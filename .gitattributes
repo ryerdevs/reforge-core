@@ -1,0 +1,25 @@
+# Line endings: el servidor se compila en WSL (Linux/gcc) — LF obligatorio
+# en Makefiles y scripts, o el build se rompe ("\r: command not found").
+* text=auto
+
+*.sh text eol=lf
+Makefile text eol=lf
+makefile text eol=lf
+*.mk text eol=lf
+*.py text eol=lf
+*.quest text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+
+# Binarios (nunca tocar line endings)
+*.exe binary
+*.dll binary
+*.pdb binary
+*.obj binary
+*.lib binary
+*.epk binary
+*.eix binary
+*.mp3 binary
+*.pak binary
+*.dmp binary
