@@ -35,6 +35,14 @@ The rewrite touches three worlds at once: the legacy C++ server/client (the orac
 5. **Orchestrator** verifies independently, applies corrections, updates docs, and **commits**.
 6. Loop protocol (when used): write attempt result to `.opencode/loop-history/<loop>/history-NNN.md`, PASS stops, FAIL retries up to `maxAttempts`, then escalates.
 
+## Specialization mechanics (agents are specialists, not generalists)
+
+Each agent is defined by a dedicated file in `.opencode/agents/<role>.md` (local, gitignored): **mission prompt + permissions + model**. The mission is strict — what it does AND what it never does; permissions enforce it (oracle/librarian/explorer/observer are `edit: deny`; only fixer and designer write).
+
+- Specialization comes from **scope restriction, not context volume**: each agent receives only its lane (files, acceptance criterion, evidence sources), never the whole project.
+- Global skills exist for everyone (opencode mechanics), but each agent's mission limits it to its lane's skills (oracle → adversarial review; fixer → rust-* + clean-code; librarian → documentation-*; explorer → graphify/codemap).
+- More context does not make an agent smarter — it dilutes focus. A specialist gets **less, targeted** context.
+
 ## Value contract (what each agent uniquely contributes)
 
 Skills are **global** (auto-loaded from `~/.agents/skills` for every agent); they do not differentiate agents. Value comes from the **role mission + delegation discipline**. Each agent exists because it provides something the others must not do themselves:
