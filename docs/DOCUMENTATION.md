@@ -137,6 +137,12 @@ Documentation changes follow the same role split as code changes:
 
 Every session ends with the changes logged in `../CHANGELOG.md` (rule 9 of AGENTS.md).
 
+### Agent team organization
+
+The full agent roster (roles, models, skills, spawn/reuse rules, session discipline, gates and the loop protocol) is documented in [`explanation/agent-organization.md`](explanation/agent-organization.md). Operational lessons agents must not repeat are in [`guardrails/agent-operations.md`](../guardrails/agent-operations.md).
+
+Session discipline (mandatory): fresh session for every oracle review; end oracle prompts with an explicit "report in your final message" instruction; reuse fixer sessions within the same scope; reconcile every lane before dispatching the next; disjoint write scopes for parallel lanes.
+
 ## 11. Review checklist
 
 Every documentation change is reviewed against this checklist:

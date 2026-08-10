@@ -136,6 +136,8 @@ wsl -d Debian-M2 -- bash /mnt/c/projects/Metin2/scripts/start_m2_min.sh
 
 ## Work rules
 
+> **Agent team:** the full roster (roles, models, skills, spawn/reuse rules, session discipline, gates) is in `docs/explanation/agent-organization.md`; operational lessons (fresh oracle sessions, mandatory report instruction, disjoint write scopes) are in `docs/guardrails/agent-operations.md`.
+
 1. Read this file and any nearby `AGENTS.md` before working.
 2. Inspect the relevant source, build and runtime before touching anything.
 3. Declare the scope; preserve unrelated user changes.
