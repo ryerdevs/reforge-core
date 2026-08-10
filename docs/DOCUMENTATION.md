@@ -130,18 +130,18 @@ Template for a phase status entry (used in `CURRENT.md` and phase docs):
 
 Documentation changes follow the same role split as code changes:
 
-- **Librarian** — audits and researches the docs: finds inconsistencies, stale links, missing metadata, contradictions with the code; produces the audit report. Never edits.
-- **Fixer** — applies the audit's changes: writes/edits files, normalizes metadata, moves files, verifies links. Never decides policy.
-- **Oracle** — reviews the result adversarially: metadata correctness, preserved decisions, no invented evidence, no broken links. Never edits.
+- **Librarian** — **maintains** the docs: audits them AND edits them (applies its own audit fixes), keeping them consistent with this policy; proposes policy improvements. Owner of documentation upkeep.
+- **Fixer** — build's adversary: reviews code changes adversarially (stale docs are findings); never edits.
+- **Oracle** — supreme supervisor: reviews the whole change (code + docs + plan) after the per-lane reviewers; never edits.
 - **Orchestrator** — accepts/rejects the audit, coordinates lanes, and **commits** at session close. Only the orchestrator commits.
 
 Every session ends with the changes logged in `../CHANGELOG.md` (rule 9 of AGENTS.md).
 
 ### Agent team organization
 
-The full agent roster (roles, models, skills, spawn/reuse rules, session discipline, gates and the loop protocol) is documented in [`explanation/agent-organization.md`](explanation/agent-organization.md). Operational lessons agents must not repeat are in [`guardrails/agent-operations.md`](../guardrails/agent-operations.md).
+The full agent roster (hierarchy, models, skills, spawn/reuse rules, session discipline, gates and the loop protocol) is documented in [`explanation/agent-organization.md`](explanation/agent-organization.md). Operational lessons agents must not repeat are in [`guardrails/agent-operations.md`](../guardrails/agent-operations.md).
 
-Session discipline (mandatory): fresh session for every oracle review; end oracle prompts with an explicit "report in your final message" instruction; reuse fixer sessions within the same scope; reconcile every lane before dispatching the next; disjoint write scopes for parallel lanes.
+Session discipline (mandatory): fresh session for every reviewer (oracle, fixer); end reviewer prompts with an explicit "report in your final message" instruction; reuse build (implementer) sessions within the same scope; reconcile every lane before dispatching the next; disjoint write scopes for parallel lanes.
 
 ## 11. Review checklist
 

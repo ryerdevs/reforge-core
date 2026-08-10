@@ -7,6 +7,24 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-10] (8th part) — Team redefinition: build implements, fixer attacks, oracle supervises, librarian maintains docs
+
+### Changed
+
+- **Team hierarchy (user decision):** `Orchestrator → Oracle (supreme supervisor, second only to the orchestrator) → build (implementer) → fixer (build's adversary) → librarian (documentation maintainer)` + explorer/observer/designer.
+- **`.opencode/agents/fixer.md`** (local, gitignored): rewritten as **build's adversary** — read-only reviewer that attacks build's code, says what was done wrong, checks plan alignment and docs; mandatory numbered report. (Was: implementation specialist.)
+- **`.opencode/agents/oracle.md`**: rewritten as **supreme supervisor** — meta-review of the whole change (code + docs + plan + gates), catches what the fixer missed, gate verdict (ready to commit / not ready). (Was: per-deliverable adversary.)
+- **`.opencode/agents/librarian.md`**: permission `edit: allow`; mission = **documentation maintainer** — audits AND edits docs (applies its own audit fixes), owns doc upkeep, may propose policy improvements. (Was: read-only auditor.)
+- **`~/.config/opencode/oh-my-opencode-slim.json`**: fixer skills rebalanced to the adversarial set (grill-me, caveman-review, simplify, ponytail-review, diagnose, clean-code, clean-code-principles, verification-before-completion, cpp-pro, rust-best-practices, rust-testing).
+- **`docs/explanation/agent-organization.md`**: hierarchy diagram + roster + standard flow (build → fixer → build fixes → oracle → librarian → orchestrator commits) rewritten for the new model.
+- **`docs/DOCUMENTATION.md` §10**: librarian maintains (audits + edits), fixer = code adversary, oracle = supreme supervisor.
+- **`docs/guardrails/agent-operations.md`**: fresh-session and report-instruction rules now apply to **every reviewer** (oracle, fixer); reuse rule points at build (implementer).
+- **`AGENTS.md` rule 10**: delegation map updated (@build implements, @fixer reviews, @oracle supervises).
+
+### Verified
+
+- Config JSON valid; the 3 agent definition files rewritten; docs links intact. Requires opencode restart to load.
+
 ## [2026-08-10] (7th part) — Agent harness: models, skills and team organization
 
 ### Added

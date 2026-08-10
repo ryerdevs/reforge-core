@@ -9,25 +9,25 @@ Last verified: 2026-08-10
 
 Operational lessons about running the agent team. Each rule follows the standard guardrail structure. The team model is described in `explanation/agent-organization.md`.
 
-## Rule 1 — Use a fresh session for every oracle review
+## Rule 1 — Use a fresh session for every reviewer (oracle, fixer)
 
-- **Why:** resumed oracle sessions repeatedly returned empty results (observed 3+ times on 2026-08-10: the contract review, the net-crate review and the structure design all came back empty when resumed; fresh sessions delivered full reports).
-- **Evidence:** board history of `ses_0160574aeffe...` (empty on resume, full report on fresh spawn); `ora-20`/`ora-6` errored.
-- **Consequence:** resuming an oracle wastes a round trip; retry with a fresh session.
+- **Why:** resumed reviewer sessions repeatedly returned empty results (observed 3+ times on 2026-08-10: the contract review, the net-crate review and the structure design all came back empty when resumed; fresh sessions delivered full reports).
+- **Evidence:** board history of `ses_0160574aeffe...` (empty on resume, full report on fresh spawn); `ora-20`/`ora-6` errored. Under the current model the fixer is a reviewer too — same rule applies.
+- **Consequence:** resuming a reviewer wastes a round trip; retry with a fresh session.
 - **Status:** Active.
 
-## Rule 2 — End oracle prompts with an explicit report instruction
+## Rule 2 — End reviewer prompts with an explicit report instruction
 
 - **Why:** the failures above were silent: the session "completed" without producing its final message.
 - **Evidence:** prompts containing "escribe SIEMPRE tu informe completo en tu último mensaje" consistently produced full reports.
 - **Consequence:** prompts without it risk a completed-but-empty review.
 - **Status:** Active.
 
-## Rule 3 — Reuse fixer sessions when the context matches
+## Rule 3 — Reuse build (implementer) sessions when the context matches
 
-- **Why:** fixers keep the file context they read; resuming them avoids re-reading and re-deciding.
-- **Evidence:** `fix-1` was resumed successfully multiple times (net crate → hardening → retoques → flat layout → server_realms rename) with full reports each time.
-- **Consequence:** reusing a fixer across unrelated scopes bloats context; keep reuse within the same crate/folder.
+- **Why:** implementers keep the file context they read; resuming them avoids re-reading and re-deciding.
+- **Evidence:** the implementer session chain (fix-1: net crate → hardening → retoques → flat layout → server_realms rename) resumed successfully multiple times with full reports. Under the current model the implementer role is `build`.
+- **Consequence:** reusing an implementer across unrelated scopes bloats context; keep reuse within the same crate/folder.
 - **Status:** Active.
 
 ## Rule 4 — Reconcile sessions after every lane
