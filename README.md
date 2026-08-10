@@ -1,4 +1,4 @@
-# m2-rs
+# reforge-core
 
 > **Un MMORPG clásico de 2004 reimaginado desde cero: servidor en Rust, PostgreSQL 18, arquitectura server-authoritative y un diseño pensado para crecer.**
 >
@@ -12,7 +12,7 @@
 
 ## ¿Qué es esto?
 
-**m2-rs** es la reescritura completa del servidor de un **MMORPG clásico de 2004** (género hack & slash con mundo persistente, gremios y PvP) en **Rust**, con las tecnologías de 2026 y un objetivo claro: **hacer más con menos**.
+**reforge-core** es la reescritura completa del servidor de un **MMORPG clásico de 2004** (género hack & slash con mundo persistente, gremios y PvP) en **Rust**, con las tecnologías de 2026 y un objetivo claro: **hacer más con menos**.
 
 No es una traducción línea por línea del C++ original — es un **rediseño estructural** que:
 
@@ -56,17 +56,19 @@ Cliente (binario original congelado + 2 paquetes aditivos) ──► Servidor Ru
 
 ```
 source/
-├── server_legacy/    # Fuente C++ del servidor original (la referencia a portar)
-├── client_src/       # Fuente C++ del cliente (contrato de protocolo)
-├── pack_src/         # Fuentes del pack (python, uiscript, herramienta de repack)
-└── proto/            # Metadatos de protocolo
-docs/                 # Plan de reescritura, specs, ADRs
-scripts/              # Scripts de arranque del servidor (WSL/Linux)
-ROADMAP.md            # Plan maestro por fases
-CHANGELOG.md          # Registro cronológico de cambios
+├── client/     # Código C++ del cliente v40999 (contrato de protocolo)
+├── server/     # Código C++ del servidor legacy (la referencia a portar)
+├── tools/      # Herramientas: DBManager, DumpProto, switch_compiler + proto/
+│   └── proto/  #   Metadatos de protocolo
+├── pack/       # Fuentes del pack (python, uiscript, PackMakerLite)
+└── svfiles/    # Runtime desplegado (local, no va a git)
+docs/           # Plan de reescritura, specs, ADRs
+scripts/        # Scripts de arranque del servidor (WSL/Linux)
+ROADMAP.md      # Plan maestro por fases
+CHANGELOG.md    # Registro cronológico de cambios
 ```
 
-> **Binarios y packs no están en git.** El cliente instalado, los packs compilados y los builds se distribuyen como Releases.
+> **Binarios y packs no están en git.** El cliente instalado, los `.epk`, las dependencias de build (`source/client/Extern/`) y el runtime (`source/svfiles/`) se quedan en local o se distribuyen como Releases.
 
 ## Roadmap
 

@@ -44,22 +44,14 @@ desktop.ini
 **/*.pch
 **/compile_commands.json
 
-# ---- Runtime del servidor (generado) ----
-server/runtime/
-server/linux/build/
-server/linux/extern/
-server/linux/out/
-server/metin2_mysql/data/
-server/metin2_mysql/*.err
-server/metin2_mysql/*.pid
+# ---- Runtime del servidor (generado, WSL) ----
+source/svfiles/
 
 # ---- Assets extraídos del cliente (modo dev) ----
-client/Client/Client/assets/
+source/client/**/assets/
 
-# ---- Serverfiles v5 (MartySama) ----
-source/metin2_server/Srcs/Server/game/OBJDIR/
-source/metin2_server/Srcs/Server/db/OBJDIR/
-source/metin2_server/Srcs/Server/**/OBJDIR/
+# ---- Serverfiles (MartySama) ----
+source/server/**/OBJDIR/
 
 # ---- Grafos graphify (generados) ----
 **/graphify-out/
@@ -97,14 +89,11 @@ __pycache__/
 # ---- Pack compilado y contenido extraído (se genera con PackMakerLite) ----
 **/*.epk
 **/*.eix
-source/metin2_pack/pack/locale/
-source/metin2_pack/pack/special_patch_ex/
+source/pack/locale/
+source/pack/special_patch_ex/
 
-# ---- Runtime desplegado del servidor (binarios, logs, instancias) ----
-source/metin2_svfiles/
-**/syslog
-**/stdout
-**/stderr
+# ---- Dependencias de build del cliente (externas) ----
+source/client/Extern/
 
 # ---- Python / tooling ----
 *.egg-info/
