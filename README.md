@@ -33,16 +33,19 @@ No es una traducción línea por línea del C++ original — es un **rediseño e
 | Auditoría del legacy vs estándares 2026 | ✅ |
 | Plan de reescritura unificado | ✅ [ver plan](docs/superpowers/plans/2026-08-09-servidor-rust-plan-unico.md) |
 | Spec del DSL de quests | ✅ [ver spec](docs/superpowers/specs/2026-08-09-quest-dsl-spec.md) |
-| F0–F6 (servidor Rust) | ⏳ en diseño |
+| **F0** — Fundaciones (workspace, ADRs, crate `protocol` byte-exacto) | ✅ 30/30 tests |
+| **F1** — Red y transporte (tokio: listener, framer, handshake) | ✅ 23/23 tests — falta el hito de integración (entorno WSL) |
+| **F2** — Auth | ⏳ siguiente |
+| F3–F6 (servidor Rust) | ⏳ en diseño |
 | F7 (cliente nuevo) | ⏳ después del servidor |
 
 ## Arquitectura en 30 segundos
 
 ```
-Cliente (binario original congelado + 2 paquetes aditivos) ──► Servidor Rust
-                                                                    │  net (tokio)
-                                                                    │  regiones en paralelo (ECS)
-                                                                    │  db crate (sqlx, nunca inline)
+Cliente (binario original congelado + 2 paquetes aditivos) ──► server_realms (binario, roles auth|channel)
+                                                                    │  network (tokio: framer + handshake)
+                                                                    │  realm (regiones en paralelo, ECS)
+                                                                    │  database (sqlx, nunca inline)
                                                                     ▼
                                                             PostgreSQL 18 central
 ```
@@ -58,6 +61,7 @@ Cliente (binario original congelado + 2 paquetes aditivos) ──► Servidor Ru
 source/
 ├── client/     # Código C++ del cliente v40999 (contrato de protocolo)
 ├── server/     # Código C++ del servidor legacy (la referencia a portar)
+├── reforge/    # REESCRITURA RUST (workspace): protocol, network, database, realm + binario server_realms
 ├── tools/      # Herramientas: DBManager, DumpProto, switch_compiler + proto/
 │   └── proto/  #   Metadatos de protocolo
 ├── pack/       # Fuentes del pack (python, uiscript, PackMakerLite)
@@ -68,14 +72,14 @@ ROADMAP.md      # Plan maestro por fases
 CHANGELOG.md    # Registro cronológico de cambios
 ```
 
-> **Binarios y packs no están en git.** El cliente instalado, los `.epk`, las dependencias de build (`source/client/Extern/`) y el runtime (`source/svfiles/`) se quedan en local o se distribuyen como Releases.
+> **Binarios y packs no están en git.** El cliente instalado, los `.epk`, las dependencias de build (`source/client/Extern/`) y el runtime (`source/deploy/`, espejo de WSL) se quedan en local o se distribuyen como Releases.
 
 ## Roadmap
 
 | Fase | Contenido |
 |---|---|
-| **F0** | Workspace Rust, ADRs, crate `protocol` byte-exacto, harness de captura |
-| **F1** | Red/transporte con tokio |
+| **F0** | Workspace Rust, ADRs, crate `protocol` byte-exacto, harness de captura — ✅ |
+| **F1** | Red/transporte con tokio: listener, framer, handshake — ✅ (falta hito de integración con WSL) |
 | **F2** | Auth Rust + primeras modificaciones del cliente |
 | **F3** | Capa de datos (PostgreSQL) + canal de datos servidor→cliente |
 | **F4** | Entrada al mundo + nombres UTF-8 |
