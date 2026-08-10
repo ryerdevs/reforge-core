@@ -8,6 +8,7 @@
 ## Estado actual (2026-08-09)
 
 - **Línea base C++ verificada:** login completo funcionando (auth + canal + selección de personaje) con el cliente real. Cuenta `test` / `1234`.
+- **REESCRITURA RUST ARRANCADA (2026-08-10):** ADR-0003 + workspace `source/reforge` (5 crates) + crate `protocol` con el flujo de login byte-exacto implementado y verificado (30/30 tests). **Hallazgo clave:** el spec §3 estaba mal en los tamaños de `TSimplePlayer` (71B packed, no 76B natural) y `TPacketGCLoginSuccess` (449B, no 474B) — corregido con evidencia dual-toolchain y erratas documentadas en el spec §7. Review adversarial (oracle) del contrato y del código sin fallos críticos. Pendientes de fases: keepalive TIME_SYNC/PING en F1, PanamaPack 151 + hybrid-crypt 152/153 en F2, harness de captura real (WSL).
 - **CRASH DE ENTRADA AL MUNDO — RESUELTO (2026-08-09):** causa raíz en el cliente — over-read de heap en `string_replace_word` (PythonSkill.cpp:62). Fix de 2 líneas desplegado (`metin2client.exe` 5.115.904 B, 14:12, hash C7EAD7CC). **Pendiente: verificación final del usuario (entrar 2-3 veces).** Detalle en AGENTS.md y CHANGELOG.
 - **Language System 1.2.6:** integrado y cargando (16 idiomas, 764-775 entradas c/u). Huecos A+B+C del servidor y 181 claves pendientes — **los huecos de textos del servidor quedan superados por el diseño nuevo** (textos servidor→cliente por manifest, §4.6 del plan único).
 - **PLAN DE REESCRITURA UNIFICADO ESCRITO (2026-08-09):** `docs/superpowers/plans/2026-08-09-servidor-rust-plan-unico.md` — consolida arquitectura, anti-hack, DB, DSL de quests, migración, canales regionales, cliente modificable. 12 preguntas abiertas para revisores externos.
@@ -40,6 +41,7 @@ Objetivo: esqueleto del workspace Rust + decisiones de arquitectura cerradas por
 - [x] Crate `protocol`: **spec byte-exacto del flujo de login completado** (`docs/superpowers/specs/2026-08-08-wire-protocol-login-flow.md`)
 - [x] **Plan unificado escrito** (`docs/superpowers/plans/2026-08-09-servidor-rust-plan-unico.md`)
 - [x] Auditoría legacy completa (§2.3 del plan único)
+- [x] **ADR-0003: workspace Rust en `source/reforge`** (ubicación, layout de crates, políticas, límite de propiedad — 2026-08-10)
 - [ ] ADR: límites de dominio y propiedad de datos (char.cpp por sistemas sobre Entity mínimo en ECS)
 - [ ] ADR: concurrencia (regiones + ECS; world task nunca await SQL inline)
 - [ ] ADR: motor de quests (DSL propio, sin scripting)
@@ -48,9 +50,9 @@ Objetivo: esqueleto del workspace Rust + decisiones de arquitectura cerradas por
 - [ ] ADR: capa de datos (WAL local + mutation_id + RLS + failover; contrato durable/volátil)
 - [ ] ADR: datos servidor→cliente (manifest versionado + delta + hot reload)
 - [ ] ADR: migración MySQL → PostgreSQL (en F3, no F6)
-- [ ] Workspace Cargo con crates: `protocol`, `net`, `db`, `game`, `auth`
-- [ ] Implementar crate `protocol` (login flow) con golden tests de los structs del spec
-- [ ] Harness de verificación: captura de paquetes reales (tcpdump/Wireshark contra el server C++) como golden tests
+- [x] **Workspace Cargo creado en `source/reforge`** (2026-08-10): crates `protocol`, `net`, `db`, `game`, `auth` — edition 2024, resolver 3, `**/target/` ignorado. `cargo build` OK
+- [x] **Crate `protocol` implementado (2026-08-10)**: 17 paquetes del flujo de login (spec §3) + TSimplePlayer 71B packed — zero-deps, LE manual, parseo sin panic. **30/30 tests** (golden byte-vectores + roundtrips + sizes + bad-lengths). Review adversarial (oracle) sin fallos críticos. **Hito F0 (LOGIN3 byte-exacto) CUMPLIDO a nivel de crate** — falta solo el harness de captura real
+- [ ] Harness de verificación: captura de paquetes reales (tcpdump/Wireshark contra el server C++) como golden tests — **pendiente: requiere server C++ arriba en WSL** (próxima sesión)
 - [ ] **Repositorio GitHub**: solo fuentes (~150-200 MB); binarios/pack/backups a Releases o storage externo; `.gitignore` de artefactos de build, clientes instalados, graphify-out, .opencode
 
 **Hito F0:** un LOGIN3 real capturado se parsea y re-serializa byte a byte idéntico.

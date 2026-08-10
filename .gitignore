@@ -99,3 +99,6 @@ source/client/Extern/
 *.egg-info/
 .pytest_cache/
 
+
+# ---- Rust (reforge) ----
+**/target/
