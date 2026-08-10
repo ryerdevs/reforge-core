@@ -59,7 +59,7 @@ Cadena de fixes aplicados en esta sesión (cada uno verificado empíricamente):
 | `client-om2\` | Cliente fuente de referencia ("Old Metin2 Project", corresponde a tmp4-server) |
 | `source\client\` | FUENTE del cliente (S3llMetin2 v24 / MartySama). Build: MSBuild `Metin2Client.sln` (en `source\client\`) Release\|Win32 (VS Build Tools 18). Dependencias de build en `source\client\Extern\` (gitignored) |
 | `source\server\` | FUENTE del servidor (MartySama 5.9). `{common,db,game,libgame,liblua,libpoly,libsql,libthecore}`, Makefile portado a Debian/gcc |
-| `source\reforge\` | **REESCRITURA RUST (nueva, 2026-08-10)** — workspace Cargo: crates `protocol` (F0: login flow byte-exacto, 30/30 tests), `net` (F1), `db` (F3), `game` (F4+), `auth` (F2). ADR-0003. **NO tocar la línea base C++ desde aquí; la línea base es el oráculo** |
+| `source\reforge\` | **REESCRITURA RUST (nueva, 2026-08-10, layout plano — ADR-0004)** — workspace Cargo: `protocol` (F0: wire byte-exacto, 30/30), `network` (F1: tokio+framer+handshake, 23/23; incluye módulo `auth` F2), `database` (F3), `realm` (F4+), `server_realms` (binario único, roles `auth\|channel` por config — nombre provisional del usuario). ADR-0003/0004. **NO tocar la línea base C++ desde aquí; la línea base es el oráculo** |
 | `source\deploy\` | Runtime desplegado: `main\srv1\{db,auth1,chan\chX\coreY}` instancias (gitignored) |
 | `source\pack\` | Fuente del pack del cliente (`root\serverinfo.py` = lista de servidores; `PackMakerLite.exe` + `.json` = herramienta de repack) |
 | `source\tools\` | Herramientas: `DBManager` (suite PHP/bash import/export txt↔mysql), `DumpProto`, `switch_compiler.py` |

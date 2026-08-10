@@ -2,6 +2,7 @@
 
 > **Estado: DRAFT v0.2 — documento de discusión unificado.** Consolida `2026-08-09-servidor-rust-draft-discusion.md` + `2026-08-09-quest-dsl-spec.md` + diseño de movimiento.
 > **Fecha:** 2026-08-09 · **Proyecto:** Reescritura del servidor de Metin2 en Rust
+> **Actualización 2026-08-10:** los nombres de crates de este plan (`net`, `db`, `game`, `auth`) fueron sustituidos por ADR-0004 (`network`, `database`, `realm`, `server_realms`) — ver `docs/decisions/0004-reforge-structure-and-names.md`.
 > **Propósito:** un solo archivo con todo el diseño para revisión de terceros. Feedback: sección «Preguntas para los revisores».
 
 ---

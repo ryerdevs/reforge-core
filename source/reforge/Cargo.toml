@@ -1,8 +1,14 @@
 [workspace]
 resolver = "3"
-members = ["protocol", "net", "db", "game", "auth"]
+members = ["protocol", "network", "database", "realm", "server_realms"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 license = "MPL-2.0"
+
+[workspace.dependencies]
+tokio = { version = "1.49", features = ["rt-multi-thread", "net", "io-util", "time", "sync", "macros"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
