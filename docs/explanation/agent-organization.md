@@ -35,6 +35,28 @@ The rewrite touches three worlds at once: the legacy C++ server/client (the orac
 5. **Orchestrator** verifies independently, applies corrections, updates docs, and **commits**.
 6. Loop protocol (when used): write attempt result to `.opencode/loop-history/<loop>/history-NNN.md`, PASS stops, FAIL retries up to `maxAttempts`, then escalates.
 
+## Value contract (what each agent uniquely contributes)
+
+Skills are **global** (auto-loaded from `~/.agents/skills` for every agent); they do not differentiate agents. Value comes from the **role mission + delegation discipline**. Each agent exists because it provides something the others must not do themselves:
+
+| Agent | Unique contribution | Must NOT |
+|---|---|---|
+| **Orchestrator** | Plan, delegate, reconcile, verify, docs, commit | Implement non-trivial code; review its own work |
+| **Fixer** | Write code for one bounded task | Decide architecture; review its own output |
+| **Oracle-fixer** | Attack one deliverable + check plan alignment | Write code |
+| **Oracle general** | Meta-review of the whole change after per-lane oracles | Write code |
+| **Librarian** | External research + documentation audits | Edit files |
+| **Explorer** | Recon: find files/patterns, return compressed context | Implement |
+| **Observer** | Read images/PDFs/screenshots without polluting context | Implement |
+| **Designer** | UI/UX visual and interaction quality | Copywriting, backend |
+
+Delegation discipline (the antidote to "loose agents"):
+
+- The orchestrator delegates **by lane**: recon → explorer, research/docs audit → librarian, implementation → fixer, review → oracle, visuals → designer/observer.
+- The orchestrator handles directly **only**: coordination, verification commands, git/commit, and edits smaller than ~15 lines that are isolated and low-risk.
+- **Never** implement a non-trivial feature directly while a fixer exists; **never** self-review own docs while an oracle exists.
+- Every task dispatch names: the lane, the write scope, the acceptance criterion, and (for oracles) the mandatory final report.
+
 ## Spawn and reuse rules
 
 - **Fresh session for every oracle review.** Resumed oracle sessions returned empty results repeatedly (2026-08-10) — see `guardrails/agent-operations.md` rule 1.
