@@ -59,7 +59,7 @@ Cadena de fixes aplicados en esta sesión (cada uno verificado empíricamente):
 | `client-om2\` | Cliente fuente de referencia ("Old Metin2 Project", corresponde a tmp4-server) |
 | `source\client\` | FUENTE del cliente (S3llMetin2 v24 / MartySama). Build: MSBuild `Metin2Client.sln` (en `source\client\`) Release\|Win32 (VS Build Tools 18). Dependencias de build en `source\client\Extern\` (gitignored) |
 | `source\server\` | FUENTE del servidor (MartySama 5.9). `{common,db,game,libgame,liblua,libpoly,libsql,libthecore}`, Makefile portado a Debian/gcc |
-| `source\svfiles\` | Runtime: `main\srv1\{db,auth1,chan\chX\coreY}` instancias desplegadas (gitignored) |
+| `source\deploy\` | Runtime desplegado: `main\srv1\{db,auth1,chan\chX\coreY}` instancias (gitignored) |
 | `source\pack\` | Fuente del pack del cliente (`root\serverinfo.py` = lista de servidores; `PackMakerLite.exe` + `.json` = herramienta de repack) |
 | `source\tools\` | Herramientas: `DBManager` (suite PHP/bash import/export txt↔mysql), `DumpProto`, `switch_compiler.py` |
 | `source\tools\proto\` | Metadatos de protocolo |

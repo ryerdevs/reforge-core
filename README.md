@@ -61,7 +61,7 @@ source/
 ├── tools/      # Herramientas: DBManager, DumpProto, switch_compiler + proto/
 │   └── proto/  #   Metadatos de protocolo
 ├── pack/       # Fuentes del pack (python, uiscript, PackMakerLite)
-└── svfiles/    # Runtime desplegado (local, no va a git)
+└── deploy/     # Runtime desplegado (local, no va a git)
 docs/           # Plan de reescritura, specs, ADRs
 scripts/        # Scripts de arranque del servidor (WSL/Linux)
 ROADMAP.md      # Plan maestro por fases

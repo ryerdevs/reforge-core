@@ -45,7 +45,7 @@ desktop.ini
 **/compile_commands.json
 
 # ---- Runtime del servidor (generado, WSL) ----
-source/svfiles/
+source/deploy/
 
 # ---- Assets extraídos del cliente (modo dev) ----
 source/client/**/assets/
@@ -89,8 +89,8 @@ __pycache__/
 # ---- Pack compilado y contenido extraído (se genera con PackMakerLite) ----
 **/*.epk
 **/*.eix
-source/pack/locale/
-source/pack/special_patch_ex/
+source/tools/pack/locale/
+source/tools/pack/special_patch_ex/
 
 # ---- Dependencias de build del cliente (externas) ----
 source/client/Extern/
