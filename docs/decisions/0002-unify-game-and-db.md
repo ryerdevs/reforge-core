@@ -1,85 +1,89 @@
-# ADR-0002: Unificar `game` y `db` en un solo proceso Rust (db como crate)
+---
+Type: Decision
+Status: Accepted
+Audience: Contributors, maintainers
+Date: 2026-08-08
+Last verified: 2026-08-10
+Supersedes: —
+Superseded by: —
+---
 
-## Estado
+# ADR-0002: Unify `game` and `db` into a single Rust process (db as a crate)
 
-Aceptado
+## Context
 
-## Fecha
+The legacy (C++) server splits the logic into three binaries: `auth` (30001/30002), `db` (30000) and `game`/cores (30003+). The `db` binary is not a database: it is an **SQL broker + cross-channel coordinator** that:
 
-2026-08-08
+- concentrates the SQL connections per slot (`SQL_PLAYER`/`SQL_ACCOUNT`/`SQL_COMMON`/`SQL_LOG`, 3 connections per slot — `DBManager.cpp`);
+- keeps shared state between cores: `LoginData`, `GuildManager`, `ItemIDRangeManager`, `PrivManager`, `Monarch`, `ItemAwardManager`, `Marriage`;
+- serves the proto tables at boot (`PROTO_FROM_DB`);
+- talks to each core with its own socket protocol with request/response correlated by `ident` (`QID_*` + `ReturnQuery`), and **duplicates state** (login cache on both sides: `game/src/db.cpp:134` vs `db/src/LoginData`).
 
-## Contexto
+Cost of the split observed empirically (2026-08-08 fixes):
 
-El servidor legacy (C++) separa la lógica en tres binarios: `auth` (30001/30002), `db` (30000) y `game`/cores (30003+). El binario `db` no es una base de datos: es un **broker SQL + coordinador cross-canal** que:
+- a whole game↔db protocol to maintain;
+- a reconnection machine with its own bugs (fdwatch WRITE flood — fix #10: the WRITE interest persists because `oneshot` is ignored; READ must be re-registered after draining);
+- mandatory boot order (mariadb → db → auth → cores);
+- double deploy and version coordination;
+- the db as a single bottleneck and point of failure.
 
-- concentra las conexiones SQL por slot (`SQL_PLAYER`/`SQL_ACCOUNT`/`SQL_COMMON`/`SQL_LOG`, 3 conexiones por slot — `DBManager.cpp`);
-- mantiene estado compartido entre cores: `LoginData`, `GuildManager`, `ItemIDRangeManager`, `PrivManager`, `Monarch`, `ItemAwardManager`, `Marriage`;
-- sirve las tablas de proto en boot (`PROTO_FROM_DB`);
-- habla con cada core un protocolo de socket propio con request/response correlacionado por `ident` (`QID_*` + `ReturnQuery`), y **duplica estado** (caché de login en ambos lados: `game/src/db.cpp:134` vs `db/src/LoginData`).
+What the split DOES buy: (1) crash containment (one core dies without killing the SQL layer), (2) N cores against 1 db process, (3) isolation of the SQL layer from the single-threaded `libthecore` event loop (synchronous MySQL would block).
 
-Costo del split observado empíricamente (fixes 2026-08-08):
+In Rust with tokio, the three benefits are recomposed without the protocol:
 
-- un protocolo entero entre game↔db que hay que mantener;
-- máquina de reconexión con bugs propios (flood de WRITE del fdwatch — fix #10: el interés WRITE persiste porque `oneshot` se ignora; hay que re-registrar READ tras drenar);
-- orden de arranque obligatorio (mariadb → db → auth → cores);
-- doble deploy y coordinación de versiones;
-- el db como cuello de botella único y punto de fallo.
+- crash containment is recreated with per-task panics (`catch_unwind`/`JoinHandle`) and a process-per-channel topology;
+- "one db for N cores" is exactly what PostgreSQL already does (ADR-0001);
+- SQL isolation comes from an async pool (`sqlx`/`PgPool`) without a blocking event loop.
 
-Lo que el split SÍ compra: (1) contención de crash (un core muere sin matar la capa SQL), (2) N cores contra 1 proceso db, (3) aislamiento de la capa SQL del event loop single-thread de `libthecore` (MySQL síncrono bloquearía).
+The game↔db seam is clean: it communicates exclusively through a small typed packet (`HEADER_GD_*`/`HEADER_DG_*` in `common/tables.h`, `QID.h`) and the db binary is only ~12.8k LOC. The decision is low-risk in both directions; the cost of keeping the split is duplicating the packet contract, and the cost of unifying is losing the process boundary.
 
-En Rust con tokio, los tres beneficios se recomponen sin el protocolo:
+## Decision
 
-- la contención de crash se recrea con panics por tarea (`catch_unwind`/`JoinHandle`) y topología proceso-por-canal;
-- "un db para N cores" es exactamente lo que ya hace PostgreSQL (ADR-0001);
-- el aislamiento SQL lo da un pool async (`sqlx`/`PgPool`) sin event loop bloqueante.
+**Unify `game` and `db` into a single Rust process per channel, with `db` as an internal crate** (library boundary, not process boundary).
 
-El seam game↔db es limpio: se comunica exclusivamente por un paquete tipado pequeño (`HEADER_GD_*`/`HEADER_DG_*` en `common/tables.h`, `QID.h`) y el binario db son solo ~12.8k LOC. La decisión es de bajo riesgo en ambos sentidos; el costo de separar es duplicar el contrato de paquetes, y el de unificar es perder la frontera de proceso.
+- One binary per channel + `auth` as its own process (thin proxy). `db` is an embedded crate (`metin2-db`) exposing the same functionality of the legacy db as an internal API; there is no game↔db protocol in Rust.
+- The cross-channel coordination that lives today in the db process moves to PostgreSQL: sequences with batches for `ItemIDRangeManager`, row/advisory locks for guilds/parties, `LISTEN/NOTIFY` for cache invalidation, and the login registry as a table.
+- **During the migration (Phases 0–5):** the crate also compiles as a standalone daemon speaking the legacy peer protocol (`HEADER_GD_*`/`HEADER_DG_*`), so the C++ game keeps working against a Rust db (F3 milestone) and the real client never notices. The shim must be thin: only framing + dispatch, no business logic.
+- **The final unification happens at F6**, when the last core is ported to Rust and the legacy shim is removed.
 
-## Decisión
+> Note (2026-08-10): the process topology wording was refined by ADR-0004 — `auth` is a **role of the single `server_realms` binary** (N processes of the same binary with different config), not a separate binary.
 
-**Unificar `game` y `db` en un solo proceso Rust por canal, con `db` como crate interno** (límite de librería, no de proceso).
+## Alternatives considered
 
-- Un binario por canal + `auth` como proceso propio (proxy fino). `db` es un crate (`metin2-db`) embebido que expone la misma funcionalidad del legacy db como API interna; no hay protocolo game↔db en Rust.
-- La coordinación cross-canal que hoy vive en el proceso db se mueve a PostgreSQL: sequences con batches para `ItemIDRangeManager`, row locks/advisory locks para guilds/parties, `LISTEN/NOTIFY` para invalidación de caché, y el login registry como tabla.
-- **Durante la migración (Fases 0–5):** el crate se compila también como daemon independiente que habla el protocolo legacy del peer (`HEADER_GD_*`/`HEADER_DG_*`), de modo que el game C++ sigue funcionando contra un db Rust (hito F3) y el cliente real nunca se entera. El shim debe ser fino: solo framing + dispatch, sin lógica de negocio.
-- **La unificación final ocurre en F6**, cuando el último core se porta a Rust y el shim legacy se elimina.
+### Keep the process separation (db as a separate Rust service)
 
-## Alternativas consideradas
+Rejected. It keeps the protocol, the reconnection, the ident correlation, the duplicated state and the boot order — all the debt the rewrite wants to remove. The only real extra benefit (hard crash isolation) is recomposed with process-per-channel.
 
-### Mantener la separación de procesos (db como servicio Rust separado)
+### Unify everything into a single process for all 9 channels
 
-Rechazada. Conserva el protocolo, la reconexión, la correlación por ident, el estado duplicado y el orden de arranque — toda la deuda que la reescritura quiere eliminar. El único beneficio extra real (aislamiento duro de crash) se recompone con proceso-por-canal.
+Rejected. A fatal panic or OOM in shared code would kill all channels. The project wants "do more with less", but not at the cost of a single global point of failure; the process-per-channel topology gives the right isolation.
 
-### Unificar todo en un único proceso para los 9 canales
+## Consequences
 
-Rechazada. Un panic fatal o OOM en código compartido mataría todos los canales. El proyecto quiere "hacer más con menos", pero no a costa de un único punto de fallo global; la topología proceso-por-canal da el aislamiento correcto.
+### Positive
 
-## Consecuencias
+- The game↔db protocol, the reconnection, the WRITE flood (tokio manages write interest internally) and the duplicated state disappear.
+- `db`-as-a-crate is directly testable with golden tests, without sockets.
+- One binary+config per channel; simpler deploy.
+- The process boundary is kept where it matters: client ↔ channel, channel ↔ Postgres.
 
-### Positivas
+### Negative
 
-- Desaparecen el protocolo game↔db, la reconexión, el flood de WRITE (tokio gestiona el interés de escritura internamente) y el estado duplicado.
-- `db`-como-crate es directamente testeable con golden tests, sin sockets.
-- Un solo binario+config por canal; deploy más simple.
-- La frontera de proceso se mantiene donde importa: cliente ↔ canal, canal ↔ Postgres.
+- Cross-channel coordination in Postgres changes latency and consistency semantics (e.g. double login between channels) vs the legacy in-memory cache — requires explicit contracts and a benchmark before porting `GuildManager`/`LoginData`.
+- Loss of the hard db-process containment (a fatal abort in shared code takes down the channel; mitigate with `catch_unwind` at task boundaries and restart supervision).
+- The legacy shim (F3–F5) is transition code that must stay thin or it becomes debt.
 
-### Negativas
+## Decision points this ADR fixes now
 
-- La coordinación cross-canal en Postgres cambia latencia y semántica de consistencia (p.ej. doble login entre canales) respecto a la caché en memoria del legacy — requiere contratos explícitos y benchmark antes de portar `GuildManager`/`LoginData`.
-- Pérdida de la contención dura del proceso db (un abort fatal en código compartido tumba el canal; mitigar con `catch_unwind` en fronteras de tarea y supervisión de restart).
-- El shim legacy (F3–F5) es código de transición que debe mantenerse fino o se convierte en deuda.
+1. **State ownership:** what lives in Postgres vs in memory per channel; destination of each legacy db manager (LoginData → table + cache; ItemIDRangeManager → sequence with batches; GuildManager/Marriage/Monarch → tables + row locks + NOTIFY); owner and cadence of the write-behind save.
+2. **Crash recovery:** what a channel loses on restart; fsync/save policy; boot without order between processes (only Postgres first).
+3. **Deploy topology:** process per channel, `auth` as its own process; one binary+config.
+4. **Migration:** shim contract (which legacy headers stay, which die) and the cutover point at F6.
 
-## Puntos de decisión que el ADR fija ahora
+## Not decided in this ADR
 
-1. **Propiedad de estado:** qué vive en Postgres vs en memoria por canal; destino de cada gestor del db legacy (LoginData → tabla + caché; ItemIDRangeManager → sequence con batches; GuildManager/Marriage/Monarch → tablas + row locks + NOTIFY); dueño y cadencia del save write-behind.
-2. **Recuperación de crash:** qué pierde un canal al reiniciar; política de fsync/save; arranque sin orden entre procesos (solo Postgres primero).
-3. **Topología de deploy:** proceso por canal, `auth` como proceso propio; un solo binario+config.
-4. **Migración:** contrato del shim (qué headers legacy se mantienen, cuáles mueren) y punto de corte en F6.
-
-## No decidido en este ADR
-
-- Crate de acceso a PostgreSQL concreto (recomendación pendiente: `sqlx` 0.9, ver ADR de stack).
-- Modelo de concurrencia interno (tokio task-per-connection vs actores) — ADR propio.
-- Runtime lua para quests (mlua vs migración de datos UTF-8) — ADR propio.
-- Esquema Postgres definitivo.
-- Todo lo relativo al cliente (Fase 7).
+- The concrete PostgreSQL access crate (pending recommendation: `sqlx` 0.9 — see the G-PG task, ADR-0005).
+- The internal concurrency model (tokio task-per-connection vs actors) — own ADR.
+- Lua runtime for quests (mlua vs UTF-8 data migration) — own ADR.
+- The definitive Postgres schema.
+- Everything about the client (Phase 7).

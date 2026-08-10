@@ -1,5 +1,13 @@
 # Metin2 Project Skills Design
 
+> **Metadata**
+> - Type: History
+> - Status: Historical
+> - Audience: Project agents and maintainers (historical context only)
+> - Last verified: 2026-08-10
+> - Original location: `docs/superpowers/specs/2026-08-06-metin2-project-skills-design.md`
+> - **Historical record.** Archived for context. This document is NOT current normative guidance: it was the initial 2026-08-06 design for the project-local skill set, based on the repo layout and goals of that date (Alpine/Docker compatibility baseline, `server/` tree). The current project skill set and rules are described in `AGENTS.md`; the repo layout has since been reorganized under `source/`.
+
 ## Context
 
 The workspace contains a legacy Metin2 server written in C++, with BSD-oriented history, an existing Linux port/build area, Makefiles, CMake files, Docker-related files, and MySQL assets. The immediate goal is to make the server build and run reliably on Linux, specifically Alpine Linux in the current Windows/WSL workflow. A future phase will refactor the server into Rust; Rust skills are intentionally outside this first installation batch.

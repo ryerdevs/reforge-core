@@ -1,3 +1,12 @@
+> **Metadata**
+> - Type: History
+> - Status: Historical
+> - Audience: Project agents and maintainers (historical context only)
+> - Last verified: 2026-08-10
+> - Original location: `docs/superpowers/plans/2026-08-09-servidor-rust-plan-unico.md`
+> - **Historical record.** Archived for context. This document is **NOT current normative guidance**: it is the v0.2 Spanish draft, superseded by `docs/plans/server-rewrite.md` (v0.3, canonical, in English). Architecture decisions live in `docs/decisions/` (ADRs). Statements, phase dates, stack choices and the crate names used here (`net`, `db`, `game`, `auth`) must not be treated as binding today — ADR-0004 renamed them (`network`, `database`, `realm` + binary `server_realms`).
+
+---
 # Plan de Reescritura del Servidor de Metin2 en Rust — Documento ÚNICO
 
 > **Estado: DRAFT v0.2 — documento de discusión unificado.** Consolida `2026-08-09-servidor-rust-draft-discusion.md` + `2026-08-09-quest-dsl-spec.md` + diseño de movimiento.

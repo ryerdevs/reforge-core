@@ -1,96 +1,104 @@
 # reforge-core
 
-> **Un MMORPG clásico de 2004 reimaginado desde cero: servidor en Rust, PostgreSQL 18, arquitectura server-authoritative y un diseño pensado para crecer.**
+> **A classic 2004 MMORPG reimagined from scratch: Rust server, PostgreSQL 18, server-authoritative architecture, designed to scale.**
 >
-> Un servidor alternativo e independiente para un juego clásico de hack & slash asiático, recreado por **ingeniería inversa** desde el binario original — sin afiliación con el desarrollador o publicador original.
+> An independent alternative server for a classic Asian hack & slash game, recreated by **reverse engineering** from the original binary — no affiliation with the original developer or publisher.
 
 [![Rust](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org)
 [![PostgreSQL](https://img.shields.io/badge/postgresql-18-blue.svg)](https://www.postgresql.org)
-[![License: MPL-2.0](https://img.shields.io/badge/license-MPL--2.0-blue.svg)](LICENSE)
+[![License: pending decision](https://img.shields.io/badge/license-pending--decision-lightgrey.svg)](docs/plans/server-rewrite.md)
 
 ---
 
-## ¿Qué es esto?
+## What is this?
 
-**reforge-core** es la reescritura completa del servidor de un **MMORPG clásico de 2004** (género hack & slash con mundo persistente, gremios y PvP) en **Rust**, con las tecnologías de 2026 y un objetivo claro: **hacer más con menos**.
+**reforge-core** is the complete rewrite of the server of a **classic 2004 MMORPG** (hack & slash with a persistent world, guilds and PvP) in **Rust**, with 2026 technology and one clear goal: **do more with less**.
 
-No es una traducción línea por línea del C++ original — es un **rediseño estructural** que:
+Not a line-by-line translation of the original C++ — a **structural redesign** that:
 
-- 🛡️ **Elimina los hacks de raíz**: servidor autoritativo — el cliente envía *intenciones*, el servidor calcula *hechos*. Speedhack, god-mode, dupe y memory hacking dejan de existir por diseño.
-- 🚀 **Rinde al máximo**: tokio + ECS por región, sin locks compartidos, sin SQL en el hot path. Techo de **1.000+ jugadores por instancia** (el original: ~300-500).
-- 🌍 **Un solo servidor para todos**: canales regionales (EUW/LAN/NA) que comparten la misma base de datos — juega con ping local, cambia de región solo con loguear, mercado unificado.
-- 🔄 **Hot reload**: textos, items y quests se editan en la BD y se recargan en caliente — sin reiniciar, sin recompilar, sin repaquear.
-- 📦 **Sin scripting**: las quests pasan de Lua a un **DSL declarativo propio** — elegante, tipado, con familias y bloques reutilizables.
-- 🗄️ **PostgreSQL 18** como red de seguridad transaccional: WAL local, `mutation_id` idempotente, RLS, failover — el dupe es imposible por construcción.
+- 🛡️ **Removes the hacks at the root**: server-authoritative — the client sends *intentions*, the server computes *facts*. Speedhack, god-mode, dupe and memory hacking stop existing by design.
+- 🚀 **Performs at its best**: tokio + per-region ECS, no shared locks, no SQL in the hot path. Ceiling of **1,000+ players per instance** (the original: ~300–500).
+- 🌍 **One server for everyone**: regional channels (EUW/LAN/LAS) sharing the same database — play with local ping, switch region by just logging in, unified market.
+- 🔄 **Hot reload**: texts, items and quests are edited in the DB and reloaded live — no restarts, no recompiles, no repacks.
+- 📦 **No scripting**: quests move from Lua to a **declarative own DSL** — elegant, typed, with reusable families and blocks.
+- 🗄️ **PostgreSQL 18** as transactional safety net: local WAL, idempotent `mutation_id`, RLS, failover — dupe is impossible by construction.
 
-> ⚠️ **Nota legal:** este proyecto es un servidor alternativo independiente, construido por ingeniería inversa. No tiene afiliación con el desarrollador ni el publicador del juego original, y no incluye sus assets ni su contenido protegido — solo código original.
+> ⚠️ **Legal note:** this project is an independent alternative server, built by reverse engineering. It has no affiliation with the developer or publisher of the original game and includes none of their assets or protected content — only original code.
 
-## Estado
+## Current status
 
-| Fase | Estado |
+> Detailed, always-updated status: **`docs/CURRENT.md`** · Documentation index: **`docs/README.md`**
+
+| Phase | Status |
 |---|---|
-| Línea base del binario original verificada (login completo contra el cliente) | ✅ |
-| Auditoría del legacy vs estándares 2026 | ✅ |
-| Plan de reescritura unificado | ✅ [ver plan](docs/superpowers/plans/2026-08-09-servidor-rust-plan-unico.md) |
-| Spec del DSL de quests | ✅ [ver spec](docs/superpowers/specs/2026-08-09-quest-dsl-spec.md) |
-| **F0** — Fundaciones (workspace, ADRs, crate `protocol` byte-exacto) | ✅ 30/30 tests |
-| **F1** — Red y transporte (tokio: listener, framer, handshake) | ✅ 23/23 tests — falta el hito de integración (entorno WSL) |
-| **F2** — Auth | ⏳ siguiente |
-| F3–F6 (servidor Rust) | ⏳ en diseño |
-| F7 (cliente nuevo) | ⏳ después del servidor |
+| Original binary baseline verified (full login against the client) | ✅ |
+| Legacy vs 2026-standards audit | ✅ |
+| Unified rewrite plan | ✅ [plan](docs/plans/server-rewrite.md) |
+| Quest DSL spec | ✅ [spec](docs/reference/quests/quest-dsl.md) |
+| **F0** — Foundations (workspace, ADRs, byte-exact `protocol` crate) | ✅ 30/30 tests |
+| **F1** — Network and transport (tokio: listener, framer, handshake) | ✅ 23/23 tests, 56/56 workspace — integration milestone pending (WSL) |
+| **G-PG** — PostgreSQL cutover (ADR-0005) | ⏳ next — blocks F2 |
+| **F2** — Auth (F2a server-side / F2b client batch) | ⏳ blocked on G-PG + ADR-0005 |
+| F3–F6 (Rust server) | ⏳ in design |
+| F7 (new client) | ⏳ after the server |
 
-## Arquitectura en 30 segundos
+## Architecture in 30 seconds
 
 ```
-Cliente (binario original congelado + 2 paquetes aditivos) ──► server_realms (binario, roles auth|channel)
-                                                                    │  network (tokio: framer + handshake)
-                                                                    │  realm (regiones en paralelo, ECS)
-                                                                    │  database (sqlx, nunca inline)
-                                                                    ▼
-                                                            PostgreSQL 18 central
+Client (frozen original binary + 2 additive packs) ──► server_realms (single binary, roles auth|channel)
+                                                           │  network (tokio: framer + handshake)
+                                                           │  realm (parallel regions, ECS)
+                                                           │  database (sqlx, never inline)
+                                                           ▼
+                                                   PostgreSQL 18 central
 ```
 
-- **Un proceso por región** (agrupaciones del mapa) con ECS (`bevy_ecs`): simulación paralela, single-writer por entidad.
-- **BD central compartida** entre canales-región: personaje, oro, mercado y gremios unificados.
-- **Persistencia en dos clases**: durable (items/oro → WAL + transacción) vs volátil (posición → periódico).
-- Detalle completo en el [plan unificado](docs/superpowers/plans/2026-08-09-servidor-rust-plan-unico.md).
+- One process per region (map clusters) with ECS (`bevy_ecs`): parallel simulation, single-writer per entity.
+- Shared central DB across channels-regions: character, gold, market and guilds unified.
+- Persistence in two classes: durable (items/gold → WAL + transaction) vs volatile (position → periodic).
+- Full design: [docs/plans/server-rewrite.md](docs/plans/server-rewrite.md) · docs: [docs/README.md](docs/README.md) · status: [docs/CURRENT.md](docs/CURRENT.md).
 
-## Repositorio — qué contiene
+## Repository — what it contains
 
 ```
 source/
-├── client/     # Código C++ del cliente v40999 (contrato de protocolo)
-├── server/     # Código C++ del servidor legacy (la referencia a portar)
-├── reforge/    # REESCRITURA RUST (workspace): protocol, network, database, realm + binario server_realms
-├── tools/      # Herramientas: DBManager, DumpProto, switch_compiler + proto/
-│   └── proto/  #   Metadatos de protocolo
-├── pack/       # Fuentes del pack (python, uiscript, PackMakerLite)
-└── deploy/     # Runtime desplegado (local, no va a git)
-docs/           # Plan de reescritura, specs, ADRs
-scripts/        # Scripts de arranque del servidor (WSL/Linux)
-ROADMAP.md      # Plan maestro por fases
-CHANGELOG.md    # Registro cronológico de cambios
+├── client/     # C++ client source v40999 (protocol contract)
+├── server/     # C++ legacy server source (the reference to port)
+├── reforge/    # RUST REWRITE (Cargo workspace): protocol, network, database, realm
+│   └── server_realms/  # single binary, roles auth|channel by config
+├── tools/      # Tools: DBManager, DumpProto, Mysql2Proto, switch_compiler
+│   ├── pack/   #   Pack sources (python, uiscript, PackMakerLite)
+│   └── proto/  #   Protocol metadata
+└── deploy/     # Deployed runtime (local, not in git)
+docs/           # Documentation hub: README.md, CURRENT.md, DOCUMENTATION.md,
+                # plans/, reference/, guardrails/, decisions/ (ADRs),
+                # history/ (superseded docs; Diátaxis modes on demand)
+scripts/        # Server startup scripts (WSL/Linux)
+ROADMAP.md      # Master plan by phases
+CHANGELOG.md    # Chronological change log
+AGENTS.md       # Agent instructions, verified facts, work rules
 ```
 
-> **Binarios y packs no están en git.** El cliente instalado, los `.epk`, las dependencias de build (`source/client/Extern/`) y el runtime (`source/deploy/`, espejo de WSL) se quedan en local o se distribuyen como Releases.
+> **Binaries and packs are not in git.** The installed client, the `.epk` files, the build dependencies (`source/client/Extern/`) and the runtime (`source/deploy/`, WSL mirror) stay local or are distributed as Releases.
 
 ## Roadmap
 
-| Fase | Contenido |
+| Phase | Content |
 |---|---|
-| **F0** | Workspace Rust, ADRs, crate `protocol` byte-exacto, harness de captura — ✅ |
-| **F1** | Red/transporte con tokio: listener, framer, handshake — ✅ (falta hito de integración con WSL) |
-| **F2** | Auth Rust + primeras modificaciones del cliente |
-| **F3** | Capa de datos (PostgreSQL) + canal de datos servidor→cliente |
-| **F4** | Entrada al mundo + nombres UTF-8 |
-| **F5** | Gameplay completo, benchmark de escala, hot reload, API + metrics |
-| **F6** | Paridad total y reemplazo del C++ |
-| **F7** | Cliente nuevo (wgpu + UI Slint) |
+| **F0** | Rust workspace, ADRs, byte-exact `protocol` crate, capture harness — ✅ |
+| **F1** | Network/transport with tokio: listener, framer, handshake — ✅ (WSL integration milestone pending) |
+| **G-PG** | PostgreSQL 18 cutover + temporary legacy adapter (ADR-0005) — blocks F2 |
+| **F2** | Auth (F2a) + first client batch (F2b) — blocked on G-PG |
+| **F3** | Data layer (PostgreSQL) + server→client data channel |
+| **F4** | World entry + UTF-8 names |
+| **F5** | Full gameplay, scale benchmark, hot reload, API + metrics |
+| **F6** | Full parity and replacement of the C++ baseline |
+| **F7** | New client (wgpu + Slint UI) |
 
-## ¿Quieres participar?
+## Want to participate?
 
-Este proyecto quiere **revivir el género clásico con la comunidad**: documentación pública de protocolo, anti-bot efectivo, y un servidor moderno que los operadores puedan adoptar. Issues, PRs y opiniones sobre el plan son bienvenidos — las decisiones de arquitectura se discuten en los documentos de `docs/` antes de implementarse.
+This project wants to **revive the classic genre with the community**: public protocol documentation, effective anti-bot, and a modern server operators can adopt. Issues, PRs and opinions on the plan are welcome — architecture decisions are discussed in `docs/` before being implemented.
 
-## Licencia
+## License
 
-**MPL-2.0** — permisiva para operadores de servidores privados (pueden correr y modificar sin abrir su trabajo completo). Ver [LICENSE](LICENSE).
+**Pending decision.** MPL-2.0 is proposed (permissive for private-server operators: they can run and modify without opening their entire work) but not yet accepted by the community — no `LICENSE` file exists until it is confirmed (ROADMAP open decision, plan §13). See the open question in [docs/plans/server-rewrite.md](docs/plans/server-rewrite.md).

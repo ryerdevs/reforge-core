@@ -1,6 +1,14 @@
-# Language System 1.2.6 — Estado de integración (sesión 2026-08-08)
+# Language System 1.2.6 — Integration Status (session 2026-08-08)
 
-> **Propósito de este archivo:** registrar TODO lo hecho y TODOS los problemas pendientes de la integración del mod "Language System 1.2.6" en nuestro servidor Metin2 (MartySama 5.9) + cliente (S3llMetin2 v24), para retomarlo en una nueva sesión con contexto fresco. Leer también `AGENTS.md` (reglas del proyecto) y `CHANGELOG.md`.
+> **Metadata**
+> - Type: Reference
+> - Status: Historical
+> - Audience: Engineers resuming Language System / localization work on the legacy C++ server (MartySama 5.9 + S3llMetin2 v24 client)
+> - Last verified: 2026-08-10
+> - Original location: `docs/LANGUAGE_SYSTEM_ESTADO_2026-08-08.md`
+> - **Historical reference.** Archived for context. This document is NOT current normative guidance: it records the state of the "Language System 1.2.6" mod integration as of the 2026-08-08 session. The technical evidence below is preserved verbatim. Read `AGENTS.md` (project rules, incl. the Language System status and the multi-language architecture in §17) and `CHANGELOG.md` before acting on anything recorded here.
+
+> **Purpose of this file:** record everything done and every open problem in the integration of the "Language System 1.2.6" mod into our Metin2 server (MartySama 5.9) + client (S3llMetin2 v24), so a new session can resume with fresh context. Also read `AGENTS.md` (project rules) and `CHANGELOG.md`.
 
 ---
 

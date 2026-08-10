@@ -1,5 +1,13 @@
 # Metin2 Project Skills Design Revision
 
+> **Metadata**
+> - Type: History
+> - Status: Historical
+> - Audience: Project agents and maintainers (historical context only)
+> - Last verified: 2026-08-10
+> - Original location: `docs/superpowers/specs/2026-08-06-metin2-project-skills-design-revision.md`
+> - **Historical record.** Archived for context. This document is NOT current normative guidance: it revises the 2026-08-06 project-skills design (Alpine/Docker compatibility baseline, `server/` tree). The current project rules and skill set live in `AGENTS.md`; the repo layout has since been reorganized under `source/`.
+
 This revision incorporates the project roadmap agreed after the initial design.
 
 ## Immediate baseline

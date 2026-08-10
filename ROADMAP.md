@@ -1,174 +1,212 @@
-# ROADMAP — Reescritura de Metin2 en Rust
+# ROADMAP — Metin2 server rewrite in Rust
 
-> **Plan vivo.** Este documento es el plan maestro del proyecto y se actualiza en cada sesión.
-> Metodología de seguimiento: `AGENTS.md` (reglas + estado verificado) + `CHANGELOG.md` (registro cronológico de cambios) + `ROADMAP.md` (este plan) + `docs/decisions/` (ADRs).
-> **Regla de avance: ninguna fase se da por completa sin evidencia de verificación** (regla 5 de AGENTS.md).
-> **Documento de referencia del diseño completo:** `docs/superpowers/plans/2026-08-09-servidor-rust-plan-unico.md` (único archivo, 13 secciones).
+> **Living plan.** This document is the project's master plan and is updated every session.
+> Tracking methodology: `AGENTS.md` (rules + verified state) + `CHANGELOG.md` (chronological record) + `ROADMAP.md` (this plan) + `docs/decisions/` (ADRs).
+> **Progress rule: no phase is complete without verification evidence** (rule 5 of AGENTS.md).
+> **Canonical design reference:** `docs/plans/server-rewrite.md` (single-file plan). The previous single-file draft (`docs/history/2026-08-09-server-rewrite-draft.md`) is preserved as historical.
 
-## Estado actual (2026-08-09)
+## Current state (2026-08-10)
 
-- **Línea base C++ verificada:** login completo funcionando (auth + canal + selección de personaje) con el cliente real. Cuenta `test` / `1234`.
-- **REESCRITURA RUST ARRANCADA (2026-08-10):** ADR-0003 + ADR-0004 + workspace `source/reforge` PLANO — `protocol` (F0: wire byte-exacto, 30/30), `network` (F1: tokio + framer + handshake, 23/23), `database` (F3), `realm` (F4+) + binario `server_realms` con roles `auth|channel` por config (3/3). **56/56 tests.** **Hallazgo clave:** el spec §3 estaba mal en los tamaños de `TSimplePlayer` (71B packed, no 76B natural) y `TPacketGCLoginSuccess` (449B, no 474B) — corregido con evidencia dual-toolchain y erratas en el spec §7. Review adversarial (oracle) sin fallos críticos. Runtime legacy: `source/deploy` (sin cambio). Configs del binario: **TOML** (decisión 2026-08-10). Pendientes: F1.6 milestone de integración (requiere WSL), PanamaPack 151 + hybrid-crypt 152/153 en F2, harness de captura real (WSL).
-- **CRASH DE ENTRADA AL MUNDO — RESUELTO (2026-08-09):** causa raíz en el cliente — over-read de heap en `string_replace_word` (PythonSkill.cpp:62). Fix de 2 líneas desplegado (`metin2client.exe` 5.115.904 B, 14:12, hash C7EAD7CC). **Pendiente: verificación final del usuario (entrar 2-3 veces).** Detalle en AGENTS.md y CHANGELOG.
-- **Language System 1.2.6:** integrado y cargando (16 idiomas, 764-775 entradas c/u). Huecos A+B+C del servidor y 181 claves pendientes — **los huecos de textos del servidor quedan superados por el diseño nuevo** (textos servidor→cliente por manifest, §4.6 del plan único).
-- **PLAN DE REESCRITURA UNIFICADO ESCRITO (2026-08-09):** `docs/superpowers/plans/2026-08-09-servidor-rust-plan-unico.md` — consolida arquitectura, anti-hack, DB, DSL de quests, migración, canales regionales, cliente modificable. 12 preguntas abiertas para revisores externos.
-- **Auditoría legacy vs estándares 2026 completada:** 14 decisiones P0/P1/P2 que NO se arrastran (con evidencia archivo:línea) + 7 cosas que hace bien y se conservan. Ganancia estimada: 2-5x CPU, techo 1.000+ jugadores/instancia.
-- **Quests: DSL propio DECIDIDO (sin Lua):** spec en `docs/superpowers/specs/2026-08-09-quest-dsl-spec.md` (integrado en el plan único §11). Familias + bloques + imports eliminan las ~2.500 líneas duplicadas del corpus de 194 quests.
-- **Cliente: regla de esfuerzo ≤1 semana por cambio** (nada prohibido; coste/beneficio). 7 modificaciones aditivas identificadas con evidencia (version check, hardware ID, server time, dwLoginKey, paquetes pull 162+, overrides UTF-8, lista de canales desde auth + config vía manifest).
-- Grafos graphify: server **13.190 nodos / 33.233 edges**, client **17.951 nodos / 40.116 edges** (refrescar tras cambios).
-- Pendientes de la línea base C++: verificar fix del crash, revisar 17 SYSERR de boot preexistentes.
+- **C++ baseline verified:** full login working (auth + channel + character select) with the real client. Account `test` / `1234`.
+- **RUST REWRITE STARTED (2026-08-10):** ADR-0003 + ADR-0004 + flat workspace `source/reforge` — `protocol` (F0: byte-exact wire, 30/30), `network` (F1: tokio + framer + handshake, 23/23), `database` (F3), `realm` (F4+) + single binary `server_realms` with `auth|channel` roles by config (3/3). **56/56 tests.** Key finding: spec §3 sizes for `TSimplePlayer` (71B packed, not 76B natural) and `TPacketGCLoginSuccess` (449B, not 474B) corrected with dual-toolchain evidence; errata in spec §7. Adversarial review (oracle): no critical findings. Legacy runtime: `source/deploy` (unchanged). Binary configs: **TOML** (decision 2026-08-10). Pending: F1.6 integration milestone (needs WSL), PanamaPack 151 + hybrid-crypt 152/153 isolated in `protocol::legacy` at F2 (ADR-0006), real capture harness (WSL).
+- **PLAN REORDER (2026-08-10):** **G-PG (PostgreSQL cutover) comes before F2** — **one canonical PostgreSQL** (no dual-store; MariaDB used only as migration/export source; the C++ baseline operates on the same PG through the temporary adapter); F2 is split into **F2a** (server-side auth) / **F2b** (client batch 1) and is **blocked until the PostgreSQL cutover + ADR-0005**; compatibility packets (PanamaPack 151/289B, hybrid-crypt 152/153) are **isolated in `protocol::legacy`** (ADR-0006) and deleted at the new client; **no partial Rust embedded in the legacy client during F0–F6** (ADR-0007, accepted — the already-agreed boundary); dependency deferrals documented (clap/config-rs → F2, sqlx → G-PG/F3, bevy_ecs → F4).
+- **WORLD-ENTRY CRASH — CLOSED (2026-08-09):** root cause in the client — heap over-read in `string_replace_word` (PythonSkill.cpp:62). 2-line fix deployed (`metin2client.exe` 5,115,904 B, 14:12, hash C7EAD7CC) + garbage coordinates fixed (`UPDATE player SET x=969600, y=278400`). **Closed by field test 2/2 (2026-08-09):** two consecutive world entries with the recovered characters. Details in AGENTS.md and CHANGELOG.
+- **Language System 1.2.6:** integrated and loading (16 languages, 764–775 entries each). Server-side text gaps A+B+C and the 181 missing keys — **superseded by the new design** (server→client texts by manifest, plan §5.6).
+- **Unified rewrite plan written (2026-08-09):** `docs/plans/server-rewrite.md` — architecture, anti-hack, DB, quest DSL, migration, regional channels, modifiable client. 12 open questions for external reviewers.
+- **Legacy vs 2026-standards audit completed:** 14 P0/P1/P2 decisions NOT carried over (with file:line evidence) + 7 things done right and kept. Estimated gain: 2–5x CPU, 1,000+ players/instance ceiling.
+- **Quests: own DSL DECIDED (no Lua):** spec in `docs/reference/quests/quest-dsl.md` (integrated in the plan §11). Families + blocks + imports remove the ~2,500 duplicated lines of the 194-quest corpus.
+- **Client: ≤1 week per change effort rule** (nothing forbidden; cost/benefit). 7 additive modifications identified with evidence (version check, hardware ID, server time, dwLoginKey, pull packets 162+, UTF-8 overrides, channel list from auth + config via manifest).
+- Graphify graphs (2026-08-10): server **13,200 nodes / 33,251 edges**, client **17,501 nodes / 39,258 edges**, merged **30,701 / 72,509** (refresh after code changes).
+- C++ baseline pending: verify crash fix, review 17 pre-existing boot SYSERRs.
 
-## Principios de la reescritura
+## Rewrite principles
 
-1. **Hacer más con menos**: menos código, menos complejidad, menos dependencias; la calidad nace de lo necesario.
-2. **Rediseño estructural, no traducción línea por línea** (ADR-0001).
-3. **Servidor autoritativo**: el cliente envía intenciones, el servidor calcula hechos; el cliente es una vista, nunca una fuente de verdad.
-4. **La BD no calcula, garantiza**: la lógica de juego vive en Rust; PostgreSQL impone integridad (constraints, transacciones, locks, RLS, auditoría).
-5. **Reemplazo incremental verificable** (strangler fig): cada módulo Rust preserva el comportamiento observable de su homólogo C++ y pasa verificación (harness de paridad) antes de avanzar.
-6. **Cliente congelado como contrato durante F0–F6**, con excepción: cambios aditivos ≤1 semana que liberen al serverside (regla de coste/beneficio, no de prohibición).
-7. **Paridad solo donde importa**: el comportamiento observable se conserva; el código interno no tiene por qué parecerse.
-8. **ADR antes de implementar**: límites de dominio, propiedad de datos, protocolos, concurrencia, fallos y migración se deciden por escrito primero.
-9. **Hot reload por diseño**: textos, items, quests y config se editan en la BD y se recargan en runtime (NOTIFY + manifest) — sin reiniciar ni recompilar.
+1. **Do more with less**: less code, less complexity, fewer dependencies; quality comes from what is necessary.
+2. **Structural redesign, not line-by-line translation** (ADR-0001).
+3. **Server-authoritative**: the client sends intentions, the server computes facts; the client is a view, never a source of truth.
+4. **The DB does not compute, it guarantees**: game logic lives in Rust; PostgreSQL enforces integrity (constraints, transactions, locks, RLS, audit).
+5. **Verifiable incremental replacement** (strangler fig): each Rust module preserves the observable behavior of its C++ counterpart and passes verification (parity harness) before moving on.
+6. **Client frozen as contract during F0–F6**, with one exception: additive changes ≤1 week that unblock the server side (cost/benefit rule, not prohibition — ADR-0007).
+7. **Parity only where it matters**: observable behavior is preserved; internal code need not look the same.
+8. **ADR before implementing**: domain boundaries, data ownership, protocols, concurrency, failures and migration are decided in writing first.
+9. **Hot reload by design**: texts, items, quests and config are edited in the DB and reloaded at runtime (NOTIFY + manifest) — no restarts, no recompiles.
 
-## Fases
+## Phases
 
-### Fase 0 — Fundaciones (workspace, ADRs, protocolo)
+### Phase 0 — Foundations (workspace, ADRs, protocol) — DONE (2026-08-10)
 
-Objetivo: esqueleto del workspace Rust + decisiones de arquitectura cerradas por ADR + crate de protocolo con el flujo de login verificado.
+Goal: Rust workspace skeleton + architecture decisions closed by ADR + protocol crate with the verified login flow.
 
-- [x] **ADR-0002: unificación `game` + `db`** (ACEPTADO: un proceso por región, db como crate; shim legacy durante F3–F5, unificación en F6)
-- [x] Stack Rust investigado y fijado: **tokio 1.49 + sqlx 0.9 (PgPool) + bevy_ecs standalone + config-rs + clap 4.6 + tracing + proptest** (sin mlua — quests en DSL propio; regiones + ECS, no actores)
-- [x] Crate `protocol`: **spec byte-exacto del flujo de login completado** (`docs/superpowers/specs/2026-08-08-wire-protocol-login-flow.md`)
-- [x] **Plan unificado escrito** (`docs/superpowers/plans/2026-08-09-servidor-rust-plan-unico.md`)
-- [x] Auditoría legacy completa (§2.3 del plan único)
-- [x] **ADR-0003: workspace Rust en `source/reforge`** (ubicación, layout, políticas, límite de propiedad — 2026-08-10; superado en parte por ADR-0004: layout plano + nombres)
-- [x] **ADR-0004: estructura y nombres** (2026-08-10): layout plano `protocol`/`network`/`database`/`realm` + binario `server_realms` con roles (auth|channel por config), `[workspace.dependencies]` + lints `unsafe_code = "forbid"`, rust-toolchain 1.97.0, runtime legacy `source/deploy` (sin cambio)
-- [ ] ADR: límites de dominio y propiedad de datos (char.cpp por sistemas sobre Entity mínimo en ECS)
-- [ ] ADR: concurrencia (regiones + ECS; world task nunca await SQL inline)
-- [ ] ADR: motor de quests (DSL propio, sin scripting)
-- [ ] ADR: modelo anti-hack (server-authoritative + envelope + transacciones)
-- [ ] ADR: canales regionales (BD central + proceso por región; anti-doble-login con row locks)
-- [ ] ADR: capa de datos (WAL local + mutation_id + RLS + failover; contrato durable/volátil)
-- [ ] ADR: datos servidor→cliente (manifest versionado + delta + hot reload)
-- [ ] ADR: migración MySQL → PostgreSQL (en F3, no F6)
-- [x] **Workspace Cargo en `source/reforge`** (2026-08-10, layout plano — ADR-0004): crates `protocol`, `network`, `database`, `realm` + binario `server_realms` (rol `auth|channel` por config) — edition 2024, resolver 3, `[workspace.dependencies]`, lints, rust-toolchain 1.97.0, `**/target/` ignorado. `cargo build` OK (56/56 tests)
-- [x] **Crate `protocol` implementado (2026-08-10)**: 17 paquetes del flujo de login (spec §3) + TSimplePlayer 71B packed — zero-deps, LE manual, parseo sin panic. **30/30 tests** (golden byte-vectores + roundtrips + sizes + bad-lengths). Review adversarial (oracle) sin fallos críticos. **Hito F0 (LOGIN3 byte-exacto) CUMPLIDO a nivel de crate** — falta solo el harness de captura real
-- [ ] Harness de verificación: captura de paquetes reales (tcpdump/Wireshark contra el server C++) como golden tests — **pendiente: requiere server C++ arriba en WSL** (próxima sesión)
-- [ ] **Repositorio GitHub**: solo fuentes (~150-200 MB); binarios/pack/backups a Releases o storage externo; `.gitignore` de artefactos de build, clientes instalados, graphify-out, .opencode
+- [x] **ADR-0002: unify `game` + `db`** (ACCEPTED: one process per region, db as crate; legacy shim during F3–F5, unification in F6)
+- [x] Rust stack researched and fixed: **tokio 1.49 + bevy_ecs standalone + config-rs + clap 4.6 + tracing + proptest**; **sqlx 0.9 (PgPool) as candidate** — the concrete DB crate decision is a G-PG task (ADR-0001 left it undecided) (no mlua — quests in own DSL; regions + ECS, not actors)
+- [x] Crate `protocol`: **byte-exact login-flow spec completed** (`docs/reference/protocol/login-flow.md` — supersedes the 2026-08-08 wire-protocol spec draft)
+- [x] **Unified plan written** (`docs/plans/server-rewrite.md` — original draft `docs/history/2026-08-09-server-rewrite-draft.md` preserved as historical)
+- [x] Legacy audit complete (plan §3.3)
+- [x] **ADR-0003: Rust workspace in `source/reforge`** (location, layout, policies, ownership boundary — 2026-08-10; partially superseded by ADR-0004: flat layout + names)
+- [x] **ADR-0004: structure and names** (2026-08-10): flat layout `protocol`/`network`/`database`/`realm` + single binary `server_realms` with roles (auth|channel by config), `[workspace.dependencies]` + lint `unsafe_code = "forbid"`, rust-toolchain 1.97.0, legacy runtime `source/deploy` (unchanged)
+- [ ] ADR: domain boundaries and data ownership (char.cpp split into systems over a minimal Entity in ECS)
+- [ ] ADR: concurrency (regions + ECS; world task never awaits SQL inline)
+- [ ] ADR: quest engine (own DSL, no scripting)
+- [ ] ADR: anti-hack model (server-authoritative + envelope + transactions)
+- [ ] ADR: regional channels (central DB + one process per region; anti-double-login with row locks)
+- [ ] ADR: data layer (local WAL + mutation_id + RLS + failover; durable/volatile contract)
+- [ ] ADR: server→client data (versioned manifest + delta + hot reload)
+- [x] **Cargo workspace in `source/reforge`** (2026-08-10, flat layout — ADR-0004): crates `protocol`, `network`, `database`, `realm` + binary `server_realms` (role `auth|channel` by config) — edition 2024, resolver 3, `[workspace.dependencies]`, lints, rust-toolchain 1.97.0, `**/target/` ignored. `cargo build` OK (56/56 tests)
+- [x] **Crate `protocol` implemented (2026-08-10)**: 17 packets of the login flow (spec §3) + TSimplePlayer 71B packed — zero-deps, manual LE, panic-free parsing. **30/30 tests** (golden byte vectors + roundtrips + sizes + bad-lengths). Adversarial review (oracle): no critical findings. **F0 milestone (LOGIN3 byte-exact) MET at crate level** — only the real capture harness is missing
+- [ ] Verification harness: real packet capture (tcpdump/Wireshark against the C++ server) as golden tests — **pending: requires the C++ server up in WSL** (next session)
+- [ ] **GitHub repository**: sources only (~150–200 MB); binaries/packs/backups to Releases or external storage; `.gitignore` for build artifacts, installed clients, graphify-out, .opencode
 
-**Hito F0:** un LOGIN3 real capturado se parsea y re-serializa byte a byte idéntico.
+**F0 milestone:** one real captured LOGIN3 parses and re-serializes byte-for-byte identical.
 
-### Fase 1 — Red y transporte (EN CURSO 2026-08-10)
+### Phase 1 — Network and transport (IN PROGRESS 2026-08-10)
 
-Objetivo: reemplazar `libthecore` + fdwatch por tokio, con paridad de comportamiento.
+Goal: replace `libthecore` + fdwatch with tokio, with behavior parity.
 
-> **Regla de avance (guardrail de alineación):** cada tarea = código + tests + review adversarial + docs + commit. El review (oracle) verifica DOS cosas: (1) que el código no se pueda romper, y (2) que lo construido ES lo que la tarea dice (no programar por programar). Una tarea no se marca hecha sin su criterio de aceptación verificado.
+> **Progress rule (alignment guardrail):** each task = code + tests + adversarial review + docs + commit. The review (oracle) verifies TWO things: (1) the code cannot be broken, and (2) what was built IS what the task says (no programming for programming's sake). A task is not marked done without its acceptance criterion verified.
 
-- [x] **F1.1 — Crate `network` (antes `net`) con tokio** (plan: tokio 1.x, features rt-multi-thread/net/io-util/time/sync + macros para tests). ACEPTACIÓN: `cargo build` limpio; `network` depende de `protocol` (edition 2024 workspace). ✓ 2026-08-10 (tokio 1.53.1, versión centralizada en `[workspace.dependencies]`)
-- [x] **F1.2 — Listener TCP** con la semántica verificada del contrato: escribir y consumir `result > 0` bytes; `0` = EAGAIN (backpressure); `-1` = error (fixes #1/#2/#6). ACEPTACIÓN: test de integración local — cliente TCP raw conecta, envía bytes, recibe respuesta/close limpio sin floods de WRITE. ✓ 2026-08-10 (`Connection` + `serve`, equivalencia documentada y cierta en tokio)
-- [x] **F1.3 — Framing** (header BYTE + payload de tamaño fijo, sin prefijo de longitud — spec §2): tabla de tamaños cliente→servidor (0xff=13, 0xfe=1, 1=49, 4=34, 5=10, 6=2, 109=52, 111=65 canal/68 auth según rol, 0xfc=13, **+ CG_ENTERGAME 10=1 y CG_STATE_CHECKER 206=1 añadidos 2026-08-10 tras review adversarial — los necesita F2/F4**); servidor→cliente = tamaños de los structs del crate `protocol`. Manejo de paquetes partidos en reads y varios paquetes por read. ACEPTACIÓN: tests de framing con paquetes fragmentados y concatenados; **header desconocido → cierre limpio de la conexión** (paridad `input.cpp:77-84`; divergencia deliberada documentada: 0x00 el C++ lo consume como no-op, el framer lo cierra). ✓ 2026-08-10 (tabla 11/11 verificada contra packet_info.cpp)
-- [x] **F1.4 — Keepalive filtrado** (erratas spec §7): `CG_TIME_SYNC` (0xfc) y `CG_PONG` (0xfe) no rompen el parseo del flujo. ACEPTACIÓN: test con secuencia real handshake → time sync → pong → login3 parsea correcto (la secuencia del criterio original incluía GC_PHASE C→S — corregido: 0xfd es estrictamente S→C, verificado en packet.h + CPacketInfoCG; desviación justificada por el implementador y validada por el adversarial). ✓ 2026-08-10
-- [x] **F1.5 — Handshake** con retries de bias de reloj (~40-80ms, límite 32): el servidor envía `GC_PHASE` + `GC_HANDSHAKE`, valida el echo `CG_HANDSHAKE` y pasa a la fase siguiente (no se elimina: pasa una vez en login, beneficio nulo, riesgo alto). ACEPTACIÓN: test de handshake correcto + timeout/retry. ✓ 2026-08-10 (`network/src/handshake.rs`: nonce u32 nunca 0, bias ±80ms simétrico, timeout 500ms/intento, respiro 50ms, filtrado keepalives 0xfc/0xfe + descarte de fuera de orden — parity input.cpp:625-626; 11 tests nuevos → network 23/23; review adversarial: LISTO para F2; deuda conocida documentada en CHANGELOG: racional retry-on-wrong-nonce, delta≈0 con cliente legacy, test de eco parcial pendiente)
-- [ ] **F1.6 — Milestone de integración**: el auth binario C++ se conecta a un peer Rust y viceversa sin timeouts ni floods de WRITE. REQUIERE: WSL con el server C++ arriba (entorno) — si no está disponible en la sesión, queda documentado como diferido, no como hecho.
+- [x] **F1.1 — Crate `network` (formerly `net`) with tokio** (plan: tokio 1.x, features rt-multi-thread/net/io-util/time/sync + macros for tests). ACCEPTANCE: clean `cargo build`; `network` depends on `protocol` (edition 2024 workspace). ✓ 2026-08-10 (tokio 1.53.1, version centralized in `[workspace.dependencies]`)
+- [x] **F1.2 — TCP listener** with the verified contract semantics: write and consume `result > 0` bytes; `0` = EAGAIN (backpressure); `-1` = error (fixes #1/#2/#6). ACCEPTANCE: local integration test — raw TCP client connects, sends bytes, receives response/clean close without WRITE floods. ✓ 2026-08-10 (`Connection` + `serve`, documented and proven tokio equivalence)
+- [x] **F1.3 — Framing** (BYTE header + fixed-size payload, no length prefix — spec §2): client→server size table (0xff=13, 0xfe=1, 1=49, 4=34, 5=10, 6=2, 109=52, 111=65 channel/68 auth by role, 0xfc=13, **+ CG_ENTERGAME 10=1 and CG_STATE_CHECKER 206=1 added 2026-08-10 after adversarial review — F2/F4 need them**); server→client = sizes of the `protocol` crate structs. Handles split packets and multiple packets per read. ACCEPTANCE: framing tests with fragmented and concatenated packets; **unknown header → clean connection close** (parity `input.cpp:77-84`; documented deliberate divergence: 0x00 is consumed as no-op by C++, closed by the framer). ✓ 2026-08-10 (11/11 table verified against packet_info.cpp)
+- [x] **F1.4 — Keepalive filtering** (spec §7 errata): `CG_TIME_SYNC` (0xfc) and `CG_PONG` (0xfe) do not break flow parsing. ACCEPTANCE: test with real sequence handshake → time sync → pong → login3 parses correctly (the original criterion's GC_PHASE C→S was corrected: 0xfd is strictly S→C, verified in packet.h + CPacketInfoCG; deviation justified by the implementer and validated adversarially). ✓ 2026-08-10
+- [x] **F1.5 — Handshake** with clock-bias retries (~40–80ms, limit 32): the server sends `GC_PHASE` + `GC_HANDSHAKE`, validates the `CG_HANDSHAKE` echo and moves to the next phase (not removed: it runs once at login, zero benefit, high risk). ACCEPTANCE: correct handshake test + timeout/retry. ✓ 2026-08-10 (`network/src/handshake.rs`: nonce u32 never 0, symmetric bias ±80ms, 500ms/intent timeout, 50ms breather, keepalive 0xfc/0xfe filtering + out-of-order discard — parity input.cpp:625-626; 11 new tests → network 23/23; adversarial review: READY for F2; known debt in CHANGELOG: retry-on-wrong-nonce rationale, delta≈0 with legacy client, partial-echo test pending)
+- [ ] **F1.6 — Integration milestone**: the C++ auth binary connects to a Rust peer and vice versa without timeouts or WRITE floods. REQUIRES: WSL with the C++ server up (environment) — if unavailable in the session, it is documented as deferred, not done.
 
-**Hito F1:** el auth binario C++ se conecta a un peer Rust y viceversa, sin timeouts ni floods de WRITE.
+**F1 milestone:** the C++ auth binary connects to a Rust peer and vice versa, without timeouts or WRITE floods.
 
-### Fase 2 — Auth + primer lote de cliente (semana 1)
+### Phase G-PG — PostgreSQL cutover (BEFORE F2 — blocks F2)
 
-Objetivo: puerto del slice auth (modo AUTH_SERVER del binario game) + las 4 modificaciones de cliente más baratas.
+Goal: PostgreSQL 18 becomes **the single canonical store** (ADR-0001 target) before any auth code is written; a temporary legacy compatibility adapter lets the C++ baseline operate on the **same PostgreSQL** with the legacy client behavior unchanged (ADR-0005). MariaDB is used only as the migration/export source.
 
-- [ ] Flujo: `GC_PHASE` + `GC_HANDSHAKE` → `CG_HANDSHAKE` echo → `LOGIN3` (65 bytes: `0x6F` + name[31] + pwd[17] + keys[16])
-- [ ] Verificación de hash: **`mysql5_password` = `"*" + UPPER(SHA1(UNHEX(SHA1(pw))))`** — el asterisco es parte del formato (fix #5/#11)
+- [ ] **ADR-0005 accepted** (Proposed → Accepted): PostgreSQL cutover + temporary legacy compatibility adapter; F2 gated by it
+- [ ] PostgreSQL 18 provisioned (schemas per domain, per-schema permissions, RLS)
+- [ ] Temporary legacy compatibility adapter: the C++ baseline (source untouched) operates on the **same PostgreSQL** through the adapter (its MySQL-speaking `libsql` is bridged by translation); legacy client behavior unchanged; removed at F6. MariaDB used only as migration/export source
+- [ ] Migration groundwork: MySQL → PostgreSQL schema mapping (types/defaults/`ENUM`/`SET`/`UNSIGNED` adaptation per ADR-0001), data comparison harness
+- [ ] Concrete PostgreSQL crate decision (sqlx/PgPool per ADR-0001 recommendation)
+
+**G-PG milestone:** the Rust auth (F2) persists against PostgreSQL 18 while the C++ baseline and the legacy client run unchanged.
+
+**Note: F2 is BLOCKED on this phase and on ADR-0005.**
+
+### Phase 2 — Auth + first client batch (BLOCKED on G-PG + ADR-0005)
+
+> **Gate:** F2 does not start until G-PG completes and ADR-0005 is accepted. Split per the 2026-08-10 plan reorder: **F2a** = server-side auth slice; **F2b** = client batch 1 (additive, ≤1 week each, ADR-0007).
+
+**F2a — server-side auth (Rust: `network::auth` module + `server_realms --role auth`):**
+
+- [ ] Flow: `GC_PHASE` + `GC_HANDSHAKE` → `CG_HANDSHAKE` echo → `LOGIN3` (65 bytes: `0x6F` + name[31] + pwd[17] + keys[16])
+- [ ] Hash verification: **`mysql5_password` = `"*" + UPPER(SHA1(UNHEX(SHA1(pw))))`** — the asterisk is part of the format (fixes #5/#11); legacy-hash parity kept only for the compatibility window
 - [ ] `GC_AUTH_SUCCESS` (0x96 + key + result)
-- [ ] **Cliente (≤1 semana): version check al conectar** (rechazo limpio por versión; gatea evolución de protocolo)
-- [ ] **Cliente: hardware ID en LOGIN3** (bans por hardware, anti-multibox)
-- [ ] **Cliente: server time** (timers consistentes con reloj del servidor)
-- [ ] **Serverside (sin tocar cliente): validar `dwLoginKey` (LOGIN_BY_KEY)** — el password no se reenvía en claro en reconexiones (sesiones tokenizadas)
-- [ ] **Timeout global de conexión en el auth** (deuda F1.5: una conexión muda vive hasta 17.6s — ver CHANGELOG 2026-08-10 3ª parte)
+- [ ] Serverside (no client change): validate `dwLoginKey` (LOGIN_BY_KEY) — no cleartext password on reconnects (tokenized sessions)
+- [ ] Global connection timeout in the auth (F1.5 debt: a silent connection lives up to 17.6s — CHANGELOG 2026-08-10 3rd part)
 
-**Hito F2:** login contra auth Rust + db C++; el cliente recompilado pasa el version check.
+**F2b — client batch 1 (additive C++ changes, ≤1 week each, ADR-0007):**
 
-### Fase 3 — Capa de datos + canal de datos
+- [ ] Version check on connect (clean reject; gates protocol evolution)
+- [ ] Hardware ID in LOGIN3 (hardware bans, anti-multibox)
+- [ ] Server time (timers consistent with the server clock)
 
-Objetivo: crate `database` por dominios tras trait de backend + migración a PostgreSQL + paquetes pull-based en el cliente.
+**Compatibility packets (isolated — ADR-0006):** PanamaPack (151, 289B) + hybrid-crypt (152/153) are implemented only inside `protocol::legacy` — never in the new wire core. Boundary documented in `docs/reference/protocol/legacy-compatibility.md`; the whole layer is deleted at the new client (F7).
 
-- [ ] Crate `database` organizado por módulos de dominio: account/world/social/economy/log (esquemas PG separados, permisos por esquema, RLS)
-- [ ] Backend trait: `direct-sql` (MariaDB, mínimo, solo lo que el game C++ necesita) → `postgres` (destino en esta fase, no F6)
-- [ ] Portar por QID: login → player load/save → items → social
-- [ ] Pipeline durable: **WAL local por región + mutation_id + batch ≤100ms + replay idempotente** (`ON CONFLICT DO NOTHING`)
-- [ ] Ruteo SQL: `SQL_ACCOUNT` vs `SQL_PLAYER` (fix #8); `QUERY_LOGIN` 12 columnas (fix #7)
-- [ ] Migrador MySQL → PostgreSQL + harness de comparación de datos
-- [ ] **Cliente: paquetes aditivos pull-based** (headers 162+: CG_QUERY/GC_RESPONSE; registro tabla + case en PhaseLogin) — el canal de datos §4.6
-- [ ] `PROTO_FROM_DB` mantenido
+**F2 milestone:** login against the Rust auth on PostgreSQL (F2a) + the recompiled client passes the version check (F2b).
 
-**Hito F3:** el game C++ corre contra database Rust sin cambios de comportamiento; el cliente recompilado recibe datos aditivos sin desincronizarse.
+### Phase 3 — Data layer + data channel
 
-### Fase 4 — Entrada al mundo + nombres
+Goal: `database` crate organized by domains behind a backend trait + porting onto PostgreSQL (G-PG already done) + pull-based data packets in the client.
 
-Objetivo: selección de personaje + spawn con paridad + overrides de nombres UTF-8.
+- [ ] Crate `database` organized by domain modules: account/world/social/economy/log (separate PG schemas, per-schema permissions, RLS) — **PostgreSQL-only after G-PG** (no MariaDB backend; MariaDB is only the migration/export source)
+- [ ] Backend: `postgres` (sqlx candidate — concrete crate decided at G-PG/F3); no `direct-sql` backend
+- [ ] Port by QID: login → player load/save → items → social
+- [ ] Durable pipeline: **local WAL per region + `mutation_id` + batch ≤100ms + idempotent replay** (`ON CONFLICT DO NOTHING`)
+- [ ] SQL routing: `SQL_ACCOUNT` vs `SQL_PLAYER` (fix #8); `QUERY_LOGIN` 13 columns (fix #7) — ported semantics on PostgreSQL
+- [ ] Data comparison harness extended to all ported QIDs (groundwork from G-PG)
+- [ ] **Client: additive pull-based packets** (headers 162+: CG_QUERY/GC_RESPONSE; table registration + case in PhaseLogin) — the data channel §5.6
+- [ ] `PROTO_FROM_DB` maintained
+
+**F3 milestone:** the C++ game runs against the Rust `database` without behavior changes; the recompiled client receives additive data without desynchronizing.
+
+### Phase 4 — World entry + names
+
+Goal: character select + spawn with parity + UTF-8 name overrides.
 
 - [ ] `CG_PLAYER_SELECT` (header 6) → `GC_LOGIN_SUCCESS3`
-- [ ] Spawn de personaje, mapa (`Venter_the_east.mp3`), stats
-- [ ] **Cliente: overrides en memoria** (`SetLocaleName`/`SetItemLocaleName` tras `LoadLocaleData`) — el servidor manda nombres UTF-8 desde la BD; adiós mojibake y trampa CP949
-- [ ] Entidades: núcleo Entity mínimo + sistemas en ECS (bevy_ecs standalone) — NUNCA portar char.cpp como clase única
+- [ ] Character spawn, map (`Venter_the_east.mp3`), stats
+- [ ] **Client: in-memory overrides** (new override API to be added around `CPythonNonPlayer`/`CItemData` after `LoadLocaleData` — no `SetLocaleName`/`SetItemLocaleName` exist in the legacy client; they must be written first) — the server sends UTF-8 names from the DB; goodbye mojibake and the CP949 trap
+- [ ] Entities: minimal Entity core + ECS systems (bevy_ecs standalone) — NEVER port char.cpp as a single class
 
-**Hito F4:** el cliente real entra al mundo contra el core Rust con nombres correctos.
+**F4 milestone:** the real client enters the world against the Rust core with correct names.
 
-### Fase 5 — Gameplay básico + escala
+### Phase 5 — Basic gameplay + scale
 
-Objetivo: core jugable por dominios, side-by-side, benchmark de escala, y el resto de cliente.
+Goal: playable core by domains, side-by-side, scale benchmark, and the rest of the client.
 
-- [ ] Movimiento: envelope de velocidad por entidad + walkability del mapa + corrección (anti-speedhack) + lag tolerance
-- [ ] Combate: daño íntegro servidor + cooldowns por reloj del servidor + rango/LoS
-- [ ] Drops, items, inventario: transacciones atómicas (mats → resultado → oro en un commit)
-- [ ] NPCs, quests (motor DSL + conversor automático del corpus + harness de paridad), chat, tiendas, safebox, trade, GM
-- [ ] **Cliente: lista de canales desde el auth** (override de serverinfo.py — adiós IP horneada)
-- [ ] **Cliente: config vía manifest** (rates, límites visibles — ajuste sin recompilar)
-- [ ] Hot reload operativo: NOTIFY → recarga → bump manifest → delta
-- [ ] **Slint standalone** (UI de login/select/HUD contra el servidor real, en paralelo — se reutiliza en F7)
-- [ ] Benchmark de escala: N bots × N regiones (gate antes de considerar multi-proceso)
-- [ ] API REST + metrics (Prometheus/Grafana) + Docker (features de primera clase)
+- [ ] Movement: per-entity speed envelope + map walkability + correction (anti-speedhack) + lag tolerance
+- [ ] Combat: full server-side damage + server-clock cooldowns + range/LoS
+- [ ] Drops, items, inventory: atomic transactions (materials → result → gold in one commit)
+- [ ] NPCs, quests (DSL engine + automatic corpus converter + parity harness), chat, shops, safebox, trade, GM
+- [ ] **Client: channel list from the auth** (override of serverinfo.py — goodbye baked IP)
+- [ ] **Client: config via manifest** (rates, visible limits — tuning without recompiling)
+- [ ] Hot reload operational: NOTIFY → reload → manifest bump → delta
+- [ ] **Slint standalone** (login/select/HUD UI against the real server, in parallel — reused in F7; standalone per ADR-0007)
+- [ ] Scale benchmark: N bots × N regions (gate before considering multi-process)
+- [ ] REST API + metrics (Prometheus/Grafana) + Docker (first-class features)
 
-**Hito F5:** sesión de juego completa sin divergencias observables + benchmark superado.
+**F5 milestone:** a full game session with no observable divergence + benchmark passed.
 
-### Fase 6 — Paridad total e integración
+### Phase 6 — Full parity and integration
 
-- [ ] Side-by-side automatizado: misma entrada de paquetes → diff de respuestas Rust vs C++
-- [ ] Suite de golden tests ampliada a todo el tráfico de una sesión real
-- [ ] Migración de datos completa y verificada (backup/restore; failover con Patroni)
-- [ ] Reemplazo final: instancias `srv1` corriendo 100% Rust
+- [ ] Automated side-by-side: same packet input → diff of Rust vs C++ responses
+- [ ] Golden test suite extended to all traffic of a real session
+- [ ] Complete verified data migration (backup/restore; Patroni failover)
+- [ ] Final replacement: `srv1` instances running 100% Rust
+- [ ] Removal: legacy compatibility adapter (ADR-0005) + `protocol::legacy` (ADR-0006) deleted at replacement
 
-**Hito F6:** el servidor Rust reemplaza al C++ en producción de pruebas sin cambios en el cliente.
+**F6 milestone:** the Rust server replaces the C++ one in test production without client changes.
 
-### Fase 7 — Cliente (después del servidor)
+### Phase 7 — Client (after the server)
 
-> Decisiones abiertas que se resolverán con ADRs propios. La UI se diseña en Slint (app standalone desde F5, se integra por textura en el cliente nuevo). El cliente se rehace con wgpu; la UI Slint existente se reutiliza (los `.slint` sobreviven).
+> Open decisions are resolved by their own ADRs. The UI is designed in Slint (standalone app from F5, integrated as texture into the new client). The client is rebuilt with wgpu; the existing Slint UI is reused (the `.slint` files survive). Per ADR-0007, nothing Rust is embedded in the legacy client during F0–F6 — the new client is standalone.
 
-- [ ] Cliente Rust (wgpu), protocolo nuevo, cifrado real
-- [ ] UI Slint integrada (login → select → HUD — lo hecho en F5 standalone se conserva)
-- [ ] Límites del cliente legacy (24 chars, 5 personajes, stack 200) revisables con cliente nuevo
-- [ ] Formatos de pack: solo se preservan las herramientas (PackMakerLite, TEA/LZO, DumpProto) si se reutilizan
+- [ ] Rust client (wgpu), new protocol, real encryption
+- [ ] Integrated Slint UI (login → select → HUD — the F5 standalone work is kept)
+- [ ] Legacy client limits (24 chars, 5 characters, stack 200) revisable with the new client
+- [ ] Pack formats: only the tools are preserved (PackMakerLite, TEA/LZO, DumpProto) if reused
+- [ ] Delete `protocol::legacy` (ADR-0006) — nothing legacy survives in the new wire
 
-## Decisiones abiertas (para ADRs y revisores)
+## Dependency deferrals (2026-08-10)
 
-1. **DSL de quests** (spec §11.11): `between` nativo; `if` 1 nivel + else; `select` con captura `as`; claves `@clave` vs literal; naming `.quest`/`.qdsl`/`.mq`; trigger `timer` explícito.
-2. **Cliente F7**: motor (wgpu), protocolo nuevo, cifrado — sin detalle hasta F6.
-3. **Regiones cross-server**: ubicación física de los procesos de regiones especiales (junto a la BD central propuesto).
-4. **Comercio unificado**: cierre de pujas con reloj de la BD (decidido el principio; detalles de la subasta en F5).
-5. **Licencia**: MPL-2.0 propuesta (AGPL repele a operadores de pservers) — confirmar con la comunidad.
-6. **Timing API web + metrics**: desde F5 (propuesto) vs después del corte.
+Ponytail rule: dependencies enter only when the phase requires them.
 
-## Repositorio GitHub (preparación)
+- `clap` + `config-rs` → **F2** (binary args/config; `server_realms` main is std-only today)
+- `sqlx`/PgPool → **G-PG / F3** (`database` crate)
+- `bevy_ecs` → **F4** (`realm`)
+- No `mlua` ever — quests use the own DSL (decided)
+- `protocol` module split → **F2**, with PanamaPack/hybrid-crypt under `protocol::legacy` (ADR-0004 consequence, ADR-0006)
 
-- **Solo fuentes al repo** (~150-200 MB): `source\server`, `source\client` (sin artefactos de build), `source\pack` (sin .epk), `source\tools` (incluye `proto\`), `scripts\`, `docs\`, `AGENTS.md`, `ROADMAP.md`, `CHANGELOG.md`.
-- **NO van al repo**: `client\` (cliente instalado, pack 2.1 GB), `client-om2\` (referencia descargada), `archive\` (backups), `Extern\` (dependencias), artefactos de build (obj/bin/Debug/Release ~2,4 GB), `graphify-out\`, `.opencode\`, `systems\`.
-- **Binarios** (cliente instalado, .epk, builds) → GitHub Releases (no cuenta contra el límite del repo) o storage externo; se generan con los scripts de build.
-- `.gitignore` raíz con todos los patrones anteriores antes del primer push.
+## Open decisions (for ADRs and reviewers)
 
-## Cómo se lleva la cuenta
+1. **Quest DSL** (spec §11): native `between`; `if` 1 level + else; `select` with `as` capture; `@key` vs literal keys; `.quest`/`.qdsl`/`.mq` naming; explicit `timer` trigger.
+2. **F7 client**: engine (wgpu), new protocol, encryption — no detail until F6.
+3. **Cross-server regions**: physical location of special-region processes (next to the central DB proposed).
+4. **Unified trade**: bid closing with the DB clock (principle decided; auction details in F5).
+5. **License**: MPL-2.0 proposed (AGPL repels pserver operators) — confirm with the community.
+6. **Web API + metrics timing**: from F5 (proposed) vs after the cutover.
+7. **ADR-0005 and ADR-0006 are Proposed** (PostgreSQL cutover + legacy compat boundary) — pending review/confirmation. ADR-0007 is Accepted for the already-agreed boundary only.
 
-- **`CHANGELOG.md`** — registro cronológico: cada cambio verificado se anota (fecha, qué cambió, evidencia). Lo mantiene el orchestrator al final de cada sesión.
-- **`AGENTS.md`** — estado actual, hechos verificados y reglas. Se actualiza cuando cambia el conocimiento del proyecto.
-- **`docs/decisions/`** — ADRs. Toda decisión de arquitectura se escribe ANTES de implementar.
-- **`docs/superpowers/plans/2026-08-09-servidor-rust-plan-unico.md`** — el diseño completo de referencia (único archivo).
-- **Grafos** — `graphify update` sobre `source\server` y `source\client` tras cambios de código relevantes.
+## GitHub repository (preparation)
+
+- **Sources only to the repo** (~150–200 MB): `source\server`, `source\client` (no build artifacts), `source\tools\pack` (no .epk), `source\tools` (includes `proto\`), `scripts\`, `docs\`, `AGENTS.md`, `ROADMAP.md`, `CHANGELOG.md`.
+- **NOT in the repo**: `client\` (installed client, 2.1 GB pack), `client-om2\` (downloaded reference), `archive\` (backups), `Extern\` (dependencies), build artifacts (obj/bin/Debug/Release ~2.4 GB), `graphify-out\`, `.opencode\`, `systems\`.
+- **Binaries** (installed client, .epk, builds) → GitHub Releases (does not count against the repo limit) or external storage; generated by the build scripts.
+- Root `.gitignore` with all the above patterns before the first push.
+
+## How the count is kept
+
+- **`docs/README.md`** — documentation index (entry point to all docs).
+- **`docs/CURRENT.md`** — current verified state of the project.
+- **`docs/DOCUMENTATION.md`** — documentation rules and workflow (Keep a Changelog, ADR template, graph workflow).
+- **`docs/decisions/`** — ADRs. Every architecture decision is written BEFORE implementation.
+- **`docs/plans/server-rewrite.md`** — the canonical design reference (single file).
+- **`docs/history/`** — superseded/historical plans, specs and status docs (nothing is deleted; old `docs/superpowers/` content is indexed there).
+- **`docs/guardrails/`** — lessons and rules not to repeat (index + 5 files, each rule with Rule/Why/Evidence/Consequence/Status).
+- **`docs/reference/`** — protocol, quests and compatibility reference (`docs/reference/protocol/login-flow.md`, `docs/reference/protocol/legacy-compatibility.md`, `docs/reference/quests/quest-dsl.md`).
+- **Graphs** — `graphify update` on `source\server` and `source\client` after relevant code changes; re-merge to the root (`graphify merge-graphs server client --out graphify-out\graph.json`).
