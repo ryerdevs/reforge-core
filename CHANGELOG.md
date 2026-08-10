@@ -5,6 +5,27 @@ Todos los cambios notables del proyecto se documentan en este archivo.
 El formato se basa en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/).
 El proyecto usa versionado semántico ([SemVer](https://semver.org/spec/v2.0.0.html)) cuando existan releases; mientras tanto, las entradas se agrupan por fecha.
 
+## [2026-08-10] — REESCRITURA RUST ARRANCADA: ADR-0003 + workspace `source/reforge` + crate `protocol` (F0)
+
+### Añadido
+
+- **ADR-0003** (`docs/decisions/0003-reforge-workspace-rust-layout.md`): el servidor Rust vive en `source/reforge` (carpeta nueva, mismo repo `reforge-core`), workspace con crates `protocol`/`net`/`db`/`game`/`auth`, edition 2024, `protocol` zero-deps, límite de propiedad: nadie toca la línea base C++ desde esta línea de trabajo.
+- **Workspace Cargo** en `source/reforge` (5 crates, `cargo build` OK) + `**/target/` en `.gitignore`.
+- **Crate `protocol` implementado** (`source/reforge/protocol/src/lib.rs`, ~1.7k líneas, zero-deps): 17 paquetes del flujo de login del spec §3 (handshake, login/login2/login3 65/68B, phase, auth success/failure, login key, empire, login success 449B + TSimplePlayer 71B, character add 37B, additional info 70B, player select/delete/create) con parseo sin panic (longitud incorrecta → `ProtocolError::BadLength`, también slices largos), LE manual, helpers C-string strlcpy (fix `saturating_sub` anti-panic), constantes de headers verificadas contra `packet.h`.
+- **30/30 tests** (`cargo test -p protocol`): golden byte-vectores manuales (login3 65B/68B, login success 449B con offsets críticos handle@441/random_key@445/skill_group@70, character add, additional info, handshake, phase, auth success, login failure), roundtrips de todos los paquetes, `wire_sizes`, `bad_lengths_are_errors`.
+- **Review adversarial de 2 vueltas (oracle)**: contrato antes de escribir + código después — sin fallos críticos; 2 huecos MEDIO diferidos a fase (keepalive TIME_SYNC/PING → F1; PanamaPack 151/289B + hybrid-crypt 152/153 → F2).
+
+### Corregido (spec del wire protocol — errores que habrían roto la paridad)
+
+- **`TSimplePlayer` es 71B packed, no 76B natural** (`tables.h:271` abre pack(1) antes del struct; evidencia dual-toolchain gcc -m32 y MSVC x86, ambos 71B) → **`TPacketGCLoginSuccess` = 449B (handle@441, random_key@445), no 474B**; `TAccountTable` = 444B. El cliente real ya coincide (449B en producción).
+- `TPacketGDAuthLogin` = 110B (no 100B); SQL del auth = 15 columnas (no 13); `HEADER_GC_LOGIN_FAILURE=7`/`HEADER_GC_LOGIN_KEY=118` añadidos; bug conocido del cliente (registra LOGIN_FAILURE con 6B) documentado.
+- Todas las correcciones aplicadas en el cuerpo del spec + sección «Erratas 2026-08-10» (§7) con pendientes por fase.
+
+### Pendiente
+
+- Harness de captura real (tcpdump contra server C++ en WSL) para cerrar el hito F0 con evidencia de red — requiere stack arriba.
+- F1 (net): listener tokio + keepalive; F2 (auth): PanamaPack + constructores + validación de header por dispatch.
+
 ## [2026-08-09] (3ª sesión, 4ª parte) — Selector de banderas FUNCIONANDO + personajes viejos recuperados (2/2) + stack rearmado
 
 ### Resuelto

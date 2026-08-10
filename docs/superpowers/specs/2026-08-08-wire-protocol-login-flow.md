@@ -29,7 +29,7 @@ Flags de build que cambian tamaños: `ENABLE_ACCE_COSTUME_SYSTEM` (+4B en TSimpl
   - Header desconocido → `CPacketInfo::Get` false → conexión cerrada (`input.cpp:77-84`). Los paquetes de tamaño variable devuelven `iExtraLen` desde `Analyze` (`input.cpp:96-101`).
 - Servidor→cliente: sin tabla; el server envía `desc->Packet(&struct, sizeof(struct))` — structs crudos.
 - **Endianness:** little-endian nativo (x86).
-- **Alineación:** `packet.h:304..2305` envuelve TODOS los structs de paquetes en `#pragma pack(1)` → byte-exactos, sin padding. Excepción: `TSimplePlayer`/`TAccountTable` (`tables.h:285-316`) se declaran ANTES del pack(1) → alineación natural (solo importa db↔game y `TPacketGCLoginSuccess`, que los embebe como blobs).
+- **Alineación:** `packet.h:304..2305` envuelve TODOS los structs de paquetes en `#pragma pack(1)` → byte-exactos, sin padding. **ERRATA 2026-08-10:** `TSimplePlayer`/`TAccountTable` (`tables.h:285-316`) NO se declaran antes del pack(1) — `tables.h:271` abre `#pragma pack(1)` y `tables.h:1333` lo cierra, así que ambos están DENTRO del pack → **TSimplePlayer = 71B packed, TPacketGCLoginSuccess = 449B, TAccountTable = 444B** (el cliente coincide: `UserInterface/Packet.h:355-356` + `TSimplePlayerInformation:1063` → `sizeof(TPacketGCLoginSuccess4)` = 449, verificado en producción). Ver sección «Erratas 2026-08-10».
 
 ## 3. Structs byte-exactos (todos packed, LE)
 
@@ -48,19 +48,19 @@ Flags de build que cambian tamaños: `ENABLE_ACCE_COSTUME_SYSTEM` (+4B en TSimpl
 | `TPacketGCAuthSuccess` | 6 | `BYTE bHeader; DWORD dwLoginKey; BYTE bResult` |
 | `TPacketGCLoginFailure` | 10 | `BYTE header; char szStatus[9]` ("NOID","WRONGPWD","ALREADY","NOTAVAIL","BLKLOGIN","VERSION","FULL","SHUTDOWN") |
 | `TPacketGCEmpire` | 2 | `BYTE bHeader; BYTE bEmpire` (1..3) |
-| `TPacketGCLoginSuccess` | 474 | `BYTE bHeader(=0x20=32)`; `TSimplePlayer players[5]` (offset 1, 380B); `DWORD guild_id[5]` (381, 20B); `char guild_name[5][13]` (401, 65B); `DWORD handle` (466); `DWORD random_key` (470) |
+| `TPacketGCLoginSuccess` | **449** (ERRATA: no 474) | `BYTE bHeader(=0x20=32)`; `TSimplePlayer players[5]` packed (offset 1, 355B); `DWORD guild_id[5]` (356, 20B); `char guild_name[5][13]` (376, 65B); `DWORD handle` (**441**); `DWORD random_key` (**445**) |
 | `TPacketGCCharacterAdd` | 37 | `BYTE header; DWORD dwVID; float angle; long x,y,z; BYTE bType; DWORD wRaceNum; BYTE bMovingSpeed; BYTE bAttackSpeed; BYTE bStateFlag; DWORD dwAffectFlag[2]` |
 | `TPacketGCCharacterAdditionalInfo` | 70 | `BYTE header; DWORD dwVID; char name[25]; DWORD awPart[5]; BYTE bEmpire; DWORD dwGuildID; DWORD dwLevel; short sAlignment; BYTE bPKMode; DWORD dwMountVnum; DWORD dwArrow` |
 
-`TSimplePlayer` (76B, `tables.h:285`, natural alignment, ACEE ON): `DWORD dwID; char szName[25]; BYTE byJob; BYTE byLevel; DWORD dwPlayMinutes; BYTE byST,byHT,byDX,byIQ; DWORD wMainPart; BYTE bChangeName; DWORD wHairPart; DWORD wAccePart; BYTE bDummy[4]; long x,y; long lAddr; WORD wPort; BYTE skill_group` (offsets 0,4,29,30,31,35,39,43,47,51,55,59,63,67,71,73,75).
+`TSimplePlayer` (**71B packed, ERRATA: no 76B**, `tables.h:285` DENTRO del pack(1) de `tables.h:271`, ACEE+QUIVER ON): `DWORD dwID`(0); `char szName[25]`(4); `BYTE byJob`(29); `BYTE byLevel`(30); `DWORD dwPlayMinutes`(31); `BYTE byST,byHT,byDX,byIQ`(35,36,37,38); `DWORD wMainPart`(39); `BYTE bChangeName`(43); `DWORD wHairPart`(44); `DWORD wAccePart`(48); `BYTE bDummy[4]`(52); `long x,y`(56,60); `long lAddr`(64); `WORD wPort`(68); `BYTE skill_group`(70). Suma: 4+25+1+1+4+4+1+4+1+4+4+4+4+4+4+2+1 = 71. Los offsets del layout original (47,51,55,59,63,67,71,73,75) eran erróneos.
 
 ## 4. Máquina de estados del login
 
 **(a) Auth :30001 (CInputAuth, `input_auth.cpp:223-257`):**
 1. S→C: `GC_PHASE=0xfd` (PHASE_HANDSHAKE) + `GC_HANDSHAKE=0xff` (retries hasta 32)
 2. C→S: `CG_HANDSHAKE=0xff` (13B) → phase PHASE_AUTH
-3. C→S: `CG_LOGIN3=111` (68B con lang) → `CInputAuth::Login` (`input_auth.cpp:66`) → `ReturnQuery(QID_AUTH_LOGIN, ...)` — SQL 13 columnas: `mysql_hash_password('%s'), password, securitycode, social_id, id, status, availDt-NOW()>0, 7×UNIX_TIMESTAMP(...)` (col0 = hash con `*`, strcmp contra almacenado — `db.cpp:340`)
-4. Resultado en `DBManager::AnalyzeReturnQuery` (`db.cpp:229-396`): 0 filas → `GC_LOGIN_FAILURE` "NOID"; hash mismatch → "WRONGPWD"; si no → `SendAuthLogin` (`db.cpp:179-202`, `HEADER_GD_AUTH_LOGIN=100`, `TPacketGDAuthLogin` 100B: `DWORD dwID; DWORD dwLoginKey; char szLogin[31]; char szSocialID[19]; DWORD adwClientKey[4]; int iPremiumTimes[9]`)
+3. C→S: `CG_LOGIN3=111` (68B con lang) → `CInputAuth::Login` (`input_auth.cpp:66`) → `ReturnQuery(QID_AUTH_LOGIN, ...)` — SQL **15 columnas** (ERRATA: no 13, `input_auth.cpp:207-218`): `mysql_hash_password('%s'), password, securitycode, social_id, id, status, availDt-NOW()>0, 7×UNIX_TIMESTAMP(...), create_time` (col0 = hash con `*`, strcmp contra almacenado — `db.cpp:340`)
+4. Resultado en `DBManager::AnalyzeReturnQuery` (`db.cpp:229-396`): 0 filas → `GC_LOGIN_FAILURE` "NOID"; hash mismatch → "WRONGPWD"; si no → `SendAuthLogin` (`db.cpp:179-202`, `HEADER_GD_AUTH_LOGIN=100`, `TPacketGDAuthLogin` **110B** (ERRATA: no 100 — 4+4+31+19+16+36=110, `tables.h:987-995` con `iPremiumTimes[9]`): `DWORD dwID; DWORD dwLoginKey; char szLogin[31]; char szSocialID[19]; DWORD adwClientKey[4]; int iPremiumTimes[9]`)
 5. db `QUERY_AUTH_LOGIN` (`ClientManager.cpp:1854-1901`) registra CLoginData → `HEADER_DG_AUTH_LOGIN` (1 BYTE result)
 6. game `CInputDB::AuthLogin` (`input_db.cpp:1697-1728`) → C→S: **`GC_AUTH_SUCCESS=150`** (6B) → el cliente cierra auth y conecta al canal
 
@@ -85,3 +85,24 @@ Flags de build que cambian tamaños: `ENABLE_ACCE_COSTUME_SYSTEM` (+4B en TSimpl
 ## 6. Coordenadas del grafo graphify (para re-verificación)
 
 `command_login3` → `game/src/packet.h:507`; `CInputLogin::Analyze()` → `input_login.cpp:1023`; `CPacketInfo` → `packet_info.h:17`; `QUERY_LOGIN`/`RESULT_LOGIN` → `db/src/ClientManager.h:222-225`; `CInputDB::Boot()` → `input_db.cpp:474`; `SendLoginSuccessPacket` → `desc.cpp:955`; `TEA_Encrypt` → `libthecore/src/tea.c:282` (sin uso actual: plaintext).
+
+---
+
+## 7. Erratas 2026-08-10 (verificadas contra código y toolchains)
+
+> Revisión adversarial del crate `protocol` (oracle + fixer, 2026-08-10). Corregido en el cuerpo del spec; este resumen queda como registro. Evidencia empírica: `gcc -m32` (toolchain server) y MSVC 14.51 x86 (toolchain cliente) compilan `TSimplePlayer` = 71B; el cliente registra `sizeof(TPacketGCLoginSuccess4)` = 449 y el login funciona en producción.
+
+| # | Error del spec original | Realidad (verificada) | Estado |
+|---|---|---|---|
+| 1 | `TSimplePlayer` 76B natural (antes del pack) | **71B packed** (`tables.h:271` abre pack(1); struct en 285; cierra en 1333) | CORREGIDO §2/§3 |
+| 2 | `TPacketGCLoginSuccess` 474B (handle@466) | **449B** (players@1, guild_id@356, guild_name@376, handle@441, random_key@445) | CORREGIDO §3 |
+| 3 | `TAccountTable` 472B | **444B** packed (4+31+17+19+9+8+1+5×71) | CORREGIDO §2 |
+| 4 | `TPacketGDAuthLogin` 100B | **110B** (suma de sus propios campos: 4+4+31+19+16+36) | CORREGIDO §4a |
+| 5 | SQL del auth "13 columnas" | **15 columnas** (`input_auth.cpp:207-218`, +7 premium + create_time) | CORREGIDO §4a |
+| 6 | — | `HEADER_GC_LOGIN_FAILURE=7`, `HEADER_GC_LOGIN_KEY=118` faltaban en la tabla §3 | AÑADIDO (crate) |
+| 7 | — | Bug del cliente `AccountConnector.cpp:113`: registra `GC_LOGIN_FAILURE` con `sizeof(TPacketGCAuthSuccess)` (6B) en vez de 10B — el wire ES 10B; no "corregir" el crate para emitir 6B | DOCUMENTADO |
+
+**Fuera de alcance F0 (pendientes para fases):**
+- **F1 (net):** keepalive/framing — `CG_TIME_SYNC` (0xfc, 13B = sizeof(TPacketCGHandshake)), `CG_PONG` (0xfe), `GC_PING` (44). El canal y el auth los intercalan; el parseo de Login3 fallaría si no se filtran.
+- **F2 (auth):** `TPacketGCPanamaPack` (151, 289B: header + szPackName[256] + abIV[32] XOR-eado con la panama key — `panama.cpp:83-87`) y hybrid-crypt 152/153 se envían en TODO auth exitoso ANTES de `GC_AUTH_SUCCESS` (`input_db.cpp:1710-1717`); el cliente los espera incondicionalmente (`AccountConnector.cpp:119-126`). El crate `protocol` debe añadirlos en F2.
+- **F2 (API):** `TPacketGCLoginSuccess` sin constructor (25 campos × 5 jugadores), `TPacketCGPlayerCreate::new` fija `index=0`; `from_bytes` no valida `data[0]` (decisión: el dispatch lo hace net, F1).
