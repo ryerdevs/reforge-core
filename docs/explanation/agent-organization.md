@@ -7,22 +7,34 @@ Last verified: 2026-08-10
 
 # Agent team organization
 
-This project runs as a small agent team. This document explains **who does what, when an agent is spawned or reused, and how work moves through gates**. The policy that governs documentation changes lives in `DOCUMENTATION.md` §10; operational lessons are in `guardrails/agent-operations.md`.
+This project runs as a small agent team. This document explains **who does what, who reports to whom, and how work moves through gates**. The policy that governs documentation changes lives in `DOCUMENTATION.md` §10; operational lessons are in `guardrails/agent-operations.md`.
+
+## Hierarchy
+
+```
+Orchestrator ── calls everyone; plans, delegates, verifies, commits
+   └── Oracle — supreme supervisor (second only to the orchestrator)
+          ├── build — the implementer (writes code)
+          │     └── Fixer — build's adversary (reviews build's code, says what was done wrong)
+          ├── Librarian — documentation maintainer (audits AND edits docs; research)
+          ├── Explorer — recon (read-only)
+          ├── Observer — visual analysis (read-only)
+          └── Designer — UI/UX (edits UI)
+```
 
 ## Why a team
 
-The rewrite touches three worlds at once: the legacy C++ server/client (the oracle), the Rust workspace (`source/reforge`), and PostgreSQL. No single agent should both write and verify its own work. The team separates **writing**, **attacking**, **researching**, **recon** and **control**, so every deliverable passes at least one adversarial review before it is accepted.
+The rewrite touches three worlds at once: the legacy C++ server/client (the oracle of truth), the Rust workspace (`source/reforge`), and PostgreSQL. No single agent should both write and verify its own work. The team separates **writing**, **attacking**, **maintaining docs**, **recon** and **control**, so every deliverable passes at least one adversarial review before it is accepted.
 
 ## Roster
 
 | Role | Model (all `opencode-go/deepseek-v4-flash`, variant max unless noted) | Owns | When spawned |
 |---|---|---|---|
 | **Orchestrator** | v4-flash max | Planning, delegation, verification, docs, **the only one who commits** | always (this role) |
-| **build** (opencode built-in, not omo-slim) | v4-flash max | Direct implementation: full toolkit (clean-code, rust-best-practices/async-patterns/testing, verification-before-completion, ponytail; cpp-pro/make only for the legacy adapter) | direct work when the orchestrator is not delegating to fixer lanes |
-| **Fixer** | v4-flash max | Implementation of one bounded task | per task; one lane = one fixer |
-| **Oracle-fixer** | v4-flash max | Adversarial review of ONE fixer's deliverable ("try to break it" + alignment with the plan) | per lane, after its fixer |
-| **Oracle general** | v4-flash max | Meta-review of the whole change after all per-lane oracles passed | at each gate (phase, commit) |
-| **Librarian** | v4-flash max | External research + documentation audits; never edits | research or doc audits |
+| **Oracle** | v4-flash max | **Supreme supervisor** — meta-review of the whole change (code + docs + plan + gates); second only to the orchestrator | at every gate (phase, commit) |
+| **build** (opencode built-in, not omo-slim) | v4-flash max | Implementation: full toolkit (clean-code, rust-*, verification-before-completion, ponytail; cpp-pro/make only for the legacy adapter) | direct implementation work |
+| **Fixer** | v4-flash max | **build's adversary** — reviews build's code, says what was done wrong, checks plan alignment; read-only | after build delivers, per task |
+| **Librarian** | v4-flash max | **Documentation maintainer** — audits AND edits docs (applies its own audit fixes); external research | doc upkeep, research, doc audits |
 | **Explorer** | v4-flash max | Fast codebase recon returning compressed context | discovery before planning |
 | **Observer** | mimo-v2.5 | Visual/media analysis | images, PDFs, screenshots |
 | **Designer** | v4-flash max | UI/UX polish | user-facing interfaces |
@@ -30,54 +42,54 @@ The rewrite touches three worlds at once: the legacy C++ server/client (the orac
 ## Standard flow (one lane)
 
 1. **Orchestrator** reads the plan (`ROADMAP.md` / `docs/CURRENT.md`), picks the next bounded task with an acceptance criterion.
-2. **Fixer** implements it (write scope: one folder/crate; disjoint from every other running lane).
-3. **Oracle-fixer** (fresh session) tries to break it and checks it matches the task, not just the code.
-4. **Oracle general** (fresh session) supervises the whole change after the per-lane oracles.
-5. **Orchestrator** verifies independently, applies corrections, updates docs, and **commits**.
-6. Loop protocol (when used): write attempt result to `.opencode/loop-history/<loop>/history-NNN.md`, PASS stops, FAIL retries up to `maxAttempts`, then escalates.
+2. **build** implements it (write scope: one folder/crate; disjoint from every other running lane).
+3. **Fixer** (fresh session) attacks build's output: what was done wrong, does it match the task, are docs updated.
+4. **build** fixes the findings; fixer re-checks (iterate until clean or findings are accepted by the orchestrator).
+5. **Oracle** (fresh session) supervises the WHOLE change after the fixer: code, docs, plan consistency, gates, cross-cutting risks.
+6. **Librarian** maintains the docs touched by the change (if any).
+7. **Orchestrator** verifies independently, applies corrections, and **commits**.
+8. Loop protocol (when used): write attempt result to `.opencode/loop-history/<loop>/history-NNN.md`, PASS stops, FAIL retries up to `maxAttempts`, then escalates.
 
 ## Specialization mechanics (agents are specialists, not generalists)
 
-Each agent is defined by a dedicated file in `.opencode/agents/<role>.md` (local, gitignored): **mission prompt + permissions + model**. The mission is strict — what it does AND what it never does; permissions enforce it (oracle/librarian/explorer/observer are `edit: deny`; only fixer and designer write).
+Each agent is defined by a dedicated file in `.opencode/agents/<role>.md` (local, gitignored): **mission prompt + permissions + model**. The mission is strict — what it does AND what it never does; permissions enforce it (**read-only: oracle, fixer, explorer, observer** — `edit: deny`; **writers: build, librarian (docs only), designer**).
 
 - Specialization comes from **scope restriction, not context volume**: each agent receives only its lane (files, acceptance criterion, evidence sources), never the whole project.
-- Global skills exist for everyone (opencode mechanics), but each agent's mission limits it to its lane's skills (oracle → adversarial review; fixer → rust-* + clean-code; librarian → documentation-*; explorer → graphify/codemap).
+- Global skills exist for everyone (opencode mechanics), but each agent's mission limits it to its lane's skills (fixer → adversarial review; build → rust-* + clean-code; librarian → documentation-*; explorer → graphify/codemap).
 - More context does not make an agent smarter — it dilutes focus. A specialist gets **less, targeted** context.
 
 ## Value contract (what each agent uniquely contributes)
 
-Skills are **global** (auto-loaded from `~/.agents/skills` for every agent); they do not differentiate agents. Value comes from the **role mission + delegation discipline**. Each agent exists because it provides something the others must not do themselves:
-
 | Agent | Unique contribution | Must NOT |
 |---|---|---|
 | **Orchestrator** | Plan, delegate, reconcile, verify, docs, commit | Implement non-trivial code; review its own work |
-| **Fixer** | Write code for one bounded task | Decide architecture; review its own output |
-| **Oracle-fixer** | Attack one deliverable + check plan alignment | Write code |
-| **Oracle general** | Meta-review of the whole change after per-lane oracles | Write code |
-| **Librarian** | External research + documentation audits | Edit files |
+| **Oracle** | Supreme supervision: meta-review of the whole change, catch what the fixer missed, gate verdict | Write code, edit |
+| **build** | Write code for one bounded task | Decide architecture; review its own output as final |
+| **Fixer** | Attack build's output, say what was done wrong, check plan alignment + docs | Write code, edit |
+| **Librarian** | Maintain the documentation (audit + edit), research | Edit code; decide policy alone |
 | **Explorer** | Recon: find files/patterns, return compressed context | Implement |
 | **Observer** | Read images/PDFs/screenshots without polluting context | Implement |
 | **Designer** | UI/UX visual and interaction quality | Copywriting, backend |
 
 Delegation discipline (the antidote to "loose agents"):
 
-- The orchestrator delegates **by lane**: recon → explorer, research/docs audit → librarian, implementation → fixer, review → oracle, visuals → designer/observer.
+- The orchestrator delegates **by lane**: recon → explorer, implementation → build, review of build → fixer, supervision → oracle, docs → librarian, visuals → designer/observer.
 - The orchestrator handles directly **only**: coordination, verification commands, git/commit, and edits smaller than ~15 lines that are isolated and low-risk.
-- **Never** implement a non-trivial feature directly while a fixer exists; **never** self-review own docs while an oracle exists.
-- Every task dispatch names: the lane, the write scope, the acceptance criterion, and (for oracles) the mandatory final report.
-- **Every task ends with its documentation updated** (canonical docs, doc-comments, `Last verified` — policy `docs/DOCUMENTATION.md`); agents list required doc updates when outside their write scope. The librarian audits docs against the policy and may propose policy improvements (never edits); the fixer applies, the oracle reviews, the orchestrator commits.
+- **Never** implement a non-trivial feature directly while build exists; **never** self-review own docs while an oracle exists.
+- Every task dispatch names: the lane, the write scope, the acceptance criterion, and (for reviewers) the mandatory final report.
+- **Every task ends with its documentation updated** (canonical docs, doc-comments, `Last verified` — policy `docs/DOCUMENTATION.md`); the librarian owns doc upkeep, build/fixer list required doc updates when docs are outside their lane, the oracle verifies docs as part of supervision.
 
 ## Spawn and reuse rules
 
-- **Fresh session for every oracle review.** Resumed oracle sessions returned empty results repeatedly (2026-08-10) — see `guardrails/agent-operations.md` rule 1.
-- **Reuse fixer sessions** when the new task is in the same context (fix-1 was resumed successfully several times).
+- **Fresh session for every reviewer** (oracle and fixer-as-adversary). Resumed reviewer sessions returned empty results repeatedly (2026-08-10) — see `guardrails/agent-operations.md` rule 1.
+- **Reuse build (implementer) sessions** when the new task is in the same context (resumed successfully several times).
 - **Never reissue an unchanged task** after a rejection; adjust scope or context first.
-- **Parallel lanes only with disjoint write scopes.** One lane = one fixer + one oracle-fixer.
+- **Parallel lanes only with disjoint write scopes.**
 - **Labels are informative:** give every task a distinct description; the board inherits the original objective when a session is resumed.
 
 ## Gates
 
-- A task is "done" only with: code + tests + per-lane oracle verdict + (at phase gates) general oracle verdict + docs updated + commit with evidence.
+- A task is "done" only with: code + tests + fixer verdict + oracle verdict + docs updated + commit with evidence.
 - No phase is marked complete without its acceptance criterion verified (`AGENTS.md` rule 5).
 - Architecture decisions are ADRs before code (`DOCUMENTATION.md` §9).
 
