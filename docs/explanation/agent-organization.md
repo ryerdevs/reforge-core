@@ -18,6 +18,7 @@ The rewrite touches three worlds at once: the legacy C++ server/client (the orac
 | Role | Model (all `opencode-go/deepseek-v4-flash`, variant max unless noted) | Owns | When spawned |
 |---|---|---|---|
 | **Orchestrator** | v4-flash max | Planning, delegation, verification, docs, **the only one who commits** | always (this role) |
+| **build** (opencode built-in, not omo-slim) | v4-flash max | Direct implementation: full toolkit (clean-code, rust-best-practices/async-patterns/testing, verification-before-completion, ponytail; cpp-pro/make only for the legacy adapter) | direct work when the orchestrator is not delegating to fixer lanes |
 | **Fixer** | v4-flash max | Implementation of one bounded task | per task; one lane = one fixer |
 | **Oracle-fixer** | v4-flash max | Adversarial review of ONE fixer's deliverable ("try to break it" + alignment with the plan) | per lane, after its fixer |
 | **Oracle general** | v4-flash max | Meta-review of the whole change after all per-lane oracles passed | at each gate (phase, commit) |
