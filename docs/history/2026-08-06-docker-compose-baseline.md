@@ -1,5 +1,13 @@
 # Metin2 Alpine Linux and Docker Compose Compatibility Baseline
 
+> **Metadata**
+> - Type: History
+> - Status: Historical
+> - Audience: Project agents and maintainers (historical context only)
+> - Last verified: 2026-08-10
+> - Original location: `docs/superpowers/plans/2026-08-06-metin2-alpine-docker-compose-baseline.md`
+> - **Historical record.** Archived for context. This document is NOT current normative guidance: it was the planned Alpine/Docker compatibility baseline. The current runtime contract (MariaDB + legacy C++ processes via `scripts/` on WSL) and the Rust rewrite direction are described in `AGENTS.md` and the active `docs/plans/server-rewrite.md`. Paths and tasks in this file reflect the 2026-08-06 repo layout (e.g. `server/`), which has since been reorganized under `source/` — do not follow them literally.
+
 > **For agentic workers:** execute this plan task-by-task. Use the project-local C++/CMake, Docker, debugging, documentation, and verification guidance before modifying implementation files.
 
 **Goal:** Convert the already-buildable Linux C++ server into a reproducible Alpine Linux build and a one-command Docker Compose deployment without changing the legacy server's observable behavior.

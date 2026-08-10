@@ -1,9 +1,97 @@
 # Changelog
 
-Todos los cambios notables del proyecto se documentan en este archivo.
+All notable changes to this project are documented in this file.
 
-El formato se basa en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/).
-El proyecto usa versionado semántico ([SemVer](https://semver.org/spec/v2.0.0.html)) cuando existan releases; mientras tanto, las entradas se agrupan por fecha.
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.html)) once releases exist; until then, entries are grouped by date.
+
+> **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
+
+## [2026-08-10] (4th part) — Documentation reorganization (docs hubs, plan reorder, ADR-0005/0006/0007)
+
+### Added
+
+- **Documentation hub restructured** (final layout; the hub files are owned by the documentation lanes, the reorg is coordinated):
+  - `docs/README.md` — documentation index (entry point to all docs).
+  - `docs/CURRENT.md` — current verified state of the project.
+  - `docs/DOCUMENTATION.md` — documentation rules and workflow (Keep a Changelog format, ADR template, graph workflow).
+  - `docs/plans/server-rewrite.md` — canonical design reference (replaces `docs/history/2026-08-09-server-rewrite-draft.md`, preserved as historical).
+  - `docs/reference/protocol/login-flow.md` — byte-exact login wire spec (moved from `docs/superpowers/specs/2026-08-08-wire-protocol-login-flow.md`).
+  - `docs/reference/protocol/legacy-compatibility.md` — legacy wire/pack compatibility boundary (ADR-0006).
+  - `docs/reference/quests/quest-dsl.md` — quest DSL spec (moved from `docs/superpowers/specs/2026-08-09-quest-dsl-spec.md`).
+  - `docs/how-to/`, `docs/tutorials/`, `docs/explanation/`, `docs/decisions/`, `docs/history/`.
+- **ADR-0005 (Proposed)** — `docs/decisions/0005-postgresql-cutover-and-legacy-adapter.md`: PostgreSQL cutover (phase G-PG) + temporary legacy compatibility adapter; **F2 is gated by it**. Not accepted yet — needs confirmation.
+- **ADR-0006 (Proposed)** — `docs/decisions/0006-legacy-wire-pack-compat-boundary.md`: legacy wire/pack compatibility boundary — PanamaPack (151, 289B) and hybrid-crypt (152/153) isolated in `protocol::legacy`, never in the new wire core; boundary documented in `docs/reference/protocol/legacy-compatibility.md`; deleted at the new client (F7).
+- **ADR-0007 (Accepted — only the already-agreed boundary)** — `docs/decisions/0007-no-partial-rust-in-legacy-client.md`: no partial Rust embedded in the legacy client during F0–F6; the Rust client ships standalone (Slint standalone in F5, wgpu client in F7). Everything else about the new client remains open (own ADRs at F7).
+
+### Changed
+
+- **Root `README.md`:** translated to English; concise current status linking to `docs/README.md` and `docs/CURRENT.md`; final workspace names (`source/reforge`: `protocol`, `network`, `database`, `realm` + binary `server_realms` with `auth|channel` roles); architecture section trimmed (no duplicated design — points to `docs/plans/server-rewrite.md`).
+- **`ROADMAP.md`:** translated to English; **plan reorder — G-PG (PostgreSQL cutover) before F2**; F2 split into **F2a** (server-side auth) / **F2b** (client batch 1) and **blocked until the PostgreSQL cutover + ADR-0005**; compatibility packets isolated in `protocol::legacy` (ADR-0006); no partial Rust embedded client (ADR-0007); dependency deferrals documented (clap/config-rs → F2, sqlx → G-PG/F3, bevy_ecs → F4, no mlua ever); links updated to `docs/plans/server-rewrite.md`, `docs/reference/protocol/login-flow.md`, `docs/reference/protocol/legacy-compatibility.md`, `docs/reference/quests/quest-dsl.md`; graph counts updated to **server 13,200/33,251, client 17,501/39,258, merged 30,701/72,509**. F0/F1 actual evidence preserved; **G-PG and F2 NOT marked done**.
+- **`AGENTS.md`:** translated to English; repository layout and documentation workflow updated to the new docs structure; all safety/build rules, protocol facts, runbook, crash history and the graph workflow preserved; documentation rules now point to `docs/README.md`, `docs/CURRENT.md`, `docs/DOCUMENTATION.md`.
+- **ADRs 0001–0004:** metadata headers added (`Status`/`Date`/`Supersedes`/`Superseded by`); ADR-0003 links updated to the new plan/spec paths (old ones noted as historical); decisions unchanged.
+- **Documentation policy:** docs are written in English going forward; old decisions/plans marked historical/superseded, never deleted (no-hide-history rule).
+
+### Verified
+
+- All links in the five owned files (README, ROADMAP, CHANGELOG, AGENTS.md, `docs/decisions/*`) point to the final docs target paths.
+- ROADMAP F0/F1 checkbox evidence untouched (56/56 tests, F1.1–F1.5 acceptance criteria); G-PG/F2 left unchecked; ADR statuses explicit (0001–0004 Accepted, 0005/0006 Proposed, 0007 Accepted for the already-agreed boundary).
+- No source code touched on this lane — documentation-only change; the other docs lanes' files (hubs, renames) are separate work in the same worktree.
+
+## [2026-08-10] (6th part) — Docs audit: guardrails, metadata normalization, hub sections
+
+### Added
+
+- **`docs/guardrails/`** — new section with 6 files, each rule structured as Rule / Why / Evidence / Consequence / Status (policy `docs/DOCUMENTATION.md` §3.1):
+  - `README.md` (Hub index), `rust-rewrite.md` (property boundary, two source copies, ADR-before-code, tests/evidence, minimal deps, no partial Rust in client), `legacy-compatibility.md` (PanamaPack is a wire packet not a library/EIX/EPK, `protocol::legacy` temporary, single canonical PostgreSQL, legacy client contract), `data-and-encoding.md` (CP949, `PROTO_FROM_DB`, `item_proto` names, PostgreSQL encoding, units vs cells), `operations.md` (WSL memory, boot order, `sync` after deploy, IP check, no artifacts in git), `world-entry-crash.md` (0xC0000374 postmortem, closed 2/2, diagnostic lessons).
+
+### Changed
+
+- **`docs/DOCUMENTATION.md`** — `Type: Hub`; metadata scheme extended: `Type: Tutorial | How-to | Reference | Explanation | Plan | Decision | Guardrail | History | Hub | Snapshot`; `Status: Current | Proposed | Accepted | Superseded | Historical`; document-kinds table (Plans/Decisions/Guardrails/History/Hub/Snapshot); guardrail rule structure §3.1; no-empty-Diátaxis-dirs rule; documentation workflow §10 (librarian audits → fixer applies → oracle reviews → orchestrator commits).
+- **`docs/README.md`** — hub rewritten with visible **Plans / Decisions / Reference / Guardrails / History** sections; empty `tutorials/`/`how-to/`/`explanation/` links removed (documented as on-demand only); reader directed to CURRENT/ROADMAP/CHANGELOG.
+- **ADRs 0001–0007 normalized** — consistent YAML frontmatter (`Type: Decision`, `Status`, `Audience`, `Date`, `Last verified`, `Supersedes`, `Superseded by`); **active ADRs translated to English without changing decisions** (0001, 0002, 0003, 0004 were Spanish); 0001 note on ADR-0005 refinement kept; 0002 note on ADR-0004 process-topology refinement added; 0003 folder list corrected (`source/tools/pack`, not `source/pack`).
+- **`docs/CURRENT.md`** — `Type: Snapshot`; docs-structure line updated (no empty Diátaxis dirs listed).
+- **`docs/plans/server-rewrite.md`** — `Type: Plan`.
+- **`AGENTS.md`** — `docs\` layout row and methodology updated: `guardrails/` added, empty Diátaxis dirs marked on-demand, no empty-dir policy.
+- **`ROADMAP.md`** — "How the count is kept" adds `docs/guardrails/`.
+- **`README.md` (root)** — docs tree line updated (no empty Diátaxis dirs listed).
+
+### Verified
+
+- **Relative-link scan over `docs/**` + root markdown: 0 broken links.**
+- Backtick-path scan: 53 flagged, all explained — policy mode names (`docs/tutorials/` etc., on-demand), brace expansion (`source/{client,server,tools,deploy}`), explicit provenance (historical "Original location" paths under `docs/superpowers/`, the reverted `source/realms` rename note), and read-only historical content references. **No active path is broken.**
+- Every guardrail file has complete metadata (`Type: Guardrail`, `Status`, `Audience`, `Last verified`) and linked evidence.
+- No link points to empty/missing categories; `docs/superpowers`, `docs/tutorials`, `docs/how-to`, `docs/explanation` directories do not exist and contain no files (nothing to remove).
+- Content consistency preserved: single canonical PostgreSQL + adapter (ADR-0005), G-PG before F2, F2 blocked, `protocol::legacy` isolated, no partial Rust in legacy client; 56/56 tests, graph counts 13,200/33,251 + 17,501/39,258 + 30,701/72,509; crates `protocol`/`network`/`database`/`realm`/`server_realms`; F1.6 pending; G-PG/F2 not marked done.
+
+## [2026-08-10] (5th part) — Documentation reconciliation (oracle findings)
+
+### Added
+
+- **`docs/history/2026-08-09-server-rewrite-plan-v0.2.md`**: the original Spanish plan v0.2 **body** restored byte-identically from `HEAD:docs/superpowers/plans/2026-08-09-servidor-rust-plan-unico.md` (verified via the original blob hash `7a108e754229ef...`); migration metadata/provenance was added separately and the body remains non-normative. `docs/plans/server-rewrite.md` links to it.
+- **`docs/history/README.md`**: index of all historical documents (`Type: Hub`, `Status: Historical`).
+- Historical documents received provenance metadata and limited link corrections; their technical history remains preserved and non-normative.
+
+### Changed
+
+- **Single canonical PostgreSQL (user decision 2026-08-10):** `ADR-0005`, `ROADMAP.md` (G-PG + F3) and `docs/plans/server-rewrite.md` now state: **one PostgreSQL**; the C++ baseline operates on the **same PG** through a temporary compatibility adapter (its MySQL `libsql` is bridged); MariaDB is used only as the **migration/export source**; no dual-store, no `direct-sql` backend, no "C++ stays on MariaDB during F2–F6".
+- **`docs/plans/server-rewrite.md` + `ROADMAP.md` F4:** removed the invented `SetLocaleName`/`SetItemLocaleName` API (does not exist in the legacy client) → "new in-memory override API to be added around `CPythonNonPlayer`/`CItemData` after `LoadLocaleData`".
+- **`docs/reference/protocol/login-flow.md`:** `GC_AUTH_SUCCESS` corrected to **S→C** (was C→S); `TSimplePlayer` size sum fixed to `4+25+1+1+4+4+4+1+4+4+4+4+4+4+2+1 = 71`.
+- **`source/reforge/protocol/src/lib.rs` doc-comment:** contract path → `docs/reference/protocol/login-flow.md` (canonical); obsolete 76B/474B deviation narrative removed.
+- **Paths:** `source\pack` → `source\tools\pack` in AGENTS.md, README.md, ROADMAP.md and active docs; `Mysql2Proto` added to the tools list (exists in `source/tools`).
+- **QUERY_LOGIN:** columns 12 → **13** in AGENTS.md and ROADMAP (verified `ClientManagerLogin.cpp:395-426` + `CreateAccountTableFromRes:259-297`; `lang` column from the Language System ALTER).
+- **World-entry crash state:** AGENTS.md/ROADMAP aligned with CHANGELOG — closed, field test 2/2 (2026-08-09).
+- **Plan section refs:** ROADMAP §4.6→§5.6, §2.3→§3.3, §11.11→§11.
+- **`docs/CURRENT.md`:** removed the claim that the docs snapshot is in commit `b85a019` → "documentation reorganization pending commit".
+- **`docs/DOCUMENTATION.md`:** metadata scheme now allows `Type: Hub | Snapshot` and `Status: Historical` (used by the hubs and history index).
+- **`README.md`:** license badge/link → "License: pending decision" (no `LICENSE` file exists; MPL-2.0 still Proposed).
+- **`CHANGELOG.md` language note:** corrected — the 2026-08-10 1st–3rd parts are also Spanish; only the 4th part and the new English docs follow the English rule.
+
+### Verified
+
+- Relative-link scan over `docs/**` + root markdown: **0 broken links**.
+- Grep: no active `source\pack`; no `SetLocaleName` as an existing API (only negative mentions); no active dual-store/`direct-sql (MariaDB)`; no `12 columns` in active docs (only the historical 2026-08-08 changelog entry, preserved verbatim); `docs/superpowers` appears only as provenance/history policy.
+- v0.2 body restoration verified byte-identical against the original blob (`7a108e754229ef378605a2fe7216f7c2b185035d`); the current historical file additionally contains the approved migration metadata.
 
 ## [2026-08-10] (3ª parte) — F1.5 handshake + binario `server_realms` + config TOML
 
@@ -130,7 +218,7 @@ El proyecto usa versionado semántico ([SemVer](https://semver.org/spec/v2.0.0.h
 
 ### Auditoría completa del Language System (cliente + servidor + pack)
 
-- **Servidor: 11/11 archivos del doc `LANGUAGE_SYSTEM_ESTADO_2026-08-08.md` §4 verificados en el código actual.** Motor vivo (`g_iUseLocale=TRUE`), runtime 16 idiomas desplegado, `account.lang='en'` en BD (el cliente lo sobrescribió al loguear en EN — comportamiento por diseño).
+- **Servidor: 11/11 archivos del doc `docs/reference/legacy/language-system.md` §4 verificados en el código actual.** Motor vivo (`g_iUseLocale=TRUE`), runtime 16 idiomas desplegado, `account.lang='en'` en BD (el cliente lo sobrescribió al loguear en EN — comportamiento por diseño).
 - **CORRECCIÓN DE DATO ERRÓNEO de esta misma sesión:** el EN del runtime **cubre el 100% de las claves de ES (0 faltantes, 11 extra)**. El análisis previo de "732 claves ES sin cubrir por EN" fue un **error de parseo** (contaba líneas con comillas, no pares clave→valor). El EN estaba completo; la mezcla ES/EN que vio el usuario tiene otras causas (ver huecos B y C abajo).
 - **Huecos reales del servidor** (lo que falta para "todos los textos del servidor en el idioma del jugador"):
   - **A. Broadcasts/notices/timers usan el idioma del ÚLTIMO paquete procesado** — `LC_TEXT_LANG`/`LC_TEXT_NEW_LANG` están definidas (locale.hpp:57-58) pero nunca se usan (1 match = comentario). Los 26 `SendNotice` salen en el idioma del jugador anterior.
@@ -208,7 +296,7 @@ El proyecto usa versionado semántico ([SemVer](https://semver.org/spec/v2.0.0.h
 ### Avance Fase 0 (reescritura Rust)
 
 - **ADR-0002 aceptado** (`docs/decisions/0002-unify-game-and-db.md`): unificar `game`+`db` en un proceso por canal con db como crate; shim legacy del protocolo GD/DG durante F3–F5; unificación final en F6. Recomendación de @oracle con verificación en el código (el db legacy es un broker SQL + coordinador cross-canal, no una BD).
-- **Spec byte-exacto del wire protocol de login** (`docs/superpowers/specs/2026-08-08-wire-protocol-login-flow.md`): constantes (LOGIN_MAX_LEN=30, PASSWD_MAX_LEN=16), framing sin prefijo de longitud (tabla `CPacketInfoCG`), 16 structs packed con offsets (TPacketCGLogin3 65/68B, TPacketGCLoginSuccess 474B, TPacketGCCharacterAdd 37B...), máquina de estados auth→canal completa y protocolo peer GD/DG/QID. Extraído con el grafo graphify + lectura de fuentes.
+- **Spec byte-exacto del wire protocol de login** (`docs/reference/protocol/login-flow.md`, antes `docs/superpowers/specs/2026-08-08-wire-protocol-login-flow.md`): constantes (LOGIN_MAX_LEN=30, PASSWD_MAX_LEN=16), framing sin prefijo de longitud (tabla `CPacketInfoCG`), 16 structs packed con offsets (TPacketCGLogin3 65/68B, TPacketGCLoginSuccess 474B, TPacketGCCharacterAdd 37B...), máquina de estados auth→canal completa y protocolo peer GD/DG/QID. Extraído con el grafo graphify + lectura de fuentes.
 - **Stack Rust investigado y fijado**: tokio 1.49 + sqlx 0.9 + mlua 0.12 + config-rs + clap 4.6 + tracing + proptest (reporte de @librarian; sin actores: task-per-connection, mundo por canal tras `mpsc`).
 - **Mapa de módulos del servidor** (reporte de @explorer): los 3 binarios, propiedad de datos, capa de red libthecore/fdwatch y 15 fronteras naturales de port (char.cpp 6.5k LOC, input_main, quest engine, db ClientManager*...).
 

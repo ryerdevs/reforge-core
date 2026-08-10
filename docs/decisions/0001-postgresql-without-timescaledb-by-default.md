@@ -1,85 +1,87 @@
-# ADR-0001: PostgreSQL como base principal sin TimescaleDB por defecto
+---
+Type: Decision
+Status: Accepted
+Audience: Contributors, maintainers
+Date: 2026-08-06
+Last verified: 2026-08-10
+Supersedes: —
+Superseded by: —
+---
 
-## Estado
+# ADR-0001: PostgreSQL as the primary database, no TimescaleDB by default
 
-Aceptado
+## Context
 
-## Fecha
+The current server uses C++ and a `libsql` layer based on the MySQL/MariaDB API. Its model contains transactional game state — accounts, characters, items, inventory, guilds and trading — plus historical and log tables.
 
-2026-08-06
+The project has two horizons:
 
-## Contexto
+1. Keep the C++ server compatible with Alpine Linux and Docker.
+2. Structurally rewrite the server in Rust, with a more coherent architecture and a possible unification of the current `game` and `db` responsibilities.
 
-El servidor actual utiliza C++ y una capa `libsql` basada en la API de MySQL/MariaDB. Su modelo contiene estado transaccional del juego —cuentas, personajes, objetos, inventario, gremios y comercio— además de tablas históricas y de logs.
+TimescaleDB was evaluated because part of the model contains events and records with timestamps. However, it has not been demonstrated yet that the volume, retention or analytical queries justify adding an extension and specific operations for time series.
 
-El proyecto tendrá dos horizontes:
+## Decision
 
-1. Mantener el servidor C++ compatible con Alpine Linux y Docker.
-2. Rehacer estructuralmente el servidor en Rust, con una arquitectura más coherente y una posible unificación de las responsabilidades actuales de `game` y `db`.
+Standard PostgreSQL will be the main database of the future Rust server.
 
-Se evaluó TimescaleDB porque parte del modelo contiene eventos y registros con marcas temporales. Sin embargo, no se ha demostrado todavía que el volumen, la retención o las consultas analíticas justifiquen añadir una extensión y una operación específica para series temporales.
+TimescaleDB will not be installed nor become an initial dependency. It will be evaluated later only for telemetry, metrics, audit or historical event tables if real measurements show a clear need for temporal partitioning, retention, compression or high-volume analytics.
 
-## Decisión
+The main game state tables remain normal PostgreSQL relational tables.
 
-PostgreSQL estándar será la base de datos principal del futuro servidor Rust.
+The C++ server compatibility phase keeps MySQL/MariaDB until a verified migration strategy exists. **This timing is refined by proposed ADR-0005:** the target plan is a single canonical PostgreSQL database with a temporary compatibility adapter; no dual-store operation is intended. The PostgreSQL target and the rejection of TimescaleDB remain accepted by this ADR.
 
-TimescaleDB no se instalará ni se convertirá en una dependencia inicial. Se evaluará posteriormente únicamente para tablas de telemetría, métricas, auditoría o eventos históricos si las mediciones reales muestran una necesidad clara de particionado temporal, retención, compresión o analítica de alto volumen.
+## Alternatives considered
 
-Las tablas de estado principal del juego permanecerán como tablas relacionales PostgreSQL normales.
+### PostgreSQL with TimescaleDB from the start
 
-La fase de compatibilidad del servidor C++ conservará MySQL/MariaDB hasta que exista una estrategia de migración verificada.
+Rejected for now. It provides useful capabilities for time series, but adds a dependency and operational restrictions before there is evidence they are necessary.
 
-## Alternativas consideradas
+### MariaDB as the permanent target
 
-### PostgreSQL con TimescaleDB desde el inicio
+Not chosen for the rewrite. It is the most compatible transition with the current C++, but it keeps the conceptual dependency on the MySQL API and patterns we want to move past.
 
-Rechazada por ahora. Aporta capacidades útiles para series temporales, pero añade una dependencia y restricciones operativas antes de tener evidencia de que sean necesarias.
+### Distributed database such as CockroachDB or YugabyteDB
 
-### MariaDB como destino permanente
+Not chosen. Multi-node distribution, transactional retries and operational complexity are not justified for the initial deployment of a self-contained game server.
 
-No elegida para la reescritura. Es la transición más compatible con el C++ actual, pero mantiene la dependencia conceptual de la API y los patrones de MySQL que queremos superar.
+### Specialized time-series database
 
-### Base de datos distribuida como CockroachDB o YugabyteDB
+Not chosen. It would introduce another technology and operational boundary when PostgreSQL can initially cover both the game state and the lower-volume logs.
 
-No elegida. La distribución multi-nodo, los reintentos transaccionales y la complejidad operativa no están justificados para el despliegue inicial de un servidor de juego autocontenido.
+## Consequences
 
-### Base de datos especializada de series temporales
+### Positive
 
-No elegida. Introduciría otra tecnología y otra frontera operativa cuando PostgreSQL puede cubrir inicialmente tanto el estado del juego como los logs de menor volumen.
+- Fewer components and a smaller operational surface.
+- Future schema oriented to PostgreSQL without dragging MySQL limitations.
+- Game state transactions and relations stay in a clear relational model.
+- TimescaleDB can be added later without making it an irreversible decision for the whole system.
+- The Docker infrastructure can start with a standard PostgreSQL server.
 
-## Consecuencias
+### Negative
 
-### Positivas
+- Standard PostgreSQL may not be enough for a high-volume telemetry platform.
+- If logs grow a lot, partitioning, retention or a specialized solution must be designed.
+- The MySQL/MariaDB migration will still require adapting types, defaults, `ENUM`, `SET`, `UNSIGNED` integers, invalid dates and specific queries.
 
-- Menos componentes y menor superficie operativa.
-- Esquema futuro orientado a PostgreSQL sin arrastrar limitaciones de MySQL.
-- Las transacciones y relaciones del estado del juego permanecen en un modelo relacional claro.
-- TimescaleDB puede añadirse más adelante sin convertirlo en una decisión irreversible para todo el sistema.
-- La infraestructura Docker puede comenzar con un servidor PostgreSQL estándar.
+## Conditions to re-evaluate TimescaleDB
 
-### Negativas
+The decision is revised only with measurements and a concrete case. The indicators will be:
 
-- PostgreSQL estándar puede no ser suficiente para una plataforma de telemetría de gran volumen.
-- Si los logs crecen mucho, habrá que diseñar particionado, retención o una solución especializada.
-- La migración desde MySQL/MariaDB seguirá requiriendo adaptar tipos, defaults, `ENUM`, `SET`, enteros `UNSIGNED`, fechas inválidas y consultas específicas.
+- sustained volume of event insertions;
+- size and growth of historical tables;
+- query latency over time ranges;
+- cost of retention, compression and deletion of old data;
+- index and maintenance pressure on standard PostgreSQL;
+- need for real-time temporal aggregations.
 
-## Condiciones para reevaluar TimescaleDB
+The re-evaluation must include a reproducible benchmark, a backup/restore test and a review of the impact on Docker, Alpine and daily operations.
 
-La decisión se revisará solo con mediciones y un caso concreto. Los indicadores serán:
+## Not decided in this ADR
 
-- volumen sostenido de inserciones de eventos;
-- tamaño y crecimiento de tablas históricas;
-- latencia de consultas por rangos temporales;
-- coste de retención, compresión y borrado de datos antiguos;
-- presión de índices y mantenimiento sobre PostgreSQL estándar;
-- necesidad de agregaciones temporales en tiempo real.
-
-La reevaluación deberá incluir un benchmark reproducible, una prueba de backup/restore y una revisión del impacto en Docker, Alpine y la operación diaria.
-
-## No decidido en este ADR
-
-- La librería o crate Rust para acceder a PostgreSQL.
-- El diseño definitivo del esquema Rust.
-- La separación final entre estado transaccional, eventos y telemetría.
-- El procedimiento exacto de migración de datos desde MySQL 5.6.
-- Si los eventos históricos vivirán en el mismo clúster PostgreSQL o en una instancia separada.
+- The Rust library/crate to access PostgreSQL (candidate: `sqlx` — the concrete decision is a G-PG task, ADR-0005).
+- The definitive design of the Rust schema.
+- The final split between transactional state, events and telemetry.
+- The exact data migration procedure from MySQL 5.6.
+- Whether historical events live in the same PostgreSQL cluster or in a separate instance.

@@ -1,6 +1,8 @@
 //! # `protocol` — paquetes byte-exactos del wire de Metin2 (cliente↔servidor).
 //!
-//! Contrato: `docs/superpowers/specs/2026-08-08-wire-protocol-login-flow.md` §1–§3.
+//! Contrato: `docs/reference/protocol/login-flow.md` §1–§3 (spec canónico;
+//! el draft anterior `docs/superpowers/specs/2026-08-08-wire-protocol-login-flow.md`
+//! quedó archivado como histórico — no usar).
 //! Little-endian, sin prefijo de longitud, tamaños fijos (packed, sin padding).
 //! Zero-deps: serialización manual LE (ADR-0003). Std only.
 //!
@@ -11,26 +13,16 @@
 //! y empíricamente compilando los structs C reales con gcc -m32 (toolchain del
 //! server) y MSVC 14.51 x86 (toolchain del cliente).
 //!
-//! # DESVIACIÓN CRÍTICA RESPECTO AL SPEC (TSimplePlayer / TPacketGCLoginSuccess)
+//! # Nota sobre tamaños packed (ERRATA del spec, corregida 2026-08-10, spec §7)
 //!
-//! El spec §2 afirma que `TSimplePlayer`/`TAccountTable` se declaran ANTES del
-//! `#pragma pack(1)` → alineación natural (76 B por jugador) → LoginSuccess 474 B.
-//! **El código real dice lo contrario:**
-//! - `source/server/common/tables.h:271` — `#pragma pack(1)`; `TSimplePlayer` está
-//!   en la línea 285, DENTRO de la región packed. (El spec dice "antes", es falso.)
-//! - `source/client/UserInterface/Packet.h:356` — `#pragma pack(1)`; la
-//!   `TSimplePlayerInformation` (línea 1063) también está DENTRO.
-//! - Compilación empírica del struct exacto (ACCE ON): gcc -m32 → `sizeof=71`,
-//!   MSVC x86 → `sizeof=71`; la variante natural da 76 en ambos pero NO es la que
-//!   compila ninguno de los dos lados.
-//! - El cliente registra `sizeof(TPacketGCLoginSuccess4)` = **449** (header 0x20)
-//!   en su mapa de headers y el login funciona en producción → el server envía
-//!   exactamente 449 B (`desc.cpp:987` `Packet(&p, sizeof(TPacketGCLoginSuccess))`).
-//! - La lista de offsets del spec (…,47,51,55,59,63,67,71,73,75) no corresponde a
-//!   NINGÚN layout real (ni packed ni natural).
-//!
-//! Conclusión: este crate implementa el **formato wire real** — `TSimplePlayer`
-//! = 71 B packed, `TPacketGCLoginSuccess` = 449 B. (Ver tests `spec_note_*`.)
+//! `TSimplePlayer`/`TAccountTable` están DENTRO de la región `#pragma pack(1)`
+//! (`source/server/common/tables.h:271` abre; `:1333` cierra; el struct está en
+//! `:285`) → **71 B packed** por jugador; `TPacketGCLoginSuccess` = **449 B**
+//! (handle@441, random_key@445); `TAccountTable` = 444 B. El spec canónico ya
+//! refleja estos tamaños; este crate implementa el formato wire real
+//! (ver tests `spec_note_*`). Evidencia: gcc -m32 → `sizeof=71`, MSVC x86 →
+//! `sizeof=71`, y el cliente registra `sizeof(TPacketGCLoginSuccess4)` = 449
+//! (header 0x20) con login funcionando en producción.
 
 // ============================================================================
 // Constantes (spec §1 + packet.h verificado)

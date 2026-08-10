@@ -1,61 +1,63 @@
-# ADR-0004: Estructura y nombres del workspace `reforge`
+---
+Type: Decision
+Status: Accepted
+Audience: Contributors, maintainers
+Date: 2026-08-10
+Last verified: 2026-08-10
+Supersedes: ADR-0003 (partial — workspace layout and crate names)
+Superseded by: —
+---
 
-## Estado
+# ADR-0004: `reforge` workspace structure and names
 
-Aceptado
+## Context
 
-## Fecha
+ADR-0003 defined the Rust workspace in `source/reforge` with a flat layout and generic layer names (`protocol`, `net`, `db`, `game`, `auth`). The user asked for a more professional structure and names with identity, without a brand prefix (rejected `m2-*`). After evaluating the `crates/` subdirectory proposal (tokio/serde/bevy convention), the user **rejected it**: he prefers the flat layout at the workspace root.
 
-2026-08-10
+He also decided **ONE single binary** (not several): the `game`+`db` unification (ADR-0002) removes the db broker as a process, and the channel isolation required by ADR-0002 is achieved with **N processes of the SAME binary** with different config (role `auth` | `channel`), not with N binaries. This resolves the inconsistency between ADR-0002 ("auth as its own process") and the unified plan ("auth as a mode of the same binary"): auth is a role of the same binary, and the process running that role is the auth server.
 
-## Contexto
+## Decision
 
-ADR-0003 definió el workspace Rust en `source/reforge` con layout plano y nombres de capa genéricos (`protocol`, `net`, `db`, `game`, `auth`). El usuario pidió una estructura más profesional y nombres con identidad, sin prefijo de marca (rechazó `m2-*`). Tras evaluar la propuesta de subdirectorio `crates/` (convención de tokio/serde/bevy), el usuario la **descartó**: prefiere el layout plano en la raíz del workspace.
+1. **Flat layout** in `source/reforge` (no subdirectories): `protocol/`, `network/`, `database/`, `realm/`, `server_realms/`.
+2. **Crate names** (renames over ADR-0003):
 
-Además decidió **UN solo binario** (no varios): la unificación `game`+`db` (ADR-0002) elimina el broker db como proceso, y el aislamiento entre canales que exige ADR-0002 se logra con **N procesos del MISMO binario** con config distinta (rol `auth` | `channel`), no con N binarios. Esto resuelve la inconsistencia entre ADR-0002 ("auth como proceso propio") y el plan único ("auth como modo del mismo binario"): auth es un rol del mismo binario, y el proceso que corre ese rol es el auth server.
-
-## Decisión
-
-1. **Layout plano** en `source/reforge` (sin subdirectorios): `protocol/`, `network/`, `database/`, `realm/`, `server_realms/`.
-2. **Nombres de crates** (renombres sobre ADR-0003):
-
-| Antes (ADR-0003) | Ahora | Justificación |
+| Before (ADR-0003) | Now | Justification |
 |---|---|---|
-| `protocol` | `protocol` | Sin cambio — en contexto del workspace no es ambiguo |
-| `net` | `network` | Comunica la capa completa; "transport" descartado por el usuario |
-| `db` | `database` | Inequívoco; "db" era ambiguo |
-| `game` | `realm` | Nombra el dominio (la simulación del mundo por regiones); "server" queda reservado para el binario |
-| `auth` (crate) | módulo `network::auth` | El auth es capa de red pura (handshake, LOGIN3, keys, panama pack) — vive dentro de network (F2) |
+| `protocol` | `protocol` | Unchanged — not ambiguous in the workspace context |
+| `net` | `network` | Communicates the full layer; "transport" rejected by the user |
+| `db` | `database` | Unambiguous; "db" was ambiguous |
+| `game` | `realm` | Names the domain (the world simulation by regions); "server" stays reserved for the binary |
+| `auth` (crate) | module `network::auth` | Auth is pure network layer (handshake, LOGIN3, keys, PanamaPack) — lives inside network (F2) |
 
-3. **Un solo binario `server_realms`** (nombre provisional del usuario) con roles por config: `--role auth` (puerto 30001) | `--role channel` (región, puerto 30003). Un artefacto, N procesos aislados. Escala por config: regiones cross-server = rol nuevo, sin binario nuevo.
-4. **Convenciones de workspace**: `[workspace.dependencies]` centralizado (tokio 1.49: rt-multi-thread/net/io-util/time/sync/macros), `[workspace.lints.rust] unsafe_code = "forbid"` (no hay unsafe; el lint lo garantiza), `rust-toolchain.toml` (1.97.0), `README.md` con arquitectura + glosario de nombres.
-5. **Runtime**: el runtime legacy conserva `source/deploy` (copia Windows del árbol de instancias, gitignored; el árbol WSL `metin2_svfiles` NO se toca — los scripts de arranque dependen de esa ruta). 2026-08-10: el renombre intermedio a `source/realms` se **revirtió por corrección del usuario**. El nombre **`server_realms`** es el crate binario de la reescritura en `source/reforge/server_realms`, que albergará el binario compilado + configs desde F2 (nombre provisional del usuario).
+3. **One single binary `server_realms`** (provisional user name) with roles by config: `--role auth` (port 30001) | `--role channel` (region, port 30003). One artifact, N isolated processes. Scales by config: cross-server regions = new role, no new binary.
+4. **Workspace conventions**: centralized `[workspace.dependencies]` (tokio 1.49: rt-multi-thread/net/io-util/time/sync/macros), `[workspace.lints.rust] unsafe_code = "forbid"` (there is no unsafe; the lint guarantees it), `rust-toolchain.toml` (1.97.0), workspace `README.md` with architecture + names glossary.
+5. **Runtime**: the legacy runtime keeps `source/deploy` (Windows copy of the instances tree, gitignored; the WSL tree `metin2_svfiles` is NOT touched — the startup scripts depend on that path). 2026-08-10: the intermediate rename to `source/realms` was **reverted by user correction**. The name **`server_realms`** is the rewrite's binary crate in `source/reforge/server_realms`, which will host the compiled binary + configs from F2 (provisional user name).
 
-## Alternativas consideradas
+## Alternatives considered
 
-- **Subdirectorio `crates/` + `servers/`**: propuesto (convención de industria), rechazado por el usuario — prefiere el plano. Se revisita solo si el workspace crece a >8-10 crates (YAGNI).
-- **Prefijo `m2-`/`metin2-`**: rechazado por el usuario — nombres sin prefijo.
-- **`transport` para net**: rechazado por el usuario — `network`.
-- **Varios binarios (`auth-server`, `channel-server`)**: rechazado — duplican main()/config/deps y pueden divergir; el binario único escala por config.
-- **Nombres del runtime**: `deploy` (se queda — el renombre a `realms` se revirtió por corrección del usuario), `runtime`/`production` (no evocan el caso), `release` (colisiona con `cargo build --release` y GitHub Releases) → `realms` pasó al nombre del binario de la reescritura (`server_realms`, provisional).
+- **`crates/` + `servers/` subdirectories**: proposed (industry convention), rejected by the user — he prefers the flat layout. Revisited only if the workspace grows beyond 8–10 crates (YAGNI).
+- **`m2-`/`metin2-` prefix**: rejected by the user — names without prefix.
+- **`transport` for net**: rejected by the user — `network`.
+- **Several binaries (`auth-server`, `channel-server`)**: rejected — they duplicate main()/config/deps and can diverge; the single binary scales by config.
+- **Runtime names**: `deploy` (stays — the rename to `realms` was reverted by user correction), `runtime`/`production` (do not evoke the case), `release` (collides with `cargo build --release` and GitHub Releases) → `realms` went to the rewrite binary's name (`server_realms`, provisional).
 
-## Consecuencias
+## Consequences
 
-### Positivas
+### Positive
 
-- Identidad del proyecto (nombres de dominio, no de implementación).
-- Raíz del workspace limpia y legible; un solo artefacto de build.
-- Escalado por config (roles), no por binarios; regiones nuevas = config nueva.
-- Límites claros: `server_realms` (ejecutable fino) vs crates (librerías).
+- Project identity (domain names, not implementation names).
+- Clean, legible workspace root; a single build artifact.
+- Scaling by config (roles), not by binaries; new regions = new config.
+- Clear boundaries: `server_realms` (thin executable) vs crates (libraries).
 
-### Negativas
+### Negative
 
-- Los renombres tocan referencias en docs/specs/ADRs (se actualizan en la misma sesión).
-- La división de `protocol/src/lib.rs` (~1700 líneas) en módulos queda **diferida a F2** (cuando entre PanamaPack y los paquetes del mundo) — YAGNI hoy.
-- Si el workspace crece mucho, el layout plano se llenará — se revisita `crates/` en ese momento.
+- The renames touch references in docs/specs/ADRs (updated in the same session).
+- The split of `protocol/src/lib.rs` (~1700 lines) into modules is **deferred to F2** (when PanamaPack and the world packets arrive) — YAGNI today.
+- If the workspace grows a lot, the flat layout fills up — `crates/` is revisited then.
 
-## No decidido en este ADR
+## Not decided in this ADR
 
-- Estructura interna de módulos de `protocol` (F2).
-- **Config del binario: TOML — DECIDIDO (2026-08-10).** Los configs de `server_realms` (rol, región, puertos, rates...) se escriben en **TOML** (comentarios, tablas anidadas, Rust-nativo; vía config-rs en F2; clap para los args `--role`). `server_realms/` albergará el binario compilado + configs desde F2.
-- Esquema de instancias del runtime (`source/deploy`) y de la carpeta `server_realms` (binario + configs) — F2/F5.
+- Internal module structure of `protocol` (F2).
+- **Binary config: TOML — DECIDED (2026-08-10).** The `server_realms` configs (role, region, ports, rates...) are written in **TOML** (comments, nested tables, Rust-native; via config-rs in F2; clap for the `--role` args). `server_realms/` will host the compiled binary + configs from F2.
+- Instances scheme of the runtime (`source/deploy`) and of the `server_realms` folder (binary + configs) — F2/F5.

@@ -1,8 +1,16 @@
 # Cliente: implementación del modo desarrollo con assets sueltos
 
+> **Metadata**
+> - Type: History
+> - Status: Historical
+> - Audience: Project agents and maintainers (historical context only)
+> - Last verified: 2026-08-10
+> - Original location: `docs/superpowers/plans/2026-08-06-client-assets-dev-mode-implementation.md`
+> - **Historical record.** Archived for context. This document is NOT current normative guidance: it was the 2026-08-06 plan for a loose-assets development mode against the old repo layout (`client/Client/Client/...`). The current client tree is `source\client\` and the pack workflow uses `source\tools\pack\PackMakerLite.exe` — do not follow the paths or tasks literally.
+
 > **Para agentes:** ejecuta este plan tarea por tarea. Usa la guía local de C++/CMake, depuración y documentación del proyecto antes de modificar archivos de implementación.
 
-**Meta:** preparar una distribución exclusiva para desarrollo en la que el cliente lea todos sus recursos desde `client/Client/Client/assets`, sin inicializar `pack/Index` ni depender de archivos `.eix` o `.epk`, tal como define el spec `docs/superpowers/specs/2026-08-06-client-assets-development-mode-design.md`.
+**Meta:** preparar una distribución exclusiva para desarrollo en la que el cliente lea todos sus recursos desde `client/Client/Client/assets`, sin inicializar `pack/Index` ni depender de archivos `.eix` o `.epk`, tal como define el spec `docs/history/2026-08-06-client-assets-design.md`.
 
 **Arquitectura:** mantener `CEterPackManager` como adaptador temporal. El arranque deja de leer `pack/Index` y configura el adaptador en modo archivo con raíz `<directorio-de-ejecución>/assets`. La resolución de rutas virtuales (`pc/`, `locale/`, `uiscript/`, ...) se antepone a la raíz `assets` dentro de `Get`, `isExist` y las operaciones de lectura. La extracción es una operación de preparación de la distribución developer, no una funcionalidad del cliente en tiempo de ejecución.
 
@@ -175,7 +183,7 @@ Repetir la validación de la Tarea 5 con `pack/` sin `.eix`/`.epk`. Confirmar qu
 ## Tarea 7: Documentar y cerrar
 
 **Archivos:**
-- Modificar: `docs/superpowers/specs/2026-08-06-client-assets-development-mode-design.md` (agregar estado: implementado)
+- Modificar: `docs/history/2026-08-06-client-assets-design.md` (agregar estado: implementado)
 - Crear: `docs/operations/client-assets-dev-mode.md` (guía operativa)
 - Modificar: `AGENTS.md` con los comandos verificados y limitaciones
 

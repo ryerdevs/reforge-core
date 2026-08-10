@@ -1,5 +1,13 @@
 # Reescritura del servidor de Metin2 en Rust — Propuesta para discusión
 
+> **Metadata**
+> - Type: History
+> - Status: Historical
+> - Audience: Project agents and maintainers (historical context only)
+> - Last verified: 2026-08-10
+> - Original location: `docs/superpowers/plans/2026-08-09-servidor-rust-draft-discusion.md`
+> - **Historical record.** Archived for context. This document is NOT current normative guidance: it was the v0.1 discussion draft superseded by `docs/plans/server-rewrite.md` (the active rewrite plan). Architecture decisions live in `docs/decisions/` (ADRs). Statements, phase dates and stack choices in this file must not be treated as binding today.
+
 > **Estado: DRAFT v0.1 — documento de discusión.** No es el plan final.
 > **Propósito:** presentar la visión, las decisiones y la estrategia a revisores externos para que aporten antes de fijar el plan definitivo.
 > **Fecha:** 2026-08-09 · **Autor:** equipo del proyecto (orchestrator + revisión de arquitectura)
@@ -256,7 +264,7 @@ PostgreSQL central (tx batch ≤100ms, uuidv7, CHECK gold>=0)
 | Runtime async | **tokio 1.49** | Estándar de facto; tareas, mpsc, timers |
 | Base de datos | **PostgreSQL 18.4** | ACID, MVCC, features 17/18: async I/O, `uuidv7()`, `OLD/NEW` en RETURNING (auditoría gratis), generated columns, LISTEN/NOTIFY, advisory locks, RLS, checksums por defecto, backups incrementales |
 | Acceso BD | **sqlx 0.9** | Queries compile-time checked, migraciones integradas, pool propio |
-| Quests | **DSL propio declarativo + motor de estados Rust** (parser pest/chumsky) | Cero runtime de scripting: quests = datos tipados (familias con parámetros, bloques reutilizables, imports) validados en load-time con errores archivo:línea. Contenido legacy (194 `.quest`) convertido automáticamente con harness de paridad. Casos raros (oxevent) → módulos Rust. Spec: `docs/superpowers/specs/2026-08-09-quest-dsl-spec.md` |
+| Quests | **DSL propio declarativo + motor de estados Rust** (parser pest/chumsky) | Cero runtime de scripting: quests = datos tipados (familias con parámetros, bloques reutilizables, imports) validados en load-time con errores archivo:línea. Contenido legacy (194 `.quest`) convertido automáticamente con harness de paridad. Casos raros (oxevent) → módulos Rust. Spec: `docs/reference/quests/quest-dsl.md` (original: `docs/superpowers/specs/2026-08-09-quest-dsl-spec.md`) |
 | Config | config-rs + clap 4.6 | — |
 | Observabilidad | tracing | — |
 | Tests | cargo test + proptest + golden tests de paquetes | — |

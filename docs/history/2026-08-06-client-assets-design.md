@@ -1,5 +1,13 @@
 # Cliente: assets sueltos para desarrollo
 
+> **Metadata**
+> - Type: History
+> - Status: Historical
+> - Audience: Project agents and maintainers (historical context only)
+> - Last verified: 2026-08-10
+> - Original location: `docs/superpowers/specs/2026-08-06-client-assets-development-mode-design.md`
+> - **Historical record.** Archived for context. This document is NOT current normative guidance: it was the 2026-08-06 design for a loose-assets development mode against the old repo layout (`client/Client/Client/...`). The current client tree is `source\client\` and the pack workflow uses `source\tools\pack\PackMakerLite.exe` — the design was not carried into the current repo layout.
+
 ## Objetivo
 
 Preparar una distribución exclusiva para desarrollo en la que el cliente lea todos sus recursos desde `client/Client/Client/assets`, sin inicializar `pack/Index` ni depender de archivos `.eix` o `.epk`.

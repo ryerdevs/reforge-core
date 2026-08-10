@@ -1,60 +1,64 @@
-# ADR-0003: Workspace Rust en `source/reforge` — layout y política del nuevo servidor
+---
+Type: Decision
+Status: Accepted
+Audience: Contributors, maintainers
+Date: 2026-08-10
+Last verified: 2026-08-10
+Supersedes: —
+Superseded by: ADR-0004 (flat layout, no `crates/`; `network`/`database`/`realm`; `server_realms` binary with roles). Kept: the `source/reforge` folder, the property boundary over the C++ baseline, the verification policies.
+---
 
-## Estado
+# ADR-0003: Rust workspace in `source/reforge` — layout and policy of the new server
 
-Aceptado — **parcialmente superado por ADR-0004 (2026-08-10):** el layout y los nombres del workspace cambian (layout plano, sin `crates/`; `network`/`database`/`realm`; binario `server_realms` con roles). Se mantienen: carpeta `source/reforge`, límite de propiedad sobre la línea base C++, políticas de verificación.
+## Context
 
-## Fecha
+The project rewrites the Metin2 server in Rust (ROADMAP F0–F7, unified plan `docs/plans/server-rewrite.md` — the original draft remains as historical in `docs/history/2026-08-09-server-rewrite-draft.md`). The legacy C++ code lives in `source/{client,server,tools,deploy}` (the client pack in `source/tools/pack`) and must remain **intact and stable** during the whole migration (AGENTS.md rule: two source copies, the WSL one compiles the server; the C++ baseline is the test oracle).
 
-2026-08-10
+The user decided (2026-08-10): the new Rust server goes in a **new folder** `source/reforge`, inside the same repository, to avoid modifying anything of the C++ baseline.
 
-## Contexto
+The F0 plan requires: "Cargo workspace with crates: `protocol`, `net`, `db`, `game`, `auth`" + "Implement the `protocol` crate (login flow) with golden tests of the spec structs". The byte-exact contract is already specified (`docs/reference/protocol/login-flow.md` — replaces the original spec `docs/superpowers/specs/2026-08-08-wire-protocol-login-flow.md`).
 
-El proyecto reescribe el servidor de Metin2 en Rust (ROADMAP F0–F7, plan único `docs/superpowers/plans/2026-08-09-servidor-rust-plan-unico.md`). El código legacy C++ vive en `source/{client,server,tools,pack,deploy}` y debe permanecer **intacto y estable** durante toda la migración (regla de AGENTS.md: dos copias de source, la de WSL compila el servidor; la línea base C++ es el oráculo de tests).
+## Decision
 
-El usuario decidió (2026-08-10): el nuevo servidor Rust va en una **carpeta nueva** `source/reforge`, dentro del mismo repositorio, para no modificar nada de la línea base C++.
+1. **Location:** Cargo workspace in `source/reforge`, in the current repo (`origin → github.com/ryerdevs/reforge-core.git`). No separate repo or branch is created; the existing repo IS the project repo.
+2. **Workspace layout** (one crate per layer, per plan F0):
+   - `protocol` — byte-exact wire packets (client↔server and legacy peer), no dependencies (std only). First implementation: the full login flow of spec §3.
+   - `net` — tokio transport (F1): framing, listener, `result > 0`/EAGAIN semantics.
+   - `db` — data layer by domains (F3), internal crate (ADR-0002).
+   - `game` — game logic by regions/ECS (F4+).
+   - `auth` — auth mode of the binary (F2).
+3. **Crate policy:** edition 2024, `resolver = "3"`, dependencies ONLY when the phase requires them (ponytail: YAGNI). `protocol` starts **zero-deps**: manual byte-exact LE serialization, no serde/bincode.
+4. **Verification policy:** every crate compiles with `cargo build` and passes `cargo test` from the first commit; the `protocol` crate includes byte-exact golden tests built from the spec (and later from real tcpdump captures — F0 harness).
+5. **Property boundary:** `source/reforge/**` is owned exclusively by the Rust workspace. Nobody edits `source/server`, `source/client` or `source/deploy` in this lane.
 
-El plan F0 exige: "Workspace Cargo con crates: `protocol`, `net`, `db`, `game`, `auth`" + "Implementar crate `protocol` (login flow) con golden tests de los structs del spec". El contrato byte-exacto ya está especificado (`docs/superpowers/specs/2026-08-08-wire-protocol-login-flow.md`).
+> Note (2026-08-10): the crate names and layout of point 2 are superseded by ADR-0004 (`net`→`network`, `db`→`database`, `game`→`realm`, `auth` crate→`network::auth` module, binary `server_realms`). The decisions that stay: the `source/reforge` location, the property boundary and the verification policies.
 
-## Decisión
+## Alternatives considered
 
-1. **Ubicación:** workspace Cargo en `source/reforge`, en el repo actual (`origin → github.com/ryerdevs/reforge-core.git`). No se crea un repo ni una branch separada; el repo existente ES el repo del proyecto.
-2. **Layout del workspace** (un crate por capa, según plan F0):
-   - `protocol` — paquetes byte-exactos del wire (cliente↔servidor y peer legacy), sin dependencias (std only). Primera implementación: el flujo de login completo del spec §3.
-   - `net` — transporte tokio (F1): framing, listener, semántica `result > 0`/EAGAIN.
-   - `db` — capa de datos por dominios (F3), crate interno (ADR-0002).
-   - `game` — lógica de juego por regiones/ECS (F4+).
-   - `auth` — modo auth del binario (F2).
-3. **Política de crates:** edition 2024, `resolver = "3"`, dependencias SOLO cuando la fase las exige (ponytail: YAGNI). `protocol` arranca **zero-deps**: serialización manual LE byte-exacta, sin serde/bincode.
-4. **Política de verificación:** cada crate compila con `cargo build` y pasa `cargo test` desde el primer commit; el crate `protocol` incluye golden tests byte a byte construidos desde el spec (y más adelante desde capturas tcpdump reales — harness F0).
-5. **Límite de propiedad:** `source/reforge/**` es propiedad exclusiva del workspace Rust. Nadie edita `source/server`, `source/client` ni `source/deploy` en esta línea de trabajo.
+### Separate repo for the Rust server
 
-## Alternativas consideradas
+Rejected: the current repo is already named `reforge-core`; a second repo duplicates issue/CI management and complicates referencing the contract (specs, ADRs) that live in this repo. The plan's "GitHub repository" section already defines what goes into the repo (sources only); `source/reforge` meets that criterion.
 
-### Repo separado para el server Rust
+### Separate `reforge` branch in the same repo
 
-Rechazada: el repo actual ya se llama `reforge-core`; un segundo repo duplica la gestión de issues/CI y complica el referenciado del contrato (specs, ADRs) que viven en este repo. El plan §"Repositorio GitHub" ya define qué sube al repo (solo fuentes); `source/reforge` cumple ese criterio.
+Rejected for now: the C++ baseline is stable and is the oracle; working on `main` with the new folder keeps the user's simple commit+push flow. If the Rust work starts hindering the baseline, a branch is evaluated then (YAGNI).
 
-### Branch separada `reforge` en el mismo repo
+## Consequences
 
-Rechazada por ahora: la línea base C++ está estable y es el oráculo; trabajar en `main` con la carpeta nueva mantiene el flujo commit+push simple del usuario. Si el trabajo Rust empieza a entorpecer la base, se evalúa branch en su momento (YAGNI).
+### Positive
 
-## Consecuencias
+- The C++ baseline is physically separated: zero cross-editing risk (the lesson of the two-source-copies disaster).
+- The contract (specs/ADRs) and the Rust code live in the same repo: direct traceability.
+- Multi-crate workspace ready to grow by phases without restructuring.
 
-### Positivas
+### Negative
 
-- La línea base C++ queda físicamente separada: cero riesgo de edición cruzada (la lección del desastre de las dos copias de source).
-- El contrato (specs/ADRs) y el código Rust conviven en el mismo repo: trazabilidad directa.
-- Workspace multi-crate listo para crecer por fases sin reestructurar.
+- The repo will contain legacy and new code together; PR diffs can mix domains if the property boundary is not respected (rule 5 of this ADR).
+- `cargo` needs a Rust toolchain on the build machine (verified: cargo/rustc 1.97.0 local; edition 2024 supported).
 
-### Negativas
+## Not decided in this ADR
 
-- El repo contendrá el código legacy y el nuevo juntos; el diff de PRs puede mezclar dominios si no se respeta el límite de propiedad (regla 5 de este ADR).
-- `cargo` necesita toolchain Rust en la máquina de build (verificado: cargo/rustc 1.97.0 local; edition 2024 soportada).
-
-## No decidido en este ADR
-
-- Modelo de concurrencia interno de `game` (regiones + ECS) — ADR propio (pendiente F0 del plan).
-- Límites de dominio / propiedad de datos — ADR propio.
-- Engine de quests (DSL) — ADR propio.
-- Anti-hack, canales regionales, capa de datos, manifest — ADRs propios (lista del plan §13.2).
+- Internal concurrency model of `game` (regions + ECS) — own ADR (pending F0 of the plan).
+- Domain boundaries / data ownership — own ADR.
+- Quest engine (DSL) — own ADR.
+- Anti-hack, regional channels, data layer, manifest — own ADRs (list in plan §13).

@@ -1,5 +1,13 @@
 # Metin2 Agent Skills and AGENTS.md Implementation Plan
 
+> **Metadata**
+> - Type: History
+> - Status: Historical
+> - Audience: Project agents and maintainers (historical context only)
+> - Last verified: 2026-08-10
+> - Original location: `docs/superpowers/plans/2026-08-06-metin2-agent-skills-and-agents-md.md`
+> - **Historical record.** Archived for context. This document is NOT current normative guidance: it describes the 2026-08-06 plan to set up project skills and a root `AGENTS.md` (the workspace had no Git repository at the time). The current project rules live in `AGENTS.md`; the skills installed at the time are superseded by the current project skill set.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Establish a project-local skill set and durable agent instructions for the Alpine Linux compatibility baseline and the future Rust server rewrite.
@@ -150,7 +158,7 @@ Expected: this setup phase has not modified C++ sources, Dockerfiles, Compose fi
 
 **Files:**
 - Read: `AGENTS.md`
-- Read: `docs/superpowers/specs/2026-08-06-metin2-project-skills-design-revision.md`
+- Read: `docs/history/2026-08-06-project-skills-revision.md`
 
 - [ ] **Step 1: Report the installed set**
 
