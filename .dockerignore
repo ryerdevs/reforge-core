@@ -1,0 +1,35 @@
+# Contexto de build de Docker: raíz del repo
+# Excluye archivos grandes/irrelevantes
+.git
+**/OBJDIR
+**/build
+**/Debug
+**/Release
+**/*.o
+**/*.a
+**/log
+**/cores
+client.zip
+Extensions.zip
+Server-*.zip
+metin2_mysql.tar.gz
+metin2_mysql_dump.zip
+metin2_server+src.tar.gz
+server/metin2_mysql
+server/runtime
+server/linux/build
+server/linux/extern
+server/metin2_server+src
+docs
+.commandcode
+
+# Reorganización: artefactos archivados (el tar.gz del paquete se re-incluye)
+archive/*
+!archive/server/
+!archive/server/metin2-server-package.tar.gz
+
+# Raíz reorganizada
+server/Extensions
+build_release.log
+game.pid
+skills-lock.json

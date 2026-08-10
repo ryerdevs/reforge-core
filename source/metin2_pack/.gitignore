@@ -1,0 +1,20 @@
+*.eix
+*.epk
+*.pyc
+*.pyo
+
+### protos
+item_proto
+mob_proto
+
+### archives
+*.rar
+*.7z
+*.zip
+*.gz
+*.bz
+*.xz
+*.tar
+*.tgz
+*.tbz
+*.txz
