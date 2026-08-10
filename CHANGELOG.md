@@ -7,6 +7,33 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-10] (7th part) — Agent harness: models, skills and team organization
+
+### Added
+
+- **`docs/explanation/agent-organization.md`** — the agent team organization: roster (roles, models, skills), standard per-lane flow (fixer → oracle-fixer → oracle general → verify → commit), spawn/reuse rules, gates and the loop protocol.
+- **`docs/guardrails/agent-operations.md`** — operational lessons with evidence: fresh session for every oracle review (resumed oracle sessions returned empty 3+ times on 2026-08-10), mandatory "report in final message" instruction in oracle prompts, reuse fixer sessions within scope, reconcile every lane, distinct task labels (board inherited stale objectives), disjoint write scopes for parallel lanes, opencode restart after config changes.
+- **Rust skills installed globally** for the build lane: `rust-best-practices` (apollographql), `rust-async-patterns` (wshobson), `rust-testing` (affaan-m).
+
+### Changed
+
+- **`~/.config/opencode/opencode.jsonc`** (outside the repo): built-in `build` agent now uses `opencode-go/deepseek-v4-flash` variant max, same as orchestrator/explorer/librarian/fixer.
+- **`~/.config/opencode/oh-my-opencode-slim.json`** (outside the repo): skill sets rebalanced per role (below).
+- **`docs/DOCUMENTATION.md` §10**: extended with the team organization links and the session-discipline rules.
+- **`AGENTS.md`**: Work rules now point to the team organization and operations guardrails.
+
+### Skills rebalance (why)
+
+- **oracle**: removed C++ debugger skills (`gdb`, `strace-ltrace`, `sanitizers`) — not the role; added the adversarial-review skills that match its job: `grill-me`, `caveman-review`, `simplify`, `ponytail-review`. Kept `diagnose`, `cpp-pro` (reads legacy C++ evidence), `architecture-designer`, `improve-codebase-architecture`, `verification-before-completion`, `documentation-and-adrs`.
+- **fixer**: removed `cmake` (build is Makefiles/MSBuild) and `sanitizers`; added `rust-best-practices`, `rust-async-patterns`, `rust-testing` — the active work is Rust (tokio/sqlx/cargo). Kept `cpp-pro` + `make` for the temporary C++ adapter (G-PG) and the legacy baseline.
+- **explorer**: added `graphify` (graphs-first rule) and `codemap` (legacy C/C++ maps).
+- **librarian**: already carries `documentation`, `documentation-writer`, `documentation-and-adrs`, `find-skills` (previous session).
+
+### Verified
+
+- `npx skills add` reports the 3 Rust skills installed for OpenCode (the PromptScript integration "failed to install" line is cosmetic — that target does not support global installs; OpenCode universal install succeeded).
+- Config files are valid JSON/JSONC; they load at opencode startup only — a restart is required to take effect.
+
 ## [2026-08-10] (4th part) — Documentation reorganization (docs hubs, plan reorder, ADR-0005/0006/0007)
 
 ### Added
