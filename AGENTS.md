@@ -145,7 +145,7 @@ wsl -d Debian-M2 -- bash /mnt/c/projects/Metin2/scripts/start_m2_min.sh
 5. Proportional verification: inspection → focused check → build/run. Report with real command output; do not claim something works without evidence.
 6. Always sync the two source copies (WSL + Windows).
 7. Confirm before destructive operations (deleting volumes, databases, build caches).
-8. Update docs/ADRs when project knowledge changes (see "Documentation methodology" below).
+8. **Docs after every change:** every task ends with its documentation updated — canonical docs, doc-comments and metadata `Last verified` (policy: `docs/DOCUMENTATION.md`; hub: `docs/README.md`). Never leave docs describing the old behavior; if a doc is outside the lane's write scope, the agent lists the exact required updates in its report. Update docs/ADRs when project knowledge changes (see "Documentation methodology" below).
 9. **Log the changes (orchestrator log):** at the end of each work session, record in `CHANGELOG.md` (Keep a Changelog style, grouped by date) what changed and with what evidence; mark progress in `ROADMAP.md`; write an ADR before deciding architecture. Never end a session with unlogged changes.
 10. **Work in parallel (speed):** when there are independent tasks, deploy specialized agents in the background simultaneously (@explorer/@librarian for discovery, @fixer for scoped implementation, @oracle for decisions/review). Do not serialize work that can run in parallel; reconcile results when returning.
 11. **Plan mode by default:** for any architecture or rewrite task, FIRST plan and discuss with the user (alternatives, risks, ADR before implementing). Do not write rewrite code without explicit plan confirmation.

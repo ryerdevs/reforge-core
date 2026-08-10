@@ -65,6 +65,7 @@ Delegation discipline (the antidote to "loose agents"):
 - The orchestrator handles directly **only**: coordination, verification commands, git/commit, and edits smaller than ~15 lines that are isolated and low-risk.
 - **Never** implement a non-trivial feature directly while a fixer exists; **never** self-review own docs while an oracle exists.
 - Every task dispatch names: the lane, the write scope, the acceptance criterion, and (for oracles) the mandatory final report.
+- **Every task ends with its documentation updated** (canonical docs, doc-comments, `Last verified` — policy `docs/DOCUMENTATION.md`); agents list required doc updates when outside their write scope. The librarian audits docs against the policy and may propose policy improvements (never edits); the fixer applies, the oracle reviews, the orchestrator commits.
 
 ## Spawn and reuse rules
 
