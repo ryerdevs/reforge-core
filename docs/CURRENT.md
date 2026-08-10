@@ -12,10 +12,11 @@ This is a point-in-time snapshot. It is the **source of truth for current status
 ## Snapshot
 
 - **Date:** 2026-08-10
-- **Commit:** documentation reorganization **pending commit** — this snapshot's files (`CURRENT.md`, `DOCUMENTATION.md`, ADRs 0005–0007, the reorganized `docs/` tree) are not yet committed; `b85a019` is the last committed state and does NOT contain them.
+- **Commit:** `03c03ad` — the documentation reorganization (hubs, ADRs 0005–0007, guardrails, agent-organization, G-PG database inventories) is **committed**. A fresh session starts here.
 - **Rust rewrite workspace:** `source/reforge/` — crates `protocol`, `network`, `database`, `realm` + binary `server_realms` (flat layout, ADR-0004). Rust toolchain 1.97.0, edition 2024, `unsafe_code = "forbid"`.
 - **Legacy baseline:** C++ login fully working (auth + channel + character select, account `test` / `1234`); runtime instances under `source/deploy/` (gitignored). The C++ baseline is the oracle — `source/reforge/**` is owned exclusively by the rewrite (ADR-0003).
-- **Docs structure:** reorganized 2026-08-10 into `plans/`, `reference/`, `history/`, `guardrails/`, `decisions/` + hubs (see `docs/README.md`); superseded plans moved to `history/` (read-only). Diátaxis modes (`tutorials/`, `how-to/`, `explanation/`) have no content yet — created on demand.
+- **Docs structure:** reorganized 2026-08-10 into `plans/`, `reference/`, `history/`, `guardrails/`, `decisions/`, `explanation/` + hubs (see `docs/README.md`); superseded plans moved to `history/` (read-only). Diátaxis modes (`tutorials/`, `how-to/`) have no content yet — created on demand.
+- **Agent team (harness):** redefined 2026-08-10 — orchestrator → oracle (supreme supervisor) → build (implementer) → fixer (build's adversary) → librarian (docs maintainer, audits AND edits). Full model in `explanation/agent-organization.md`. **opencode restart required to load the new config/agents.**
 
 ## Verified numbers
 
@@ -45,8 +46,8 @@ This is a point-in-time snapshot. It is the **source of truth for current status
 
 ## Next gates
 
-1. **G-PG** (planned, not done): PostgreSQL cutover + database boundary — single canonical PG database, temporary compatibility adapter for legacy C++, no dual databases. Deliverable drafted as ADR-0005 (**Proposed**); the gate remains open until acceptance.
-2. **F2a** (planned, not done): first slice of F2 once G-PG is closed.
+1. **G-PG** (planned, not done): PostgreSQL cutover — single canonical PG database, temporary compatibility adapter for legacy C++, no dual databases. **Inputs ready:** ADR-0005 (**Proposed**), the live-schema inventory (`reference/database/legacy-schema.md`) and the SQL-compatibility inventory (`reference/database/legacy-sql-compatibility.md`) — both oracle-validated (0 blockers). **Next step:** implement the cutover (PG setup, migrations, adapter) and close the gate.
+2. **F2a** (planned, not done): first slice of F2 (auth Rust over PostgreSQL) once G-PG is closed.
 
 ## Where to look next
 
@@ -54,5 +55,8 @@ This is a point-in-time snapshot. It is the **source of truth for current status
 - Architecture decisions: [`decisions/`](decisions/) (0001 PostgreSQL, 0002 game+db unification, 0003 workspace, 0004 names/config, 0005 cutover, 0006 compat boundary, 0007 client boundary)
 - Design reference: [`plans/server-rewrite.md`](plans/server-rewrite.md)
 - Wire contract: [`reference/protocol/login-flow.md`](reference/protocol/login-flow.md)
+- Legacy compatibility boundary: [`reference/protocol/legacy-compatibility.md`](reference/protocol/legacy-compatibility.md)
+- **G-PG database inventories:** [`reference/database/legacy-schema.md`](reference/database/legacy-schema.md) · [`reference/database/legacy-sql-compatibility.md`](reference/database/legacy-sql-compatibility.md)
+- Agent team model (roster, hierarchy, session rules): [`explanation/agent-organization.md`](explanation/agent-organization.md)
 - Superseded plans/specs (read-only): [`history/`](history/)
 - Change history: [`../CHANGELOG.md`](../CHANGELOG.md)
