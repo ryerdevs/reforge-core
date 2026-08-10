@@ -31,7 +31,7 @@ Cadena de fixes aplicados en esta sesión (cada uno verificado empíricamente):
 
 **Cliente:**
 12. `AccountConnector.cpp` `__AuthState_RecvPhase`: se eliminó `rkNetStream.ClearLoginInfo()` — borraba `m_stPassword` del CPythonNetworkStream DURANTE el auth → la conexión al canal enviaba la contraseña vacía → "contraseña incorrecta" en el canal. (El `ClearLoginInfo` del cliente solo limpia el password, no el ID — por eso el canal recibía el login correcto con password vacío.) Cliente RECOMPILADO con este fix (Release|Win32, metin2client.exe ~5.1MB).
-13. Pack `root.epk` (intrologin.py): re-SetLoginInfo con los valores de los edit lines antes de conectar al canal (líneas ~1082 y ~1320). Repack con `PackMakerLite.exe` (en `source\metin2_pack\pack\` — usa `PackMakerLite.json` con las claves del pack).
+13. Pack `root.epk` (intrologin.py): re-SetLoginInfo con los valores de los edit lines antes de conectar al canal (líneas ~1082 y ~1320). Repack con `PackMakerLite.exe` (en `source\pack\` — usa `PackMakerLite.json` con las claves del pack).
 14. **ENTRADA AL MUNDO (nuevo, 2026-08-08):** `PythonNetworkStreamPhaseLogin.cpp` `SetLoginPhase`: se ELIMINÓ `ClearLoginInfo()` (borraba `m_stPassword`) en AMBAS ramas (normal y DirectEnter). El flujo de entrada al mundo reconecta varias veces al canal y REAUTENTICA con LOGIN3 en cada reconexión: (a) DirectEnter del select (`ConnectGameServer`, `introselect.py` → `net.DirectEnter`), (b) warp a la partida (`RecvWarpPacket`). El password vacío → db `RESULT_LOGIN: no account` → `GC_LOGIN_FAILURE` que el cliente en DirectEnter-mode se traga → cliente colgado en el select. Verificado: el server acepta el LOGIN3 con password correcto y responde al `CG_PLAYER_SELECT` (header 6) con la creación del personaje en el mundo (mapa `Venter_the_east.mp3`, stats). Cliente RECOMPILADO (Release|Win32, 14:55, ~5.1MB) y desplegado a `client\metin2client.exe`. La copia del password permanece en memoria durante la sesión (intencional).
 15. **SPAM DEL CHAT / monster_chat (nuevo, 2026-08-08, fix de DATOS — sin rebuild):** el chat spameaba `SYSERR: LUA ScriptRunError (code:1 src:[(locale.monster_chat[vnum] ...)])` por cada monstruo en combate. Doble causa, ambas en el runtime `share/locale/spain`:
     - `translate.lua` estaba desplegado VACÍO (0 bytes) → `gameforge` nunca se definía. Fix: `translate.lua` ← `translate_ES.lua` (1.1MB, el contenido real en español). Mismo para `germany` ← `translate_DE.lua`.
@@ -47,20 +47,23 @@ Cadena de fixes aplicados en esta sesión (cada uno verificado empíricamente):
     - **NPCs:** desde 2026-08-09 el cliente también los resuelve desde SU pack. El servidor SÍ envía el nombre (`GC_CHAR_ADDITIONAL_INFO` → `char.cpp:922-948` → `GetName()` → `szLocaleName` de MySQL) pero el cliente lo IGNORA para `TYPE_NPC` y usa `CPythonNonPlayer::GetName(race)` del pack (fallback al nombre del servidor si el pack no tiene la entrada — `PythonNetworkStreamPhaseGameActor.cpp` `RecvCharacterAdditionalInfo`). Antes (08-08) dependían de la BD → no cambiaban de idioma con el cliente.
     - **TRAMPA (causó crash del core):** los txt de drops del servidor (`etc_drop_item.txt`, y presumiblemente `common_drop_item.txt`, `drop_item_group.txt`, etc.) referencian items **POR NOMBRE en CP949** (`ReadEtcDropItemFile` en `item_manager_read_tables.cpp:457-498` → `GetValidVnum`/`GetVnumByOriginalName`). Si `item_proto` en MySQL no tiene los nombres CP949 originales, el core aborta el boot con `No such an item (name: ...)` → `Boot: cannot load ETCDropItem`. **REGLA: NO tocar los nombres de `item_proto` en el servidor — deben quedar en CP949 original; los nombres visibles de items los pone el cliente.**
     - Los nombres de `mob_proto` SÍ pueden cambiarse en MySQL (mobs no se referencian por nombre en los txt de boot); los NPCs mostrarán el `locale_name` de MySQL.
-    - El dbmanager de `source\metin2_client\Srcs\Tools\DBManager` (suite PHP/bash) existe pero es solo import/export txt↔mysql — no traduce.
+    - El dbmanager de `source\tools\DBManager` (suite PHP/bash) existe pero es solo import/export txt↔mysql — no traduce.
 
 ## Layout del repositorio
+
+> **Estructura reorganizada 2026-08-09:** todo el código vive bajo `source/`, organizado por componente (sin prefijos `metin2_`, sin `Srcs` intermedios). Las rutas viejas (`source\metin2_client`, `source\metin2_server`, `source\metin2_pack`, `source\metin2_svfiles`) NO existen.
 
 | Ruta | Qué es |
 |---|---|
 | `client\` | Cliente instalado (metin2client.exe v1.0.40999.1 — RECOMPILADO 2026-08-08 con el fix; pack\*.epk, config, mark) |
 | `client-om2\` | Cliente fuente de referencia ("Old Metin2 Project", corresponde a tmp4-server) |
-| `source\metin2_client\` | FUENTE del cliente (S3llMetin2 v24 / MartySama). Build: MSBuild `Srcs\Client\Metin2Client.sln` Release\|Win32 (VS Build Tools 18) |
-| `source\metin2_server\` | FUENTE del servidor (MartySama 5.9). `Srcs\Server\{common,db,game,...}`, Makefile portado a Debian/gcc |
-| `source\metin2_svfiles\` | Runtime: `main\srv1\{db,auth1,chan\chX\coreY}` instancias desplegadas |
-| `source\metin2_pack\` | Fuente del pack del cliente (`pack\root\serverinfo.py` = lista de servidores; `pack\PackMakerLite.exe` + `.json` = herramienta de repack) |
-| `source\metin2_proto\` | Metadatos de protocolo |
-| `Extern\`, `archive\`, `.commandcode\` | Dependencias, backups, skills |
+| `source\client\` | FUENTE del cliente (S3llMetin2 v24 / MartySama). Build: MSBuild `Metin2Client.sln` (en `source\client\`) Release\|Win32 (VS Build Tools 18). Dependencias de build en `source\client\Extern\` (gitignored) |
+| `source\server\` | FUENTE del servidor (MartySama 5.9). `{common,db,game,libgame,liblua,libpoly,libsql,libthecore}`, Makefile portado a Debian/gcc |
+| `source\svfiles\` | Runtime: `main\srv1\{db,auth1,chan\chX\coreY}` instancias desplegadas (gitignored) |
+| `source\pack\` | Fuente del pack del cliente (`root\serverinfo.py` = lista de servidores; `PackMakerLite.exe` + `.json` = herramienta de repack) |
+| `source\tools\` | Herramientas: `DBManager` (suite PHP/bash import/export txt↔mysql), `DumpProto`, `switch_compiler.py` |
+| `source\tools\proto\` | Metadatos de protocolo |
+| `archive\`, `.commandcode\` | Backups, skills |
 | `docs\` | ADRs (`docs\decisions\`) y planes/specs (`docs\superpowers\`) |
 | `ROADMAP.md`, `CHANGELOG.md` | Plan maestro de la reescritura Rust y registro cronológico de cambios |
 | `scripts\` | Scripts de arranque/recuperación (`start_m2_min.sh`, `start_m2_full.sh`, `mem_audit.sh`, `watch_*.sh`) |
@@ -75,13 +78,13 @@ Cadena de fixes aplicados en esta sesión (cada uno verificado empíricamente):
 
 - `/home/m2/source` (WSL) es **la copia que compila el servidor** (el `VERSION.txt` hornea esa ruta).
 - `C:\projects\Metin2\source` (Windows) es una copia de referencia — NO se usa para compilar el servidor.
-- El cliente SÍ se compila desde la copia Windows (`source\metin2_client`).
+- El cliente SÍ se compila desde la copia Windows (`source\client`).
 - El desastre del modelo anterior vino de editar ambas copias inconsistentemente y de cambios de defines/protocolo opuestos entre cliente y servidor. **Después de cualquier cambio, sincronizar ambas copias** (diff/md5sum) y **verificar que los defines de protocolo coincidan en ambos lados**.
 - CUIDADO: los crashes de WSL pueden PERDER escrituras sin flushear (ext4) — tras desplegar binarios, ejecutar `sync` en WSL y verificar con md5sum.
 
 ## Hechos de protocolo (verificados 2026-08-08)
 
-- Cliente v40999 (`source\metin2_client`), servidor `__GAME_VERSION__` 41023 (`source\metin2_server`).
+- Cliente v40999 (`source\client`), servidor `__GAME_VERSION__` 41023 (`source\server`).
 - Tablas de headers coherentes entre servidor y ambos clientes (handshake 0xff/0xfe, LOGIN3=111, GC_AUTH_SUCCESS=150, GC_LOGIN_SUCCESS3=6, GC_EMPIRE=90...).
 - Flujo del login: cliente → auth(30001): GC_PHASE + GC_HANDSHAKE (con retries de bias de reloj ~40-80ms) → CG_HANDSHAKE echo → LOGIN3(65 bytes: 0x6F + name[31] + pwd[17] + keys[16]) → QID_AUTH_LOGIN (SQL en db) → strcmp(hash con *, hash almacenado) → GC_AUTH_SUCCESS(0x96+key+result) → cliente cierra auth → conecta al canal(30003) → LOGIN3 → GD_LOGIN → QUERY_LOGIN (12 columnas) → RESULT_LOGIN → GC_EMPIRE(0x5a+empire) + SendLoginSuccessPacket → selección de personaje.
 - **Cifrado: `_IMPROVED_PACKET_ENCRYPTION_` OFF en ambos lados; `USE_NO_PACKET_ENCRYPTION` ON (plaintext).** Sequence OFF en ambos. SI se cambia un lado, cambiar el otro.
@@ -103,8 +106,8 @@ wsl -d Debian-M2 -- bash /mnt/c/projects/Metin2/scripts/start_m2_min.sh
 - **El stack completo (9 cores) revienta la memoria de esta máquina** (4GB host, WSL cap 2GB). Usar `start_m2_min.sh` salvo que haya más RAM.
 - **WSL inestable:** crashes `Wsl/Service/E_UNEXPECTED` en momentos de I/O pesado (builds, syncs, restarts) — máquina con 4GB RAM, Windows 10 22H2, WSL 2.7.3, errores WHEA PCIe. El SSD estuvo LLENO (5GB libres) — se limpió (npm-cache, TEMP, logs WSL, artefactos de build, backups) → 23GB libres en host, 3.2G usados en WSL. Config en `C:\Users\Ricardo Casamayor\.wslconfig` (memory=2GB, swap=8GB). Tras cada crash: `wsl --shutdown` → `start_m2_min.sh`.
 - **Recompilar el servidor:** en WSL: las librerías primero (`cd /home/m2/source/metin2_server/Srcs/Server && make -C liblua/5.0 && make -C libsql && make -C libgame/src && make -C libpoly && make -C libthecore/src`), luego `make -C game/src` → `game_r41023` y `make -C db/src` → `db_r41023`; desplegar a `main/srv1/share/bin/{game,db}` y reiniciar auth+cores. **Siempre `sync` tras el deploy.**
-- **Recompilar el cliente:** MSBuild `source\metin2_client\Srcs\Client\Metin2Client.sln` /p:Configuration=Release /p:Platform=Win32 → `Srcs\Client\bin\Release\metin2client.exe` → copiar a `client\metin2client.exe`.
-- **Reempaquetar el pack:** editar `source\metin2_pack\pack\root\*.py` → `cd source\metin2_pack\pack && PackMakerLite.exe --nolog --parallel -p root` → copiar `root.epk`/`root.eix` a `client\pack\`.
+- **Recompilar el cliente:** MSBuild `source\client\Metin2Client.sln` /p:Configuration=Release /p:Platform=Win32 → `source\client\bin\Release\metin2client.exe` → copiar a `client\metin2client.exe`.
+- **Reempaquetar el pack:** editar `source\pack\root\*.py` → `cd source\pack && PackMakerLite.exe --nolog --parallel -p root` → copiar `root.epk`/`root.eix` a `client\pack\`.
 - **Orden de arranque obligatorio:** mariadb → srv1-db → srv1-auth1 → cores.
 
 ## Pendientes conocidos (2026-08-08)
@@ -144,7 +147,7 @@ wsl -d Debian-M2 -- bash /mnt/c/projects/Metin2/scripts/start_m2_min.sh
 10. **Trabajar en paralelo (velocidad):** cuando haya tareas independientes, desplegar agentes especializados en background simultáneamente (@explorer/@librarian para descubrimiento, @fixer para implementación acotada, @oracle para decisiones/review). No serializar trabajo que pueda correr en paralelo; reconciliar resultados al volver.
 11. **Modo plan por defecto:** para toda tarea de arquitectura o reescritura, PRIMERO planificar y discutir con el usuario (alternativas, riesgos, ADR antes de implementar). No escribir código de la reescritura sin confirmación explícita del plan.
 12. **Pushback permanente (devil's advocate):** el usuario lo pidió explícitamente: antes de aceptar cualquier plan suyo, evaluarlo críticamente y, si existe una opción significativamente mejor, proponerla con argumentos concretos (hechos del repo, medidas, riesgos). Si el plan es sólido, validarlo con evidencia en vez de inventar un pushback falso. Nunca aceptar un plan sin análisis.
-13. **Grafos primero (regla permanente del usuario):** ante CUALQUIER tarea de buscar/explorar/modificar/refactorizar código, consultar SIEMPRE los grafos de graphify ANTES de grep/glob/lectura a ciegas: `graphify query "..." --graph <merged>` para preguntas enfocadas, `graphify explain/path/god-nodes` para nodos específicos, o `GRAPH_REPORT.md` para contexto amplio. El usuario no debe tener que pedirlo: es automático en cada tarea de código. Grafos disponibles: `graphify-out/graph.json` (raíz = merge server+client), `source\metin2_server\graphify-out\graph.json`, `source\metin2_client\graphify-out\graph.json`.
+13. **Grafos primero (regla permanente del usuario):** ante CUALQUIER tarea de buscar/explorar/modificar/refactorizar código, consultar SIEMPRE los grafos de graphify ANTES de grep/glob/lectura a ciegas: `graphify query "..." --graph <merged>` para preguntas enfocadas, `graphify explain/path/god-nodes` para nodos específicos, o `GRAPH_REPORT.md` para contexto amplio. El usuario no debe tener que pedirlo: es automático en cada tarea de código. Grafos disponibles: `graphify-out/graph.json` (raíz = merge server+client), `source\server\graphify-out\graph.json`, `source\client\graphify-out\graph.json`.
 14. **Personalidad ponytail (permanente):** el orchestrator opera SIEMPRE con la filosofía ponytail: YAGNI, solución más mínima que funciona, stdlib/nativo antes que dependencias, una línea antes que cincuenta, no escribir código que no haga falta, no sobre-construir. Aplicar a todo código de la reescritura y de la línea base. Nunca cortar validación, seguridad ni accesibilidad — lo pequeño es consecuencia de lo necesario, no de recortar.
 
 ## Metodología de documentación (cómo se lleva la cuenta)
@@ -154,7 +157,7 @@ El proyecto sigue el patrón estándar de proyectos con agentes IA (AGENTS.md + 
 - **`CHANGELOG.md`** — registro cronológico de todo cambio verificado: fecha, qué cambió, evidencia. Lo mantiene el orchestrator al cierre de cada sesión (regla 9).
 - **`ROADMAP.md`** — plan maestro de la reescritura Rust: fases F0–F7 con checkboxes e hitos verificables. Actualizar los checkboxes cuando una fase avanza; mover a "Estado actual" lo verificado.
 - **`docs/decisions/`** — ADRs (formato ADR-0001 como plantilla: Estado/Fecha/Contexto/Decisión/Alternativas/Consecuencias). Toda decisión de arquitectura se escribe ANTES de implementar.
-- **Grafos** — tras cambios de código relevantes, refrescar con `graphify update` sobre `source\metin2_server` y `source\metin2_client`, y re-mergear a la raíz (`graphify merge-graphs` server client --out `graphify-out\graph.json`). El MCP `graphify` (config global de opencode) sirve el grafo mergeado en `C:\projects\Metin2\graphify-out\graph.json` — visible como conectado en la TUI de omo-slim. Ver regla 13.
+- **Grafos** — tras cambios de código relevantes, refrescar con `graphify update` sobre `source\server` y `source\client`, y re-mergear a la raíz (`graphify merge-graphs` server client --out `graphify-out\graph.json`). El MCP `graphify` (config global de opencode) sirve el grafo mergeado en `C:\projects\Metin2\graphify-out\graph.json` — visible como conectado en la TUI de omo-slim. Ver regla 13.
 
 ## Guardarraíles para la reescritura Rust (futuro)
 

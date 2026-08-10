@@ -152,7 +152,7 @@ Objetivo: core jugable por dominios, side-by-side, benchmark de escala, y el res
 
 ## Repositorio GitHub (preparación)
 
-- **Solo fuentes al repo** (~150-200 MB): `source\metin2_server`, `source\metin2_client\Srcs` (sin artefactos de build), `source\metin2_pack` (sin .epk), `source\metin2_proto`, `scripts\`, `docs\`, `AGENTS.md`, `ROADMAP.md`, `CHANGELOG.md`.
+- **Solo fuentes al repo** (~150-200 MB): `source\server`, `source\client` (sin artefactos de build), `source\pack` (sin .epk), `source\tools` (incluye `proto\`), `scripts\`, `docs\`, `AGENTS.md`, `ROADMAP.md`, `CHANGELOG.md`.
 - **NO van al repo**: `client\` (cliente instalado, pack 2.1 GB), `client-om2\` (referencia descargada), `archive\` (backups), `Extern\` (dependencias), artefactos de build (obj/bin/Debug/Release ~2,4 GB), `graphify-out\`, `.opencode\`, `systems\`.
 - **Binarios** (cliente instalado, .epk, builds) → GitHub Releases (no cuenta contra el límite del repo) o storage externo; se generan con los scripts de build.
 - `.gitignore` raíz con todos los patrones anteriores antes del primer push.
@@ -163,4 +163,4 @@ Objetivo: core jugable por dominios, side-by-side, benchmark de escala, y el res
 - **`AGENTS.md`** — estado actual, hechos verificados y reglas. Se actualiza cuando cambia el conocimiento del proyecto.
 - **`docs/decisions/`** — ADRs. Toda decisión de arquitectura se escribe ANTES de implementar.
 - **`docs/superpowers/plans/2026-08-09-servidor-rust-plan-unico.md`** — el diseño completo de referencia (único archivo).
-- **Grafos** — `graphify update` sobre `source\metin2_server` y `source\metin2_client` tras cambios de código relevantes.
+- **Grafos** — `graphify update` sobre `source\server` y `source\client` tras cambios de código relevantes.
