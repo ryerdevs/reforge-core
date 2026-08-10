@@ -1,5 +1,5 @@
 [package]
-name = "network"
+name = "server_realms"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,7 +9,6 @@ workspace = true
 
 [dependencies]
 protocol = { path = "../protocol" }
-tokio.workspace = true
-
-[dev-dependencies]
-tokio.workspace = true
+network = { path = "../network" }
+database = { path = "../database" }
+realm = { path = "../realm" }

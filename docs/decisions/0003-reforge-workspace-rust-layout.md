@@ -2,7 +2,7 @@
 
 ## Estado
 
-Aceptado
+Aceptado — **parcialmente superado por ADR-0004 (2026-08-10):** el layout y los nombres del workspace cambian (layout plano, sin `crates/`; `network`/`database`/`realm`; binario `server_realms` con roles). Se mantienen: carpeta `source/reforge`, límite de propiedad sobre la línea base C++, políticas de verificación.
 
 ## Fecha
 

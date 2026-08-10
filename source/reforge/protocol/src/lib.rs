@@ -48,6 +48,9 @@ pub mod header {
     pub const CG_CHARACTER_DELETE: u8 = 5;
     pub const CG_CHARACTER_SELECT: u8 = 6;
     pub const CG_ENTERGAME: u8 = 10;
+    /// Ping del selector de canales (`ServerStateChecker.cpp:60`, `packet.h:97`);
+    /// 1 byte (solo header). Lo usa la tabla de framing de `network`.
+    pub const CG_STATE_CHECKER: u8 = 206;
     pub const CG_LOGIN2: u8 = 109;
     pub const CG_LOGIN3: u8 = 111;
 

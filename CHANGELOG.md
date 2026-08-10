@@ -5,6 +5,57 @@ Todos los cambios notables del proyecto se documentan en este archivo.
 El formato se basa en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/).
 El proyecto usa versionado semántico ([SemVer](https://semver.org/spec/v2.0.0.html)) cuando existan releases; mientras tanto, las entradas se agrupan por fecha.
 
+## [2026-08-10] (3ª parte) — F1.5 handshake + binario `server_realms` + config TOML
+
+### Añadido
+
+- **F1.5 — Handshake** (`network/src/handshake.rs`, 597 líneas, 11 tests nuevos): `perform`/`perform_with` sobre `Connection`+`Framer` — envía `GC_PHASE(HANDSHAKE)`+`GC_HANDSHAKE` (nonce u32 nunca 0, now32 con wrap 2^32, l_delta=0), valida el eco `CG_HANDSHAKE` (nonce, l_delta≥0 parity desc.cpp:693-697, bias |±80ms| simétrico vs [0,50] unilateral del legacy), retries ≤32 con timeout 500ms/intento y respiro 50ms, filtra keepalives (0xfc/0xfe) y descarta paquetes fuera de orden (parity input.cpp:625-626). **Cancelación por timeout demostrada segura** (solo descarta reads Pending; los bytes parciales quedan en `framer.buf`). **56/56 tests** (network 23/23, protocol 30/30, server_realms 3/3), 0 warnings de build (clippy: 4 warnings pre-existentes de F0 en `protocol` — indentación de doc-list, args de función, identity_op en test; no de esta sesión).
+- **Binario `server_realms`** (antes `server`; nombre provisional del usuario): `git mv` + package renombrado, members/README actualizados, smoke verificado (roles auth/channel exit 0; rol inválido exit 2).
+- **Configs: TOML** (decisión del usuario 2026-08-10): configs de `server_realms` en TOML vía config-rs (F2; clap para args). Registrado en ADR-0004.
+
+### Corregido
+
+- **Carpeta legacy**: el renombre intermedio a `source/realms` se REVIRTIÓ por corrección del usuario — `source/deploy` conserva su nombre; `realms` queda solo como sufijo del binario (`server_realms`).
+- `.gitignore`: vuelve a `source/deploy/` (el runtime renombrado quedaba sin ignorar — 50 MB).
+- Artefactos residuales del binario viejo (`target/debug/server*.exe/pdb`) eliminados.
+
+### Verificado (reviews adversariales del equipo: 3 fixers → 3 oracles-fixer)
+
+- Ora-7 (rename server_realms): ✓ 7/7, sin hallazgos ≥ baja.
+- Ora-8 (docs deploy/server_realms): ✓ 8/8, consistencia disco↔docs verificada; 0 residuales de `source/realms` como ruta activa.
+- Ora-10 (handshake F1.5): **✓ LISTO para F2** — byte-parity del wire verificada contra el cliente real; cancelación por timeout demostrada por análisis del código. 7 hallazgos de deuda conocida (abajo).
+
+### Pendiente (deuda conocida de F1.5, no bloqueante — para el kickoff de F2)
+
+- **Racional del retry-on-wrong-nonce incoherente** (handshake.rs:64-67, 254-256): el nonce es fijo entre intentos → un eco duplicado lleva el MISMO nonce y se acepta; el camino solo lo dispara corrupción/malicia, donde el close instantáneo del C++ (input.cpp:179-183) es mejor que 32×(500+50)ms ≈ 17.6s de conexión zombie. Corregir doc o revertir a parity en F2.
+- **`Handshake.delta ≈ 0` SIEMPRE con el cliente legacy** (el cliente hace eco de `dwTime + 2·lDelta` con lDelta=0 → bias=0): la doc que dice "el bias real es ~la latencia" es incorrecta; y el mecanismo bias/retry NO converge para peers no-legacy con reloj desviado (el C++ converge con lNewDelta; el Rust reenvía now32/lDelta=0). F2 y el futuro cliente Rust no deben heredar esa suposición.
+- **Gap de test**: eco parcial (5 de 13 B) a través del timeout — la propiedad más delicada, analizada correcta pero sin test que la fije.
+- Off-by-one vs C++: 32 intentos Rust vs 33 envíos legacy (1 inicial + 32 retries); `Handshake.server_time` es el now_ms del inicio (stale tras retries, el C++ fija el del éxito); `unreachable!()` en ruta de red (demostrablemente seguro hoy); 17.6s de vida de conexión muda (el auth público debe considerar timeout global en F2).
+
+## [2026-08-10] (2ª parte) — Estructura y nombres profesionales (ADR-0004) + layout plano
+
+### Añadido
+
+- **ADR-0004** (`docs/decisions/0004-reforge-structure-and-names.md`): estructura y nombres definitivos del workspace — layout PLANO en `source/reforge` (el subdirectorio `crates/` se propuso y el usuario lo descartó), renombres de dominio (sin prefijo de marca), binario único `server_realms` con roles por config, convenciones de workspace, runtime legacy `source/deploy` (sin cambio).
+- **Crate binario `server_realms`** (`source/reforge/server_realms/`, nombre provisional del usuario): UN binario con roles por config — `--role auth` (F2) | `--role channel` (F5); main mínimo con std (sin clap), `parse_role` puro con 3 tests. Resuelve la inconsistencia ADR-0002 ("auth proceso propio") vs plan único ("auth modo del binario"): auth es un ROL del mismo binario.
+- **Convenciones de workspace**: `[workspace.dependencies]` (tokio 1.49 → resuelve 1.53.1, features centralizadas), `[workspace.lints.rust] unsafe_code = "forbid"` heredado en los 5 crates (`[lints] workspace = true`), `rust-toolchain.toml` (1.97.0), `README.md` del workspace (estructura + glosario).
+
+### Cambiado
+
+- **Renombres de crates** (git mv, historial preservado): `net` → `network`, `db` → `database`, `game` → `realm`, `protocol` sin cambio; crate `auth` eliminado → módulo `network::auth` (stub F2).
+- **Framer de network**: tabla C→S ampliada con `CG_ENTERGAME` (10 → 1B) y `CG_STATE_CHECKER` (206 → 1B, constante añadida a `protocol::header`); doc-comment con los matices (0x00 divergencia deliberada vs no-op del C++ `input.cpp:75-76`; EnterGame/StateChecker para F2/F4; sin idle timeout hasta F2). Test nuevo `entergame_and_state_checker_are_1_byte_packets`.
+- **Runtime legacy: conserva `source/deploy`** (copia Windows del runtime, gitignored; el árbol WSL `metin2_svfiles` NO se toca — los scripts dependen de esa ruta). El renombre intermedio a `source/realms` se revirtió por corrección del usuario; `realms` queda solo como sufijo del binario de la reescritura (`server_realms`).
+
+### Corregido
+
+- **`.gitignore`**: `source/realms/` → `source/deploy/` (revertido tras corrección del usuario — el runtime legacy conserva su nombre; la regla vuelve a cubrir `source/deploy/`).
+
+### Verificado
+
+- **45/45 tests** (`cargo test` workspace): protocol 30/30, network 12/12, server_realms 3/3, database/realm 0. Build 0 warnings (debug + release fresco). Smoke del binario: roles auth/channel exit 0, rol inválido/flag desconocido/valor faltante exit 2.
+- Review adversarial (oracle-fixer A): 0 críticos; 2 MEDIA corregidos (lints heredados en database/realm — falso positivo, ya estaban — y gitignore); lista para commit.
+- **Corrección del usuario (misma fecha):** el runtime legacy conserva `source/deploy` (el renombre a `realms` se revirtió) y el binario de la reescritura pasa a llamarse `server_realms` (nombre provisional; carpeta `source/reforge/server_realms` albergará el binario compilado + configs desde F2). Docs, ROADMAP, ADR-0004 y `.gitignore` actualizados en consecuencia.
+
 ## [2026-08-10] — REESCRITURA RUST ARRANCADA: ADR-0003 + workspace `source/reforge` + crate `protocol` (F0)
 
 ### Añadido
