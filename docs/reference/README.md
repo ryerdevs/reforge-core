@@ -13,6 +13,7 @@ Information-oriented material (Diátaxis): exact definitions, contracts, and inv
 - Legacy wire/pack compatibility boundary: [protocol/legacy-compatibility.md](protocol/legacy-compatibility.md)
 - Quest DSL spec: [quests/quest-dsl.md](quests/quest-dsl.md)
 - Legacy system notes (read-only): [legacy/language-system.md](legacy/language-system.md)
+- Legacy MariaDB schema inventory (G-PG, migration baseline): [database/legacy-schema.md](database/legacy-schema.md)
 - Architecture decision records: [../decisions/](../decisions/)
 - Phase plan with acceptance criteria: [../../ROADMAP.md](../../ROADMAP.md)
 

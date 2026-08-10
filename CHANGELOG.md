@@ -7,6 +7,20 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-10] (9th part) — Checkpoint: G-PG database inventories committed + CURRENT updated
+
+### Added
+
+- **`docs/reference/database/legacy-schema.md`** — reproducible inventory of the live MariaDB schema (77 tables, column types/encodings, triggers, hash function, AI counters, hazards) as the PostgreSQL migration baseline. Type Reference, Status Proposed.
+- **`docs/reference/database/legacy-sql-compatibility.md`** — inventory of MySQL-specific SQL (204 submission sites; REPLACE/ON DUPLICATE/UPDATE LIMIT/collate/escaping/multi-statement hazards; connection topology; pgcrypto hash expression) for the temporary C++→PostgreSQL adapter. Type Reference, Status Proposed.
+- `docs/reference/README.md` — link to the database reference section.
+
+### Verified
+
+- Both inventories audited twice by oracle-fixers against the live MariaDB/WSL and `source/server` (0 blockers after corrections; final counts and citations verified).
+- `docs/CURRENT.md` refreshed: snapshot commit `03c03ad`, harness state, next gates (G-PG implementation → F2a).
+- Working tree clean after this checkpoint.
+
 ## [2026-08-10] (8th part) — Team redefinition: build implements, fixer attacks, oracle supervises, librarian maintains docs
 
 ### Changed
