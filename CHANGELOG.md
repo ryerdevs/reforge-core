@@ -7,6 +7,36 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-11] (6th part) — F4 MILESTONE MET: the real client enters the world against the Rust core and stays
+
+### Fixed (the world-entry saga — 7 server-side iterations, all matching the CLIENT contract)
+
+The client reached the select screen early, but world entry failed silently (clean close, no dump = Python-exception pattern; the instrumented client proved NO exceptions — each failure was a SERVER mismatch with the client's contract):
+
+1. **Entry queue** (C++ order verified `input_db.cpp:428-459`/`input_login.cpp:611-656`): LOADING → MainCharacter → 36× quickslots → Points → Skills → items → affects → [CG_ENTERGAME] → ADD+INFO+GAME+LandList(435B)+TIME+CHANNEL.
+2. **MainCharacter 47B** — the CLIENT's layout has NO `empire` (48B server layout desynced the whole stream → the client closed on an invalid header after the loading).
+3. **lAddr/wPort in the 449B** — the DirectEnter reconnect uses them (`introselect.py` → `ConnectGameServer`); 0/0 → silent `OnConnectFailure` → back to login. Now `inet_addr` format + port (bytes at offsets 64/68 verified).
+4. **0xf1 CG_CLIENT_VERSION2 (67B)** — the client sends its version at the end of the loading; the C++ ignores it (`input.cpp:205-213`).
+5. **Game-phase C→S table** — 24 packets (CG_MOVE 16B verified, ATTACK, ITEM_*, etc.) accepted + ignored (gameplay is F5); unknown/variable headers still close (parity).
+6. **Inactivity timeout** — the absolute 15s killed sessions; now per-read (reset on ANY client packet).
+7. **Heartbeat** — the client is SILENT at idle; the C++ pings (`GC_PING` 44, 1B, `desc.cpp:179-214`); the channel sends it every 10s (`ping_interval_ms`, < idle 15s) and the client's `CG_PONG` resets the idle.
+
+### Added
+
+- **Client instrumentation** (`python_error.log` — Python exceptions + RecvErrorPacket content; kept — the definitive diagnostic tool; the client was rebuilt + deployed, md5 `2D94E5EE...`).
+- **Guardrails**: the client's `Packet.h` is the wire contract for game-phase packets (field-by-field; the 47B lesson); the heartbeat is server-side; timeout semantics (absolute vs inactivity).
+
+### Verified
+
+- **F4 MILESTONE MET (2026-08-11):** the REAL client enters the world against the Rust core and stays — the user sustained 50+ seconds in the map (log: session live without timeout; `paquete de juego 0xNN ignorado` for the spawn traffic). World is empty (NPCs/mobs = F5); movement unprocessed (F5); HUD full (real MAX points), hotbar initialized, inventory empty.
+- **Workspace: 227 passed / 0 failed / 31 ignored** (channel gated 5/5 incl. deployed; heartbeat test: session lives 2.5× the timeout with pings/pongs).
+
+### Pending
+
+- **F5 (the big part — gameplay)**: movement (speed envelope + walkability + anti-speedhack), combat, drops/items/inventory, NPCs/mobs, quests, shops — the client currently stands still in an empty world.
+- F4 tail: client UTF-8 name overrides, minimal Entity core + ECS (bevy_ecs — due at F4/F5).
+- F3 tail: PROTO_FROM_DB harness note; capture-snapshot harness; data-channel activation (framing map 162/163 — the client's CheckPacket kills on unregistered headers, noted).
+
 ## [2026-08-11] (5th part) — F4 slice 1 (realm WorldStore + select/spawn packets) + F3 tail (snapshot + data channel)
 
 ### Added — F4 slice 1 (`realm` crate, world entry)
@@ -421,6 +451,7 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 - **El selector de banderas causó pantalla NEGRA al abrir el login** (primera versión 18:04): `btn.SetEvent(ui.__mem_func__(self.__OnClickLanguageFlag(...)))` envolvía una **closure** con `__mem_func__` (wrapper pensado para métodos bound estilo `self.__OnClickLoginButton`) → excepción en `__CreateLanguageSelector` durante `LoginWindow.Open()` → el login no se construye → negro. **Fix:** `SetEvent` directo con la closure (igual que las lambdas del teclado virtual, `key_space.SetEvent(lambda ...)`) + **try/except blindado** en `__CreateLanguageSelector` (`print` del error, el login se muestra igual aunque el selector falle). Repack 538368 B 18:12, desplegado a `client\pack` y verificado por desempaquetado (línea 379 sin `__mem_func__`, 32 banderas dentro del epk).
 - **Verificado el `.rar` del sistema completo** (`systems\Language System 1.2.6.rar`, UnRAR l): contenido idéntico a la carpeta extraída, **sin ninguna imagen de bandera de país** y sin lógica de selector de login. Los 8 `02. Client\root\*.py` del mod son parches del coliseo PVP (dependen de `__LANGUAGE_SYSTEM__` en el C++ del cliente, no integrado) — **copiarlos rompería el login** (ImportError `uiLanguageSystem`, AttributeError `app.LANGUAGE_SYSTEM`, `player.IsLanguageSystem()` inexistente). Confirmada la decisión #8 del doc de estado (no integrar ese root).
+
 
 ## [2026-08-09] (3ª sesión, 2ª parte) — Crash de entrada al mundo: diagnóstico en curso + auditoría del Language System
 

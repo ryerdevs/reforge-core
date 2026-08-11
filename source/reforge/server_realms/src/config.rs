@@ -29,6 +29,17 @@ pub struct Config {
     /// `g_bNoMoreClient` del C++ (input_auth.cpp:96-105): rechaza con
     /// GC_LOGIN_FAILURE "SHUTDOWN".
     pub no_more_clients: bool,
+    /// Número del canal (parity `g_bChannel` del CONFIG del core — el
+    /// `TPacketGCChannel` del entry, `input_login.cpp:653-656`). El rol auth
+    /// no lo usa (default 1).
+    pub channel: u8,
+    /// Heartbeat del servidor: intervalo del `GC_PING` (44, 1 B) en la fase
+    /// de juego — el cliente en reposo NO manda nada; responde `CG_PONG`
+    /// (0xfe) a cada ping (parity `ping_event`, `desc.cpp:179-214`; el C++
+    /// usa 60 s — `ping_event_second_cycle = passes_per_sec * 60`,
+    /// config.cpp:30). DEBE ser menor que `timeout_ms` (el pong del cliente
+    /// resetea el timeout de inactividad). Default 10 s < 15 s.
+    pub ping_interval_ms: u64,
     /// Directorio base de los archivos legacy (panama/ + cshybridcrypt*) —
     /// parity del cwd del auth C++. Vacío = sin legacy (el runtime srv1 actual
     /// no tiene los archivos → el auth C++ tampoco envía 151-153).
@@ -47,6 +58,8 @@ impl Default for Config {
             pg_conn: "host=127.0.0.1 port=5432 user=mt2 password=mt2 dbname=metin2".into(),
             timeout: Duration::from_secs(15),
             no_more_clients: false,
+            channel: 1,
+            ping_interval_ms: 10_000,
             legacy_dir: String::new(),
             expected_version: 40999,
         }
@@ -90,6 +103,16 @@ impl Config {
                         "false" => false,
                         _ => return Err(where_at("no_more_clients debe ser true|false")),
                     };
+                }
+                "channel" => {
+                    cfg.channel = value
+                        .parse()
+                        .map_err(|_| where_at("channel debe ser un entero (u8)"))?;
+                }
+                "ping_interval_ms" => {
+                    cfg.ping_interval_ms = value
+                        .parse()
+                        .map_err(|_| where_at("ping_interval_ms debe ser un entero (ms)"))?;
                 }
                 "legacy_dir" => cfg.legacy_dir = parse_string(value, &where_at)?,
                 "expected_version" => {

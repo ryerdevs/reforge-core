@@ -22,7 +22,7 @@ This is a point-in-time snapshot. It is the **source of truth for current status
 
 | Item | Value | Evidence |
 |---|---|---|
-| Workspace tests | **196 passing / 0 failed / 22 ignored** (realm 6 + 4 gated, database 34 + 11 gated, mysql_proxy 66, network 24 + 2 f16 smoke, protocol 43 + 6 datachannel + 3 golden, server_realms 14 + 4 auth smoke) | `cargo test` in `source/reforge` |
+| Workspace tests | **227 passing / 0 failed / 31 ignored** (realm 6 + gated, database 34 + gated, mysql_proxy 66, network 24 + 2 f16 smoke, protocol 43 + golden/datachannel/world, server_realms 19 + 5 channel gated) | `cargo test` in `source/reforge` |
 | `mysql_proxy` adapter | 53/53 — wire v10 codec, translate (§4 inventory as test table), session (per-slot search_path), config | `source/reforge/mysql_proxy/src/{wire,translate,session,config,server,sha1}.rs` |
 | Parity (migration) | **30/30 tables** count+md5 equal (volatile `account.last_play` excluded — live-login write lands on PG only) | `scripts/gpg/parity_check.py` |
 | Parity (boot) | A/B green — 0 new SYSERR + identical boot table lines vs the MariaDB baseline | `scripts/gpg/parity_boot.sh` |
@@ -45,7 +45,7 @@ This is a point-in-time snapshot. It is the **source of truth for current status
 | **F1 — Network** | Listener, framer, handshake done — **25/25 tests**; **F1.6 MET** (f16_peer ↔ live auth, no floods, 2026-08-10) | F1 milestone closed; remaining debt: retry-on-wrong-nonce rationale, partial-echo test |
 | **G-PG — PostgreSQL cutover** | **COMPLETE (2026-08-10)** — ADR-0005 Accepted, B1–B8 done, real login on PG, parity A/B green | Close-out only: sync WSL/Windows source copies; optional graph refresh |
 | **F2 — Auth + first client batch** | **F2a + F2b DONE (2026-08-11)** — Rust auth + client version/hwid batch, verified end-to-end with the real client (world entry) | **F3** (data layer + data channel) |
-| **F3+ — Data, world, parity** | **F3 tail done (2026-08-11)** — world repos + WAL wired + snapshot harness + data channel 162+ (protocol + client contract). **F4 slice 1 done** — realm `WorldStore` + select/spawn packet mappings | **F4 slice 2 (the channel)**: listener + handshake + select flow end-to-end + spawn; details in [plans/server-rewrite.md](plans/server-rewrite.md) |
+| **F3+ — Data, world, parity** | **F3 done + F4 MILESTONE MET (2026-08-11)** — the REAL client enters the world against the Rust core and stays (select → DirectEnter → loading → map 41, 50+ s sustained; world empty — NPCs F5). World repos + WAL + snapshot harness + data channel 162+ + client instrumentation (`python_error.log`) | **F5 (gameplay)**: movement (speed envelope + walkability), combat, drops/items, NPCs/mobs, quests, shops; F4 tail: client UTF-8 names, ECS |
 
 ## Next gates
 

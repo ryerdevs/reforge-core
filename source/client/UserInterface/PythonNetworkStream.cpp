@@ -573,6 +573,15 @@ bool CPythonNetworkStream::RecvErrorPacket(int header)
 	TraceError("Phase %s does not handle this header (header: %d, last: %d, %d)",
 		m_strPhase.c_str(), header, g_iLastPacket[0], g_iLastPacket[1]);
 
+	// F4 instrumentación (log-only): registrar el paquete no manejado en
+	// logs/python_error.log — evidencia para el diagnóstico select/GAME.
+	char szLog[256];
+	_snprintf(szLog, sizeof(szLog),
+		"[RecvErrorPacket] phase=%s header=%d recv_buffer=%u last=%d,%d",
+		m_strPhase.c_str(), header, GetRecvBufferSize(),
+		g_iLastPacket[0], g_iLastPacket[1]);
+	AppendPythonErrorLog(szLog);
+
 	ClearRecvBuffer();
 	return true;
 }

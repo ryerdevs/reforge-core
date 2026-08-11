@@ -81,4 +81,12 @@ Rules for running the legacy test stack on the WSL Debian-M2 environment. Source
 - **Consequence:** parity false positives, DB pollution, throwaway rows mixed with the user's real data.
 - **Status:** Active.
 
+## 10. The client's `Packet.h` is the wire contract for game-phase packets
+
+- **Rule:** for every game-phase packet, verify sizes/fields FIELD-BY-FIELD against the CLIENT's `Packet.h` (v40999, packed, with its conditionals), not the server's `packet.h` (41023). The client is the frozen contract (ADR-0007) — when layouts differ, the SERVER adapts. Related: the heartbeat is SERVER-side (`GC_PING` 44, 1 B, `desc.cpp:179-214` — the client is SILENT at idle, it only responds pongs); timeouts must be INACTIVITY-based (reset on any client packet), never absolute.
+- **Why:** 2026-08-11 F4 world-entry saga (7 server-side iterations): the MainCharacter 48 B (server) vs 47 B (client, no `empire`) desynced the whole stream — the client closed cleanly on an invalid header AFTER the loading bar completed (no exception, no dump; the instrumented client proved it). The DirectEnter reconnect uses `lAddr`/`wPort` from the 449 B (0/0 → silent `OnConnectFailure` → login). The client sends `0xf1` (version, 67 B) at the end of the loading and the C→S game table (24 packets, CG_MOVE = 16 B) at spawn — all must be in the framer.
+- **Evidence:** channel log of the saga (`chan/ch1/core1/stdout` — the deploy logs there, NOT /tmp/gpg/channel.log); the client instrumentation (`python_error.log` empty throughout — the failures were server-side); 227/0/31 workspace.
+- **Consequence:** silent close-to-login loops, wasted iterations; the client layout check is the FIRST step for any new game-phase packet.
+- **Status:** Active.
+
 Related: [`rust-rewrite.md`](rust-rewrite.md) (two source copies), [`data-and-encoding.md`](data-and-encoding.md).

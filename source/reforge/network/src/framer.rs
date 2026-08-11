@@ -33,11 +33,12 @@ pub enum ConnectionRole {
 /// Tamaño total (header + payload) de un paquete cliente→servidor, o `None`
 /// si el header no está en la tabla (→ cerrar la conexión, `input.cpp:77-84`).
 ///
-/// Subconjunto F1 de `CPacketInfoCG` (flujo de login, sequence OFF):
-/// `0xff`=13, `0xfe`=1, `1`=49, `4`=34, `5`=10, `6`=2, `10`=1, `109`=52,
-/// `111`=65/68, `206`=1, `0xfc`=13. Los tamaños vienen de las constantes
-/// `SIZE` del crate `protocol` (no de literales duplicados); los de 1 B son
-/// `sizeof(BYTE)` (sin struct en el crate).
+/// Subconjunto F1 de `CPacketInfoCG` (flujo de login + fase de juego,
+/// sequence OFF): los de tamaño fijo — ver `packet_size` para la lista
+/// completa con sus Packet.h del cliente. Los de tamaño VARIABLE del C++
+/// (CG_CHAT 3, CG_WHISPER 19, CG_SYNC_POSITION 8, CG_SHOP 50, CG_TEXT... —
+/// su `iExtraLen` depende del contenido) NO están en la tabla: recibirlos
+/// cierra la conexión (seguro por defecto, documentado).
 ///
 /// Matices verificados contra el C++:
 /// - `0x00` NO se acepta. El C++ lo consume como no-op de 1 byte ANTES del
@@ -48,6 +49,15 @@ pub enum ConnectionRole {
 ///   `CG_STATE_CHECKER` (206, 1 B, `packet_info.cpp:232` /
 ///   `ServerStateChecker.cpp:60`) ya están en la tabla: los necesita la entrada
 ///   al mundo (F4) y el ping del selector de canales (F2).
+/// - `CG_MARK_LOGIN` (100, 9 B, `packet_info.cpp:141` / `packet.h:1729-1734`):
+///   la conexión del guild mark responde con este paquete al handshake del
+///   server (`GuildMarkDownloader.cpp:213-229`); el server normal
+///   (`guild_mark_server` OFF) lo rechaza cerrando (`input.cpp:560-572`) — el
+///   handshake lo reporta como `HandshakeError::MarkLogin` y el canal cierra.
+/// - `CG_CLIENT_VERSION2` (0xf1, 67 B, `Packet.h:135,974-979`): el cliente lo
+///   manda al terminar la carga (`SendClientVersionPacket`); el canal lo
+///   IGNORA sin validar (parity `input.cpp:205-213` — el auth nunca lo recibe:
+///   su flujo termina en el GC_AUTH_SUCCESS).
 /// - Sin idle timeout: el C++ tampoco lo tiene (una conexión muda queda abierta
 ///   hasta que el SO la cierre). **F2 debe añadir un timeout explícito.**
 ///
@@ -70,7 +80,40 @@ pub fn packet_size(role: ConnectionRole, header: u8) -> Option<usize> {
         header::CG_CHARACTER_CREATE => TPacketCGPlayerCreate::SIZE, // 4, 34
         header::CG_CHARACTER_DELETE => TPacketCGPlayerDelete::SIZE, // 5, 10
         header::CG_ENTERGAME => 1,   // 10, sizeof(TPacketCGEnterGame) = BYTE (packet.h:613-616)
+        header::CG_MARK_LOGIN => protocol::world::TPacketCGMarkLogin::SIZE, // 100, 9 (packet_info.cpp:141)
+        header::CG_CLIENT_VERSION2 => 67, // 0xf1, TPacketCGClientVersion2 = 1 + 33 + 33 (Packet.h:974-979)
         header::CG_STATE_CHECKER => 1, // 206, sizeof(BYTE) — ping selector de canales (packet_info.cpp:232)
+        // ---------------------------------------------------------------
+        // Fase de juego (la tabla C→S completa de tamaños fijos del
+        // `CPacketInfoCG` — packet_info.cpp:158-235; los tamaños son los
+        // structs del PACKET.H DEL CLIENTE, packed — la entrada al mundo no
+        // puede cerrar por un paquete de juego legítimo):
+        // ---------------------------------------------------------------
+        header::CG_ATTACK => 8,             // 2, header+bType+vid+2 CRC (Packet.h:509-516)
+        header::CG_MOVE => 16,              // 7, header+func+arg+rot+lx+ly+time (Packet.h:677-686)
+        header::CG_ITEM_USE => 16,          // 11, header+pos+ch_vid+victim_vid+vnum (Packet.h:1689-1697)
+        header::CG_ITEM_DROP => 8,          // 12, header+pos+elk (cheque OFF en el cliente) (Packet.h:556-564)
+        header::CG_ITEM_MOVE => 8,          // 13, header+pos+change_pos+num (Packet.h:577-583)
+        header::CG_ITEM_PICKUP => 5,        // 15, header+vid (Packet.h:585-589)
+        header::CG_QUICKSLOT_ADD => 4,      // 16, header+pos+slot (Packet.h:591-596)
+        header::CG_QUICKSLOT_DEL => 2,      // 17 (Packet.h:598-602)
+        header::CG_QUICKSLOT_SWAP => 3,     // 18 (Packet.h:604-609)
+        header::CG_ITEM_DROP2 => 9,         // 20, header+pos+gold+count (cheque OFF) (Packet.h:566-575)
+        header::CG_ON_CLICK => 5,           // 26, header+vid (Packet.h:611-615)
+        header::CG_EXCHANGE => 47,          // 27, header+sub+is_me+arg1+arg2+arg3+values+attrs (Packet.h:1812-1822)
+        header::CG_CHARACTER_POSITION => 2, // 28, header+position (Packet.h:653-657)
+        header::CG_SCRIPT_ANSWER => 2,      // 29 (Packet.h:659-663)
+        header::CG_QUEST_INPUT_STRING => 66, // 30, header+szString[65] (Packet.h:1002-1006)
+        header::CG_QUEST_CONFIRM => 6,      // 31, header+answer+requestPID (Packet.h:1008-1013)
+        header::CG_PVP => 10,               // 41, header+src+dst+mode (Packet.h:2014-2020)
+        header::CG_FLY_TARGETING => 17,     // 51, header+shooter+target+x+y (Packet.h:709-716)
+        header::CG_USE_SKILL => 9,          // 52, header+vnum+target (Packet.h:833-838)
+        header::CG_SHOOT => 2,              // 54 (Packet.h:718-722)
+        header::CG_MYSHOP => 35,            // 55, header+szSign[33]+count (SHOP_SIGN_MAX_LEN=32) (Packet.h:953-958)
+        header::CG_ITEM_USE_TO_ITEM => 7,   // 60, header+source+target (Packet.h:549-554)
+        header::CG_TARGET => 5,             // 61, header+vid (Packet.h:671-675)
+        header::CG_WARP => 15,              // 65, header+x+y+addr+port (Packet.h:2028-2035)
+        header::CG_SCRIPT_BUTTON => 5,      // 66, header+idx (Packet.h:665-669)
         _ => return None,
     })
 }
@@ -247,6 +290,23 @@ mod tests {
         // 1 B: entrada al mundo (F4) y ping del selector de canales (F2)
         assert_eq!(packet_size(ConnectionRole::Channel, header::CG_ENTERGAME), Some(1));
         assert_eq!(packet_size(ConnectionRole::Channel, header::CG_STATE_CHECKER), Some(1));
+        // 0xf1 (67 B): la versión del cliente al terminar la carga
+        // (TPacketCGClientVersion2 = 1 + 33 + 33, Packet.h:974-979).
+        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_CLIENT_VERSION2), Some(67));
+        assert_eq!(packet_size(ConnectionRole::Auth, header::CG_CLIENT_VERSION2), Some(67), "el auth no lo recibe (flujo corto) — la tabla es común");
+        // Fase de juego: los paquetes del spawn/idle con sus tamaños del
+        // Packet.h del cliente (packed) — el MOVE del spawn (16 B) es el que
+        // cerraba la entrada (slice 3.7).
+        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_MOVE), Some(16));
+        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_ATTACK), Some(8));
+        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_ITEM_USE), Some(16));
+        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_QUICKSLOT_ADD), Some(4));
+        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_MYSHOP), Some(35));
+        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_WARP), Some(15));
+        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_ITEM_DROP), Some(8), "cheque OFF en el cliente");
+        // Los variables del C++ siguen fuera (cierre documentado).
+        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_CHAT), None);
+        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_WHISPER), None);
         // LOGIN3: 65 canal / 68 auth (sufijo szLanguage[3])
         assert_eq!(
             packet_size(ConnectionRole::Channel, header::CG_LOGIN3),
