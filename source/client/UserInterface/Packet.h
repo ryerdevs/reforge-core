@@ -483,7 +483,14 @@ typedef struct command_login3
     char	pwd[PASS_MAX_NUM + 1];
     DWORD	adwClientKey[4];
     char	szLanguage[3]; // Language System: 2 chars + '\0' (p.ej. "es")
+    DWORD	dwVersion;     // F2b: client version (METIN2_GET_VERSION()), AUTH-only (offset 68..72)
+    char	hwid[16];      // F2b: 16-byte machine id, AUTH-only (offset 72..88)
 } TPacketCGLogin3;
+
+// F2b: AUTH LOGIN3 is 88 bytes (was 68). The CHANNEL still sends only the
+// first 65 bytes (see SendLoginPacket/SendLoginPacketNew). Natural packing
+// here is pack(1) (see pragma pack above), so no padding: 1+31+17+16+3+4+16.
+static_assert(sizeof(TPacketCGLogin3) == 88, "TPacketCGLogin3 must be 88 bytes (F2b)");
 
 typedef struct command_direct_enter
 {

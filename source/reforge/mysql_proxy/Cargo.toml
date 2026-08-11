@@ -1,0 +1,12 @@
+[package]
+name = "mysql_proxy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+tokio.workspace = true
+tokio-postgres.workspace = true

@@ -28,6 +28,11 @@
 // Constantes (spec §1 + packet.h verificado)
 // ============================================================================
 
+/// Paquetes legacy-client-only (ADR-0006): PanamaPack 151 + hybrid-crypt
+/// 152/153 — el auth C++ los envía en login exitoso antes de `GC_AUTH_SUCCESS`
+/// (`input_db.cpp:1710-1716`). Boundary aislado y borrable en bloque en F7.
+pub mod legacy;
+
 pub mod header {
     //! Headers de paquete (verificados contra `game/src/packet.h`).
 
@@ -328,11 +333,21 @@ pub struct TPacketCGLogin3 {
     pub adw_client_key: [u32; 4],
     /// Sufijo de 3 B SOLO del auth ("es\0"). En canal es 0-length (65 B totales).
     pub sz_language: [u8; 3],
+    /// F2b (aditivo, auth): version del cliente (DWORD LE tras el lang) —
+    /// `None` si el LOGIN3 es de 68 B (cliente actual).
+    pub version: Option<u32>,
+    /// F2b (aditivo, auth): hardware ID (16 B tras la version) — `None` si el
+    /// LOGIN3 no la trae (68/72 B).
+    pub hwid: Option<[u8; 16]>,
 }
 
 impl TPacketCGLogin3 {
     pub const SIZE_CHANNEL: usize = 65;
     pub const SIZE_AUTH: usize = 68;
+    /// 68 + version[4] (F2b — version sin hwid).
+    pub const SIZE_AUTH_VERSION: usize = 72;
+    /// 72 + hwid[16] (F2b — version + hardware id).
+    pub const SIZE_AUTH_FULL: usize = 88;
     pub const HEADER: u8 = header::CG_LOGIN3;
 
     /// Login3 para el canal (65 B, sin sufijo de idioma).
@@ -343,6 +358,8 @@ impl TPacketCGLogin3 {
             passwd: from_cstr(passwd),
             adw_client_key,
             sz_language: [0; 3],
+            version: None,
+            hwid: None,
         }
     }
 
@@ -354,37 +371,55 @@ impl TPacketCGLogin3 {
             passwd: from_cstr(passwd),
             adw_client_key,
             sz_language: from_cstr::<3>(lang),
+            version: None,
+            hwid: None,
         }
     }
 
-    /// Acepta 65 B (canal, sin idioma) o 68 B (auth, con idioma).
+    /// Acepta 65 B (canal, sin idioma), 68 B (auth, con idioma), 72 B (auth +
+    /// version F2b) y 88 B (auth + version + hwid F2b).
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        let base = |data: &[u8]| Self {
+            header: data[0],
+            login: rd_arr(data, 1),
+            passwd: rd_arr(data, 32),
+            adw_client_key: [
+                rd_u32(data, 49),
+                rd_u32(data, 53),
+                rd_u32(data, 57),
+                rd_u32(data, 61),
+            ],
+            sz_language: [0; 3],
+            version: None,
+            hwid: None,
+        };
         match data.len() {
-            Self::SIZE_CHANNEL => Ok(Self {
-                header: data[0],
-                login: rd_arr(data, 1),
-                passwd: rd_arr(data, 32),
-                adw_client_key: [
-                    rd_u32(data, 49),
-                    rd_u32(data, 53),
-                    rd_u32(data, 57),
-                    rd_u32(data, 61),
-                ],
-                sz_language: [0; 3],
-            }),
+            Self::SIZE_CHANNEL => Ok(base(data)),
             Self::SIZE_AUTH => Ok(Self {
-                header: data[0],
-                login: rd_arr(data, 1),
-                passwd: rd_arr(data, 32),
-                adw_client_key: [
-                    rd_u32(data, 49),
-                    rd_u32(data, 53),
-                    rd_u32(data, 57),
-                    rd_u32(data, 61),
-                ],
                 sz_language: rd_arr(data, 65),
+                ..base(data)
             }),
-            got => Err(ProtocolError::BadLength { expected: Self::SIZE_CHANNEL, got }),
+            Self::SIZE_AUTH_VERSION => {
+                let mut auth = Self {
+                    sz_language: rd_arr(data, 65),
+                    ..base(data)
+                };
+                auth.version = Some(rd_u32(data, 68));
+                Ok(auth)
+            }
+            Self::SIZE_AUTH_FULL => {
+                let mut auth = Self {
+                    sz_language: rd_arr(data, 65),
+                    ..base(data)
+                };
+                auth.version = Some(rd_u32(data, 68));
+                auth.hwid = Some(rd_arr(data, 72));
+                Ok(auth)
+            }
+            got => Err(ProtocolError::BadLength {
+                expected: Self::SIZE_CHANNEL,
+                got,
+            }),
         }
     }
 
@@ -423,6 +458,19 @@ impl TPacketCGLogin3 {
         } else {
             self.to_bytes_auth().to_vec()
         }
+    }
+
+    /// Serializa el LOGIN3 auth extendido (F2b): 68 B base + `version`[4] (si
+    /// `Some`) + `hwid`[16] (si `Some`) → 68/72/88 B. Para el f16_peer y tests.
+    pub fn to_bytes_auth_with(&self, version: Option<u32>, hwid: Option<[u8; 16]>) -> Vec<u8> {
+        let mut b = self.to_bytes_auth().to_vec();
+        if let Some(v) = version {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        if let Some(h) = hwid {
+            b.extend_from_slice(&h);
+        }
+        b
     }
 }
 
@@ -1265,8 +1313,49 @@ mod tests {
         assert_eq!(p, p2);
         assert_eq!(p2.to_bytes_auth(), b);
         assert_eq!(p2.sz_language, *b"es\0");
+        assert_eq!(p2.version, None, "68 B sin version");
+        assert_eq!(p2.hwid, None, "68 B sin hwid");
         // to_bytes() genérico → 68 (con idioma)
         assert_eq!(p.to_bytes().len(), 68);
+    }
+
+    /// F2b: LOGIN3 auth extendido — 72 B (con version) y 88 B (con hwid).
+    #[test]
+    fn roundtrip_cg_login3_auth_extended() {
+        let hwid = [0x11u8; 16];
+        // 72 B: version sin hwid.
+        let mut b72 = TPacketCGLogin3::new_auth("test", "1234", [1, 2, 3, 4], "es").to_bytes_auth().to_vec();
+        b72.extend(40999u32.to_le_bytes());
+        assert_eq!(b72.len(), 72);
+        let p72 = TPacketCGLogin3::from_bytes(&b72).unwrap();
+        assert_eq!(p72.version, Some(40999));
+        assert_eq!(p72.hwid, None);
+        // 88 B: version + hwid.
+        let mut b88 = b72.clone();
+        b88.extend_from_slice(&hwid);
+        assert_eq!(b88.len(), 88);
+        let p88 = TPacketCGLogin3::from_bytes(&b88).unwrap();
+        assert_eq!(p88.version, Some(40999));
+        assert_eq!(p88.hwid, Some(hwid));
+        // to_bytes_auth_with: 68/72/88.
+        let p = TPacketCGLogin3::new_auth("test", "1234", [1, 2, 3, 4], "es");
+        assert_eq!(p.to_bytes_auth_with(None, None).len(), 68);
+        assert_eq!(p.to_bytes_auth_with(Some(40999), None).len(), 72);
+        assert_eq!(p.to_bytes_auth_with(Some(40999), Some(hwid)).len(), 88);
+        let round = TPacketCGLogin3::from_bytes(&p.to_bytes_auth_with(Some(40999), Some(hwid))).unwrap();
+        assert_eq!(round, p88);
+    }
+
+    /// F2b: longitudes inválidas del LOGIN3 → error.
+    #[test]
+    fn cg_login3_bad_lengths() {
+        for len in [0usize, 64, 66, 67, 69, 71, 73, 89] {
+            let mut b = vec![0u8; len];
+            if !b.is_empty() {
+                b[0] = header::CG_LOGIN3;
+            }
+            assert!(TPacketCGLogin3::from_bytes(&b).is_err(), "len {len} debe fallar");
+        }
     }
 
     #[test]

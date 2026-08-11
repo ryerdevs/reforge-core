@@ -8,3 +8,6 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+tokio-postgres.workspace = true
+tokio.workspace = true
+uuid.workspace = true

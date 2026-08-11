@@ -1,8 +1,8 @@
 ---
 Type: Reference
-Status: Proposed
+Status: Accepted
 Audience: Contributors
-Last verified: 2026-08-10
+Last verified: 2026-08-11
 ---
 
 # Legacy MySQL Schema — Migration Inventory (G-PG)
@@ -11,9 +11,10 @@ Reproducible inventory of the legacy MariaDB schema that the Rust rewrite (`sour
 ADR-0003/0004, ADR-0005 PostgreSQL cutover) must migrate into the single canonical PostgreSQL
 database. This document records **structure only** — no rows, no credentials, no raw dumps.
 
-Companion docs: [PostgreSQL cutover ADR (proposed)](../../decisions/0005-postgresql-cutover-and-legacy-adapter.md), [legacy wire/pack
+Companion docs: [PostgreSQL cutover ADR (Accepted, 2026-08-10)](../../decisions/0005-postgresql-cutover-and-legacy-adapter.md), [legacy wire/pack
 compatibility](../protocol/legacy-compatibility.md), [AGENTS.md](../../../AGENTS.md)
-(§16–17: PROTO_FROM_DB, CP949 traps, multilanguage architecture).
+(§16–17: PROTO_FROM_DB, CP949 traps, multilanguage architecture). The G-PG spec that consumes
+this inventory is [server-rewrite.md §8.2.1](../../plans/server-rewrite.md).
 
 ---
 
@@ -422,6 +423,17 @@ PG implications:
 - The `guild_grade.auth` value `REMOVE_MEMEBER` is a **typo baked into the data** — keep the
   literal or migrate values.
 
+**Phase-1 PG reality (2026-08-11, verified read-only):** three enum columns were generated as
+**plain `text` WITHOUT the CHECK** (`scripts/gpg/05-gen-ddl.py` `NO_CHECK` set) because the live
+MariaDB data violates the enum definition (imported from the pack dump under non-strict
+`sql_mode`; value `''` = enum index 0): `player.mob_proto.size` (`''` in **2864/2864** rows;
+`text NOT NULL DEFAULT 'SMALL'`), `player.skill_proto.setAffectFlag` (`''` in 80/97) and
+`setAffectFlag2` (`''` in 96/97). Their literal definitions therefore live **only** in the
+proxy's static catalog `ENUM_COLUMNS` (`source/reforge/mysql_proxy/src/translate.rs:551-592`,
+source: MariaDB `SHOW CREATE`, 2026-08-11) — the `col+0` translation (ENUM → índice 1-based,
+SET → bitmask) depends on that map, not on the PG schema. All other enum/set columns keep their
+CHECK in the generated DDL.
+
 ### 7.3 Zero dates
 
 No `'0000-00-00 00:00:00'` defaults or data patterns in the game schemas (checked all
@@ -502,10 +514,11 @@ into PG column comments.
 - `account.string` / `player.string` are **not** deltas: both exist in the static
   `account.sql` / `player.sql` (locale string key/value tables, one per db).
 - The Windows copy `source/server` contains **no `.sql` files** — the repo cannot rebuild the
-  schema from source alone. G-PG should vendor the verified DDL (as the `schema_legacy` migration
-  baseline in the Rust workspace) once approved.
+  schema from source alone. **Phase-1 DDL vendored 2026-08-10:** `scripts/gpg/schema_gpg.sql`
+  (login subset per ADR-0005/G-PG spec §8.2.1b); the full 77-table vendoring (as the
+  `schema_legacy` migration baseline in the Rust workspace) happens at F3.
 - The Rust workspace already pins `protocol::legacy` (ADR-0006, proposed) for wire/pack
-  compatibility; this schema inventory feeds ADR-0005 (PostgreSQL cutover adapter, proposed).
+  compatibility; this schema inventory feeds ADR-0005 (PostgreSQL cutover adapter, **accepted**).
 
 ## 9. Migration hazards checklist (summary)
 

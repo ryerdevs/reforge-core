@@ -12,3 +12,5 @@ protocol = { path = "../protocol" }
 network = { path = "../network" }
 database = { path = "../database" }
 realm = { path = "../realm" }
+tokio-postgres.workspace = true
+tokio.workspace = true

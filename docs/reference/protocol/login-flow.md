@@ -66,11 +66,11 @@ Build flags that change sizes: `ENABLE_ACCE_COSTUME_SYSTEM` (+4B in TSimplePlaye
 
 **(a) Auth :30001 (CInputAuth, `input_auth.cpp:223-257`):**
 1. S→C: `GC_PHASE=0xfd` (PHASE_HANDSHAKE) + `GC_HANDSHAKE=0xff` (retries up to 32)
-2. C→S: `CG_HANDSHAKE=0xff` (13B) → phase PHASE_AUTH
+2. C→S: `CG_HANDSHAKE=0xff` (13B) → phase PHASE_AUTH; S→C then sends `GC_PHASE=0xfd` (PHASE_AUTH=10) — **the client sends LOGIN3 ONLY on receiving it** (`AccountConnector.cpp` `__AuthState_RecvPhase`; verified 2026-08-10 in the Rust auth — a missing PHASE_AUTH hangs the real client at "connecting" until timeout)
 3. C→S: `CG_LOGIN3=111` (68B with lang) → `CInputAuth::Login` (`input_auth.cpp:66`) → `ReturnQuery(QID_AUTH_LOGIN, ...)` — SQL **15 columns** (ERRATA: not 13, `input_auth.cpp:207-218`): `mysql_hash_password('%s'), password, securitycode, social_id, id, status, availDt-NOW()>0, 7×UNIX_TIMESTAMP(...), create_time` (col0 = hash with `*`, strcmp against the stored one — `db.cpp:340`)
 4. Result in `DBManager::AnalyzeReturnQuery` (`db.cpp:229-396`): 0 rows → `GC_LOGIN_FAILURE` "NOID"; hash mismatch → "WRONGPWD"; otherwise → `SendAuthLogin` (`db.cpp:179-202`, `HEADER_GD_AUTH_LOGIN=100`, `TPacketGDAuthLogin` **110B** (ERRATA: not 100 — 4+4+31+19+16+36=110, `tables.h:987-995` with `iPremiumTimes[9]`): `DWORD dwID; DWORD dwLoginKey; char szLogin[31]; char szSocialID[19]; DWORD adwClientKey[4]; int iPremiumTimes[9]`)
 5. db `QUERY_AUTH_LOGIN` (`ClientManager.cpp:1854-1901`) registers CLoginData → `HEADER_DG_AUTH_LOGIN` (1 BYTE result)
-6. game `CInputDB::AuthLogin` (`input_db.cpp:1697-1728`) → on success first sends PanamaPack 151 + hybrid-crypt 152/153 (see [legacy-compatibility.md](legacy-compatibility.md)), then **S→C: `GC_AUTH_SUCCESS=150`** (6B, game → client) → the client closes auth and connects to the channel
+6. game `CInputDB::AuthLogin` (`input_db.cpp:1697-1728`) → on success first sends PanamaPack 151 + hybrid-crypt 152/153 — **conditional on runtime files** (`panama/panama.lst` + `cshybridcrypt*`; the current srv1 runtime has none → the C++ auth sends none; parity implemented in `protocol::legacy`, ADR-0006) — then **S→C: `GC_AUTH_SUCCESS=150`** (6B, game → client) → the client closes auth and connects to the channel
 
 **(b) Channel :30003 (CInputLogin, `input_login.cpp:1023-1119`):**
 1. S→C: `GC_PHASE=0xfd` (PHASE_LOGIN)
