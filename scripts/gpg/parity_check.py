@@ -18,11 +18,32 @@ Method (ponytail, documented):
   batch lives in memory; the harness is per-table so memory stays bounded.
 - Exit: 0 all equal, 1 any mismatch, 2 connectivity/setup error.
 
+Modes (decision post-cutover 2026-08-11 — PG is OPERATIVE, MariaDB FROZEN):
+- default (no mode flag): MariaDB LIVE vs PG live. MariaDB is the frozen migration
+  source, so a diff here is PG having advanced operationally (the user plays on PG).
+- --make-snapshot <file.json>: captures the REFERENCE state from MariaDB (the frozen
+  cutover state) into a json file: {"<schema.table>": {"rows": n, "md5": m}}.
+  The md5 is computed over the SAME canonical rows as the live check (volatile
+  columns excluded, see VOLATILE_COLUMNS).
+- --snapshot <file.json>: compares PG against the snapshot (same OK/DIFF output and
+  exit semantics as the default mode). This is the post-cutover mode: the harness no
+  longer depends on MariaDB staying reachable/frozen; the snapshot IS the oracle.
+- Known OPERATIONAL diffs (PG advanced, MariaDB frozen — expected, documented):
+  * account.account: lang ('es' vs frozen 'en' — the client overwrites account.lang
+    on every login, Language System) and last_play/hwid (excluded as volatile).
+  * player.player: +3 rows (in-game "hol" + two e2e_rust_* throwaways from the F2b
+    auth E2E), player_index.pid3=5 (the "hol" slot), player.item: +1 row (items of
+    the in-game character), messenger_list: +4 rows (E2E leftovers).
+  Anything ELSE is an UNEXPECTED diff (exit 1) and must be investigated.
+
 Usage:
   parity_check.py [--table <schema.table>]... [--verbose]
+  parity_check.py --make-snapshot <file.json> [--table <schema.table>]...
+  parity_check.py --snapshot <file.json> [--table <schema.table>]...
 """
 import argparse
 import hashlib
+import json
 import sys
 
 import pymysql
@@ -167,15 +188,102 @@ def check_table(name, verbose):
         print(f"     {qual}: {len(my_cols)} columns in order: {', '.join(my_cols)}")
     return 0
 
+def snapshot_table(cur, name):
+    """(count, md5) de una tabla sobre UN cursor (modo snapshot): mismas
+    filas canónicas que el modo live (volatile columns excluidas) — así el
+    md5 del snapshot es directamente comparable con el de PG."""
+    exclude = VOLATILE_COLUMNS.get(name, set())
+    cur.execute(f"SELECT COUNT(*) FROM {name}")
+    count = cur.fetchone()[0]
+    _, rows = load_table(cur, name, exclude)
+    return count, md5_of(rows)
+
+def make_snapshot(path, tables):
+    """Captura el estado de referencia desde MariaDB (la fuente congelada =
+    el estado del cutover): {"<schema.table>": {"rows": n, "md5": m}}."""
+    my = pymysql.connect(**MYSQL)
+    snap = {}
+    try:
+        with my.cursor() as mc:
+            for t in tables:
+                try:
+                    count, md5 = snapshot_table(mc, t)
+                except Exception as e:  # noqa: BLE001
+                    print(f"ERROR {t}: {type(e).__name__}: {e}", file=sys.stderr)
+                    return 2
+                snap[t] = {"rows": count, "md5": md5}
+    finally:
+        my.close()
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(snap, f, indent=2, sort_keys=True)
+        f.write("\n")
+    print(f"SNAPSHOT {path}: {len(snap)} tables (origen: MariaDB congelada = cutover)")
+    for t, v in snap.items():
+        print(f"  {t}: rows={v['rows']} md5={v['md5']}")
+    return 0
+
+def check_snapshot(path, tables):
+    """Compara PG contra el snapshot (mismo formato OK/DIFF y exit que el
+    modo live). Los diffs operacionales conocidos están documentados en el
+    docstring del módulo; cualquier otro diff es inesperado (exit 1)."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            snap = json.load(f)
+    except OSError as e:
+        print(f"ERROR snapshot {path}: {e}", file=sys.stderr)
+        return 2
+    pg = psycopg2.connect(**PG)
+    rc = 0
+    try:
+        with pg.cursor() as pc:
+            for t in tables:
+                if t not in snap:
+                    print(f"ERROR {t}: no está en el snapshot", file=sys.stderr)
+                    rc = 2
+                    continue
+                try:
+                    count, md5 = snapshot_table(pc, t)
+                except Exception as e:  # noqa: BLE001
+                    print(f"ERROR {t}: {type(e).__name__}: {e}", file=sys.stderr)
+                    rc = 2
+                    continue
+                exp = snap[t]
+                problems = []
+                if exp["rows"] != count:
+                    problems.append(f"row count differs: snapshot={exp['rows']} PG={count}")
+                if exp["md5"] != md5:
+                    problems.append(f"md5 differs: snapshot={exp['md5']} PG={md5}")
+                if problems:
+                    for p in problems:
+                        print(f"DIFF {t}: {p}")
+                    rc = 1
+                else:
+                    print(f"OK   {t}: rows={count} md5={md5}")
+    finally:
+        pg.close()
+    return rc
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--table", action="append", metavar="schema.table",
                     help="check only this table (repeatable)")
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--make-snapshot", metavar="file.json",
+                    help="capture the MariaDB (frozen cutover) state to a json snapshot")
+    ap.add_argument("--snapshot", metavar="file.json",
+                    help="compare PG against a snapshot file (post-cutover mode)")
     args = ap.parse_args()
 
+    if args.make_snapshot and args.snapshot:
+        ap.error("--make-snapshot y --snapshot son mutuamente excluyentes")
+
     tables = args.table or TABLES
+    if args.make_snapshot:
+        sys.exit(make_snapshot(args.make_snapshot, tables))
+    if args.snapshot:
+        sys.exit(check_snapshot(args.snapshot, tables))
+
     rc = 0
     for t in tables:
         try:

@@ -7,6 +7,28 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-11] (5th part) — F4 slice 1 (realm WorldStore + select/spawn packets) + F3 tail (snapshot + data channel)
+
+### Added — F4 slice 1 (`realm` crate, world entry)
+
+- **`realm/src/world.rs` — `WorldStore`:** composition over `PlayerRepo`/`Batcher` — `new` (fail-fast SELECT 1), `list_characters`, `select_player(account, slot)` (slot→pid via the C++-literal index query `ClientManagerPlayer.cpp:794`, slot≥5→Err, pid=0→None parity `input_login.cpp:260-271`), `save_character` via `save_mutated` (durable, audited). Verified `log.mutation_audit` live. **Debt documented:** the index query is the only direct SQL (player_index not ported in F3) — move to `database` later.
+- **`realm/src/packets.rs` — byte-exact select/spawn mappings** (structs reused from `protocol`): `TSimplePlayer` 71B (`ClientManagerLogin.cpp:324-383`), `GC_LOGIN_SUCCESS_NEWSLOT` 449B (`desc.cpp:955-988`), `TPacketGCCharacterAdd` 37B (`char.cpp:886-920`, type=6, race=job), `TPacketGCCharacterAdditionalInfo` 70B (`char.cpp:924-948`, alignment/10). **GAPs documented:** `part_acce` (not in PlayerSummary), items→parts (WEAPON/HEAD/ACCE), speeds/affects flags → 0 (runtime slices).
+- Tests: 6 unit + 4 gated (`realm_pg.rs`: live slots → pids [1,3,5,2], invalid slot Err, save via Batcher + audit, cleanup guaranteed) — **4/4 stable × 4 runs**.
+
+### Added — F3 tail
+
+- **Parity harness snapshot mode** (`parity_check.py`): `--make-snapshot` (MariaDB = cutover reference) + `--snapshot` (PG vs reference, deterministic). Snapshot `/tmp/gpg/cutover_snapshot.json`; post-cleanup: **27 OK / 4 DIFFs — all operational** (account.lang es-vs-en from the client; `hol` + his slot + an item — real gameplay). E2E test residue cleaned (2 `e2e_rust_*` chars, 4 `m2e2_*` messenger rows).
+- **Data channel 162+:** `protocol/src/datachannel.rs` — `CG_QUERY` (162: table_id + payload), `GC_RESPONSE` (163: table_id + row_count + payload), 6 tests, registered. **Client:** `PythonNetworkStreamPhaseLogin.cpp` 162/163 contract registration (inert no-ops; `Tracenf` — sys_log is disabled in the client) — rebuilt (0 errors) + deployed (md5 `6FC7A5B9...`, backup preserved).
+
+### Verified
+
+- **Workspace: 196 passed / 0 failed / 22 ignored** (realm 6+4, protocol 43+6 datachannel, database 34+11, mysql_proxy 66, network 24+2, server_realms 14+4).
+
+### Pending
+
+- **F4 slice 2 (the channel):** listener + handshake + channel LOGIN3 (65B) + select flow end-to-end (`WorldStore::account_slots` needed — the 5 pids ordered) + spawn (GC_PHASE LOADING/GAME, map, sectree) + the packet GAPs (items→parts, affects→flags, speeds). `player_index` repo + `part_acce` in PlayerSummary (debt).
+- Client data-channel framing map (with the channel activation); PROTO_FROM_DB harness note.
+
 ## [2026-08-11] (4th part) — F3 close (world repos + Batcher wiring) + live fixes
 
 ### Added (F3 close — commits e32578c, bb30010)
