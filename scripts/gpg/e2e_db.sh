@@ -23,9 +23,17 @@
 #   - throwaway character cycle          INSERT -> bytea raw check -> UPDATE save ->
 #                                        DELETE (trap-guaranteed cleanup; NEVER touches
 #                                        existing rows — the user plays on this stack)
-#   - auth login E2E: NOT here — the orchestrator covers it with the Windows peer:
-#        cd C:\projects\Metin2\source\reforge
-#        cargo run --example f16_peer -- 172.25.104.175 30001 --login3
+#   - Q10 world repos QIDs               quest/affect/safebox/item/item_award/messenger
+#                                        shapes (crate database F3/F4; C++ parity:
+#                                        ClientManager.cpp:577,967,1123,1451,1702;
+#                                        ItemAwardManager.cpp:59,167;
+#                                        messenger_manager.cpp:58,214,273) — throwaways
+#                                        e2e_<ts>/m2e2_<ts> con sweep en el trap
+#   - Q11 auth flow real                 network/examples/f16_peer contra el auth Rust
+#                                        (0.0.0.0:30001, expected_version=40999) con
+#                                        --login3 --version 40999 -> assert "LOGIN OK"
+#   - auth login E2E (Windows peer):     cd C:\projects\Metin2\source\reforge
+#                                        cargo run --example f16_peer -- 172.25.104.175 30001 --login3
 #
 # Documented exceptions (asserted structurally, not by value):
 #   - account.last_play / hwid: the LIVE login writes only on PG (MariaDB frozen).
@@ -39,6 +47,13 @@ MARIA="mariadb -h127.0.0.1 -umt2 -pmt2 --raw --batch -N"
 TS=$(date +%s)
 E2E_NAME="e2e_${TS}"
 E2E_ID=""
+# Q10 world-repos throwaways (naming único por test, guardrails/operations.md):
+# m2e2_<ts> para el companion de messenger; ids numéricos grandes sin colisión.
+M2E2_NAME="m2e2_${TS}"
+Q10_PID=$((900000000 + TS % 100000000))
+Q10_AID=$((900000000 + TS % 100000000))
+Q10_ITEM=$((100000001 + TS % 1000000))
+Q10_AWARD=""
 PASS=0
 FAIL=0
 GAPS=0
@@ -50,7 +65,7 @@ check() { # $1 label, $2 expected, $3 actual
   if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (expected [$2] got [$3])"; fi
 }
 
-# trap: ALWAYS delete the throwaway character (never leave rows behind)
+# trap: ALWAYS delete the throwaway character + Q10 rows (never leave rows behind)
 cleanup() {
   if [ -n "$E2E_ID" ]; then
     $PROXY -D player -e "DELETE FROM player WHERE id=$E2E_ID" >/dev/null 2>&1
@@ -58,6 +73,14 @@ cleanup() {
   fi
   # safety net by name too
   $PROXY -D player -e "DELETE FROM player WHERE name='$E2E_NAME'" >/dev/null 2>&1
+  # Q10 world-repos sweep (nombres/ids únicos de ESTA corrida)
+  [ -n "$Q10_PID" ] && $PROXY -D player -e "DELETE FROM quest WHERE dwPID=$Q10_PID" >/dev/null 2>&1
+  [ -n "$Q10_PID" ] && $PROXY -D player -e "DELETE FROM affect WHERE dwPID=$Q10_PID" >/dev/null 2>&1
+  [ -n "$Q10_AID" ] && $PROXY -D player -e "DELETE FROM safebox WHERE account_id=$Q10_AID" >/dev/null 2>&1
+  [ -n "$Q10_AID" ] && $PROXY -D player -e "DELETE FROM item WHERE owner_id=$Q10_AID" >/dev/null 2>&1
+  [ -n "$Q10_ITEM" ] && $PROXY -D player -e "DELETE FROM item WHERE id=$Q10_ITEM" >/dev/null 2>&1
+  $PROXY -D player -e "DELETE FROM item_award WHERE login='$E2E_NAME'" >/dev/null 2>&1
+  $PROXY -D player -e "DELETE FROM messenger_list WHERE account='$E2E_NAME' OR companion='$M2E2_NAME'" >/dev/null 2>&1
   sync
 }
 trap cleanup EXIT
@@ -209,6 +232,113 @@ check "Q9 skill_proto 97 rows both" "$(printf '%s' "$R9M" | grep -c .)" "$(print
 MV=$(printf '%s\n' "$R9M" | awk -F'\t' '$1==1{print $13}')
 PV=$(printf '%s\n' "$R9P" | awk -F'\t' '$1==1{print $13}')
 if [ "$MV" = "$PV" ]; then ok "Q9 skill 1 setFlag+0 equal ($MV)"; else gap "Q9 skill 1 setFlag+0: MariaDB indice=[$MV] proxy texto=[$PV] — col+0 pendiente del crate (§4)"; fi
+
+# ---------------------------------------------------------------- 10. world repos QIDs
+# Shapes portadas por el crate database (F3/F4) — replay del SQL legacy REAL
+# (el snprintf del C++) a través del proxy; throwaway SIEMPRE con cleanup en
+# el trap (naming único e2e_<ts>/m2e2_<ts>, guardrails/operations.md).
+# Referencias de shapes: source/reforge/database/src/{quest,affect,safebox,
+# item,messenger}.rs (contract QIDs del legacy).
+
+# --- quest: save (REPLACE upsert) / load / save lValue==0 → DELETE
+Q10Q1="REPLACE INTO quest (dwPID, szName, szState, lValue) VALUES($Q10_PID, 'q10_$TS', 's1', 7)"
+if $PROXY -D player -e "$Q10Q1" >/dev/null 2>&1; then ok "Q10 quest save (REPLACE upsert) exit0"; else bad "Q10 quest save failed: $($PROXY -D player -e "$Q10Q1" 2>&1)"; fi
+R10Q=$($PROXY -D player -N -e "SELECT lValue FROM quest WHERE dwPID=$Q10_PID AND szName='q10_$TS' AND szState='s1'")
+check "Q10 quest load lValue=7" "7" "$R10Q"
+R10Q=$($PROXY -D player -N -e "SELECT COUNT(*) FROM quest WHERE dwPID=$Q10_PID")
+check "Q10 quest rows=1" "1" "$R10Q"
+# save con lValue==0 → DELETE (parity ClientManager.cpp:577-579)
+if $PROXY -D player -e "DELETE FROM quest WHERE dwPID=$Q10_PID AND szName='q10_$TS' AND szState='s1'" >/dev/null 2>&1; then ok "Q10 quest delete (lValue=0) exit0"; else bad "Q10 quest delete failed"; fi
+R10Q=$($PROXY -D player -N -e "SELECT COUNT(*) FROM quest WHERE dwPID=$Q10_PID")
+check "Q10 quest rows=0 tras delete" "0" "$R10Q"
+
+# --- affect: save (REPLACE upsert) / load / remove
+Q10A="REPLACE INTO affect (dwPID, bType, bApplyOn, lApplyValue, dwFlag, lDuration, lSPCost) VALUES($Q10_PID, 1, 2, 3, 4, 5, 6)"
+if $PROXY -D player -e "$Q10A" >/dev/null 2>&1; then ok "Q10 affect save (REPLACE upsert) exit0"; else bad "Q10 affect save failed"; fi
+R10A=$($PROXY -D player -N -e "SELECT dwFlag FROM affect WHERE dwPID=$Q10_PID AND bType=1 AND bApplyOn=2")
+check "Q10 affect load dwFlag=4" "4" "$R10A"
+R10A=$($PROXY -D player -N -e "SELECT COUNT(*) FROM affect WHERE dwPID=$Q10_PID")
+check "Q10 affect rows=1" "1" "$R10A"
+if $PROXY -D player -e "DELETE FROM affect WHERE dwPID=$Q10_PID AND bType=1 AND bApplyOn=2" >/dev/null 2>&1; then ok "Q10 affect remove exit0"; else bad "Q10 affect remove failed"; fi
+R10A=$($PROXY -D player -N -e "SELECT COUNT(*) FROM affect WHERE dwPID=$Q10_PID")
+check "Q10 affect rows=0 tras remove" "0" "$R10A"
+
+# --- safebox: set_size(1)→INSERT / load / set_size(2)→UPDATE / gold
+# (parity ClientManager.cpp:967-970 y :1123; size==1 crea la fila)
+if $PROXY -D player -e "INSERT INTO safebox (account_id, size) VALUES($Q10_AID, 1)" >/dev/null 2>&1; then ok "Q10 safebox set_size(1) INSERT exit0"; else bad "Q10 safebox set_size(1) failed"; fi
+R10S=$($PROXY -D player -N -e "SELECT size FROM safebox WHERE account_id=$Q10_AID")
+check "Q10 safebox load size=1" "1" "$R10S"
+if $PROXY -D player -e "UPDATE safebox SET size=2 WHERE account_id=$Q10_AID" >/dev/null 2>&1; then ok "Q10 safebox set_size(2) UPDATE exit0"; else bad "Q10 safebox set_size(2) failed"; fi
+R10S=$($PROXY -D player -N -e "SELECT size FROM safebox WHERE account_id=$Q10_AID")
+check "Q10 safebox size=2 tras UPDATE" "2" "$R10S"
+if $PROXY -D player -e "UPDATE safebox SET gold='12345' WHERE account_id=$Q10_AID" >/dev/null 2>&1; then ok "Q10 safebox gold UPDATE exit0"; else bad "Q10 safebox gold failed"; fi
+R10S=$($PROXY -D player -N -e "SELECT gold FROM safebox WHERE account_id=$Q10_AID")
+check "Q10 safebox gold=12345" "12345" "$R10S"
+R10S=$($PROXY -D player -N -e "SELECT account_id, size, password FROM safebox WHERE account_id=$Q10_AID")
+check "Q10 safebox load 3 cols" "3" "$(printf '%s\n' "$R10S" | awk -F'\t' '{print NF; exit}')"
+
+# --- item: upsert ON DUPLICATE KEY (id explícito en ITEM_ID_RANGE), load_by_owner
+# --- (window índice 1 = 'INVENTORY'), max_id_range, delete
+# (parity ClientManager.cpp:1451 upsert, ClientManagerPlayer.cpp:321 load)
+# Shape REAL del C++ (ClientManager.cpp:1425-1452): el ODKU repite el MISMO
+# setQuery con literales (window=índice; NO count=count+1 — ese shape no
+# existe en el legacy y da 42702 en PG, ambigüedad target/EXCLUDED).
+Q10I1="INSERT INTO item SET id=$Q10_ITEM, owner_id=$Q10_AID, \`window\`=1, pos=0, count=1, vnum=30001, socket0=0, socket1=0, socket2=0 ON DUPLICATE KEY UPDATE id=$Q10_ITEM, owner_id=$Q10_AID, \`window\`=1, pos=0, count=1, vnum=30001, socket0=0, socket1=0, socket2=0"
+Q10I2="INSERT INTO item SET id=$Q10_ITEM, owner_id=$Q10_AID, \`window\`=1, pos=0, count=2, vnum=30001, socket0=0, socket1=0, socket2=0 ON DUPLICATE KEY UPDATE id=$Q10_ITEM, owner_id=$Q10_AID, \`window\`=1, pos=0, count=2, vnum=30001, socket0=0, socket1=0, socket2=0"
+if $PROXY -D player -e "$Q10I1" >/dev/null 2>&1; then ok "Q10 item upsert exit0"; else bad "Q10 item upsert failed: $($PROXY -D player -e "$Q10I1" 2>&1 | tail -1)"; fi
+if $PROXY -D player -e "$Q10I2" >/dev/null 2>&1; then ok "Q10 item upsert 2nd (count=2) exit0"; else bad "Q10 item upsert 2nd failed: $($PROXY -D player -e "$Q10I2" 2>&1 | tail -1)"; fi
+R10I=$($PROXY -D player -N -e "SELECT count FROM item WHERE id=$Q10_ITEM")
+check "Q10 item count=2 tras 2 upserts" "2" "$R10I"
+R10I=$($PROXY -D player -N -e "SELECT id, \`window\`+0, pos, count, vnum FROM item WHERE owner_id=$Q10_AID AND \`window\`='INVENTORY'")
+check "Q10 item load_by_owner rows=1" "1" "$(printf '%s\n' "$R10I" | grep -c .)"
+check "Q10 item window idx=1" "1" "$(printf '%s\n' "$R10I" | awk -F'\t' 'NR==1{print $2}')"
+check "Q10 item count=2 via load" "2" "$(printf '%s\n' "$R10I" | awk -F'\t' 'NR==1{print $4}')"
+R10I=$($PROXY -D player -N -e "SELECT MAX(id) FROM item WHERE id >= 100000000 and id <= 200000000")
+# robustez: batch -N imprime NULL para rango vacío (antes: error integer expr)
+if [ -n "$R10I" ] && [ "$R10I" != "NULL" ] && [ "$R10I" -ge "$Q10_ITEM" ]; then ok "Q10 max_id_range >= item (max=$R10I)"; else bad "Q10 max_id_range < item: got [$R10I]"; fi
+if $PROXY -D player -e "DELETE FROM item WHERE id=$Q10_ITEM" >/dev/null 2>&1; then ok "Q10 item delete exit0"; else bad "Q10 item delete failed"; fi
+R10I=$($PROXY -D player -N -e "SELECT COUNT(*) FROM item WHERE id=$Q10_ITEM")
+check "Q10 item rows=0 tras delete" "0" "$R10I"
+
+# --- item_award: insert / load pendientes / take (taken_time) / 0 pendientes
+# (parity ItemAwardManager.cpp:59-69 load, :167 take)
+Q10AW="INSERT INTO item_award(\`login\`, \`vnum\`, \`count\`, \`mall\`, \`why\`) VALUES('$E2E_NAME', 30001, 1, 0, 'e2e q10')"
+if $PROXY -D player -e "$Q10AW" >/dev/null 2>&1; then ok "Q10 item_award insert exit0"; else bad "Q10 item_award insert failed"; fi
+Q10_AWARD=$($PROXY -D player -N -e "SELECT id FROM item_award WHERE login='$E2E_NAME' AND taken_time IS Null" | head -1)
+[ -n "$Q10_AWARD" ] && ok "Q10 item_award load id=$Q10_AWARD" || bad "Q10 item_award load: sin fila pendiente"
+if [ -n "$Q10_AWARD" ]; then
+  if $PROXY -D player -e "UPDATE item_award SET taken_time=NOW(),item_id=$Q10_ITEM WHERE id=$Q10_AWARD AND taken_time IS Null" >/dev/null 2>&1; then ok "Q10 item_award take exit0"; else bad "Q10 item_award take failed"; fi
+  R10AW=$($PROXY -D player -N -e "SELECT COUNT(*) FROM item_award WHERE login='$E2E_NAME' AND taken_time IS Null")
+  check "Q10 item_award 0 pendientes tras take" "0" "$R10AW"
+  R10AW=$($PROXY -D player -N -e "SELECT item_id FROM item_award WHERE id=$Q10_AWARD")
+  check "Q10 item_award item_id=$Q10_ITEM" "$Q10_ITEM" "$R10AW"
+fi
+
+# --- messenger: add / list / remove (parity messenger_manager.cpp:58,214,273)
+if $PROXY -D player -e "INSERT INTO messenger_list VALUES ('$E2E_NAME', '$M2E2_NAME')" >/dev/null 2>&1; then ok "Q10 messenger add exit0"; else bad "Q10 messenger add failed"; fi
+R10M=$($PROXY -D player -N -e "SELECT account, companion FROM messenger_list WHERE account='$E2E_NAME'")
+check "Q10 messenger list rows=1" "1" "$(printf '%s\n' "$R10M" | grep -c .)"
+check "Q10 messenger companion=$M2E2_NAME" "$M2E2_NAME" "$(printf '%s\n' "$R10M" | awk -F'\t' 'NR==1{print $2}')"
+if $PROXY -D player -e "DELETE FROM messenger_list WHERE account='$E2E_NAME' AND companion = '$M2E2_NAME'" >/dev/null 2>&1; then ok "Q10 messenger remove exit0"; else bad "Q10 messenger remove failed"; fi
+R10M=$($PROXY -D player -N -e "SELECT COUNT(*) FROM messenger_list WHERE account='$E2E_NAME'")
+check "Q10 messenger rows=0 tras remove" "0" "$R10M"
+
+# ---------------------------------------------------------------- 11. auth flow real
+# Peer Rust (network/examples/f16_peer) contra el auth REAL (0.0.0.0:30001,
+# server_realms con expected_version=40999). Un login inofensivo test/1234.
+Q11_OUT=/tmp/gpg/q11_peer.txt
+if (cd /mnt/c/projects/Metin2/source/reforge && export PATH=/root/.cargo/bin:$PATH && cargo build --release --example f16_peer) >/tmp/gpg/q11_build.log 2>&1; then
+  ok "Q11 f16_peer build OK"
+else
+  bad "Q11 f16_peer build FAILED: $(tail -3 /tmp/gpg/q11_build.log)"
+fi
+PEER=/mnt/c/projects/Metin2/source/reforge/target/release/examples/f16_peer
+if [ -x "$PEER" ] && "$PEER" 127.0.0.1 30001 --login3 --version 40999 >"$Q11_OUT" 2>&1; then
+  ok "Q11 peer exit0"
+else
+  bad "Q11 peer exit!=0: $(tail -3 "$Q11_OUT")"
+fi
+if grep -q "LOGIN OK" "$Q11_OUT"; then ok "Q11 LOGIN OK (auth real acepta test/1234)"; else bad "Q11 sin LOGIN OK: $(tail -5 "$Q11_OUT")"; fi
 
 # ---------------------------------------------------------------- summary
 echo "============================================================"

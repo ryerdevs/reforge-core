@@ -7,6 +7,10 @@
 //!
 //! Reglas implementadas (inventario §3/§4):
 //! - backticks → comillas dobles (reservadas en PG: `window`, `where`, `when`);
+//! - nombres de columna de INSERT/REPLACE/ODKU/UPDATE-SET → minúsculas
+//!   (MySQL case-insensitive; PG folds los no-quoted — el catálogo PG entrega
+//!   lowercase; los `REPLACE INTO quest (dwPID, …)` del C++ legacy fallaban
+//!   con 42703 al citarse verbatim — fix 2026-08-11, E2E Q10);
 //! - `col+0` (cast de ENUM/SET a entero, 12 columnas del boot) → expresión PG
 //!   de índice (ENUM) o bitmask (SET) según el catálogo estático
 //!   `ENUM_COLUMNS` (fuente: SHOW CREATE MariaDB, 2026-08-11); el `+0` de
@@ -370,7 +374,7 @@ fn parse_insert_body(
     }
     if body.starts_with('(') {
         let (cols_inner, end2) = paren_arg(body, 0).ok_or_else(|| TranslateError::Syntax("INSERT: lista de columnas".into()))?;
-        let cols: Vec<String> = split_top_level(&cols_inner).iter().map(|c| unquote_ident(c).to_string()).collect();
+        let cols: Vec<String> = split_top_level(&cols_inner).iter().map(|c| unquote_ident(c).to_ascii_lowercase()).collect();
         let rest = skip_ws(&body[end2..]);
         if kw_at(rest, "VALUES") {
             let tuples = values_of_tuples(&rest[6..]).ok_or_else(|| TranslateError::Syntax("INSERT: VALUES malformado".into()))?;
@@ -459,13 +463,21 @@ fn build_insert(
     if let Some(odku_body) = odku {
         // MySQL ODKU: nombres pelados en el RHS = valor ACTUAL de la fila —
         // misma semántica que PG `DO UPDATE SET` (spec §4).
+        // NOTA (2026-08-11): un RHS con nombre de columna pelado (`count=count+1`)
+        // da 42702 en PG (ambigüedad target/EXCLUDED) — el C++ legacy nunca
+        // usa ese shape (ClientManager.cpp:1451 repite el setQuery con
+        // literales); se documenta, no se traduce.
         let pk = quote_pk(table, &info.pk)?;
         let mut sets = Vec::new();
         for a in split_top_level(odku_body) {
             let (col, end) = parse_ident(a).ok_or_else(|| TranslateError::Syntax("ON DUPLICATE KEY UPDATE: assignment sin columna".into()))?;
+            let col = col.to_ascii_lowercase();
             let rest = skip_ws(&a[end..]);
             let rest = skip_ws(rest.strip_prefix('=').ok_or_else(|| TranslateError::Syntax("ON DUPLICATE KEY UPDATE: assignment sin '='".into()))?);
-            sets.push(format!("\"{col}\" = {}", scan(rest)));
+            // Misma conversión índice→literal que en los VALUES (item.window;
+            // el ODKU del QUERY_ITEM_SAVE repite el setQuery con window=índice).
+            let rhs = fix_enum_value(table, &col, rest).unwrap_or_else(|| scan(rest));
+            sets.push(format!("\"{col}\" = {rhs}"));
         }
         sql.push_str(&format!(" ON CONFLICT ({pk}) DO UPDATE SET {}", sets.join(", ")));
     }
@@ -1189,6 +1201,8 @@ fn parse_values(s: &str) -> Option<Vec<String>> {
 }
 
 /// Assignments `col = expr[, col = expr]` → (columnas, valores).
+/// Las columnas se normalizan a minúsculas (MySQL case-insensitive; PG folds
+/// los identificadores sin quote — el catálogo PG entrega lowercase).
 fn parse_assignments(parts: &[&str]) -> Result<(Vec<String>, Vec<String>), TranslateError> {
     let mut cols = Vec::new();
     let mut vals = Vec::new();
@@ -1197,7 +1211,7 @@ fn parse_assignments(parts: &[&str]) -> Result<(Vec<String>, Vec<String>), Trans
         let rest = skip_ws(&part[end..]);
         let rest = skip_ws(rest.strip_prefix('=').ok_or_else(|| TranslateError::Syntax("assignment sin '='".into()))?);
         vals.push(rest.to_string());
-        cols.push(col);
+        cols.push(col.to_ascii_lowercase());
     }
     Ok((cols, vals))
 }
@@ -1273,8 +1287,8 @@ mod tests {
                 bytea: vec![],
             };
             let mut m: HashMap<&'static str, TableInfo> = HashMap::new();
-            m.insert("quest", n(vec!["dwPID", "szName", "szState", "lValue"], vec!["dwPID", "szName", "szState"], vec![]));
-            m.insert("affect", n(vec!["dwPID", "bType", "bApplyOn", "lApplyValue", "dwFlag", "lDuration", "lSPCost"], vec!["dwPID", "bType", "bApplyOn", "lApplyValue"], vec![]));
+            m.insert("quest", n(vec!["dwpid", "szname", "szstate", "lvalue"], vec!["dwpid", "szname", "szstate"], vec![]));
+            m.insert("affect", n(vec!["dwpid", "btype", "bapplyon", "lapplyvalue", "dwflag", "lduration", "lspcost"], vec!["dwpid", "btype", "bapplyon", "lapplyvalue"], vec![]));
             m.insert("horse_name", n(vec!["id", "name"], vec!["id"], vec![]));
             m.insert("monarch", n(vec!["empire", "name", "windate", "money"], vec!["empire"], vec![]));
             m.insert("myshop_pricelist", n(vec!["owner_id", "item_vnum", "price"], vec!["owner_id", "item_vnum"], vec![]));
@@ -1473,6 +1487,53 @@ mod tests {
         assert_rw("SELECT pid1+0 FROM player.player_index", "SELECT pid1 FROM player.player_index").await;
     }
 
+    // --- Fila 10f: columnas camelCase del C++ legacy → minúsculas (PG folds
+    // --- los identificadores no-quoted; citar verbatim daba 42703 — E2E Q10
+    // --- 2026-08-11: QUERY_QUEST_SAVE / QUERY_ADD_AFFECT fallaban en vivo).
+    #[tokio::test]
+    async fn insert_column_names_lowercased_like_pg_folding() {
+        // REPLACE del quest save (ClientManager.cpp:584): dwPID/szName/… →
+        // dwpid/szname/… en la columna-list Y en el ON CONFLICT (catálogo).
+        assert_rw(
+            "REPLACE INTO quest (dwPID, szName, szState, lValue) VALUES(100, 'q1', 's1', 5)",
+            "INSERT INTO quest (\"dwpid\", \"szname\", \"szstate\", \"lvalue\") VALUES (100, 'q1', 's1', 5) ON CONFLICT (\"dwpid\", \"szname\", \"szstate\") DO UPDATE SET \"dwpid\"=EXCLUDED.\"dwpid\", \"szname\"=EXCLUDED.\"szname\", \"szstate\"=EXCLUDED.\"szstate\", \"lvalue\"=EXCLUDED.\"lvalue\"",
+        )
+        .await;
+        // REPLACE del affect save (ClientManagerPlayer.cpp:1151-1160).
+        assert_rw(
+            "REPLACE INTO affect (dwPID, bType, bApplyOn, lApplyValue, dwFlag, lDuration, lSPCost) VALUES(1, 2, 3, 4, 5, 6, 7)",
+            "INSERT INTO affect (\"dwpid\", \"btype\", \"bapplyon\", \"lapplyvalue\", \"dwflag\", \"lduration\", \"lspcost\") VALUES (1, 2, 3, 4, 5, 6, 7) ON CONFLICT (\"dwpid\", \"btype\", \"bapplyon\", \"lapplyvalue\") DO UPDATE SET \"dwpid\"=EXCLUDED.\"dwpid\", \"btype\"=EXCLUDED.\"btype\", \"bapplyon\"=EXCLUDED.\"bapplyon\", \"lapplyvalue\"=EXCLUDED.\"lapplyvalue\", \"dwflag\"=EXCLUDED.\"dwflag\", \"lduration\"=EXCLUDED.\"lduration\", \"lspcost\"=EXCLUDED.\"lspcost\"",
+        )
+        .await;
+        // INSERT…SET camelCase (forma INSERT del quest save) → minúsculas.
+        assert_rw(
+            "INSERT INTO quest SET dwPID=1, szName='a', szState='b', lValue=5",
+            "INSERT INTO quest (\"dwpid\", \"szname\", \"szstate\", \"lvalue\") VALUES (1, 'a', 'b', 5)",
+        )
+        .await;
+        // ODKU con columna camelCase → minúsculas en el SET target.
+        assert_rw(
+            "INSERT INTO quest SET dwPID=1, szName='a', szState='b', lValue=5 ON DUPLICATE KEY UPDATE lValue=9",
+            "INSERT INTO quest (\"dwpid\", \"szname\", \"szstate\", \"lvalue\") VALUES (1, 'a', 'b', 5) ON CONFLICT (\"dwpid\", \"szname\", \"szstate\") DO UPDATE SET \"lvalue\" = 9",
+        )
+        .await;
+        // Las minúsculas existentes no cambian (item upsert del E2E Q10).
+        assert_rw(
+            "INSERT INTO item SET id=100000001, owner_id=2, `window`=1, pos=1, count=1, vnum=30001 ON DUPLICATE KEY UPDATE count=2",
+            "INSERT INTO item (\"id\", \"owner_id\", \"window\", \"pos\", \"count\", \"vnum\") VALUES (100000001, 2, 'INVENTORY', 1, 1, 30001) ON CONFLICT (\"id\") DO UPDATE SET \"count\" = 2",
+        )
+        .await;
+        // ODKU del QUERY_ITEM_SAVE (ClientManager.cpp:1451): el RHS repite el
+        // setQuery con `window`=índice → misma conversión índice→literal que
+        // en los VALUES (asimetría 2026-08-11: sin esto PG recibe
+        // `"window" = 1` contra una columna text → 42804).
+        assert_rw(
+            "INSERT INTO item SET id=100000001, owner_id=2, `window`=1, pos=1, count=1, vnum=30001 ON DUPLICATE KEY UPDATE id=100000001, owner_id=2, `window`=1, pos=1, count=2, vnum=30001",
+            "INSERT INTO item (\"id\", \"owner_id\", \"window\", \"pos\", \"count\", \"vnum\") VALUES (100000001, 2, 'INVENTORY', 1, 1, 30001) ON CONFLICT (\"id\") DO UPDATE SET \"id\" = 100000001, \"owner_id\" = 2, \"window\" = 'INVENTORY', \"pos\" = 1, \"count\" = 2, \"vnum\" = 30001",
+        )
+        .await;
+    }
+
     // --- Fila 2: UNIX_TIMESTAMP → EXTRACT(EPOCH FROM) -----------------------
     #[tokio::test]
     async fn unix_timestamp_to_epoch() {
@@ -1520,7 +1581,7 @@ mod tests {
     async fn replace_into_values() {
         assert_rw(
             "REPLACE INTO quest (dwPID, szName, szState, lValue) VALUES(100, 'q1', 's1', 5)",
-            "INSERT INTO quest (\"dwPID\", \"szName\", \"szState\", \"lValue\") VALUES (100, 'q1', 's1', 5) ON CONFLICT (\"dwPID\", \"szName\", \"szState\") DO UPDATE SET \"dwPID\"=EXCLUDED.\"dwPID\", \"szName\"=EXCLUDED.\"szName\", \"szState\"=EXCLUDED.\"szState\", \"lValue\"=EXCLUDED.\"lValue\"",
+            "INSERT INTO quest (\"dwpid\", \"szname\", \"szstate\", \"lvalue\") VALUES (100, 'q1', 's1', 5) ON CONFLICT (\"dwpid\", \"szname\", \"szstate\") DO UPDATE SET \"dwpid\"=EXCLUDED.\"dwpid\", \"szname\"=EXCLUDED.\"szname\", \"szstate\"=EXCLUDED.\"szstate\", \"lvalue\"=EXCLUDED.\"lvalue\"",
         )
         .await;
         // REPLACE sin lista de columnas → columnas del catálogo (horse_name).
@@ -1548,7 +1609,7 @@ mod tests {
     async fn replace_into_select() {
         assert_rw(
             "REPLACE INTO quest (dwPID, szName, szState, lValue) SELECT pid, 'guild_manage', 'new_disband_time', 123 FROM guild_member WHERE guild_id = 5",
-            "INSERT INTO quest (\"dwPID\", \"szName\", \"szState\", \"lValue\") SELECT pid, 'guild_manage', 'new_disband_time', 123 FROM guild_member WHERE guild_id = 5 ON CONFLICT (\"dwPID\", \"szName\", \"szState\") DO UPDATE SET \"dwPID\"=EXCLUDED.\"dwPID\", \"szName\"=EXCLUDED.\"szName\", \"szState\"=EXCLUDED.\"szState\", \"lValue\"=EXCLUDED.\"lValue\"",
+            "INSERT INTO quest (\"dwpid\", \"szname\", \"szstate\", \"lvalue\") SELECT pid, 'guild_manage', 'new_disband_time', 123 FROM guild_member WHERE guild_id = 5 ON CONFLICT (\"dwpid\", \"szname\", \"szstate\") DO UPDATE SET \"dwpid\"=EXCLUDED.\"dwpid\", \"szname\"=EXCLUDED.\"szname\", \"szstate\"=EXCLUDED.\"szstate\", \"lvalue\"=EXCLUDED.\"lvalue\"",
         )
         .await;
     }

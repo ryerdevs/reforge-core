@@ -2,12 +2,14 @@
 //!
 //! F2a: rol `auth` REAL — login del cliente legacy contra PostgreSQL
 //! (parity con el auth C++: `input_auth.cpp` / `input_db.cpp:1697-1728`).
-//! F5: rol `channel` (realm) — stub.
+//! F4 slice 2: rol `channel` — flujo login→select (+ spawn best-effort)
+//! contra PostgreSQL directo (`realm::WorldStore`, ADR-0008).
 //!
-//! Uso: `server_realms --role auth --config server_realms.toml`
+//! Uso: `server_realms --role auth|channel --config server_realms.toml`
 //! (sin clap: parseo de args con std, el config TOML es el parser mínimo).
 
 mod auth;
+mod channel;
 mod config;
 
 use std::process::ExitCode;
@@ -78,7 +80,17 @@ async fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Role::Channel => {
-            println!("server_realms role=channel — stub (F5)");
+            let cfg = match Config::load(&args.config_path) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("server_realms: {e}");
+                    return ExitCode::from(2);
+                }
+            };
+            if let Err(e) = channel::run(cfg).await {
+                eprintln!("server_realms: {e}");
+                return ExitCode::from(1);
+            }
             ExitCode::SUCCESS
         }
     }

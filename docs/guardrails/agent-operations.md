@@ -58,3 +58,10 @@ Operational lessons about running the agent team. Each rule follows the standard
 - **Evidence:** `customize-opencode` skill (config loaded at start).
 - **Consequence:** after editing `~/.config/opencode/*`, the user must restart opencode before the new models/skills apply.
 - **Status:** Active.
+
+## Rule 8 — Verify exact text with Select-String before `edit`
+
+- **Why:** the edit tool fails on `oldString not found` when the target text contains characters that render differently from how they are stored (em-dash `—`, section sign `§`, arrows `→`, non-ASCII) — 2 failed edits on 2026-08-11. The rendered view and the stored bytes differ; blind oldString matching fails.
+- **Evidence:** 2026-08-11 session: `edit` failed twice on strings containing `§`/`—`; matching the exact text from `Select-String`/`read` output (ASCII-only anchors) succeeded.
+- **Consequence:** failed edits, wasted rounds, or editing the wrong occurrence after guessing.
+- **Status:** Active.

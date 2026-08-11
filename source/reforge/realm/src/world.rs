@@ -4,32 +4,20 @@
 //! - `new(pg_conn)` spawna el `Batcher` (100 ms — patrón de `wal.rs`) con el
 //!   `PgMutationSink` (audit `log.mutation_audit`, misma tx) y valida la
 //!   conexión (fail-fast).
-//! - `list_characters` / `select_player` = lecturas del flujo select
-//!   (`input_login.cpp:247-287`): el C++ resuelve el pid del slot en
-//!   `player_index` (`ClientManagerPlayer.cpp:794` — `SELECT pid%u ...`) y
-//!   luego carga el player.
+//! - `list_characters` / `select_player` / `account_slots` = lecturas del
+//!   flujo select (`input_login.cpp:247-287`): el C++ resuelve el pid del slot
+//!   en `player_index` (`ClientManagerPlayer.cpp:794` — `SELECT pid%u ...`) y
+//!   luego carga el player. La query del índice vive en
+//!   `database::PlayerRepo::player_index_pid` (F4 slice 2 — resuelve la deuda
+//!   del SQL directo documentada en el slice 1).
 //! - `save_character` = write durable: `PlayerRepo::save_mutated` -> Batcher
 //!   (batch transaccional <=100 ms + audit, ADR-0008).
-//!
-//! NOTA (desviación documentada): `player_index` no tiene repo en `database`
-//! (F3 close no lo portó) y este lane no puede tocar `database` (solo LEE) —
-//! la query del índice vive aqui como SQL directo con conexión propia
-//! (parity literal de `ClientManagerPlayer.cpp:794`). Es la ÚNICA query directa
-//! del crate; el resto pasa por repos.
 
 use std::time::Duration;
 
 use database::player::{PlayerRepo, PlayerRow, PlayerSummary};
 use database::wal::{Batcher, PgMutationSink};
 use tokio_postgres::NoTls;
-
-/// Máximo de personajes por cuenta (`protocol::PLAYER_PER_ACCOUNT` = 5).
-const PLAYER_PER_ACCOUNT: usize = 5;
-
-/// Nombres de columna del índice por slot (parity `ClientManagerPlayer.cpp:794`
-/// — `SELECT pid%u` con `account_index + 1`). Constante cerrada: el slot se
-/// valida contra `PLAYER_PER_ACCOUNT` antes de indexar.
-const PID_COLUMNS: [&str; PLAYER_PER_ACCOUNT] = ["pid1", "pid2", "pid3", "pid4", "pid5"];
 
 /// Composición del dominio world: repos + Batcher durable.
 pub struct WorldStore {
@@ -79,6 +67,20 @@ impl WorldStore {
         self.player.list_for_account(account_id).await
     }
 
+    /// Los 5 pids de la cuenta en ORDEN de slot (parity `ClientManagerPlayer.cpp:794`
+    /// — el C++ resuelve `pid%u` por slot en el índice; el 449B del select se
+    /// arma por slot, no por el orden de la lista Q3).
+    ///
+    /// 5 lecturas del repo (una por slot): el login no es hot path; el pool de
+    /// conexiones se decide con el pipeline WAL (ADR-0008).
+    pub async fn account_slots(&self, account_id: i64) -> Result<[Option<i64>; 5], String> {
+        let mut slots = [None; 5];
+        for (i, slot) in slots.iter_mut().enumerate() {
+            *slot = self.player.player_index_pid(account_id, i as u8).await?;
+        }
+        Ok(slots)
+    }
+
     /// Select del flujo select/spawn: resuelve el pid del slot en
     /// `player.player_index` (parity `ClientManagerPlayer.cpp:794`) y carga el
     /// personaje completo (Q2).
@@ -89,15 +91,10 @@ impl WorldStore {
     ///   corta con "player index not found", `input_login.cpp:266-271`).
     /// - `pid > 0` pero el player no existe -> `Ok(None)` (carga Q2 sin fila).
     pub async fn select_player(&self, account_id: i64, slot: u8) -> Result<Option<PlayerRow>, String> {
-        let slot = slot as usize;
-        if slot >= PLAYER_PER_ACCOUNT {
-            return Err(format!("select_player: slot {slot} fuera de rango 0..{}", PLAYER_PER_ACCOUNT - 1));
-        }
-        let pid = self.index_pid(account_id, slot).await?;
-        match pid {
-            0 => Ok(None),
-            pid => self.player.load(pid).await,
-        }
+        let Some(pid) = self.player.player_index_pid(account_id, slot).await? else {
+            return Ok(None);
+        };
+        self.player.load(pid).await
     }
 
     /// Save durable del personaje: `PlayerRepo::save_mutated` -> Batcher
@@ -107,42 +104,18 @@ impl WorldStore {
     pub fn save_character(&self, row: &PlayerRow) {
         self.player.save_mutated(&self.batcher, row);
     }
-
-    /// Query directa del índice (única del crate — ver nota del módulo):
-    /// `SELECT pid{n} FROM player.player_index WHERE id = $1` (parity literal
-    /// `ClientManagerPlayer.cpp:794`). 0 filas -> 0 (slot vacío).
-    async fn index_pid(&self, account_id: i64, slot: usize) -> Result<i64, String> {
-        let (client, connection) = tokio_postgres::connect(&self.pg_conn, NoTls)
-            .await
-            .map_err(|e| format!("PG connect: {e}"))?;
-        tokio::spawn(async move {
-            let _ = connection.await;
-        });
-        let sql = format!(
-            "SELECT {} FROM player.player_index WHERE id = $1",
-            PID_COLUMNS[slot]
-        );
-        let rows = client
-            .query(&sql, &[&account_id])
-            .await
-            .map_err(|e| format!("PLAYER_INDEX pid{}: {e}", slot + 1))?;
-        Ok(rows.first().and_then(|r| r.try_get(0).ok()).unwrap_or(0))
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// El slot se valida contra el rango antes de indexar `PID_COLUMNS`
-    /// (compilación: el array tiene 5 entradas; el error es runtime).
+    /// La validación del slot y el SQL del índice viven en
+    /// `database::player` (`index_sql_shape_and_slot_validation` + el gated
+    /// `player_index_pid_live_account_slots`) — aquí solo la invariante de
+    /// composición: account_slots devuelve un array fijo de 5 slots.
     #[test]
-    fn slot_range_and_pid_columns() {
-        assert_eq!(PID_COLUMNS.len(), PLAYER_PER_ACCOUNT);
-        assert_eq!(PID_COLUMNS, ["pid1", "pid2", "pid3", "pid4", "pid5"]);
-        // La validación de select_player cubre 0..4 (se testea en el gated
-        // con PG real; aquí solo la invariante del array).
-        assert!(PID_COLUMNS[0].starts_with("pid"));
-        assert!(PID_COLUMNS[4].ends_with('5'));
+    fn account_slots_shape() {
+        let _s: [Option<i64>; 5] = [None; 5];
     }
 }

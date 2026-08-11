@@ -49,4 +49,12 @@ Rules about character encodings, proto tables, and coordinate conventions. These
 - **Consequence:** client heap-corruption crash on world entry; lost characters.
 - **Status:** Active.
 
+## 6. Verify byte-exactness with `od`/hex, not text diff
+
+- **Rule:** when a layer consumes BINARY bytes (blobs, bytea, wire payloads), verify byte-exactness with `od -An -tx1` (or a hex dump), NOT with a text diff. PG's text output (`\x…` for bytea) and the MySQL wire can re-encode; a text diff can pass while the bytes differ (and vice versa). Never feed PG text forms into binary layers.
+- **Why:** the world-entry crash (2026-08-10, 0xC0000374 heap corruption) came from binary data corrupted in a text layer; the E2E catches this class with raw byte comparison.
+- **Evidence:** `e2e_db.sh` Q2/Q4/Q5 (`skill_level bytea raw identical` — `od -An -tx1` straight from the wire); [`world-entry-crash.md`](world-entry-crash.md); AGENTS.md "bytea raw" convention.
+- **Consequence:** silently corrupted blobs (skill_level/quickslot) that crash the client at map load.
+- **Status:** Active.
+
 Related: [`world-entry-crash.md`](world-entry-crash.md), [`legacy-compatibility.md`](legacy-compatibility.md).
