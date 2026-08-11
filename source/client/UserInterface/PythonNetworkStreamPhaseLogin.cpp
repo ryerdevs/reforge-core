@@ -59,6 +59,20 @@ void CPythonNetworkStream::LoginPhase()
 			RecvHybridCryptSDBPacket();
 			return;
 
+		// F3 §5.6 data channel (aditivo, contrato): registramos los headers del
+		// canal de datos pull-based (protocol::datachannel, headers 162/163 —
+		// manifest versionado + delta). NADA se envía/solicita aún: handlers
+		// NO-OP; el registro fija el contrato en PhaseLogin. Nota: el framing
+		// real (tamaño) se registrará con el canal en un lane posterior —
+		// CheckPacket no conoce estos headers todavía.
+		case 162: // CG_QUERY (client→server; defensivo en recv)
+			Tracenf("DataChannel: CG_QUERY(162) recibido en PhaseLogin (no-op, contrato F3 5.6)");
+			return;
+
+		case 163: // GC_RESPONSE (server→client)
+			Tracenf("DataChannel: GC_RESPONSE(163) recibido en PhaseLogin (no-op, contrato F3 5.6)");
+			return;
+
 		default:
 			if (RecvDefaultPacket(header))
 				return;

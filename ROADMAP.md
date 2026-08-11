@@ -121,13 +121,15 @@ Goal: `database` crate organized by domains behind a backend trait + porting ont
 - [ ] Port by QID: login → player load/save → items → social — *login (account) + player load/save (world) ported 2026-08-11; items/social next*
 - [x] Durable pipeline: **local WAL per region + `mutation_id` + batch ≤100ms + idempotent replay** (`ON CONFLICT DO NOTHING`) — *2026-08-11: `database/src/wal.rs` (uuidv7 + Batcher ≤100ms one-tx + idempotent replay + audit same-tx; integration 2/2 vs real PG; DDL exported, not applied); realm wiring + local replay after crash pending*
 - [ ] SQL routing: `SQL_ACCOUNT` vs `SQL_PLAYER` (fix #8); `QUERY_LOGIN` 13 columns (fix #7) — ported semantics on PostgreSQL
-- [ ] Data comparison harness extended to all ported QIDs (groundwork from G-PG)
-- [ ] **Client: additive pull-based packets** (headers 162+: CG_QUERY/GC_RESPONSE; table registration + case in PhaseLogin) — the data channel §5.6
+- [x] Data comparison harness extended to all ported QIDs (groundwork from G-PG) — *snapshot mode 2026-08-11: `--make-snapshot` (cutover reference) + `--snapshot` (PG vs reference, deterministic; 27 OK / 4 operational DIFFs post-cleanup)*
+- [x] **Client: additive pull-based packets** (headers 162+: CG_QUERY/GC_RESPONSE; table registration + case in PhaseLogin) — the data channel §5.6 — *2026-08-11: `protocol::datachannel` (162/163 minimal wire) + client PhaseLogin contract registration (inert — framing map pending with the channel activation)*
 - [ ] `PROTO_FROM_DB` maintained
 
 **F3 milestone:** the C++ game runs against the Rust `database` without behavior changes; the recompiled client receives additive data without desynchronizing.
 
 ### Phase 4 — World entry + names
+
+> **Slice 1 DONE (2026-08-11):** `realm` `WorldStore` (list/select/save via Batcher) + byte-exact select/spawn packet mappings (TSimplePlayer 71B, GC_LOGIN_SUCCESS_NEWSLOT 449B, GCCharacterAdd 37B, AdditionalInfo 70B — C++ file:line contracts; GAPs documented). **Slice 2 (the channel) is next:** listener + channel handshake/LOGIN3 + select flow end-to-end + spawn.
 
 Goal: character select + spawn with parity + UTF-8 name overrides.
 

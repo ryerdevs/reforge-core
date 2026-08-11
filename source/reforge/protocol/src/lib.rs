@@ -33,6 +33,12 @@
 /// (`input_db.cpp:1710-1716`). Boundary aislado y borrable en bloque en F7.
 pub mod legacy;
 
+/// Canal de datos aditivo pull-based (F3 §5.6): `CG_QUERY` (162) /
+/// `GC_RESPONSE` (163) — manifest versionado + delta (server = única fuente
+/// de datos). Aditivo: el cliente legacy registra los headers como no-op en
+/// PhaseLogin; el wire del sobre se fija aquí (payload crudo, ver módulo).
+pub mod datachannel;
+
 pub mod header {
     //! Headers de paquete (verificados contra `game/src/packet.h`).
 

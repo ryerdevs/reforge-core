@@ -8,3 +8,8 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+database = { path = "../database" }
+protocol = { path = "../protocol" }
+tokio.workspace = true
+tokio-postgres.workspace = true
+uuid.workspace = true
