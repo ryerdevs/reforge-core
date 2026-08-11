@@ -7,6 +7,26 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-11] (4th part) — F3 close (world repos + Batcher wiring) + live fixes
+
+### Added (F3 close — commits e32578c, bb30010)
+
+- **World repos in `database`** (contract parity with file:line): `QuestRepo` (load/save, lValue==0 → DELETE else upsert), `AffectRepo` (load/save/remove, upsert PK 4 cols), `SafeboxRepo` (size/load/set_size with the size==1 INSERT parity, set_gold), `ItemRepo` (load_by_owner 22 cols, upsert `ON CONFLICT (id)` with id==0 → DEFAULT + RETURNING, delete, max_id_in_range, item_award load/take idempotent), `MessengerRepo` (list/add/remove; duplicate → Err 23505 documented).
+- **Batcher wired to the write path:** `PlayerRepo::save_mutated(&Batcher, &PlayerRow)` — uuidv7 mutation + audit in the SAME tx, ≤100ms batches (tested with paused time), idempotent replay. `wal.rs` extended: `Param::Null` + int2/int4/int8 encoding by target type (**22P03 fix** — postgres-types i64→INT8 only).
+- **Workspace: 184 passed / 0 failed / 18 ignored** (unit 34 database, gated 18/18 × 5 consecutive stable runs). Known environmental flake: `f16_peer_smoke` fake-auth timing (pre-existing).
+
+### Fixed (live errors, orchestrated directly — fix-4 lane returned empty with nothing applied)
+
+- **WAL audit DDL applied to live PG:** `log.mutation_audit (mutation_id uuid PK, applied_at timestamptz default now(), payload text)` — verified `\d`.
+- **NPC motion data (the Uriel/Mirine animation bug):** `mob_proto.folder=''` for the custom NPCs → mapped 9 races to existing folders with verified motlist (`blacksmith` ×7: Anciana/Vendedor/Mirine/Aranyo/Soon/Uriel/Maestro Lucha Mental; `bkarcher` for Maestro Arquero; `treasure_hunt_box` for 20714). UPDATE applied to **PG and MariaDB** (parity mob_proto OK, md5 `efe5e128...`). Core restarted (pid 4418) — final in-game verification pending (NPC spawn).
+- **`Extern\include\boost\preprocessor\debug\error.hpp` restored** (official boost 1.83.0, 1574 B) — client rebuilds no longer need a shim.
+- **Guardrail added** (`agent-operations.md` Rule 1): empty terminal result from a writer lane = UNVERIFIED — verify actual artifacts before reconciling.
+
+### Pending
+
+- F3 tail: data channel client packets (162+), `PROTO_FROM_DB` harness note, capture-snapshot harness; in-game NPC animation verification (the user's next entry).
+- F4 (world entry + names in Rust — the realm crate with WorldStore = PlayerRepo + Batcher) — the push toward 50%.
+
 ## [2026-08-11] (3rd part) — col+0 fixed + F3 phase 2 (WAL/PlayerRepo/auth consolidation) + F0 capture milestone
 
 ### Fixed
