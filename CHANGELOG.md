@@ -7,6 +7,124 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-11] (3rd part) — col+0 fixed + F3 phase 2 (WAL/PlayerRepo/auth consolidation) + F0 capture milestone
+
+### Fixed
+
+- **4 `col+0` ENUM/SET gaps (E2E 55/0/4 → 59/0/0):** `translate.rs` now rewrites `col+0` on ENUM/SET columns to the MySQL index/bitmask semantics via a static `ENUM_COLUMNS` catalog (12 columns, SHOW CREATE source; `mob_proto.size/ai_flag/setRaceFlag/setImmuneFlag`, `item_proto.immuneflag`, `skill_proto.setFlag/setAffectFlag/setAffectFlag2/eSkillType`, `item_attr(.rare).apply`, `item.window`). ENUM → 1-based index (''/no-enum → 0, NULL → NULL); SET → bitmask (`AGGR,NOMOVE,BERSERK,...→3459`; `ATTACK,USE_MELEE_DAMAGE→3`). **Bonus:** `item.window+0` in the safebox load was the same live bug (C++ received 'SAFEBOX'→0 instead of 3) — fixed. Docs updated (legacy-sql-compatibility §4, legacy-schema §4 CHECK-loss notes).
+
+### Added — F3 phase 2 (data layer)
+
+- **`database/src/wal.rs`:** uuidv7 hand-rolled (48-bit ms + version 7 + rand; format/uniqueness/chronological tests) + `Batcher` (tokio worker, ≤100ms flush verified with paused time, one transaction per batch, idempotent replay `ON CONFLICT DO NOTHING` + audit append in the SAME tx; `AUDIT_DDL` exported, not applied to the live PG). Gated integration vs real PG: replay 2× → 3+3 rows (not 6), invalid mutation → full rollback 0+0.
+- **`database/src/player.rs` (world domain):** `PlayerRepo::load` (43-col contract in the C++ parse order, bytea raw), `save` (41 cols + `last_play=NOW()` + blob round-trip), `list_for_account` (15 cols), `create` (`id=DEFAULT` + `RETURNING id`, rule B5). Gated integration vs real PG 3/3 (ninja load, list ≥3, throwaway create→load→save→reload byte-identical + guaranteed cleanup).
+- **Auth consolidated onto `AccountRepo`:** inline SQL removed from `auth.rs` (`pg_validate` → `account_login` using `login`/`set_lang`/`set_hwid`); SQLSTATE added to repo errors to preserve the "hwid column missing → log + continue" handling; 4 smokes green; redeployed (md5 `b7176f7a...`, pid 22219) — **f16_peer LOGIN OK verified** (wire intact).
+- **F0 capture harness (F0 milestone MET):** `scripts/gpg/capture_auth.sh` + `extract_pcap_login3.py` (stdlib pcap parser, TCP reassembly) → golden fixture `source/reforge/protocol/tests/golden/auth_login3_40999.bin` (88B, md5 `6a93aa8f...`, deterministic across 2 captures) + `golden_auth.rs` (3 tests) — **the real captured LOGIN3 parses and re-serializes byte-for-byte identical**.
+
+### Verified
+
+- **Workspace: 168 passed / 0 failed / 7 ignored** (database 18+7 gated, mysql_proxy 66, network 24+2, protocol 37+3 golden, server_realms 14+4 smoke) — my own run.
+- Gated integration vs real PG: 7/7 (2 account + 3 player + 2 wal).
+- E2E DB: **59/0/0** post-fix; stack healthy (auth pid 22219).
+
+### Environment note
+
+- **core1 died silently ~01:48** (no shutdown log, no OOM in dmesg — WSL memory pressure during the WSL-side release build; the 2GB cap is the known constraint). Restarted cleanly (pid 22292, PG confs intact). Watch: WSL builds + the running stack coexist badly on 2GB — do WSL cargo builds when the game is idle.
+
+### Pending
+
+- Wire the `Batcher` into the realm write path; local WAL replay after crash; RLS (post-WAL); next repos: quest/affect/safebox/item/item_award/messenger (Q6 E2E queries); F4 (world entry + names in Rust — the big push toward 50%).
+
+## [2026-08-11] (2nd part) — E2E DB suite green + F3 started (ADR-0008 + database crate)
+
+### Added
+
+- **`scripts/gpg/e2e_db.sh`** — repeatable E2E suite for the DB layer: the real db-binary query set (Q1 QUERY_LOGIN 13 cols, Q2 player load 42 cols, Q3 char list, Q4 creation with escaped blobs, Q5 save, Q6 quest/affect/safebox/item_award/messenger, Q7 locale, Q8 item id probes, Q9 boot protos with `col+0`) replayed through the proxy vs MariaDB as oracle; throwaway character cycle with guaranteed cleanup (`trap`); volatile exceptions documented (last_play/hwid/x/y/playtime). **55 PASS / 0 FAIL / 4 GAP(crate), exit 0.**
+- **ADR-0008 (Accepted):** data layer — tokio-postgres 0.7 decided for the `database` crate (evidence in the ADR: proven end-to-end here, 0 new deps, full contract incl. LISTEN/NOTIFY; sqlx deferred to the WAL phase with measurements, pool via deadpool-postgres possible without a driver change); PostgreSQL-only repos, no direct-sql backend; durable = transactional batch ≤100ms, volatile = save 30s+logout; WAL + `mutation_id` (uuidv7) + idempotent replay → F3 phase 2; RLS post-WAL; failover F5/F6.
+- **Crate `database`** (first slice, domain `account`): `AccountRepo::login` (13-column QUERY_LOGIN contract with LEFT JOIN player_index, MySQL hash in Rust + defensive col0==col3 re-check parity `CreateAccountTableFromRes:288-292`), `set_lang`/`set_hwid`; world/social/economy/log domain stubs. **7 unit + 2 integration gated (`#[ignore]`) — integration run against real PG in WSL: 2/2 ok** (test/1234 → id=1, empire=3, pids=[1,3,5,0,2], hash exact, status OK; wrong password → None; lang/hwid persist+restore — confirming the F2b hwid fix end-to-end). **Workspace 149 passed, 0 failed, 2 ignored.**
+
+### Found (E2E — crate checklist, not masked)
+
+- **4 `col+0` gaps in mysql_proxy translate:** ENUM/SET columns (mob_proto `size`/`setRaceFlag`, item_proto `immuneflag`, skill_proto `setFlag`) — the C++ reads the enum INDEX (`size+0` → index in MySQL); the proxy returns the raw text (index 0 vs 1 divergences on setRaceFlag). The §4 translation table requires index semantics (same class as the `item.window` fix).
+- **Non-ASCII raw bytes in SQL literals** (0xfe/0xde with latin1 client) → PG UTF-8 errors — pending crate item (the `\0` escaping works).
+
+### Pending
+
+- Fix the 4 `col+0` ENUM/SET index gaps + non-ASCII literal handling (mysql_proxy crate — next lane).
+- F3 phase 2: WAL pipeline (batches ≤100ms + mutation_id + idempotent replay); migrate the auth's queries to `AccountRepo` (no behavior change); next QIDs: player load/save (world domain).
+
+## [2026-08-11] (1st part) — F2b complete: version check + hardware ID verified with the real client
+
+### Added
+
+- **Client (F2b, additive, ADR-0007):** `TPacketCGLogin3` → **88B at auth** (`dwVersion` 68..72 + `hwid[16]` 72..88 after `szLanguage`; `static_assert` 88 verified) — `UserInterface\Packet.h:479-493`; new `Hwid.h` (MachineGuid hex-decode with `KEY_WOW64_64KEY` — mandatory for Win32 — fallback volume serial (8-arg SDK) → zeros); `AccountConnector.cpp:182-186` fills version + hwid; **channel LOGIN3 stays 65B** (`SendLoginPacket`/`SendLoginPacketNew` subtract the auth-only fields). Rebuilt (3.1 min, 0 errors, 14 pre-existing warnings) → deployed (md5 `7D3783F1...`, backup `metin2client.exe.f2b_backup` preserved).
+- **Server (Rust auth):** LOGIN3 parse 68/72/88 (`protocol`); framer variable range `111-auth = (68,88)`; **version gate** (`expected_version = 40999` config default; mismatch → clean close, no invented status — `input_auth.cpp` has no version check); **hwid → `UPDATE account.account SET hwid=$1`** as hex text (fixed the `[u8;16]` ToSql serialization bug); backward compatible with 68B.
+- **PG:** `account.hwid VARCHAR(64) NOT NULL DEFAULT ''` (MariaDB frozen without it → `VOLATILE_COLUMNS` updated in parity_check).
+- Server time (F2b item 3): **verified already working** — client aligns its clock at handshake (`ELTimer_SetServerMSec`) + receives epoch time at world entry (`GC_TIME` → `SetServerTime`); no change needed (recon evidence).
+
+### Verified
+
+- f16_peer: 88B + version 40999 + hwid → LOGIN OK + hwid persisted; version 99999 → `VERSION MISMATCH got=99999 expected=40999 — cierre limpio`; 68B → backward compat OK.
+- **REAL client (new build):** login → select → **world entry** (01:08, `battle_hit` in core1); `account.hwid` = `bb2cad39631b49e2bd0c61bcc577e7e6` (the machine's real MachineGuid).
+- Parity: 3 legitimate **operational** diffs (`player` +1 row "hol", `player_index` pid3, `item` +1) — the user played on PG while MariaDB stays frozen; harness target decision (snapshot-based) deferred to F3.
+
+### Pending
+
+- `source\client\Extern\include\boost\preprocessor\debug\error.hpp` missing (client rebuilds need a temporary shim) — restore permanently.
+- Parity harness post-cutover target (PG snapshot vs frozen MariaDB) — F3.
+- Next phase: **F3** (data layer + data channel).
+
+## [2026-08-10] (11th part) — World entry on PG fixed + F2a: Rust auth serving real clients
+
+### Fixed (post-gate, found by real gameplay)
+
+- **World-entry client crash on PG (A/B proven):** the proxy returned bytea columns as PG's `\x...` TEXT instead of raw bytes for the player_load query → the core binary-copied it into `TPlayerTable` → the client closed ~1s after ENTERGAME. Root cause: `session::first_from_table` matched the first "FROM" without parenthesis-depth filtering — the translated `EXTRACT(EPOCH FROM LOCALTIMESTAMP)` in the projection resolved `localtimestamp` as the table → empty bytea detection. Fixed with depth tracking + safe fallback (unknown table → ERR 1146, never silent `\x` text). Verified with a byte-exact replay diff of the exact query (`ClientManagerPlayer.cpp:361-375`) + A/B: MariaDB enters fine, PG now enters fine (user played: combat, kill events, logs).
+- **22021 on player create/save:** MySQL `\0`-escaped blobs in bytea columns (skill_level/quickslot) reached PG text literals → NUL → 22021. Fixed: bytea literals → `decode('<hex>', 'hex')` in INSERT VALUES and UPDATE SET.
+- **Proxy translate gaps closed:** `CAST(x AS unsigned)` → MySQL leading-numeric-prefix semantics (`COALESCE((regexp_match(x, '^[[:space:]]*[+-]?[0-9]+'))[1]::bigint, 0)` — fixes 22P02 on game boot); MySQL double-quoted string literals → PG single quotes (fixes 42703 `LIKE "LOCALE"`).
+- **Migration gaps closed:** `item_award` (character select), `messenger_list` (world entry) + audit: no other active missing tables (42P01 inventory vs timestamps).
+
+### Added — F2a (ROADMAP Phase 2): `server_realms --role auth`
+
+- First REAL server logic of the rewrite: handshake (`network`) → `GC_PHASE(PHASE_AUTH)` (the client sends LOGIN3 only on it — verified; a missing PHASE_AUTH hangs the real client) → LOGIN3 68B → login validation (trim/lower, valid-login-string, NOID/ALREADY guards, lang UPDATE before validation — `input_auth.cpp` parity) → password verified against PostgreSQL (hash `'*'+UPPER(SHA1(SHA1(pw)))` computed in Rust) → `GC_AUTH_SUCCESS` (0x96, bResult + dwLoginKey unique 1..INT_MAX, panama key XOR) | DB errors → deterministic bResult=0. **Global connection timeout (15s, F1.5 debt).** Driver: **tokio-postgres** (decision documented in auth.rs — proven in the proxy; sqlx stays the F3 candidate). `protocol::legacy` (ADR-0006 → Accepted): PanamaPack 151/289B + hybrid-crypt 152/153 + SDB, runtime-file conditional (panama/ + cshybridcrypt* — parity: the C++ auth sends none without files). **Workspace 140/140 tests** (protocol 35, network 25, mysql_proxy 60, server_realms 20).
+- Hybrid test harness: `scripts/gpg/hybrid_auth_test.sh` (swap auth C++ ↔ Rust on :30001, --restore).
+
+### Verified
+
+- f16_peer ↔ Rust auth (WSL+Windows): handshake → PHASE_AUTH → LOGIN3 → `GC_AUTH_SUCCESS key=0x58caefd5 result=1` — LOGIN OK; `account.lang` updated to `es` in PG by the Rust auth.
+- **REAL client login against the Rust auth → character select screen** (hybrid stack: Rust auth :30001 + C++ channel :30003 on PG): auth log `login OK test key 1948777150` / `key 404922110` (lang es + en), core1 `LoginSuccess` 00:03:42, CHARACTER COUNT polling active.
+- NPC motion errors (Uriel/Mirine animations) audited: **pre-existing data gaps** (baseline MariaDB syserrs from 08-08; `mob_proto.folder=''` for the 20000+ custom NPCs, 1144 races total; `ice_keybox` folder missing on disk) — NOT PG-related; fix = data lane (set folder from the client pack or an existing human folder + core restart), pending.
+
+### Pending
+
+- F2a debt: dwLoginKey real flow (LoginKeyStore skeleton done — the real flow still re-sends the password, AGENTS.md §14); capture harness (F0, tcpdump golden tests); F2b (client batch 1: version check/hardware ID/server time, C++ additive ≤1 week each, ADR-0007); NPC motion data fix (folder audit).
+
+## [2026-08-10] (10th part) — G-PG cutover COMPLETE + F1.6 verified (loop, 5 attempts)
+
+### Added
+
+- **G-PG design closed:** [ADR-0005](../docs/decisions/0005-postgresql-cutover-and-legacy-adapter.md) → **Accepted** with the gate checklist resolved (4/4) and implementation backlog B1–B8; cutover spec `docs/plans/server-rewrite.md` §8.2.1 (a provision, b migration, c adapter, d harness); inventories marked Accepted.
+- **PostgreSQL 18.4 (PGDG) provisioned** on WSL Debian-M2: db `metin2`, schemas `account`/`player`/`common`/`log`, role `mt2` (owner, scram, no SUPERUSER); runbook chain vendored in `scripts/gpg/` (02-install … 09-final).
+- **Phase-1 migration executed:** 30 tables with data (account, player subset incl. proto tables, guild/marriage/war_reservation, common locale/priv_settings/exp_table/spam_db/gmlist/gmhost, item/quest/affect/safebox, item_award) + the 26 `log` tables DDL-only (empty) + `account.mysql_hash_password` (pgcrypto, verified `*A4B6157319038724E3560894F7F932C8886EBFCF`). Counts parity 30/30 (`scripts/gpg/parity_check.py`; volatile `account.last_play` excluded — live-login write lands on PG only).
+- **`mysql_proxy` adapter** (`source/reforge/mysql_proxy`): MySQL wire v10 codec hand-written, `translate` (rewrites per `legacy-sql-compatibility.md` §4 as unit-test table), `session` (tokio-postgres 1:1, per-slot `search_path`, `standard_conforming_strings=off`, TimeZone), minimal TOML config, own SHA-1. 53 tests (workspace 111/111).
+- **`f16_peer`** (`source/reforge/network/examples/f16_peer.rs`): F1.6 integration peer (GC_PHASE/GC_HANDSHAKE echo with server-aligned clock + optional LOGIN3) + 2 smoke tests against a local fake-auth.
+- **Gate harness:** `scripts/gpg/parity_check.py`, `scripts/gpg/parity_boot.sh` (--only-baseline/--only-pg; A/B SYSERR + boot-lines + LoginSuccess; restores confs and stops at exit), `scripts/gpg/start_pg_stack.sh`.
+
+### Fixed
+
+- **4 gate bugs in `mysql_proxy`** (found by the real C++ boot): (1) text-row cell-count lenenc prefix (binary-protocol artifact) → ERR 2000 on 2+ column results and wrong values (2864 → 4); (2) `SET AUTOCOMMIT` (and other MySQL config SETs) passed to PG → no-op now; (3) session init refactored to a pure `init_statements()` applied before auth OK — a failed init never serves queries; (4) per-connection debug logging (`--debug`/`MYSQL_PROXY_DEBUG=1`).
+- **Migration gaps found by the gate:** item/quest/affect/safebox, guild/guild_war_reservation/marriage, exp_table/spam_db/gmlist/gmhost, item_award (character select), 26 log tables.
+
+### Verified
+
+- **parity_boot A/B green** on the PG run (0 new SYSERR, boot table lines identical vs the MariaDB baseline).
+- **REAL client login on PostgreSQL:** `test`/`1234` → character select (3 characters read from PG) — `LoginSuccess` 21:39:34 (core1 syslog); auth syslog `QID_AUTH_LOGIN: SUCCESS`; proxy log shows the translated login queries (`SELECT mysql_hash_password('1234'), a.id, ... FROM account a LEFT JOIN player.player_index ...` 13 cols, `availDt > LOCALTIMESTAMP`, `EXTRACT(EPOCH FROM ...)`, `UPDATE account SET last_play=LOCALTIMESTAMP`, `SELECT ... FROM player WHERE account_id=1` → 3 rows).
+- **F1.6 transport:** `f16_peer 172.25.104.175 30001` ↔ auth C++ live — GC_PHASE + GC_HANDSHAKE (nonce 0xec4f82ac, clock-aligned echo) → handshake completed, no timeouts, no WRITE floods.
+- Stack runtime state: srv1 (db/auth/core) operating on PostgreSQL through the proxy (`*_pg` conf variants active); MariaDB untouched (frozen migration source); `sync` verified.
+
+### Pending (F2a follow-ups, non-blocking)
+
+- `mysql_proxy` translation gaps (queued): 22P02 `ORDER BY (mValue)::bigint` (game boot), 42703 `LIKE "LOCALE"` (double-quoted string), 22021 NUL byte in a player INSERT.
+- sqlx/PgPool concrete decision for the `database` crate (F2a start); F1.5 debt (retry-on-wrong-nonce rationale, partial-echo test); real capture harness (F0).
+
 ## [2026-08-10] (9th part) — Checkpoint: G-PG database inventories committed + CURRENT updated
 
 ### Added

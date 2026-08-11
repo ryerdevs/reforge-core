@@ -1,13 +1,13 @@
 ---
 Type: Reference
-Status: Proposed
+Status: Accepted
 Audience: Contributors
-Last verified: 2026-08-10
+Last verified: 2026-08-11
 ---
 
 # Legacy SQL compatibility inventory (G-PG, job 2)
 
-> **Status note:** Proposed. This is the SQL-compatibility inventory for the G-PG cutover ([ADR-0005](../../decisions/0005-postgresql-cutover-and-legacy-adapter.md), Proposed). It records how the C++ baseline (`libsql` + `db` + `game`) reaches MySQL, which MySQL-specific SQL the temporary adapter must translate, and what must be preserved so the legacy client behavior is unchanged. Open decisions are marked **Proposed** and tracked in [§9](#9-open-decisions-proposed).
+> **Status note:** Accepted (2026-08-10, with [ADR-0005](../../decisions/0005-postgresql-cutover-and-legacy-adapter.md)). This is the SQL-compatibility inventory for the G-PG cutover. It records how the C++ baseline (`libsql` + `db` + `game`) reaches MySQL, which MySQL-specific SQL the temporary adapter must translate, and what must be preserved so the legacy client behavior is unchanged. The open decisions of [§9](#9-open-decisions-resolved-2026-08-10) are **resolved**; the §4 translation map is the adapter's unit-test table (spec: `../../plans/server-rewrite.md` §8.2.1c).
 
 ## 1. Purpose and scope
 
@@ -113,7 +113,7 @@ Portable as-is (no translation needed): plain `SELECT`/`UPDATE`/`DELETE` with nu
 | Category | MySQL text | PostgreSQL translation | Evidence |
 |---|---|---|---|
 | Backticks | `` `ident` `` | `"ident"` — cannot be dropped blindly: `window`, `where` and `when` are reserved in PG (window functions / WHERE clause / CASE WHEN) | `Cache.cpp:56` (`window`), `log.cpp:327` (`where`, `when`, …) |
-| `+0` enum cast | `setFlag+0`, `` `window`+0 `` | column becomes real integer in PG schema → rewrite `col+0` → `col` (or `col::int`) | `ClientManagerBoot.cpp:478` |
+| `+0` enum cast | `setFlag+0`, `` `window`+0 ``, `size+0`, `immuneflag+0` (12 columnas del boot) | `col+0` → **índice ENUM 1-based / bitmask SET** según el catálogo estático `ENUM_COLUMNS` del proxy — `source/reforge/mysql_proxy/src/translate.rs:551-592` (fuente: `SHOW CREATE` MariaDB, 2026-08-11; regla completa: `translate.rs:516-525`). Necesario porque las columnas son **text sin CHECK** en PG (legacy-schema.md §7.2) y el C++ lee el número (`str_to_number` en el boot). `+0` de columnas **no** catalogadas → se elimina (fallback). El caso inverso (C++ escribe el índice → literal, `item.window`) lo cubre `fix_enum_value` (`translate.rs:489-513`) | `ClientManagerBoot.cpp:478,1290-1291,1467`; `ClientManager.cpp:680`; `ClientManagerPlayer.cpp:321,385` |
 | `UNIX_TIMESTAMP(x)` | seconds since epoch | `EXTRACT(EPOCH FROM x)` (numeric; same text protocol value) | `ClientManager.cpp:115` |
 | `UNIX_TIMESTAMP(NOW())-UNIX_TIMESTAMP(last_play)` | seconds diff | `EXTRACT(EPOCH FROM now()) - EXTRACT(EPOCH FROM last_play)` (or `EXTRACT(EPOCH FROM now() - last_play)`) | `ClientManagerPlayer.cpp:370` |
 | `NOW()` | current datetime | `now()` | `log.cpp:60` |
@@ -194,22 +194,22 @@ Portable as-is (no translation needed): plain `SELECT`/`UPDATE`/`DELETE` with nu
 - PostgreSQL options: (a) database encoding **EUC_KR** (KS X 1001 — covers the bulk of CP949 Hangul/hanja, but not the full CP949 superset); (b) **bytea** columns for the byte-sensitive name columns with the adapter passing bytes through untouched (exact-match lookups run in C++ memory, not SQL, so bytea is safe); (c) UTF-8 with transcoding at the adapter — risky, violates the byte round-trip rule. **Proposed: OD-6.**
 - Related but not SQL: the server's Lua lexer is EUC-KR (2 bytes/char; AGENTS.md §15) — locale lua files with Korean must stay CP949/EUC-KR; the `locale` table rows read via SQL (`config.cpp:477-499`) fall under the same byte-preservation rule if they contain Korean.
 
-## 9. Open decisions (Proposed)
+## 9. Open decisions (resolved 2026-08-10)
 
-| # | Decision | Options | Recommendation |
+| # | Decision | Options | Resolution (2026-08-10, ADR-0005 Accepted) |
 |---|---|---|---|
-| OD-1 | Adapter mechanism | (a) link-time shim implementing the mysql C API subset over libpq; (b) protocol-level proxy (MySQL-wire server in front of PG) | (a) — smallest surface, no port changes, matches "thin adapter" (ADR-0005); the API subset is small and fully enumerated in §7.2 |
-| OD-2 | Hash computation | (a) PG SQL function with pgcrypto; (b) adapter-side computation | (a) — symmetric for both binaries, zero C++ change, no new linkage |
-| OD-3 | `REPLACE INTO` / `ON DUPLICATE KEY UPDATE` translation | (a) table metadata map in the adapter; (b) schema-side triggers/rules | (a) — explicit, removable at F6; 18 unique affected sites (§3 rows 6, 8, 9): 16 `REPLACE` + 2 `ON DUPLICATE KEY UPDATE` (`Cache.cpp:82`, `ClientManager.cpp:1451`); the 3 `INSERT/REPLACE … SET` sites are all contained in those |
-| OD-4 | `@i` user-variable emulation | (a) session temp table; (b) `SET LOCAL` custom GUC | (a) — plain SQL, no GUC registration; 1 call pair (`log.cpp:309-313`) |
-| OD-5 | Zero dates | (a) `NULL`; (b) `1000-01-01`; (c) text columns | (a) — `'00000000'` only appears as a defensive default (`db.cpp:315`); verify each affected column at migration |
-| OD-6 | Charset strategy | (a) EUC_KR database; (b) UTF-8 + bytea for CP949 name columns; (c) UTF-8 + transcoding | (b) — byte round-trip guaranteed for `item_proto.name`/`mob_proto.locale_name`; rest of the schema in UTF-8 |
-| OD-7 | Session TimeZone | UTC vs server-local | server-local (matches current MySQL session TZ behavior; `create_time` is rendered via `localtime()` at `db.cpp:330-333`) |
-| OD-8 | `mysql_affected_rows` parity | matched-rows vs changed-rows | verify against the MySQL 5.6 default at migration; document the chosen command-tag mapping in the adapter |
+| OD-1 | Adapter mechanism | (a) link-time shim implementing the mysql C API subset over libpq; (b) protocol-level proxy (MySQL-wire server in front of PG) | **(b)** — wire-level MySQL protocol v10 proxy, `source/reforge/mysql_proxy` (Rust, tokio + tokio-postgres), `127.0.0.1:3307`; zero C++ source/linkage change (runtime conf.txt only). (a) remains documented as the fallback — no known insurmountable wire issue |
+| OD-2 | Hash computation | (a) PG SQL function with pgcrypto; (b) adapter-side computation | **(a)** — `account.mysql_hash_password(text)` = `'*' || upper(encode(digest(decode(digest($1::bytea,'sha1'),'hex'),'sha1'),'hex'))`; symmetric for both binaries, zero C++ change. Stored hashes copied verbatim |
+| OD-3 | `REPLACE INTO` / `ON DUPLICATE KEY UPDATE` translation | (a) table metadata map in the adapter; (b) schema-side triggers/rules | **(a)** — PK introspected from pg_catalog per table and cached; `ON CONFLICT (pk) DO UPDATE SET` with bare names = existing row (MySQL semantics). 18 affected sites (§3 rows 6, 8, 9) |
+| OD-4 | `@i` user-variable emulation | (a) session temp table; (b) `SET LOCAL` custom GUC | **(a)** — `SET @name = (subquery)` → `CREATE TEMP TABLE pg_temp.m2var_<name> AS SELECT …`; `@name` references → `(SELECT v FROM m2var_<name>)`; 1 call pair (`log.cpp:309-313`, two separate queries) |
+| OD-5 | Zero dates | (a) `NULL`; (b) `1000-01-01`; (c) text columns | **(a)** — `'00000000'` only appears as a defensive default (`db.cpp:315`); columns verified at migration |
+| OD-6 | Charset strategy | (a) EUC_KR database; (b) UTF-8 + bytea for CP949 name columns; (c) UTF-8 + transcoding | **(b)** — PG db UTF8; `item_proto.name`/`locale_name`, `mob_proto.locale_name`, `skill_proto.szName` → `bytea`, byte-exact round-trip; adapter answers `SET NAMES` (latin1/cp949) as pass-through, no transcoding |
+| OD-7 | Session TimeZone | UTC vs server-local | **server-local** (matches current MySQL session TZ; `create_time` rendered via `localtime()` at `db.cpp:330-333`); adapter sets `TimeZone` per session |
+| OD-8 | `mysql_affected_rows` parity | matched-rows vs changed-rows | **PG command-tag (matched) rows**; phase-1 consumers verified not to branch on changed-vs-matched; the §4 consumer list (9 sites) is audited per phase as it becomes reachable (F3+) |
 
 ## 10. Related documents
 
-- [ADR-0005 — PostgreSQL cutover and temporary legacy compatibility adapter](../../decisions/0005-postgresql-cutover-and-legacy-adapter.md) (Proposed; this inventory feeds its gate checklist)
+- [ADR-0005 — PostgreSQL cutover and temporary legacy compatibility adapter](../../decisions/0005-postgresql-cutover-and-legacy-adapter.md) (**Accepted**; this inventory feeds its translation table — G-PG spec `../../plans/server-rewrite.md` §8.2.1)
 - [ADR-0001 — PostgreSQL as the primary database, no TimescaleDB by default](../../decisions/0001-postgresql-without-timescaledb-by-default.md) (Accepted; "no MySQL API patterns in the new server")
 - [ROADMAP — Phase G-PG](../../../ROADMAP.md) (blocking F2)
 - [Reference hub](../README.md)

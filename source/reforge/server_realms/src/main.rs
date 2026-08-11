@@ -1,7 +1,18 @@
 //! `server_realms` — binario único con roles (ADR-0004): un proceso por región.
 //!
-//! F2: rol `auth` (handshake + LOGIN3 + keys). F5: rol `channel` (realm).
-//! Esqueleto mínimo: parseo de `--role` con std (sin clap todavía).
+//! F2a: rol `auth` REAL — login del cliente legacy contra PostgreSQL
+//! (parity con el auth C++: `input_auth.cpp` / `input_db.cpp:1697-1728`).
+//! F5: rol `channel` (realm) — stub.
+//!
+//! Uso: `server_realms --role auth --config server_realms.toml`
+//! (sin clap: parseo de args con std, el config TOML es el parser mínimo).
+
+mod auth;
+mod config;
+
+use std::process::ExitCode;
+
+use config::Config;
 
 /// Rol del proceso.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -10,10 +21,14 @@ enum Role {
     Channel,
 }
 
-/// Parsea el rol desde los args (sin el nombre del binario): `--role auth` |
-/// `--role channel`. Default: `Auth`.
-fn parse_role(args: &[String]) -> Result<Role, String> {
+struct Args {
+    role: Role,
+    config_path: String,
+}
+
+fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut role = Role::Auth;
+    let mut path: Option<String> = None;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -27,20 +42,44 @@ fn parse_role(args: &[String]) -> Result<Role, String> {
                     other => return Err(format!("rol desconocido: {other} (auth|channel)")),
                 };
             }
+            "--config" => {
+                let v = it.next().ok_or("--config requiere un valor")?;
+                path = Some(v.clone());
+            }
             other => return Err(format!("argumento desconocido: {other}")),
         }
     }
-    Ok(role)
+    Ok(Args { role, config_path: path.unwrap_or_else(|| "server_realms.toml".into()) })
 }
 
-fn main() {
+#[tokio::main]
+async fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    match parse_role(&args) {
-        Ok(Role::Auth) => println!("server_realms role=auth — stub (F2)"),
-        Ok(Role::Channel) => println!("server_realms role=channel — stub (F5)"),
+    let args = match parse_args(&args) {
+        Ok(a) => a,
         Err(e) => {
             eprintln!("server_realms: {e}");
-            std::process::exit(2);
+            return ExitCode::from(2);
+        }
+    };
+    match args.role {
+        Role::Auth => {
+            let cfg = match Config::load(&args.config_path) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("server_realms: {e}");
+                    return ExitCode::from(2);
+                }
+            };
+            if let Err(e) = auth::run(cfg).await {
+                eprintln!("server_realms: {e}");
+                return ExitCode::from(1);
+            }
+            ExitCode::SUCCESS
+        }
+        Role::Channel => {
+            println!("server_realms role=channel — stub (F5)");
+            ExitCode::SUCCESS
         }
     }
 }
@@ -50,23 +89,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_is_auth() {
-        assert_eq!(parse_role(&[]), Ok(Role::Auth));
+    fn default_role_and_config_path() {
+        assert_eq!(parse_args(&[]).unwrap().role, Role::Auth);
+        assert_eq!(parse_args(&[]).unwrap().config_path, "server_realms.toml");
     }
 
     #[test]
     fn parses_explicit_roles() {
-        assert_eq!(parse_role(&["--role".into(), "auth".into()]), Ok(Role::Auth));
         assert_eq!(
-            parse_role(&["--role".into(), "channel".into()]),
-            Ok(Role::Channel)
+            parse_args(&["--role".into(), "auth".into(), "--config".into(), "a.toml".into()])
+                .unwrap()
+                .config_path,
+            "a.toml"
+        );
+        assert_eq!(
+            parse_args(&["--role".into(), "channel".into()]).unwrap().role,
+            Role::Channel
         );
     }
 
     #[test]
     fn rejects_invalid_role_and_args() {
-        assert!(parse_role(&["--role".into(), "game".into()]).is_err());
-        assert!(parse_role(&["--role".into()]).is_err());
-        assert!(parse_role(&["--bogus".into()]).is_err());
+        assert!(parse_args(&["--role".into(), "game".into()]).is_err());
+        assert!(parse_args(&["--role".into()]).is_err());
+        assert!(parse_args(&["--bogus".into()]).is_err());
+        assert!(parse_args(&["--config".into()]).is_err());
     }
 }

@@ -2,6 +2,8 @@
 #include "AccountConnector.h"
 #include "Packet.h"
 #include "PythonNetworkStream.h"
+#include "Version.h"
+#include "Hwid.h"
 #include "../EterBase/tea.h"
 #include "../EterPack/EterPackManager.h"
 
@@ -176,6 +178,12 @@ bool CAccountConnector::__AuthState_RecvPhase()
 		LoginPacket.szLanguage[0] = szLocale && szLocale[0] ? szLocale[0] : 'e';
 		LoginPacket.szLanguage[1] = szLocale && szLocale[1] ? szLocale[1] : 's';
 		LoginPacket.szLanguage[2] = '\0';
+
+		// F2b: AUTH-only extension — client version + 16-byte machine id.
+		// The Rust auth requires these 20 bytes (version gate); the legacy
+		// C++ auth fallback simply will not serve this client (accepted).
+		LoginPacket.dwVersion = (DWORD)METIN2_GET_VERSION();
+		GetMachineHwid(LoginPacket.hwid);
 
 		if (!Send(sizeof(LoginPacket), &LoginPacket))
 		{

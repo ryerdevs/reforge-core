@@ -113,6 +113,20 @@ impl std::error::Error for FramingError {
     }
 }
 
+/// Rango de tamaños del paquete para un header: `(mín, máx)`.
+///
+/// F2b: el LOGIN3 del auth es de tamaño VARIABLE — 68 B base, 72 con
+/// `version[4]`, 88 con `version[4]+hwid[16]` (el cliente los manda en un solo
+/// write y espera la respuesta). El framer entrega el paquete completo cuando
+/// el buffer tiene ≥ mín y recorta a máx (los bytes extra — imposibles en el
+/// flujo auth — quedarían bufferizados). El canal sigue fijo en 65 B.
+pub fn packet_range(role: ConnectionRole, header: u8) -> Option<(usize, usize)> {
+    if header == header::CG_LOGIN3 && role == ConnectionRole::Auth {
+        return Some((TPacketCGLogin3::SIZE_AUTH, TPacketCGLogin3::SIZE_AUTH_FULL));
+    }
+    packet_size(role, header).map(|n| (n, n))
+}
+
 /// Fragmenta el flujo cliente→servidor en paquetes completos `Vec<u8>`.
 ///
 /// Estado: buffer interno de bytes pendientes + rol de la conexión. Maneja
@@ -180,13 +194,17 @@ impl Framer {
             return Ok(None);
         }
         let hdr = self.buf[0];
-        let Some(size) = packet_size(self.role, hdr) else {
+        let Some((min, max)) = packet_range(self.role, hdr) else {
             return Err(FramingError::UnknownHeader { header: hdr });
         };
-        if self.buf.len() < size {
+        if self.buf.len() < min {
             return Ok(None);
         }
-        Ok(Some(self.buf.drain(..size).collect()))
+        // F2b: tamaño variable (LOGIN3 auth 68..88) — se entrega todo lo que
+        // haya (hasta máx); los fijos (min == max) conservan el comportamiento
+        // histórico.
+        let n = self.buf.len().min(max);
+        Ok(Some(self.buf.drain(..n).collect()))
     }
 }
 
@@ -249,6 +267,42 @@ mod tests {
     // ------------------------------------------------------------------
     // F1.3: fragmentación y concatenación
     // ------------------------------------------------------------------
+
+    /// F2b: el LOGIN3 del auth es de tamaño variable (68/72/88 B) — el framer
+    /// entrega el paquete completo con el tamaño que el cliente mandó; el
+    /// canal sigue fijo en 65 B.
+    #[test]
+    fn auth_login3_variable_size_68_72_88() {
+        let base = TPacketCGLogin3::new_auth("test", "1234", [1, 2, 3, 4], "es");
+        let hwid = [0x22u8; 16];
+        // 68 B (cliente actual).
+        let p68 = base.to_bytes_auth();
+        let out = Framer::new(ConnectionRole::Auth).push(&p68).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].len(), 68);
+        // 72 B (con version).
+        let p72 = base.to_bytes_auth_with(Some(40999), None);
+        let out = Framer::new(ConnectionRole::Auth).push(&p72).unwrap();
+        assert_eq!(out[0].len(), 72);
+        // 88 B (version + hwid) — entregado ENTERO.
+        let p88 = base.to_bytes_auth_with(Some(40999), Some(hwid));
+        assert_eq!(p88.len(), 88);
+        let mut f = Framer::new(ConnectionRole::Auth);
+        let out = f.push(&p88).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0], p88, "88 B se entregan enteros");
+        assert_eq!(f.buffered(), 0);
+        // Fragmentado en dos pushes (40 + 48) → completo al segundo.
+        let mut f = Framer::new(ConnectionRole::Auth);
+        assert!(f.push(&p88[..40]).unwrap().is_empty(), "< 68 B → incompleto");
+        let out = f.push(&p88[40..]).unwrap();
+        assert_eq!(out[0], p88);
+        // El canal sigue fijo en 65 B.
+        let p65 = TPacketCGLogin3::new_channel("test", "1234", [1, 2, 3, 4]).to_bytes_channel();
+        assert_eq!(packet_range(ConnectionRole::Channel, header::CG_LOGIN3), Some((65, 65)));
+        let out = Framer::new(ConnectionRole::Channel).push(&p65).unwrap();
+        assert_eq!(out[0].len(), 65);
+    }
 
     #[test]
     fn fragment_byte_by_byte() {

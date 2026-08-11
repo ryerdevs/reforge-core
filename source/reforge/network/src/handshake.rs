@@ -335,7 +335,7 @@ fn generate_nonce() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use protocol::TPacketCGLogin3;
+    use protocol::TPacketCGLogin;
     use tokio::io::{duplex, AsyncReadExt, AsyncWriteExt, DuplexStream};
 
     use crate::ConnectionRole;
@@ -566,9 +566,13 @@ mod tests {
 
         let hs = recv_handshake(&mut client_side).await;
 
-        // un LOGIN3 antes de tiempo (rol auth → 68 B, paquete completo)
-        let login3 = TPacketCGLogin3::new_auth("test", "1234", [1, 2, 3, 4], "es").to_bytes_auth();
-        client_side.write_all(&login3).await.unwrap();
+        // un paquete conocido fuera de orden (parity input.cpp:625-626) — un
+        // CG_LOGIN (49 B, tamaño fijo): el LOGIN3 del auth es de tamaño
+        // variable (68..88, F2b) y su fusión con el eco siguiente no es
+        // distinguible por el framer — el cliente real nunca lo manda durante
+        // el handshake (lo manda tras recibir PHASE_AUTH).
+        let login = TPacketCGLogin::new("test", "1234").to_bytes();
+        client_side.write_all(&login).await.unwrap();
 
         // el eco correcto después sí se procesa
         let client_time = hs.dw_time - 10;

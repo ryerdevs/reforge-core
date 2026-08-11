@@ -7,8 +7,9 @@
 
 ## Current state (2026-08-10)
 
+- **G-PG CUTOVER COMPLETE + F1.6 VERIFIED (2026-08-10, loop):** ADR-0005 Accepted (gate 4/4); PostgreSQL 18.4 (PGDG) on WSL Debian-M2 — db `metin2`, schemas account/player/common/log; phase-1 subset migrated (30 tables + 26 log DDL + `account.mysql_hash_password` pgcrypto, parity_check 30/30); `mysql_proxy` adapter (`source/reforge/mysql_proxy`, wire v10 + translate + session, 53 tests — 4 gate bugs fixed) — **the C++ baseline boots and serves the REAL client on PostgreSQL: `test`/`1234` → character select, `LoginSuccess` 21:39:34, boot parity A/B green vs the MariaDB baseline; MariaDB frozen as migration source (srv1 runtime now on PG via the proxy, conf variants `*_pg`)**. F1.6 transport verified (`f16_peer` ↔ live auth, no floods). **F2a UNBLOCKED** (first slice: auth over PG; pending there: sqlx/PgPool decision, crate gaps 22P02/42703/22021).
 - **C++ baseline verified:** full login working (auth + channel + character select) with the real client. Account `test` / `1234`.
-- **RUST REWRITE STARTED (2026-08-10):** ADR-0003 + ADR-0004 + flat workspace `source/reforge` — `protocol` (F0: byte-exact wire, 30/30), `network` (F1: tokio + framer + handshake, 23/23), `database` (F3), `realm` (F4+) + single binary `server_realms` with `auth|channel` roles by config (3/3). **56/56 tests.** Key finding: spec §3 sizes for `TSimplePlayer` (71B packed, not 76B natural) and `TPacketGCLoginSuccess` (449B, not 474B) corrected with dual-toolchain evidence; errata in spec §7. Adversarial review (oracle): no critical findings. Legacy runtime: `source/deploy` (unchanged). Binary configs: **TOML** (decision 2026-08-10). Pending: F1.6 integration milestone (needs WSL), PanamaPack 151 + hybrid-crypt 152/153 isolated in `protocol::legacy` at F2 (ADR-0006), real capture harness (WSL).
+- **RUST REWRITE STARTED (2026-08-10):** ADR-0003 + ADR-0004 + flat workspace `source/reforge` — `protocol` (F0: byte-exact wire, 30/30), `network` (F1: tokio + framer + handshake, 23/23), `database` (F3), `realm` (F4+) + single binary `server_realms` with `auth|channel` roles by config (3/3). **56/56 tests.** Key finding: spec §3 sizes for `TSimplePlayer` (71B packed, not 76B natural) and `TPacketGCLoginSuccess` (449B, not 474B) corrected with dual-toolchain evidence; errata in spec §7. Adversarial review (oracle): no critical findings. Legacy runtime: `source/deploy` (unchanged). Binary configs: **TOML** (decision 2026-08-10). Pending: PanamaPack 151 + hybrid-crypt 152/153 isolated in `protocol::legacy` at F2 (ADR-0006), real capture harness (WSL), crate gaps 22P02/42703/22021 + sqlx/PgPool decision (F2a).
 - **PLAN REORDER (2026-08-10):** **G-PG (PostgreSQL cutover) comes before F2** — **one canonical PostgreSQL** (no dual-store; MariaDB used only as migration/export source; the C++ baseline operates on the same PG through the temporary adapter); F2 is split into **F2a** (server-side auth) / **F2b** (client batch 1) and is **blocked until the PostgreSQL cutover + ADR-0005**; compatibility packets (PanamaPack 151/289B, hybrid-crypt 152/153) are **isolated in `protocol::legacy`** (ADR-0006) and deleted at the new client; **no partial Rust embedded in the legacy client during F0–F6** (ADR-0007, accepted — the already-agreed boundary); dependency deferrals documented (clap/config-rs → F2, sqlx → G-PG/F3, bevy_ecs → F4).
 - **WORLD-ENTRY CRASH — CLOSED (2026-08-09):** root cause in the client — heap over-read in `string_replace_word` (PythonSkill.cpp:62). 2-line fix deployed (`metin2client.exe` 5,115,904 B, 14:12, hash C7EAD7CC) + garbage coordinates fixed (`UPDATE player SET x=969600, y=278400`). **Closed by field test 2/2 (2026-08-09):** two consecutive world entries with the recovered characters. Details in AGENTS.md and CHANGELOG.
 - **Language System 1.2.6:** integrated and loading (16 languages, 764–775 entries each). Server-side text gaps A+B+C and the 181 missing keys — **superseded by the new design** (server→client texts by manifest, plan §5.6).
@@ -49,14 +50,14 @@ Goal: Rust workspace skeleton + architecture decisions closed by ADR + protocol 
 - [ ] ADR: quest engine (own DSL, no scripting)
 - [ ] ADR: anti-hack model (server-authoritative + envelope + transactions)
 - [ ] ADR: regional channels (central DB + one process per region; anti-double-login with row locks)
-- [ ] ADR: data layer (local WAL + mutation_id + RLS + failover; durable/volatile contract)
+- [x] ADR: data layer (local WAL + mutation_id + RLS + failover; durable/volatile contract) — **ADR-0008 Accepted 2026-08-11** (tokio-postgres decided; WAL/RLS/failover deferred with phases)
 - [ ] ADR: server→client data (versioned manifest + delta + hot reload)
 - [x] **Cargo workspace in `source/reforge`** (2026-08-10, flat layout — ADR-0004): crates `protocol`, `network`, `database`, `realm` + binary `server_realms` (role `auth|channel` by config) — edition 2024, resolver 3, `[workspace.dependencies]`, lints, rust-toolchain 1.97.0, `**/target/` ignored. `cargo build` OK (56/56 tests)
 - [x] **Crate `protocol` implemented (2026-08-10)**: 17 packets of the login flow (spec §3) + TSimplePlayer 71B packed — zero-deps, manual LE, panic-free parsing. **30/30 tests** (golden byte vectors + roundtrips + sizes + bad-lengths). Adversarial review (oracle): no critical findings. **F0 milestone (LOGIN3 byte-exact) MET at crate level** — only the real capture harness is missing
-- [ ] Verification harness: real packet capture (tcpdump/Wireshark against the C++ server) as golden tests — **pending: requires the C++ server up in WSL** (next session)
+- [x] Verification harness: real packet capture (tcpdump/Wireshark against the C++ server) as golden tests — **MET 2026-08-11: `scripts/gpg/capture_auth.sh` + `extract_pcap_login3.py` → golden fixture `protocol/tests/golden/auth_login3_40999.bin` (88B, md5 6a93aa8f) + `golden_auth.rs` — the real captured LOGIN3 parses and re-serializes byte-for-byte identical**
 - [ ] **GitHub repository**: sources only (~150–200 MB); binaries/packs/backups to Releases or external storage; `.gitignore` for build artifacts, installed clients, graphify-out, .opencode
 
-**F0 milestone:** one real captured LOGIN3 parses and re-serializes byte-for-byte identical.
+**F0 milestone:** one real captured LOGIN3 parses and re-serializes byte-for-byte identical. — **MET 2026-08-11 (golden capture, 88B auth LOGIN3 with version+hwid).**
 
 ### Phase 1 — Network and transport (IN PROGRESS 2026-08-10)
 
@@ -69,7 +70,7 @@ Goal: replace `libthecore` + fdwatch with tokio, with behavior parity.
 - [x] **F1.3 — Framing** (BYTE header + fixed-size payload, no length prefix — spec §2): client→server size table (0xff=13, 0xfe=1, 1=49, 4=34, 5=10, 6=2, 109=52, 111=65 channel/68 auth by role, 0xfc=13, **+ CG_ENTERGAME 10=1 and CG_STATE_CHECKER 206=1 added 2026-08-10 after adversarial review — F2/F4 need them**); server→client = sizes of the `protocol` crate structs. Handles split packets and multiple packets per read. ACCEPTANCE: framing tests with fragmented and concatenated packets; **unknown header → clean connection close** (parity `input.cpp:77-84`; documented deliberate divergence: 0x00 is consumed as no-op by C++, closed by the framer). ✓ 2026-08-10 (11/11 table verified against packet_info.cpp)
 - [x] **F1.4 — Keepalive filtering** (spec §7 errata): `CG_TIME_SYNC` (0xfc) and `CG_PONG` (0xfe) do not break flow parsing. ACCEPTANCE: test with real sequence handshake → time sync → pong → login3 parses correctly (the original criterion's GC_PHASE C→S was corrected: 0xfd is strictly S→C, verified in packet.h + CPacketInfoCG; deviation justified by the implementer and validated adversarially). ✓ 2026-08-10
 - [x] **F1.5 — Handshake** with clock-bias retries (~40–80ms, limit 32): the server sends `GC_PHASE` + `GC_HANDSHAKE`, validates the `CG_HANDSHAKE` echo and moves to the next phase (not removed: it runs once at login, zero benefit, high risk). ACCEPTANCE: correct handshake test + timeout/retry. ✓ 2026-08-10 (`network/src/handshake.rs`: nonce u32 never 0, symmetric bias ±80ms, 500ms/intent timeout, 50ms breather, keepalive 0xfc/0xfe filtering + out-of-order discard — parity input.cpp:625-626; 11 new tests → network 23/23; adversarial review: READY for F2; known debt in CHANGELOG: retry-on-wrong-nonce rationale, delta≈0 with legacy client, partial-echo test pending)
-- [ ] **F1.6 — Integration milestone**: the C++ auth binary connects to a Rust peer and vice versa without timeouts or WRITE floods. REQUIRES: WSL with the C++ server up (environment) — if unavailable in the session, it is documented as deferred, not done.
+- [x] **F1.6 — Integration milestone**: the C++ auth binary connects to a Rust peer and vice versa without timeouts or WRITE floods. REQUIRES: WSL with the C++ server up (environment) — if unavailable in the session, it is documented as deferred, not done. **VERIFIED 2026-08-10 (loop):** `network/examples/f16_peer` ↔ auth C++ live (`172.25.104.175:30001`) — `GC_PHASE` + `GC_HANDSHAKE` (clock-aligned echo, lDelta=0) → handshake completed, no timeouts, no WRITE floods; workspace 111/111.
 
 **F1 milestone:** the C++ auth binary connects to a Rust peer and vice versa, without timeouts or WRITE floods.
 
@@ -77,46 +78,48 @@ Goal: replace `libthecore` + fdwatch with tokio, with behavior parity.
 
 Goal: PostgreSQL 18 becomes **the single canonical store** (ADR-0001 target) before any auth code is written; a temporary legacy compatibility adapter lets the C++ baseline operate on the **same PostgreSQL** with the legacy client behavior unchanged (ADR-0005). MariaDB is used only as the migration/export source.
 
-- [ ] **ADR-0005 accepted** (Proposed → Accepted): PostgreSQL cutover + temporary legacy compatibility adapter; F2 gated by it
-- [ ] PostgreSQL 18 provisioned (schemas per domain, per-schema permissions, RLS)
-- [ ] Temporary legacy compatibility adapter: the C++ baseline (source untouched) operates on the **same PostgreSQL** through the adapter (its MySQL-speaking `libsql` is bridged by translation); legacy client behavior unchanged; removed at F6. MariaDB used only as migration/export source
-- [ ] Migration groundwork: MySQL → PostgreSQL schema mapping (types/defaults/`ENUM`/`SET`/`UNSIGNED` adaptation per ADR-0001), data comparison harness
+- [x] **ADR-0005 accepted (Accepted 2026-08-10; gate checklist 4/4; backlog B1-B8 all done)**** (Proposed → Accepted): PostgreSQL cutover + temporary legacy compatibility adapter; F2 gated by it
+- [x] PostgreSQL 18 provisioned (18.4 PGDG on Debian-M2 2026-08-10: db metin2, 4 schemas, role mt2; RLS deferred) (schemas per domain, per-schema permissions, RLS)
+- [x] Temporary legacy compatibility adapter (mysql_proxy - REAL client login on PG verified 2026-08-10): the C++ baseline (source untouched) operates on the **same PostgreSQL** through the adapter (its MySQL-speaking `libsql` is bridged by translation); legacy client behavior unchanged; removed at F6. MariaDB used only as migration/export source
+- [x] Migration groundwork (30 tables + 26 log DDL + account.mysql_hash_password fn; parity_check 30/30): MySQL → PostgreSQL schema mapping (types/defaults/`ENUM`/`SET`/`UNSIGNED` adaptation per ADR-0001), data comparison harness
 - [ ] Concrete PostgreSQL crate decision (sqlx/PgPool per ADR-0001 recommendation)
 
-**G-PG milestone:** the Rust auth (F2) persists against PostgreSQL 18 while the C++ baseline and the legacy client run unchanged.
+**G-PG milestone:** the Rust auth (F2) persists against PostgreSQL 18 while the C++ baseline and the legacy client run unchanged. — **C++/legacy-client half MET 2026-08-10 (real login on PG); Rust-auth persistence = F2a.**
 
-**Note: F2 is BLOCKED on this phase and on ADR-0005.**
+**Note: F2 is BLOCKED on this phase and on ADR-0005.** — **UNBLOCKED 2026-08-10: G-PG complete (B1–B8), ADR-0005 Accepted.**
 
-### Phase 2 — Auth + first client batch (BLOCKED on G-PG + ADR-0005)
+### Phase 2 — Auth + first client batch (UNBLOCKED 2026-08-10 — G-PG complete + ADR-0005 accepted)
 
 > **Gate:** F2 does not start until G-PG completes and ADR-0005 is accepted. Split per the 2026-08-10 plan reorder: **F2a** = server-side auth slice; **F2b** = client batch 1 (additive, ≤1 week each, ADR-0007).
 
-**F2a — server-side auth (Rust: `network::auth` module + `server_realms --role auth`):**
+**F2a — server-side auth (Rust: `server_realms --role auth`):**
 
-- [ ] Flow: `GC_PHASE` + `GC_HANDSHAKE` → `CG_HANDSHAKE` echo → `LOGIN3` (65 bytes: `0x6F` + name[31] + pwd[17] + keys[16])
-- [ ] Hash verification: **`mysql5_password` = `"*" + UPPER(SHA1(UNHEX(SHA1(pw))))`** — the asterisk is part of the format (fixes #5/#11); legacy-hash parity kept only for the compatibility window
-- [ ] `GC_AUTH_SUCCESS` (0x96 + key + result)
-- [ ] Serverside (no client change): validate `dwLoginKey` (LOGIN_BY_KEY) — no cleartext password on reconnects (tokenized sessions)
-- [ ] Global connection timeout in the auth (F1.5 debt: a silent connection lives up to 17.6s — CHANGELOG 2026-08-10 3rd part)
+> **IMPLEMENTED + VERIFIED (2026-08-10):** Rust auth serving REAL client logins on PostgreSQL (select screen reached — hybrid stack: Rust auth :30001, C++ channel :30003); 140/140 tests; tokio-postgres decided for F2a (documented in `auth.rs`); `GC_PHASE(PHASE_AUTH)` after the handshake echo (the client sends LOGIN3 only on it); `protocol::legacy` (ADR-0006 Accepted) 151-153 implemented (runtime-file conditional, parity with C++).
+
+- [x] Flow: `GC_PHASE` + `GC_HANDSHAKE` → `CG_HANDSHAKE` echo → `GC_PHASE(PHASE_AUTH)` → `LOGIN3` (68 bytes to auth: `0x6F` + name[31] + pwd[17] + keys[16] + lang[3])
+- [x] Hash verification: **`mysql5_password` = `"*" + UPPER(SHA1(UNHEX(SHA1(pw))))`** — the asterisk is part of the format (fixes #5/#11); legacy-hash parity kept only for the compatibility window
+- [x] `GC_AUTH_SUCCESS` (0x96 + key + result)
+- [ ] Serverside (no client change): validate `dwLoginKey` (LOGIN_BY_KEY) — no cleartext password on reconnects (tokenized sessions) — *skeleton `LoginKeyStore` done 2026-08-10; the real flow still re-sends the password (AGENTS.md §14)*
+- [x] Global connection timeout in the auth (F1.5 debt: a silent connection lives up to 17.6s — CHANGELOG 2026-08-10 3rd part) — *15s timeout implemented and observed firing in the hybrid test*
 
 **F2b — client batch 1 (additive C++ changes, ≤1 week each, ADR-0007):**
 
-- [ ] Version check on connect (clean reject; gates protocol evolution)
-- [ ] Hardware ID in LOGIN3 (hardware bans, anti-multibox)
-- [ ] Server time (timers consistent with the server clock)
+- [x] Version check on connect (clean reject; gates protocol evolution) — *2026-08-11: gate in the Rust auth (`expected_version=40999`); clean close on mismatch; verified with the new client + f16_peer (99999 → reject, 68B → compat)*
+- [x] Hardware ID in LOGIN3 (hardware bans, anti-multibox) — *2026-08-11: 88B auth LOGIN3 with MachineGuid hwid (Hwid.h); stored in `account.hwid` on PG; verified end-to-end*
+- [x] Server time (timers consistent with the server clock) — *verified already working (handshake `ELTimer_SetServerMSec` alignment + `GC_TIME` at world entry); no change needed — recon 2026-08-11*
 
 **Compatibility packets (isolated — ADR-0006):** PanamaPack (151, 289B) + hybrid-crypt (152/153) are implemented only inside `protocol::legacy` — never in the new wire core. Boundary documented in `docs/reference/protocol/legacy-compatibility.md`; the whole layer is deleted at the new client (F7).
 
-**F2 milestone:** login against the Rust auth on PostgreSQL (F2a) + the recompiled client passes the version check (F2b).
+**F2 milestone:** login against the Rust auth on PostgreSQL (F2a) + the recompiled client passes the version check (F2b). — **F2a half MET 2026-08-10** (real client login → select screen through the Rust auth on PostgreSQL); F2b (client version check) pending.
 
 ### Phase 3 — Data layer + data channel
 
 Goal: `database` crate organized by domains behind a backend trait + porting onto PostgreSQL (G-PG already done) + pull-based data packets in the client.
 
-- [ ] Crate `database` organized by domain modules: account/world/social/economy/log (separate PG schemas, per-schema permissions, RLS) — **PostgreSQL-only after G-PG** (no MariaDB backend; MariaDB is only the migration/export source)
-- [ ] Backend: `postgres` (sqlx candidate — concrete crate decided at G-PG/F3); no `direct-sql` backend
-- [ ] Port by QID: login → player load/save → items → social
-- [ ] Durable pipeline: **local WAL per region + `mutation_id` + batch ≤100ms + idempotent replay** (`ON CONFLICT DO NOTHING`)
+- [ ] Crate `database` organized by domain modules: account/world/social/economy/log (separate PG schemas, per-schema permissions, RLS) — **PostgreSQL-only after G-PG** (no MariaDB backend; MariaDB is only the migration/export source) — *started 2026-08-11: `account` domain (`AccountRepo::login`/`set_lang`/`set_hwid`, 7 unit + 2 gated integration tests 2/2 vs real PG); world/social/economy/log stubs; auth migration to the repo pending*
+- [x] Backend: `postgres` — **tokio-postgres 0.7 decided (ADR-0008, 2026-08-11)**: proven end-to-end here (auth serving real clients, proxy); 0 new deps; contract complete (transactions, LISTEN/NOTIFY, prepared). sqlx deferred to the WAL phase with measurements; pool later via deadpool-postgres without a driver change. No `direct-sql` backend.
+- [ ] Port by QID: login → player load/save → items → social — *login (account) + player load/save (world) ported 2026-08-11; items/social next*
+- [x] Durable pipeline: **local WAL per region + `mutation_id` + batch ≤100ms + idempotent replay** (`ON CONFLICT DO NOTHING`) — *2026-08-11: `database/src/wal.rs` (uuidv7 + Batcher ≤100ms one-tx + idempotent replay + audit same-tx; integration 2/2 vs real PG; DDL exported, not applied); realm wiring + local replay after crash pending*
 - [ ] SQL routing: `SQL_ACCOUNT` vs `SQL_PLAYER` (fix #8); `QUERY_LOGIN` 13 columns (fix #7) — ported semantics on PostgreSQL
 - [ ] Data comparison harness extended to all ported QIDs (groundwork from G-PG)
 - [ ] **Client: additive pull-based packets** (headers 162+: CG_QUERY/GC_RESPONSE; table registration + case in PhaseLogin) — the data channel §5.6

@@ -247,8 +247,9 @@ bool CPythonNetworkStream::SendLoginPacket(const char* c_szName, const char* c_s
 	for (DWORD i = 0; i < 4; ++i)
 		LoginPacket.adwClientKey[i] = g_adwEncryptKey[i];
 
-	// Channel LOGIN3 stays 65 bytes: szLanguage is AUTH-only (see TPacketCGLogin3)
-	if (!Send(sizeof(LoginPacket) - sizeof(LoginPacket.szLanguage), &LoginPacket))
+	// Channel LOGIN3 stays 65 bytes: szLanguage/dwVersion/hwid are AUTH-only
+	// (see TPacketCGLogin3) — 88 - 3 - 4 - 16 = 65
+	if (!Send(sizeof(LoginPacket) - sizeof(LoginPacket.szLanguage) - sizeof(LoginPacket.dwVersion) - sizeof(LoginPacket.hwid), &LoginPacket))
 	{
 		Tracen("SendLogin Error");
 		return false;
@@ -273,8 +274,9 @@ bool CPythonNetworkStream::SendLoginPacketNew(const char * c_szName, const char 
 	for (DWORD i = 0; i < 4; ++i)
 		LoginPacket.adwClientKey[i] = g_adwEncryptKey[i];
 
-	// Channel LOGIN3 stays 65 bytes: szLanguage is AUTH-only (see TPacketCGLogin3)
-	if (!Send(sizeof(LoginPacket) - sizeof(LoginPacket.szLanguage), &LoginPacket))
+	// Channel LOGIN3 stays 65 bytes: szLanguage/dwVersion/hwid are AUTH-only
+	// (see TPacketCGLogin3) — 88 - 3 - 4 - 16 = 65
+	if (!Send(sizeof(LoginPacket) - sizeof(LoginPacket.szLanguage) - sizeof(LoginPacket.dwVersion) - sizeof(LoginPacket.hwid), &LoginPacket))
 	{
 		Tracen("SendLogin Error");
 		return false;

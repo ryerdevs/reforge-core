@@ -10,6 +10,7 @@ Last verified: 2026-08-10
 > **Status: Draft v0.3 (canonical).** Consolidated design document for the Rust rewrite. Supersedes the Spanish drafts `2026-08-09-servidor-rust-plan-unico.md` (v0.2, see `../history/2026-08-09-server-rewrite-plan-v0.2.md`) and `2026-08-09-servidor-rust-draft-discusion.md` (v0.1, historical, see `../history/2026-08-09-server-rewrite-draft.md`).
 > **Purpose:** a single file with the full design for third-party review. Feedback: §13 «Open questions for reviewers».
 > **Update 2026-08-10:** incorporates the approved/recommended new order (canonical PostgreSQL, legacy compatibility adapter, G-PG gate, F2a/F2b split, `protocol::legacy`) — see §2 for the exact status of each item, and ADRs 0005–0007.
+> **Update (G-PG design lane, 2026-08-10):** ADR-0005 Accepted; the G-PG spec is closed in §8.2.1 (provision / migration / adapter / harness). Remaining work is the implementation backlog B1–B8 in ADR-0005.
 
 ## Document map
 
@@ -62,17 +63,17 @@ The following items were recommended in the 2026-08-10 review of the migration o
 
 | # | Item | Status | Source |
 |---|---|---|---|
-| 1 | **One canonical PostgreSQL database** for the Rust server (single operational store on the Rust side; no MySQL-backed Rust path) | **Approved** (direction); cutover timing **Proposed** | ADR-0001, ADR-0005 |
-| 2 | **Temporary legacy compatibility adapter**; no dual-store (a single canonical PostgreSQL; no second operational database); C++ baseline source untouched | **Proposed** (direction fixed by the user 2026-08-10) | ADR-0005 |
-| 3 | **Pre-F2 gate G-PG**: PostgreSQL 18 provisioned as the **single canonical store**; schema/data migration groundwork; the C++ baseline operates on the **same PostgreSQL** through the temporary adapter (MariaDB is used only as the migration/export source); verification that C++ login→world→combat still passes during the transition (behavior unchanged through the adapter + data-comparison harness) | **Proposed** (direction fixed by the user 2026-08-10) | ADR-0005 |
-| 4 | **F2 blocked** until G-PG and the ADR boundary (ADR-0005 accepted) are complete | **Proposed** | ADR-0005 |
-| 5 | **F2 split into F2a/F2b** (F2a = auth slice against PostgreSQL; F2b = first client batch) | **Proposed** | ADR-0005, §8.2 |
+| 1 | **One canonical PostgreSQL database** for the Rust server (single operational store on the Rust side; no MySQL-backed Rust path) | **Accepted** (ADR-0005, 2026-08-10) | ADR-0001, ADR-0005 |
+| 2 | **Temporary legacy compatibility adapter**; no dual-store (a single canonical PostgreSQL; no second operational database); C++ baseline source untouched | **Accepted** (ADR-0005, 2026-08-10; spec §8.2.1c) | ADR-0005 |
+| 3 | **Pre-F2 gate G-PG**: PostgreSQL 18 provisioned as the **single canonical store**; schema/data migration groundwork; the C++ baseline operates on the **same PostgreSQL** through the temporary adapter (MariaDB is used only as the migration/export source); verification that C++ login→world→combat still passes during the transition (behavior unchanged through the adapter + data-comparison harness) | **Accepted** (ADR-0005, 2026-08-10; spec closed in §8.2.1; implementation pending) | ADR-0005 |
+| 4 | **F2 blocked** until G-PG is implemented (ADR-0005 accepted; F2a unblocks when the backlog B1–B8 is green) | **Resolved** (2026-08-10) | ADR-0005 |
+| 5 | **F2 split into F2a/F2b** (F2a = auth slice against PostgreSQL; F2b = first client batch) | **Accepted** (ADR-0005, 2026-08-10) | ADR-0005, §8.2 |
 | 6 | **Legacy packets 151/152/153** (PanamaPack, hybrid-crypt) live in `protocol::legacy` and are **deletable** at the new client (F7) | **Proposed** | ADR-0006, `../reference/protocol/legacy-compatibility.md` |
 | 7 | **No Rust embedded inside the legacy client** during F0–F6; Slint standalone login/select later (F5), integrated into the new client (F7) | **Accepted** (for the already-agreed boundary) | ADR-0007 |
 | 8 | **Minimal dependency policy** — YAGNI; stdlib before dependencies | **Approved** (project principle) | AGENTS.md, §4, §7 |
 | 9 | **Defer until justified**: local WAL + `mutation_id` replay, RLS, Patroni failover, bevy_ecs, REST API/Docker | **Proposed** (target design kept in §5.5/§7, gated) | this plan |
 
-Note on item 1/3 wording: G-PG means **one canonical PostgreSQL** — the C++ baseline operates on the **same PostgreSQL** through a temporary compatibility adapter (its `libsql` layer speaks MySQL wire/SQL; the adapter bridges that), and MariaDB is used **only as the migration/export source** (initial data extraction), never as a second operational database. This direction was fixed by the user on 2026-08-10; ADR-0005 (Proposed) records it and the gate closes on its acceptance.
+Note on item 1/3 wording: G-PG means **one canonical PostgreSQL** — the C++ baseline operates on the **same PostgreSQL** through a temporary compatibility adapter (its `libsql` layer speaks MySQL wire/SQL; the adapter bridges that), and MariaDB is used **only as the migration/export source** (initial data extraction), never as a second operational database. This direction was fixed by the user on 2026-08-10 and is recorded in ADR-0005 (**Accepted**, 2026-08-10); the G-PG gate closes when the implementation backlog B1–B8 is green (§8.2.1).
 
 ## 3. Context: the legacy server and why rewrite it
 
@@ -239,12 +240,12 @@ database crate
 
 PG permissions per schema (log cannot write to economy — defense in depth). Contract: **in-memory world = live authority (zero SQL in the hot path); DB = persistence** — durable writes in transactional batches, reads only at boot/region change. All durable state (items, gold, quests, characters, guilds) is persistent by requirement.
 
-**Cutover and legacy compatibility adapter (G-PG, [Proposed] — ADR-0005):**
+**Cutover and legacy compatibility adapter (G-PG, Accepted — ADR-0005; closed spec in §8.2.1):**
 
 - **One canonical PostgreSQL 18**: the Rust server targets it from the start (no auth/data-layer work on a MySQL-backed Rust path); F2a/F2b assume PG underneath. There is **no dual-store**: MariaDB is used only as the migration/export source (initial data extraction), never as a second operational database.
 - The **C++ baseline source is not rewired** (frozen oracle; ADR-0003). To make it operate on the **same PostgreSQL**, a **temporary legacy compatibility adapter** bridges its MySQL-speaking `libsql` layer to PostgreSQL (wire/SQL translation). The adapter is temporary by contract — thin, explicit, removed at F6 (same rule as the ADR-0002 shim).
 - G-PG deliverables: schema/data migration groundwork (types, defaults, `ENUM`/`SET`/`UNSIGNED` adaptation per ADR-0001 negative consequences) + a **data-comparison harness**; verification that C++ login→world→combat is unchanged through the adapter.
-- F2 is **blocked** until G-PG completes and ADR-0005 is accepted (§8.2).
+- F2 is **blocked** until G-PG is implemented (§8.2.1; ADR-0005 backlog B1–B8).
 
 **Durable persistence pipeline (target design — deferred components marked):**
 
@@ -407,14 +408,64 @@ Vertical slices (client→auth→db→client) with the client frozen. The legacy
 |---|---|---|---|
 | **F0** Foundations | Cargo workspace, ADRs, byte-exact `protocol` crate (login flow), packet capture harness | One real captured LOGIN3 parses and re-serializes identically | **Done** (30/30; capture harness pending WSL) |
 | **F1** Network/transport | tokio listener with the verified semantics (`result > 0`/EAGAIN), framing, handshake with retries | C++ auth connects to a Rust peer and vice versa without floods | **Done through F1.5** (23/23); F1.6 integration milestone pending WSL |
-| **G-PG** (gate before F2) [Proposed, ADR-0005] | PostgreSQL 18 provisioned (schemas per domain); schema/data migration groundwork + comparison harness; legacy compatibility adapter working — C++ baseline and legacy client behavior unchanged (login→world→combat smoke test) | F2 unblock checklist: ADR-0005 accepted; PG provisioned; adapter verified; migration groundwork in place | **Blocked: pending ADR-0005 acceptance** |
-| **F2a** Auth slice [Proposed] | AUTH_SERVER role on PG: LOGIN3, hash `"*"+UPPER(SHA1(UNHEX(SHA1(pw))))`, GC_AUTH_SUCCESS, `dwLoginKey` validation, PanamaPack 151 + hybrid-crypt 152/153 in `protocol::legacy` (ADR-0006), connection timeout | Login against Rust auth on PG + C++ db; legacy client completes auth | **Blocked by G-PG + ADR-0005** |
-| **F2b** Client batch 1 [Proposed] | Additive client changes (≤1 week each): version check on connect, hardware ID in LOGIN3, server time | Recompiled client passes the version check | **Blocked by F2a** |
+| **G-PG** (gate before F2) [Accepted, ADR-0005] | PostgreSQL 18 provisioned (schemas per domain); schema/data migration groundwork + comparison harness; legacy compatibility adapter working — C++ baseline and legacy client behavior unchanged (login→world→combat smoke test) | F2 unblock checklist: ADR-0005 accepted ✓ (2026-08-10); PG provisioned; adapter verified; migration groundwork in place — implementation backlog B1–B8 (ADR-0005), spec §8.2.1 | **Spec closed; implementation pending** |
+| **F2a** Auth slice [Accepted, ADR-0005] | AUTH_SERVER role on PG: LOGIN3, hash `"*"+UPPER(SHA1(UNHEX(SHA1(pw))))`, GC_AUTH_SUCCESS, `dwLoginKey` validation, PanamaPack 151 + hybrid-crypt 152/153 in `protocol::legacy` (ADR-0006), connection timeout | Login against Rust auth on PG + C++ db; legacy client completes auth | **Blocked by G-PG implementation (B1–B8)** |
+| **F2b** Client batch 1 [Accepted, ADR-0005] | Additive client changes (≤1 week each): version check on connect, hardware ID in LOGIN3, server time | Recompiled client passes the version check | **Blocked by F2a** |
 | **F3** Data layer + data channel | `database` crate by domain on PG; port by QID; pull-based packets 162+ (CG_QUERY/GC_RESPONSE) | The C++ game runs against the Rust data layer without behavior change; the recompiled client receives additive data without desynchronizing | Planned |
 | **F4** World entry + names | CG_PLAYER_SELECT, spawn, map, stats; UTF-8 name overrides | The real client enters the world against the Rust core with correct names | Planned (requires domain-boundary ADR first, risk #2) |
 | **F5** Gameplay | Movement, combat, drops, items, NPCs, quests, chat, shops, trade, GM — by domains, side-by-side; channel list from auth; config via manifest; **Slint standalone** (Accepted, ADR-0007); scale benchmark (N bots × N regions); REST + Docker deferred until justified [Proposed] | Full session without divergences + benchmark passed | Planned |
 | **F6** Full parity | Automated side-by-side (same input → diff), instance-by-instance cutover; legacy compatibility adapter removed (ADR-0005); final data migration verified (backup/restore) | The Rust server replaces the C++ one without client changes | Planned |
 | **F7** Client (after) | Rust client (wgpu), Slint UI (the `.slint` from F5 integrate), new protocol, real encryption; **delete `protocol::legacy`** (151/152/153) [Proposed, ADR-0006] | — | Future |
+
+### Phase G-PG — PostgreSQL cutover
+
+> Spec closed 2026-08-10 (G-PG design lane; ADR-0005 Accepted). Implementation backlog: ADR-0005 (items B1–B8). Inventories: [`../reference/database/legacy-schema.md`](../reference/database/legacy-schema.md) (77 tables) and [`../reference/database/legacy-sql-compatibility.md`](../reference/database/legacy-sql-compatibility.md) (204 SQL sites; its §4 translation map is the adapter's unit-test table).
+
+#### a. Provision
+
+- **PostgreSQL 18 on Debian 12 bookworm (WSL Debian-M2) via PGDG** (`apt.postgresql.org`, `bookworm-pgdg`): repo line `deb [signed-by=/usr/share/keyrings/pgdg.gpg] http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main` (signing key `https://www.postgresql.org/media/keys/ACCC4CF8.asc`); packages `postgresql-18 postgresql-contrib-18` (pgcrypto ships in contrib).
+- **Contingency (repo unreachable): `postgresql-15` from Debian bookworm main** — same feature surface for everything used here (`search_path`, temp tables, `ON CONFLICT`, identity, `interval`, pgcrypto); no spec change.
+- Cluster `main` on `127.0.0.1:5432` (pg_hba scram for local); database `metin2`; schemas `account`, `player`, `common`, `log`; user `mt2` (owner of the four schemas, no SUPERUSER; password mt2, reused by the proxy). RLS stays deferred (§2.9 item 9) — per-schema permissions are the provisioned boundary.
+
+#### b. Migration (phase 1 = login subset)
+
+Scope = the tables the db boot + login path actually touch (verified 2026-08-10):
+
+- `account`: `account`
+- `player`: `player`, `player_index`, `item`, `quest`, `affect`, `safebox` (character load `ClientManagerPlayer.cpp:302-341`, `ClientManager.cpp:603`) + the PROTO_FROM_DB boot set: `mob_proto`, `item_proto` (`ClientManagerBoot.cpp:1290,1466`), `refine_proto` (121), `shop` + `shop_item` (248-254), `skill_proto` (476-482), `item_attr` / `item_attr_rare` (594-607, 719-732), `banword` (566), `land` (847-848), `object_proto` / `object` (950-951, 1021), `monarch` (boot join `Monarch.cpp:179`), `item` (id-range probes `ItemIDRangeManager.cpp:93,121`). `quest_item_proto` is **not** booted — the call is commented out (`ClientManagerBoot.cpp:438`).
+- `common`: `locale` (boot `ClientManager.cpp:3078`), `priv_settings` (`ClientManager.cpp:112-115`), `exp_table` / `spam_db` (game boot `config.cpp:1389`, `db.cpp:575-590`), `gmlist` / `gmhost` (GM lists at game connect `ClientManager.cpp:3480,3531`)
+- `log`: **all 26 tables, DDL only (empty)** — the game writes append-only logs during login (`loginlog2` `log.cpp:298-313`); empty-but-present tables are required so inserts never error
+- Not migrated: `hotbackup` and the `srv1_*` clones (dropped — `legacy-schema.md` §2)
+
+Type adaptation (`legacy-schema.md` §7): `int unsigned`→`bigint`, `smallint unsigned`→`integer`, `tinyint unsigned`→`smallint`, `bigint unsigned`→`numeric(20,0)`, display widths dropped; `enum`→`text`+CHECK and `set`→`text`+CHECK comma-joined (literals byte-identical, incl. `REMOVE_MEMEBER` §7.2); `datetime`→`timestamp` (no tz); `tinyint(1)`→`smallint` (never PG `boolean` — text-protocol parity); zero dates→NULL (OD-5); varbinary/CP949 columns (`item_proto.name`/`locale_name`, `mob_proto.locale_name`, `skill_proto.szName`)→`bytea`, bytes preserved exactly (AGENTS.md §17; `legacy-schema.md` §5 rules); `loginlog2.playtime`→`interval` (§7.3); `loginlog2.ip`/`hackshield_log.ip`→`bigint` (§9.9).
+
+Identity: `GENERATED BY DEFAULT AS IDENTITY` (BY DEFAULT, not ALWAYS - B5 finding 2026-08-10: the proxy rewrites MySQL `VALUES(0, ...)` to `DEFAULT`, but explicit non-zero ids from `ITEM_ID_RANGE` pass through; ALWAYS would reject them) + `setval` — `item` 50 000 006, `player` 4, `land` 293, `refine_proto` 760, `exp_table` 121, `account` 2 (§7.5); new item ids come from `ITEM_ID_RANGE` (conf.txt), independent of the identity.
+
+Logic re-implemented: `account.mysql_hash_password(text)` as a PG function with pgcrypto — `'*' || upper(encode(digest(decode(digest($1::bytea,'sha1'),'hex'),'sha1'),'hex'))` (`legacy-sql-compatibility.md` §6, OD-2); `MakeCharacter` trigger → CHECK `name ~ '^[A-Za-z0-9]+$'` (`legacy-schema.md` §7.4). Stored `account.password` values are copied verbatim — never rehashed.
+
+Export/import: `mysqldump --hex-blob --no-create-info --skip-triggers --skip-comments` per database (hex-blob protects the CP949 varbinary bytes) → `scripts/gpg/import_py.py` (hex→`\x`, zero dates→NULL, `setval` seeding) → `scripts/gpg/schema_gpg.sql` (hand-written phase-1 DDL from `legacy-schema.md` §4 + live `SHOW CREATE TABLE`; the DDL vendoring pending from `legacy-schema.md` §8 is done here for phase 1).
+
+Data parity: `scripts/gpg/parity_check.py` — per table, row count + md5 over the streamed sorted rows from both engines (bytea normalized to hex); non-zero exit on mismatch.
+
+#### c. Adapter (boundary)
+
+- **Form (OD-1 resolved): wire-level MySQL server protocol v10 proxy** — not a link shim: the C++ keeps linking `libmariadb` and connects to the proxy as if it were MySQL (`127.0.0.1:3307`). Zero C++ source change; runtime conf.txt only.
+- **Location:** `source/reforge/mysql_proxy` (workspace member, flat layout per ADR-0004; temporary — deleted at F6). Rust, tokio + **tokio-postgres** (decided here: async, 1:1 sessions, pure Rust; sqlx remains the F2a `database`-crate candidate — non-blocking for G-PG). No MySQL-wire dependency — the v10 codec is hand-written. Modules: `wire` (HandshakeV10, HandshakeResponse41, COM_QUERY/COM_QUIT/COM_PING, OK/ERR/EOF/result set), `translate` (SQL rewrite), `session` (PG session + slot mapping).
+- **Wire surface:** capabilities `CLIENT_PROTOCOL_41|PLUGIN_AUTH|SECURE_CONNECTION|CONNECT_WITH_DB|MULTI_STATEMENTS|TRANSACTIONS`; auth `mysql_native_password` (SHA1 scramble) validated against the proxy config (same user/password as conf.txt); no prepared statements (`CStmt` 0 call sites — `legacy-sql-compatibility.md` §2.1). Charset (`SET NAMES`, latin1/cp949) answered as pass-through — no transcoding anywhere (OD-6: PG db UTF8 + `bytea` for CP949 bytes).
+- **Session mapping:** 1 MySQL connection = 1 PG session; per-slot `search_path`: `SQL_ACCOUNT`→`account,player` (QUERY_LOGIN cross-schema `player.player_index` — `ClientManagerLogin.cpp:413`), `SQL_PLAYER`→`player`, `SQL_COMMON`→`common`, `SQL_LOG`→`log`; game `player_sql`→`player,account` (the auth queries `account` through its player slot — `input_auth.cpp:144-218`), `common_sql`→`common`, `log_sql`→`log`. Session init: `standard_conforming_strings=off` (MySQL backslash escaping parity) and `TimeZone` server-local (OD-7).
+- **SQL translation** (per COM_QUERY, mechanical; `legacy-sql-compatibility.md` §4 is the test table): backticks→double quotes; `+0` dropped; `NOW()`→`LOCALTIMESTAMP`; `UNIX_TIMESTAMP(x)`→`EXTRACT(EPOCH FROM x)`; `DATE_ADD(NOW(), INTERVAL n SECOND)`→`LOCALTIMESTAMP + make_interval(secs => n)`; `availDt - NOW() > 0`→`availDt > LOCALTIMESTAMP`; `REPLACE INTO`→`INSERT … ON CONFLICT (pk) DO UPDATE SET` (PK introspected from pg_catalog, cached per table); `INSERT … SET`→column-list form; `ON DUPLICATE KEY UPDATE`→`ON CONFLICT (id) DO UPDATE` (bare names = existing row = MySQL semantics); `SET sql_mode = ''`→no-op; `@var`→per-session temp table `pg_temp.m2var_<name>` (OD-4; the only pair is two separate queries — `log.cpp:309-313`); `inet_aton(x)`→`x::inet - '0.0.0.0'::inet`; `TIMEDIFF(a,b)`→`(a - b)`; `FROM_UNIXTIME(n)`→`to_timestamp(n)`; `CAST(x AS unsigned)`→`x::bigint`; `collate sjis_japanese_ci`→dropped; `UPDATE … LIMIT 1`→LIMIT dropped (PK-unique WHERE); `mysql_hash_password(...)` passes through (function in the `account` schema). One result set per COM_QUERY (no multi-statement strings exist).
+- **Result contract** (`SQLMsg::Store`, `AsyncSQL.h:59-80`): uiNumRows = row count; uiAffectedRows = PG command-tag count (OD-8 decided: matched-rows; phase-1 consumers verified not to branch on changed-vs-matched); uiInsertID = `lastval()` after INSERT (error→0; item inserts carry explicit `ITEM_ID_RANGE` ids → 0, matching MySQL). Column metadata from PG OIDs: `bytea`→`MYSQL_TYPE_BLOB` with raw bytes (decode `\x` hex) — the Lua BLOB path (`questlua_global.cpp:1616-1624`) and the escaped-binary path (`ClientManagerPlayer.cpp:171-175`) depend on it; `IS_NUM` on numeric OIDs; `NOT_NULL_FLAG` from nullability; NULL = 0xfb.
+- **Runtime change (only):** `db/conf.txt` `SQL_PLAYER/SQL_ACCOUNT/SQL_COMMON/SQL_LOG 127.0.0.1 <db> mt2 mt2 3307` (line format `Main.cpp:244-354`) and game conf `player_sql`/`common_sql`/`log_sql` (format `config.cpp:368-437`). MariaDB stays on 3306 untouched during the transition. Proxy config: TOML (ADR-0004) — listen, PG connect string, slot→search_path map, expected MySQL credentials.
+
+> **Implementation notes (B5, 2026-08-10):** (1) column metadata resolved bytea-by-name via `pg_catalog` (simple query protocol exposes only names; covers `item_proto.name/locale_name`, `mob_proto.locale_name`, `skill_proto.szName`, `player.skill_level/quickslot`); everything else reported as VAR_STRING; `NOT_NULL_FLAG=0` (Lua bridge keeps working). (2) MySQL `INSERT ... VALUES(0, ...)` (generated id) → `DEFAULT` + hint `Generated` (`ClientManagerPlayer.cpp:863`); explicit non-zero ids → `Explicit` (item awards, `ClientManager.cpp:922-925`). (3) `item.window` ENUM index → literal (`Cache.cpp:56` writes 1..7). (4) PG errors mapped SQLSTATE→MySQL errno (42P01→1146, 42703→1054, 23505→1062); COM_QUERY non-UTF8 → ERR 1105 (never corruption; phase-1 traffic is ASCII). (5) **bytea literals → `decode('<hex>', 'hex')`** (2026-08-10, fixes 22021): MySQL `mysql_real_escape_string` blobs arrive as `\0` sequences; with `standard_conforming_strings=off` PG turns them into NUL bytes inside text literals → 22021. bytea columns in INSERT VALUES and UPDATE SET are re-emitted as hex-only text via `decode()`. (The `'\x...'` bytea literal form was rejected: with SCS=off PG would process the `\x` before bytea input — ambiguous double interpretation.)
+
+#### d. Harness (parity)
+
+- `scripts/gpg/parity_boot.sh`: (1) baseline — `start_m2_min.sh` on MariaDB, snapshot `db|auth|core` syslogs; (2) PG run — same with conf pointed at the proxy, snapshot; (3) compare — no NEW `SYSERR` lines, boot table lines equal (REFINE/SHOP/MOB/ITEM/GM — `sys_log(0)` lines); (4) assert `LoginSuccess` for account `test` in core1 syslog after a real client login `test`/`1234` (AGENTS.md runbook).
+- `scripts/gpg/parity_check.py`: migration verification — counts + md5 per phase-1 table (MariaDB vs PG).
+- **Exit criteria (gate close):** parity_boot.sh green on the PG run (0 SYSERR diff + `LoginSuccess`) AND parity_check.py green (all phase-1 tables equal). Then F2a unblocks.
+
+> **Gate status (2026-08-10, loop):** B1–B8 complete. parity_boot A/B green on the PG run (0 SYSERR nuevos, boot table lines identical); REAL client login `test`/`1234` on PostgreSQL through the adapter — `LoginSuccess` 21:39:34 (core1 syslog), proxy log shows the translated QUERY_LOGIN (`mysql_hash_password(...)`, `LOCALTIMESTAMP`/`EXTRACT(EPOCH ...)`) and the character-select reads (`FROM player WHERE account_id=1` → 3 rows, from PG). MariaDB frozen as migration source; srv1 runtime operates on PG via the proxy (conf variants `*_pg`; revert = `cp *_mariadb` over the active files). F2a UNBLOCKED. Residual: parity_check excludes volatile `account.last_play` (live-login write); crate gaps 22P02/42703/22021 queued at F2a.
 
 ### 8.3 Feature set
 
@@ -439,7 +490,7 @@ Vertical slices (client→auth→db→client) with the client frozen. The legacy
 | 4 | Infinite monolith scope | Agreed feature set (core first, events deferred) |
 | 5 | Fragile/manual verification (4GB/WSL unstable environment) | Scripted verification from F0 (smoke test login→world→combat); cross-region deferred |
 | 6 | Cross-channel coordination in PG (latency vs cache) | Explicit contracts + benchmark before porting GuildManager/LoginData |
-| 7 | G-PG cutover risk (schema mapping, adapter bugs) [Proposed] | Data-comparison harness; adapter temporary by contract; C++ baseline **source** untouched — it operates on PostgreSQL only through the adapter (ADR-0005) |
+| 7 | G-PG cutover risk (schema mapping, adapter bugs) | Data-comparison harness; adapter temporary by contract; C++ baseline **source** untouched — it operates on PostgreSQL only through the adapter (ADR-0005, Accepted; spec §8.2.1) |
 
 ## 11. Decisions taken
 
@@ -451,7 +502,7 @@ Vertical slices (client→auth→db→client) with the client frozen. The legacy
 | 0002 | Unify `game` + `db` into one process per region | Accepted |
 | 0003 | Rust workspace in `source/reforge` | Accepted (partially superseded by 0004) |
 | 0004 | Flat workspace: `protocol`, `network`, `database`, `realm`, `server_realms`; config TOML | Accepted |
-| 0005 | PostgreSQL cutover (G-PG) + temporary legacy compatibility adapter (single canonical PG; C++ operates on it through the adapter); F2 gated | **Proposed** |
+| 0005 | PostgreSQL cutover (G-PG) + temporary legacy compatibility adapter (single canonical PG; C++ operates on it through the adapter); F2 gated | **Accepted** |
 | 0006 | Legacy wire/pack compatibility boundary (`protocol::legacy`, deletion at F7) | **Proposed** |
 | 0007 | No partial Rust embedded in the legacy client (F0–F6) | Accepted |
 
@@ -492,7 +543,7 @@ Summary of the decisions:
 7. **Audit §3.3**: is any legacy decision missing from the P0/P1/P2 table?
 8. **Adoption**: is MPL-2.0 the right license? Web API + metrics + Docker from F5 or after the cutover?
 9. **Regional channels (§5.4)**: is «central DB + process per region, change region = logout→login» correct? Is a shared living world like EVE definitively out by design?
-10. **Persistence (§5.5)**: is the transactional batch ≤100ms pipeline correct? Is the deferral of WAL/RLS/Patroni acceptable until justified? [Proposed items need confirmation — ADR-0005]
+10. **Persistence (§5.5)**: is the transactional batch ≤100ms pipeline correct? Is the deferral of WAL/RLS/Patroni acceptable until justified? [Deferrals confirmed with ADR-0005 acceptance, 2026-08-10 — §2.9 item 9]
 11. **Server→client data (§5.6)**: is the versioned manifest + delta the right mechanism? Are the 2 additive client packets acceptable before F7?
 12. **What I do not see**: what are we missing?
 
