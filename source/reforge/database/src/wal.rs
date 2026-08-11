@@ -76,6 +76,9 @@ pub enum Param {
     Text(String),
     Int(i64),
     Bytes(Vec<u8>),
+    /// SQL NULL (necesario en el write path: `player.skill_level`/`quickslot`
+    /// son bytea nullable y el save del C++ puede escribir NULL).
+    Null,
 }
 
 impl ToSql for Param {
@@ -86,8 +89,27 @@ impl ToSql for Param {
     ) -> Result<IsNull, Box<dyn Error + Sync + Send>> {
         match self {
             Param::Text(s) => s.to_sql(ty, out),
-            Param::Int(i) => i.to_sql(ty, out),
+            // OJO: i64 solo implementa ToSql para INT8 en postgres-types 0.2
+            // (`simple_to!(i64, int8_to_sql, INT8)`) — enviar 8 bytes a una
+            // columna int2/int4 da 22P03 en el server. Aqui codificamos por
+            // el tipo destino (parity de las columnas mixtas del save).
+            Param::Int(i) => match *ty {
+                Type::INT2 => {
+                    out.extend_from_slice(&(*i as i16).to_be_bytes());
+                    Ok(IsNull::No)
+                }
+                Type::INT4 => {
+                    out.extend_from_slice(&(*i as i32).to_be_bytes());
+                    Ok(IsNull::No)
+                }
+                Type::INT8 => {
+                    out.extend_from_slice(&i.to_be_bytes());
+                    Ok(IsNull::No)
+                }
+                _ => i.to_sql(ty, out),
+            },
             Param::Bytes(b) => b.to_sql(ty, out),
+            Param::Null => Ok(IsNull::Yes),
         }
     }
 
@@ -96,11 +118,18 @@ impl ToSql for Param {
         ty: &Type,
         out: &mut BytesMut,
     ) -> Result<IsNull, Box<dyn Error + Sync + Send>> {
-        self.to_sql(ty, out)
+        match self {
+            Param::Null => Ok(IsNull::Yes),
+            _ => self.to_sql(ty, out),
+        }
     }
 
     fn accepts(ty: &Type) -> bool {
-        String::accepts(ty) || i64::accepts(ty) || Vec::<u8>::accepts(ty)
+        String::accepts(ty)
+            || i64::accepts(ty)
+            || i32::accepts(ty)
+            || i16::accepts(ty)
+            || Vec::<u8>::accepts(ty)
     }
 }
 
@@ -114,6 +143,7 @@ impl fmt::Display for Param {
             ),
             Param::Int(i) => write!(f, "{i}"),
             Param::Bytes(b) => write!(f, "\"\\x{}\"", b.iter().map(|x| format!("{x:02x}")).collect::<String>()),
+            Param::Null => write!(f, "null"),
         }
     }
 }
@@ -244,7 +274,15 @@ impl MutationSink for PgMutationSink {
                     m.params.iter().map(|p| p as &(dyn ToSql + Sync)).collect();
                 tx.execute(&m.sql, &params)
                     .await
-                    .map_err(|e| format!("mutation {}: {e}", uuidv7_string(&m.id)))?;
+                    .map_err(|e| {
+                        // Display corto ("db error") — el mensaje real del
+                        // servidor vive en el DbError (mismo patron del audit).
+                        let detail = e
+                            .as_db_error()
+                            .map(|d| d.message().to_string())
+                            .unwrap_or_default();
+                        format!("mutation {}: {e} ({detail})", uuidv7_string(&m.id))
+                    })?;
                 // Audit en la MISMA tx; replay idempotente: si el mutation_id
                 // ya esta (re-aplicacion), el insert no hace nada.
                 // $1 viaja como uuid nativo (feature with-uuid-1); $2 es text
@@ -385,6 +423,42 @@ mod tests {
         assert!(p.ends_with('}'));
         // El id del payload == el id de la mutation (misma string).
         assert!(p.contains(&uuidv7_string(&m.id)), "mutation_id en payload");
+    }
+
+    #[test]
+    fn param_null_roundtrip() {
+        // Display -> "null" (json valido); to_sql_checked -> IsNull::Yes.
+        let m = Mutation::new(
+            "INSERT INTO t (a, b) VALUES ($1, $2)",
+            vec![Param::Null, Param::Bytes(vec![0x01, 0x00])],
+        );
+        assert!(m.payload_json().contains("null"), "payload: {}", m.payload_json());
+        let mut out = BytesMut::new();
+        assert!(matches!(
+            Param::Null.to_sql_checked(&Type::INT4, &mut out).expect("to_sql"),
+            IsNull::Yes
+        ));
+        assert!(out.is_empty(), "NULL no escribe bytes");
+    }
+
+    /// Param::Int codifica por el tipo destino: int2 (2 bytes), int4 (4),
+    /// int8 (8) — el fix del 22P03 (i64 solo ToSql para INT8 en postgres-types
+    /// 0.2; las columnas del save son smallint/integer/bigint mezcladas).
+    #[test]
+    fn param_int_encodes_by_target_type() {
+        let mut out = BytesMut::new();
+        Param::Int(5).to_sql(&Type::INT2, &mut out).expect("int2");
+        assert_eq!(&out[..], &[0x00, 0x05], "int2 2 bytes");
+        let mut out = BytesMut::new();
+        Param::Int(5).to_sql(&Type::INT4, &mut out).expect("int4");
+        assert_eq!(&out[..], &[0x00, 0x00, 0x00, 0x05], "int4 4 bytes");
+        let mut out = BytesMut::new();
+        Param::Int(5).to_sql(&Type::INT8, &mut out).expect("int8");
+        assert_eq!(&out[..], &[0, 0, 0, 0, 0, 0, 0, 5], "int8 8 bytes");
+        // Negativos (i16/i32 truncado) preservan el signo.
+        let mut out = BytesMut::new();
+        Param::Int(-1).to_sql(&Type::INT2, &mut out).expect("int2 neg");
+        assert_eq!(&out[..], &[0xff, 0xff], "int2 -1");
     }
 
     // ------------------------------------------------------------------ batcher

@@ -9,24 +9,26 @@
 //! - Pipeline durable/volatile: durable = batch transaccional <=100ms;
 //!   WAL local + mutation_id + replay idempotente diferidos a F3 phase 2.
 //!
-//! Dominios: `account` implementado (primer slice); world/social/economy/log
-//! declarados como stubs doc hasta sus fases (F4/F5).
+//! Dominios: `account` y `world` (player/quest/affect/safebox/item +
+//! item_award) implementados; social (messenger) y economy/log declarados
+//! como stubs doc hasta sus fases (F4/F5).
 
 pub mod account;
+pub mod affect;
+pub mod item;
+pub mod messenger;
 pub mod player;
+pub mod quest;
+pub mod safebox;
 pub mod sha1;
 pub mod wal;
 
-/// F3/F4 (diferido): repositorios del dominio world — personajes, items,
-/// quests, mascotas (schema `player`). Contrato pendiente de la fase world.
-pub mod world {}
-
-/// F4 (diferido): repositorios del dominio social — guildas, grupos,
-/// messenger (schema `social`).
+/// F3/F4 (diferido): resto del dominio social — guildas, grupos (schema
+/// `social`). `messenger` ya esta implementado como modulo propio (F3).
 pub mod social {}
 
 /// F4/F5 (diferido): repositorios del dominio economy — subasta, dinero,
-/// historial de comercio (schema `economy`).
+/// historial de comercio (schema `economy`). `safebox` (F3) vive en `player`.
 pub mod economy {}
 
 /// F3 phase 2 / F5 (diferido): repositorios del dominio log — audit

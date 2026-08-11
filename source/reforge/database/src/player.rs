@@ -18,6 +18,7 @@
 use tokio_postgres::{Client, NoTls, Row};
 
 use crate::account::pg_err;
+use crate::wal::{Batcher, Mutation, Param};
 
 /// Fila completa del load (42 columnas, orden de Q2). Tipos PG reales
 /// (verificados en el esquema: bigint/smallint/integer/bytea/float8).
@@ -169,34 +170,23 @@ impl PlayerRepo {
     /// afectadas (1 = ok, 0 = el personaje no existe).
     pub async fn save(&self, p: &PlayerRow) -> Result<u64, String> {
         let client = self.connect().await?;
-        let rows = client
-            .execute(
-                "UPDATE player.player SET \
-job = $1, voice = $2, dir = $3, x = $4, y = $5, z = $6, map_index = $7, \
-exit_x = $8, exit_y = $9, exit_map_index = $10, hp = $11, mp = $12, stamina = $13, \
-random_hp = $14, random_sp = $15, playtime = $16, level = $17, level_step = $18, \
-st = $19, ht = $20, dx = $21, iq = $22, gold = $23, exp = $24, stat_point = $25, \
-skill_point = $26, sub_skill_point = $27, stat_reset_count = $28, ip = $29, \
-part_main = $30, part_hair = $31, last_play = NOW(), skill_group = $32, \
-alignment = $33, horse_level = $34, horse_riding = $35, horse_hp = $36, \
-horse_hp_droptime = $37, horse_stamina = $38, horse_skill_point = $39, \
-skill_level = $40, quickslot = $41 \
-WHERE id = $42",
-                &[
-                    &p.job, &p.voice, &p.dir, &p.x, &p.y, &p.z, &p.map_index, //
-                    &p.exit_x, &p.exit_y, &p.exit_map_index, &p.hp, &p.mp, &p.stamina, //
-                    &p.random_hp, &p.random_sp, &p.playtime, &p.level, &p.level_step, //
-                    &p.st, &p.ht, &p.dx, &p.iq, &p.gold, &p.exp, &p.stat_point, //
-                    &p.skill_point, &p.sub_skill_point, &p.stat_reset_count, &ip_default(&p), //
-                    &p.part_main, &p.part_hair, &p.skill_group, &p.alignment, //
-                    &p.horse_level, &p.horse_riding, &p.horse_hp, &p.horse_hp_droptime, //
-                    &p.horse_stamina, &p.horse_skill_point, &p.skill_level, &p.quickslot, //
-                    &p.id,
-                ],
-            )
+        let owned = save_params(p);
+        let params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
+            owned.iter().map(|x| x as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+        client
+            .execute(PLAYER_SAVE_SQL, &params)
             .await
-            .map_err(|e| pg_err("PLAYER_SAVE", &e))?;
-        Ok(rows)
+            .map_err(|e| pg_err("PLAYER_SAVE", &e))
+    }
+
+    /// Save DURABLE (ADR-0008): construye la `Mutation` (uuidv7 + sql del
+    /// save + params) y la envia al `Batcher` — el sink la aplica con audit
+    /// en la MISMA transaccion, en batches <=100ms. Fire-and-forget: el
+    /// callersigue; la garantia durable la da el batch transaccional (y el
+    /// replay idempotente del WAL local en F3 phase 2). El UPDATE es
+    /// naturalmente idempotente (re-aplicarlo no cambia el estado).
+    pub fn save_mutated(&self, batcher: &Batcher, p: &PlayerRow) {
+        batcher.push(save_mutation(p));
     }
 
     /// Lista de personajes de la cuenta (Q3, 15 columnas) — orden sin
@@ -243,6 +233,51 @@ $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26) RETURNING id",
 /// `ip` no esta en el load (42 columnas) — el save usa el default del C++.
 fn ip_default(_p: &PlayerRow) -> String {
     "0.0.0.0".to_string()
+}
+
+/// SQL del save (Q5 shape, `CreatePlayerSaveQuery` `ClientManagerPlayer.cpp:70-177`):
+/// UPDATE de todas las columnas + `last_play = NOW()`. Compartido por `save()`
+/// (directo) y `save_mutated()` (mutation durable). Idempotente por naturaleza
+/// (UPDATE por PK) — requisito del replay del pipeline.
+const PLAYER_SAVE_SQL: &str = "\
+UPDATE player.player SET \
+job = $1, voice = $2, dir = $3, x = $4, y = $5, z = $6, map_index = $7, \
+exit_x = $8, exit_y = $9, exit_map_index = $10, hp = $11, mp = $12, stamina = $13, \
+random_hp = $14, random_sp = $15, playtime = $16, level = $17, level_step = $18, \
+st = $19, ht = $20, dx = $21, iq = $22, gold = $23, exp = $24, stat_point = $25, \
+skill_point = $26, sub_skill_point = $27, stat_reset_count = $28, ip = $29, \
+part_main = $30, part_hair = $31, last_play = NOW(), skill_group = $32, \
+alignment = $33, horse_level = $34, horse_riding = $35, horse_hp = $36, \
+horse_hp_droptime = $37, horse_stamina = $38, horse_skill_point = $39, \
+skill_level = $40, quickslot = $41 \
+WHERE id = $42";
+
+/// Params del save en el orden de `PLAYER_SAVE_SQL` ($1..$42). Los blobs
+/// nullable (`skill_level`/`quickslot`) van como `Param::Bytes` o
+/// `Param::Null` (el save directo pasaba `Option<Vec<u8>>` -> NULL).
+fn save_params(p: &PlayerRow) -> Vec<Param> {
+    let i16 = |v: i16| Param::Int(i64::from(v));
+    let i32 = |v: i32| Param::Int(i64::from(v));
+    let blob = |b: &Option<Vec<u8>>| match b {
+        Some(bytes) => Param::Bytes(bytes.clone()),
+        None => Param::Null,
+    };
+    vec![
+        i16(p.job), i16(p.voice), i16(p.dir), i32(p.x), i32(p.y), i32(p.z), i32(p.map_index), //
+        i32(p.exit_x), i32(p.exit_y), i32(p.exit_map_index), i32(p.hp), i32(p.mp), i16(p.stamina), //
+        i16(p.random_hp), i16(p.random_sp), i32(p.playtime), i16(p.level), i16(p.level_step), //
+        i16(p.st), i16(p.ht), i16(p.dx), i16(p.iq), i32(p.gold), i32(p.exp), i16(p.stat_point), //
+        i16(p.skill_point), i16(p.sub_skill_point), i16(p.stat_reset_count), Param::Text(ip_default(p)), //
+        Param::Int(p.part_main), Param::Int(p.part_hair), i16(p.skill_group), i32(p.alignment), //
+        i16(p.horse_level), i16(p.horse_riding), i16(p.horse_hp), Param::Int(p.horse_hp_droptime), //
+        i16(p.horse_stamina), i16(p.horse_skill_point), blob(&p.skill_level), blob(&p.quickslot), //
+        Param::Int(p.id),
+    ]
+}
+
+/// Mutation durable del save: uuidv7 + `PLAYER_SAVE_SQL` + params.
+pub(crate) fn save_mutation(p: &PlayerRow) -> Mutation {
+    Mutation::new(PLAYER_SAVE_SQL, save_params(p))
 }
 
 /// Mapeo de las 42 columnas del load (orden Q2).
@@ -322,6 +357,7 @@ fn player_summary_from_row(row: &Row) -> Result<PlayerSummary, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::wal::uuidv7_string;
 
     /// Load: 43 columnas en el orden del contrato (parse del C++
     /// `RESULT_PLAYER_LOAD` ClientManagerPlayer.cpp:464-523; el E2E etiqueta
@@ -354,13 +390,89 @@ mod tests {
     /// Save: shape Q5 — todas las columnas + last_play = NOW() + blobs bytea.
     #[test]
     fn save_sql_shape() {
-        // El SQL vive inline en save(); verificamos el contrato via la firma:
-        // los blobs se pasan como Vec<u8> (bytea nativo, no decode hex).
+        // El SQL vive en PLAYER_SAVE_SQL (compartido save/save_mutated):
+        // contrato de columnas verificado en el integration gated (Q5).
         let row = dummy_row();
-        let _ = &row.skill_level;
-        // sanity: el row tiene los 42 campos del load (compile-time).
         assert_eq!(row.name, "dummy");
         assert_eq!(row.logoff_interval, 0.0);
+        assert!(PLAYER_SAVE_SQL.contains("last_play = NOW()"), "Q5 escribe last_play");
+        assert!(PLAYER_SAVE_SQL.contains("WHERE id = $42"), "42 params");
+        assert_eq!(save_params(&row).len(), 42, "42 params del save");
+    }
+
+    /// Wiring del Batcher: la mutation del save durable usa el MISMO sql que
+    /// el save directo + uuidv7 (version 7) + 42 params con blobs nullable
+    /// como Bytes/Null.
+    #[test]
+    fn save_mutation_uses_save_sql_uuidv7_and_42_params() {
+        let row = dummy_row();
+        let m = save_mutation(&row);
+        assert_eq!(m.sql, PLAYER_SAVE_SQL, "mismo SQL (una fuente de verdad)");
+        assert_eq!(m.params.len(), 42);
+        assert_eq!(m.params[28], Param::Text("0.0.0.0".into()), "ip default del C++");
+        assert_eq!(m.params[39], Param::Null, "skill_level None -> NULL");
+        assert_eq!(m.params[40], Param::Null, "quickslot None -> NULL");
+        assert_eq!(m.params[41], Param::Int(0), "id del row");
+        assert_eq!(m.id[6] >> 4, 7, "version 7 del uuidv7");
+        assert!(m.payload_json().contains(&uuidv7_string(&m.id)), "audit payload con mutation_id");
+    }
+
+    /// La mutation con blobs presentes mapea a Bytes (bytea).
+    #[test]
+    fn save_mutation_maps_blobs_to_bytes() {
+        let mut row = dummy_row();
+        row.skill_level = Some(vec![0x01, 0x00, 0x27, 0x5c]);
+        row.quickslot = Some(vec![0xde, 0xad]);
+        let m = save_mutation(&row);
+        assert_eq!(m.params[39], Param::Bytes(vec![0x01, 0x00, 0x27, 0x5c]));
+        assert_eq!(m.params[40], Param::Bytes(vec![0xde, 0xad]));
+    }
+
+    /// El pipeline agrupa: 2 saves en <100ms -> 1 batch (el worker flushea por
+    /// intervalo desde la PRIMERA mutation). Sink contador local (sin PG).
+    #[tokio::test(start_paused = true)]
+    async fn save_mutated_two_saves_in_interval_land_in_one_batch() {
+        use crate::wal::MutationSink;
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone, Default)]
+        struct CountingSink(Arc<Mutex<Vec<Vec<Mutation>>>>);
+        impl MutationSink for CountingSink {
+            fn apply(&mut self, batch: Vec<Mutation>) -> impl std::future::Future<Output = Result<(), String>> + Send {
+                async move {
+                    self.0.lock().unwrap().push(batch);
+                    Ok(())
+                }
+            }
+        }
+
+        let sink = CountingSink::default();
+        let batcher = Batcher::spawn(std::time::Duration::from_millis(100), 64, sink.clone());
+        let repo = PlayerRepo::new("host=noop");
+        let mut a = dummy_row();
+        a.id = 1;
+        a.x = 969600;
+        let mut b = dummy_row();
+        b.id = 1;
+        b.x = 278400;
+        repo.save_mutated(&batcher, &a);
+        repo.save_mutated(&batcher, &b);
+        // Fases del reloj pausado (patron de wal.rs): 1) el worker consume la
+        // primera mutation y arranca su ventana de 100ms; 2) cruzar la ventana
+        // -> flush del batch con ambas.
+        tokio::time::advance(std::time::Duration::from_millis(50)).await;
+        tokio::task::yield_now().await;
+        tokio::time::advance(std::time::Duration::from_millis(120)).await;
+        for _ in 0..200 {
+            if sink.0.lock().unwrap().len() >= 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        let batches = sink.0.lock().unwrap();
+        assert_eq!(batches.len(), 1, "2 saves en la ventana -> 1 batch");
+        assert_eq!(batches[0].len(), 2, "ambas mutations en el batch");
+        assert_ne!(batches[0][0].id, batches[0][1].id, "uuidv7 distintos");
     }
 
     /// List: 15 columnas en el orden de Q3.

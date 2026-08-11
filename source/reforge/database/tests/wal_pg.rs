@@ -13,7 +13,7 @@
 //! `log.mutation_audit` lo aplica el harness de otro lane) y lo limpia
 //! SIEMPRE (patron trap del E2E).
 
-use database::wal::{audit_ddl, uuidv7_string, Batcher, Mutation, Param, PgMutationSink};
+use database::wal::{audit_ddl, Batcher, Mutation, Param, PgMutationSink};
 use std::time::Duration;
 
 const DEFAULT_PG: &str = "host=127.0.0.1 port=5432 user=mt2 password=mt2 dbname=metin2";
@@ -76,8 +76,17 @@ async fn wal_replay_idempotent_and_audit_same_tx() {
         batcher.push(m3);
         batcher.push(m1_replay); // replay de m1
 
-        // Espera el flush (intervalo 50ms + margen).
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        // Espera el flush: poll del contador (el sink abre conexion PG nueva
+        // en el apply — un sleep fijo flakea en WSL cuando la conexion tarda).
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let n = count(&client, &format!("SELECT COUNT(*) FROM {audit}")).await;
+            if n >= 3 {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "timeout esperando el flush (audit={n})");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
 
         // La tabla de negocio: 3 filas (no 4) — el replay no duplica.
         assert_eq!(count(&client, &format!("SELECT COUNT(*) FROM {replay}")).await, 3, "3 mutations distintas");
