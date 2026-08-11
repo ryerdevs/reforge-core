@@ -71,7 +71,7 @@ The following items were recommended in the 2026-08-10 review of the migration o
 | 6 | **Legacy packets 151/152/153** (PanamaPack, hybrid-crypt) live in `protocol::legacy` and are **deletable** at the new client (F7) | **Proposed** | ADR-0006, `../reference/protocol/legacy-compatibility.md` |
 | 7 | **No Rust embedded inside the legacy client** during F0–F6; Slint standalone login/select later (F5), integrated into the new client (F7) | **Accepted** (for the already-agreed boundary) | ADR-0007 |
 | 8 | **Minimal dependency policy** — YAGNI; stdlib before dependencies | **Approved** (project principle) | AGENTS.md, §4, §7 |
-| 9 | **Defer until justified**: local WAL + `mutation_id` replay, RLS, Patroni failover, bevy_ecs, REST API/Docker | **Proposed** (target design kept in §5.5/§7, gated) | this plan |
+| 9 | **Defer until justified**: local WAL + `mutation_id` replay, RLS, Patroni failover, bevy_ecs, REST API (**Docker removed from the plan 2026-08-11 — user decision**) | **Proposed** (target design kept in §5.5/§7, gated) | this plan |
 
 Note on item 1/3 wording: G-PG means **one canonical PostgreSQL** — the C++ baseline operates on the **same PostgreSQL** through a temporary compatibility adapter (its `libsql` layer speaks MySQL wire/SQL; the adapter bridges that), and MariaDB is used **only as the migration/export source** (initial data extraction), never as a second operational database. This direction was fixed by the user on 2026-08-10 and is recorded in ADR-0005 (**Accepted**, 2026-08-10); the G-PG gate closes when the implementation backlog B1–B8 is green (§8.2.1).
 
@@ -390,7 +390,7 @@ Rule: **touch the client only if (a) ≤1 week of work and (b) it unlocks someth
 | Observability | tracing + metrics (Prometheus/Grafana) | — |
 | Tests | cargo test + proptest + golden tests + parity harness | — |
 
-**Deferred until justified [Proposed]:** bevy_ecs (§5.2), local WAL + `mutation_id`, RLS, Patroni failover (§5.5), REST API + Docker (§8.3, F5+). The stack table above lists them as target design; each becomes a build dependency only with evidence.
+**Deferred until justified [Proposed]:** bevy_ecs (§5.2), local WAL + `mutation_id`, RLS, Patroni failover (§5.5), REST API (§8.3, F5+; **Docker removed from the plan 2026-08-11 — user decision**). The stack table above lists them as target design; each becomes a build dependency only with evidence.
 
 **Rejected with justification:** CockroachDB (proprietary license), TiDB/ScyllaDB (unnecessary multi-node; Scylla not relational), SurrealDB (document-oriented + immature), libSQL/Turso (on pause), SQLite/redb (embedded, break the shared DB between regions), TimescaleDB (ADR-0001: only if logs prove it).
 
@@ -413,7 +413,7 @@ Vertical slices (client→auth→db→client) with the client frozen. The legacy
 | **F2b** Client batch 1 [Accepted, ADR-0005] | Additive client changes (≤1 week each): version check on connect, hardware ID in LOGIN3, server time | Recompiled client passes the version check | **Blocked by F2a** |
 | **F3** Data layer + data channel | `database` crate by domain on PG; port by QID; pull-based packets 162+ (CG_QUERY/GC_RESPONSE) | The C++ game runs against the Rust data layer without behavior change; the recompiled client receives additive data without desynchronizing | Planned |
 | **F4** World entry + names | CG_PLAYER_SELECT, spawn, map, stats; UTF-8 name overrides | The real client enters the world against the Rust core with correct names | Planned (requires domain-boundary ADR first, risk #2) |
-| **F5** Gameplay | Movement, combat, drops, items, NPCs, quests, chat, shops, trade, GM — by domains, side-by-side; channel list from auth; config via manifest; **Slint standalone** (Accepted, ADR-0007); scale benchmark (N bots × N regions); REST + Docker deferred until justified [Proposed] | Full session without divergences + benchmark passed | Planned |
+| **F5** Gameplay | Movement, combat, drops, items, NPCs, quests, chat, shops, trade, GM — by domains, side-by-side; channel list from auth; config via manifest; **Slint standalone** (Accepted, ADR-0007); scale benchmark (N bots × N regions); REST deferred until justified [Proposed] (**Docker removed 2026-08-11 — user decision**) | Full session without divergences + benchmark passed | Planned |
 | **F6** Full parity | Automated side-by-side (same input → diff), instance-by-instance cutover; legacy compatibility adapter removed (ADR-0005); final data migration verified (backup/restore) | The Rust server replaces the C++ one without client changes | Planned |
 | **F7** Client (after) | Rust client (wgpu), Slint UI (the `.slint` from F5 integrate), new protocol, real encryption; **delete `protocol::legacy`** (151/152/153) [Proposed, ADR-0006] | — | Future |
 
@@ -508,7 +508,7 @@ Data parity: `scripts/gpg/parity_check.py` — per table, row count + md5 over t
 
 **Design decisions (from this plan, previously agreed):**
 
-- Rust stack: tokio 1.x + sqlx 0.9 + config-rs + clap + tracing + proptest. No scripting (own DSL). bevy_ecs/WAL/RLS/Patroni/REST/Docker deferred until justified [Proposed].
+- Rust stack: tokio 1.x + sqlx 0.9 + config-rs + clap + tracing + proptest. No scripting (own DSL). bevy_ecs/WAL/RLS/Patroni/REST deferred until justified [Proposed] (**Docker removed 2026-08-11 — user decision**).
 - Model: server-authoritative + DB as atomic safety net.
 - Strategy: strangler by vertical slices; client frozen (+2 additive packets); cutover at F6.
 - Audit §3.3: 14 P0/P1/P2 legacy decisions are NOT carried over; the 7 good things are preserved.
@@ -541,7 +541,7 @@ Summary of the decisions:
 5. **Migration**: is the F0→G-PG→F2a/F2b→F6 order correct? Is a validation step missing between phases?
 6. **Scope**: is deferring events/raids/massive social to the end correct?
 7. **Audit §3.3**: is any legacy decision missing from the P0/P1/P2 table?
-8. **Adoption**: is MPL-2.0 the right license? Web API + metrics + Docker from F5 or after the cutover?
+8. **Adoption**: is MPL-2.0 the right license? Web API + metrics from F5 or after the cutover? (Docker removed from the plan 2026-08-11 — user decision.)
 9. **Regional channels (§5.4)**: is «central DB + process per region, change region = logout→login» correct? Is a shared living world like EVE definitively out by design?
 10. **Persistence (§5.5)**: is the transactional batch ≤100ms pipeline correct? Is the deferral of WAL/RLS/Patroni acceptable until justified? [Deferrals confirmed with ADR-0005 acceptance, 2026-08-10 — §2.9 item 9]
 11. **Server→client data (§5.6)**: is the versioned manifest + delta the right mechanism? Are the 2 additive client packets acceptable before F7?

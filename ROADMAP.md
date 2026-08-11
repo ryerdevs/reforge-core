@@ -153,7 +153,7 @@ Goal: playable core by domains, side-by-side, scale benchmark, and the rest of t
 - [ ] Hot reload operational: NOTIFY → reload → manifest bump → delta
 - [ ] **Slint standalone** (login/select/HUD UI against the real server, in parallel — reused in F7; standalone per ADR-0007)
 - [ ] Scale benchmark: N bots × N regions (gate before considering multi-process)
-- [ ] REST API + metrics (Prometheus/Grafana) + Docker (first-class features)
+- [ ] REST API + metrics (Prometheus/Grafana) — **Docker: REMOVED from the plan (2026-08-11, user decision — no containerization for now; the docker-development skill stays available if revisited)**
 
 **F5 milestone:** a full game session with no observable divergence + benchmark passed.
 
