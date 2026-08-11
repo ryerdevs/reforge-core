@@ -138,7 +138,7 @@ Goal: character select + spawn with parity + UTF-8 name overrides.
 - [ ] **Client: in-memory overrides** (new override API to be added around `CPythonNonPlayer`/`CItemData` after `LoadLocaleData` — no `SetLocaleName`/`SetItemLocaleName` exist in the legacy client; they must be written first) — the server sends UTF-8 names from the DB; goodbye mojibake and the CP949 trap
 - [ ] Entities: minimal Entity core + ECS systems (bevy_ecs standalone) — NEVER port char.cpp as a single class
 
-**F4 milestone:** the real client enters the world against the Rust core with correct names.
+**F4 milestone:** the real client enters the world against the Rust core with correct names. — **MET 2026-08-11** (world entry + sustained session through the Rust channel: select → DirectEnter → loading → map 41 with the character, 50+ s; world empty — NPCs are F5; names from the client's pack).
 
 ### Phase 5 — Basic gameplay + scale
 

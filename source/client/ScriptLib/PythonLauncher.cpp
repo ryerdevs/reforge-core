@@ -50,6 +50,7 @@ void Traceback()
 	Py_DECREF(exc);
 	Py_DECREF(v);
 	Py_DECREF(tb);
+	AppendPythonErrorLog(str.c_str());	// F4 instrumentación: traceback completo al log
 	LogBoxf("Traceback:\n\n%s\n", str.c_str());
 }
 

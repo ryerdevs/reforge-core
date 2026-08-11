@@ -28,3 +28,8 @@ PyObject * Py_BadArgument();
 PyObject * Py_BuildNone();
 PyObject * Py_BuildEmptyTuple();
 
+// F4 instrumentación (log-only): evidencia de excepciones Python y paquetes
+// no manejados en client\logs\python_error.log (append, timestamp + texto).
+void AppendPythonErrorLog(const char * c_szText);
+void LogPythonException(const char * c_szSource);
+

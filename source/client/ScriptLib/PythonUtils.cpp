@@ -326,6 +326,7 @@ bool __PyCallClassMemberFunc_ByCString(PyObject* poClass, const char* c_szFunc, 
 		if (g_pkExceptionSender)
 			g_pkExceptionSender->Clear();
 
+		LogPythonException("PyCallClassMemberFunc.ByCString");
 		PyErr_Print();
 
 		if (g_pkExceptionSender)
@@ -374,6 +375,7 @@ bool __PyCallClassMemberFunc_ByPyString(PyObject* poClass, PyObject* poFuncName,
 		if (g_pkExceptionSender)
 			g_pkExceptionSender->Clear();
 
+		LogPythonException("PyCallClassMemberFunc.ByPyString");
 		PyErr_Print();
 
 		if (g_pkExceptionSender)
@@ -417,6 +419,7 @@ bool __PyCallClassMemberFunc(PyObject* poClass, PyObject * poFunc, PyObject* poA
 
 	if (!poRet)
 	{
+		LogPythonException("PyCallClassMemberFunc");
 		PyErr_Print();
 		Py_DECREF(poFunc);
 		Py_XDECREF(poArgs);
@@ -428,5 +431,83 @@ bool __PyCallClassMemberFunc(PyObject* poClass, PyObject * poFunc, PyObject* poA
 	Py_DECREF(poFunc);
 	Py_XDECREF(poArgs);
 	return true;
+}
+
+// F4 instrumentación (log-only, sin cambio de flujo) --------------------------
+// Append a client\logs\python_error.log (el cliente corre con cwd = client\)
+// con timestamp. fopen/fprintf simple — ponytail; no depende de CLogFile.
+void AppendPythonErrorLog(const char * c_szText)
+{
+	FILE * fp = fopen("logs/python_error.log", "a");
+	if (!fp)
+		return;
+
+	const time_t ct = time(nullptr);
+	const struct tm ctm = *localtime(&ct);
+
+	fprintf(fp, "[%04d-%02d-%02d %02d:%02d:%02d] %s\n",
+			ctm.tm_year + 1900, ctm.tm_mon + 1, ctm.tm_mday,
+			ctm.tm_hour, ctm.tm_min, ctm.tm_sec,
+			c_szText ? c_szText : "");
+	fclose(fp);
+}
+
+// Formatea la excepción Python pendiente (mensaje + traceback completo vía el
+// módulo traceback) y la escribe al log. NO consume la excepción: la restaura
+// con PyErr_Restore para que el flujo existente (PyErr_Print) siga intacto.
+void LogPythonException(const char * c_szSource)
+{
+	PyObject * poExc = nullptr;
+	PyObject * poVal = nullptr;
+	PyObject * poTb = nullptr;
+
+	PyErr_Fetch(&poExc, &poVal, &poTb);
+
+	if (!poExc && !poVal && !poTb)
+		return;
+
+	PyErr_NormalizeException(&poExc, &poVal, &poTb);
+
+	std::string stText = "[";
+	stText += c_szSource;
+	stText += "] ";
+
+	if (poVal)
+	{
+		PyObject * poStr = PyObject_Str(poVal);
+		if (poStr)
+		{
+			if (PyString_Check(poStr))
+				stText += PyString_AS_STRING(poStr);
+			Py_DECREF(poStr);
+		}
+	}
+
+	if (poExc && poTb)
+	{
+		PyObject * poTbModule = PyImport_ImportModule("traceback");
+		if (poTbModule)
+		{
+			char szFormatExceptionName[] = "format_exception"; // PyObject_CallMethod toma char* (Python 2.7)
+			char szFormat[] = "OOO";
+			PyObject * poLines = PyObject_CallMethod(poTbModule, szFormatExceptionName, szFormat, poExc, poVal, poTb);
+			if (poLines && PyList_Check(poLines))
+			{
+				const int iCount = PyList_Size(poLines);
+				for (int i = 0; i < iCount; ++i)
+				{
+					PyObject * poLine = PyList_GetItem(poLines, i);
+					if (poLine && PyString_Check(poLine))
+						stText += PyString_AS_STRING(poLine);
+				}
+			}
+			Py_XDECREF(poLines);
+			Py_DECREF(poTbModule);
+		}
+	}
+
+	AppendPythonErrorLog(stText.c_str());
+
+	PyErr_Restore(poExc, poVal, poTb);
 }
 

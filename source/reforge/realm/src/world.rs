@@ -108,8 +108,6 @@ impl WorldStore {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     /// La validación del slot y el SQL del índice viven en
     /// `database::player` (`index_sql_shape_and_slot_validation` + el gated
     /// `player_index_pid_live_account_slots`) — aquí solo la invariante de

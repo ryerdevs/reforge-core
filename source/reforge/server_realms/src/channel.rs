@@ -40,11 +40,17 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use database::account::AccountRepo;
+use database::affect::AffectRepo;
+use database::common::CommonRepo;
+use database::item::ItemRepo;
+use database::land::LandRepo;
 use network::framer::{ConnectionRole, Framer};
+use network::handshake::HandshakeError;
 use network::{handshake, Connection};
+use protocol::world::{TPacketGCChannel, TPacketGCTime};
 use protocol::{
     header, phase, TPacketCGLogin3, TPacketCGPlayerSelect, TPacketGCEmpire, TPacketGCLoginFailure,
     TPacketGCLoginSuccess, TPacketGCPhase, PLAYER_PER_ACCOUNT,
@@ -59,7 +65,13 @@ use crate::config::Config;
 /// Servidor channel: listener + tarea por conexión (patrón del auth).
 pub async fn run(config: Config) -> std::io::Result<()> {
     let listener = TcpListener::bind(&config.listen).await?;
-    println!("server_realms: channel escuchando en {}", listener.local_addr()?);
+    // El puerto REAL del listener (relevante con `listen = "...:0"` en tests):
+    // viaja en el `listen` del config clonado — el 449 B lo usa para el
+    // `wPort` del DirectEnter (el cliente conecta a lAddr:wPort).
+    let actual = listener.local_addr()?;
+    println!("server_realms: channel escuchando en {actual}");
+    let mut config = config;
+    config.listen = actual.to_string();
     let mut conn_id: u32 = 1;
     loop {
         let (stream, _peer) = listener.accept().await?;
@@ -74,15 +86,37 @@ pub async fn run(config: Config) -> std::io::Result<()> {
     }
 }
 
-/// Conexión channel con timeout global (patrón del auth — deuda F1.5).
+/// Conexión channel — timeout de INACTIVIDAD (NO absoluto).
+///
+/// El C++ core no tiene timeout global: las sesiones viven hasta el
+/// disconnect (la liveness la dan los keepalives 0xfc/0xfe del cliente).
+/// El propósito original (deuda F1.5) era matar conexiones SILENCIOSAS — un
+/// timeout ABSOLUTO de 15s mataba al cliente jugando (MOVE continuos — slice
+/// 3.8). Cada lectura lleva su propio `config.timeout`: se resetea con
+/// CUALQUIER paquete recibido (incluidos los ignorados de juego y los
+/// keepalives) y solo dispara si no llega NADA durante `timeout_ms`.
 async fn handle_connection(stream: TcpStream, config: Config, conn_id: u32) -> Result<(), String> {
-    match tokio::time::timeout(config.timeout, connection_inner(stream, &config, conn_id)).await {
-        Err(_) => Err(format!(
-            "channel conn {conn_id}: timeout global de {} ms — conexión cerrada",
-            config.timeout.as_millis()
-        )),
-        Ok(r) => r,
-    }
+    connection_inner(stream, &config, conn_id).await
+}
+
+/// Lee el siguiente paquete con timeout de inactividad: si no llega NADA en
+/// `timeout`, la conexión se cierra (el paquete que llega resetea el timer —
+/// el timeout se crea por lectura). El handshake (antes de este helper) tiene
+/// sus propios retries internos (F1.5 — una conexión muda muere en ellos).
+async fn recv_packet_idle<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
+    conn: &mut Connection<S>,
+    framer: &mut Framer,
+    timeout: std::time::Duration,
+) -> Result<Vec<u8>, String> {
+    tokio::time::timeout(timeout, framer.next_packet(conn))
+        .await
+        .map_err(|_| {
+            format!(
+                "timeout de inactividad de {} ms — sin paquetes del cliente, conexión cerrada",
+                timeout.as_millis()
+            )
+        })?
+        .map_err(|e| format!("framer: {e}"))
 }
 
 async fn connection_inner(stream: TcpStream, config: &Config, conn_id: u32) -> Result<(), String> {
@@ -90,9 +124,24 @@ async fn connection_inner(stream: TcpStream, config: &Config, conn_id: u32) -> R
     let mut framer = Framer::new(ConnectionRole::Channel);
 
     // 1. Handshake server-side (F1.5, validado contra el canal real en F1.6).
-    let hs = handshake::perform(&mut conn, &mut framer, now_ms())
-        .await
-        .map_err(|e| format!("handshake: {e}"))?;
+    //    El cliente del GUILD MARK abre una conexión SEPARADA en paralelo al
+    //    select y responde al handshake con CG_MARK_LOGIN (0x64) en vez del
+    //    eco (`GuildMarkDownloader.cpp:213-229`). El canal normal
+    //    (`guild_mark_server` OFF — config del runtime) cierra esa conexión
+    //    sin responder (`input.cpp:560-572`) — el cliente NO lo interpreta
+    //    como fallo (el mark es opcional; el select sigue en la otra conexión).
+    let hs = match handshake::perform(&mut conn, &mut framer, now_ms()).await {
+        Err(HandshakeError::MarkLogin(p)) => {
+            eprintln!(
+                "server_realms: channel conn {conn_id}: guild mark login (handle 0x{:08x}, \
+                 random 0x{:08x}) — no mark server, cierre limpio (parity input.cpp:562-566)",
+                p.handle, p.random_key
+            );
+            return Ok(());
+        }
+        Err(e) => return Err(format!("handshake: {e}")),
+        Ok(hs) => hs,
+    };
     eprintln!("server_realms: channel conn {conn_id}: handshake OK (delta {} ms)", hs.delta);
 
     // 2. GC_PHASE(LOGIN) — el cliente responde con el LOGIN3 del canal (65 B).
@@ -103,10 +152,7 @@ async fn connection_inner(stream: TcpStream, config: &Config, conn_id: u32) -> R
 
     // 3. LOGIN3 (65 B al canal — framer rol Channel).
     let login3 = loop {
-        let pkt = framer
-            .next_packet(&mut conn)
-            .await
-            .map_err(|e| format!("framer: {e}"))?;
+        let pkt = recv_packet_idle(&mut conn, &mut framer, config.timeout).await?;
         match pkt[0] {
             header::CG_TIME_SYNC | header::CG_PONG => continue, // keepalives (F1.4)
             header::CG_LOGIN3 => {
@@ -182,7 +228,7 @@ async fn connection_inner(stream: TcpStream, config: &Config, conn_id: u32) -> R
     conn.send(&TPacketGCPhase::new(phase::SELECT).to_bytes())
         .await
         .map_err(|e| format!("enviando GC_PHASE(SELECT): {e}"))?;
-    let success = build_login_success(&store, acc.id, conn_id).await?;
+    let success = build_login_success(&store, acc.id, conn_id, &config.listen).await?;
     let bytes = success.to_bytes();
     assert_eq!(bytes.len(), TPacketGCLoginSuccess::SIZE, "449 B (invariante wire)");
     conn.send(&bytes).await.map_err(|e| format!("enviando 449 B: {e}"))?;
@@ -190,10 +236,7 @@ async fn connection_inner(stream: TcpStream, config: &Config, conn_id: u32) -> R
 
     // 7. Select: CG_PLAYER_SELECT (2 B) → load → spawn best-effort.
     let select = loop {
-        let pkt = framer
-            .next_packet(&mut conn)
-            .await
-            .map_err(|e| format!("framer (select): {e}"))?;
+        let pkt = recv_packet_idle(&mut conn, &mut framer, config.timeout).await?;
         match pkt[0] {
             header::CG_TIME_SYNC | header::CG_PONG => continue,
             header::CG_CHARACTER_SELECT => {
@@ -215,51 +258,200 @@ async fn connection_inner(stream: TcpStream, config: &Config, conn_id: u32) -> R
         return Ok(());
     };
     eprintln!(
-        "server_realms: channel conn {conn_id}: player_load {} id={} lvl={} x={} y={}",
-        row.name, row.id, row.level, row.x, row.y
+        "server_realms: channel conn {conn_id}: player_load {} id={} lvl={} x={} y={} map={}",
+        row.name, row.id, row.level, row.x, row.y, row.map_index
     );
 
-    // Spawn best-effort: GC_PHASE(LOADING) + ADD + ADDITIONAL_INFO (los GAPs
-    // del spawn completo en realm::packets — mapa/sectree, affects→flags,
-    // items→parts, PointsPacket, SkillLevelPacket, SDB).
-    for pkt in spawn_packets(&row, empire) {
-        conn.send(&pkt).await.map_err(|e| format!("enviando spawn: {e}"))?;
+    // ------------------------------------------------------------------
+    // PLAYER LOAD (parity input_db.cpp:428-459 + los DG_* asíncronos del db):
+    // GC_PHASE(LOADING) -> MainCharacter (113) -> [SDB 153: NO — runtime sin
+    // package] -> 36×QUICKSLOT_ADD (28 — SetQuickslot por slot,
+    // char_quickslot.cpp:96-103) -> Points (16, con los MÁXIMOS + NEXT_EXP)
+    // -> Skills (76) -> N×ITEM_SET (21, ItemLoad input_db.cpp:1453-1561) ->
+    // M×AFFECT_ADD (126, AffectLoad input_db.cpp:1563-1583).
+    // ------------------------------------------------------------------
+    let next_exp = CommonRepo::new(&config.pg_conn).next_exp(row.level).await.unwrap_or(0);
+    let items = ItemRepo::new(&config.pg_conn).load_by_owner(row.id).await?;
+    let affects = AffectRepo::new(&config.pg_conn).load(row.id).await?;
+    for pkt in entry_packets(&row, next_exp, &items, &affects) {
+        conn.send(&pkt).await.map_err(|e| format!("enviando entry: {e}"))?;
     }
     eprintln!(
-        "server_realms: channel conn {conn_id}: spawn best-effort enviado \
-         (LOADING + ADD + ADDITIONAL_INFO) — el mundo completo (mapa/afects/items) es el siguiente slice"
+        "server_realms: channel conn {conn_id}: entry enviado (LOADING + MAIN_CHARACTER + {} quickslots + \
+         POINTS + SKILLS + {} items + {} affects) — esperando CG_ENTERGAME del cliente",
+        packets::quickslot_packets(row.quickslot.as_ref()).len(),
+        items.len(),
+        affects.len()
     );
 
-    // 8. Keepalive loop: el mundo real no existe todavía — la conexión se
-    //    mantiene viva leyendo hasta EOF (el cliente fallará cargando el mapa;
-    //    el hito del slice es el SELECT).
+    // El cliente carga el mapa (Warp) y manda CG_ENTERGAME (10, 1 B) al
+    // abrir la ventana del juego (game.py:206 SendEnterGamePacket). Antes
+    // manda la VERSIÓN del cliente (0xf1, 67 B) — se ignora sin validar
+    // (parity input.cpp:205-213).
     loop {
-        let pkt = framer
-            .next_packet(&mut conn)
-            .await
-            .map_err(|e| format!("framer (keepalive): {e}"))?;
+        let pkt = recv_packet_idle(&mut conn, &mut framer, config.timeout).await?;
         match pkt[0] {
             header::CG_TIME_SYNC | header::CG_PONG => continue,
-            other => {
+            header::CG_CLIENT_VERSION2 => {
+                let name_end = pkt[1..34].iter().position(|&b| b == 0).unwrap_or(33);
+                let ts_end = pkt[34..67].iter().position(|&b| b == 0).unwrap_or(33);
                 eprintln!(
-                    "server_realms: channel conn {conn_id}: post-spawn header 0x{other:02x} \
-                     ignorado (mundo no implementado)"
+                    "server_realms: channel conn {conn_id}: VERSION {} {} — ignorado sin validar \
+                     (parity input.cpp:205-213)",
+                    String::from_utf8_lossy(&pkt[1..1 + name_end]),
+                    String::from_utf8_lossy(&pkt[34..34 + ts_end])
                 );
+                continue;
+            }
+            header::CG_ENTERGAME => break,
+            other => {
+                return Err(format!(
+                    "channel conn {conn_id}: header inesperado 0x{other:02x} esperando CG_ENTERGAME"
+                ))
+            }
+        }
+    }
+    eprintln!("server_realms: channel conn {conn_id}: CG_ENTERGAME recibido");
+
+    // ------------------------------------------------------------------
+    // ENTERGAME (parity input_login.cpp:611-656): ADD (1) + INFO (136) via
+    // Show()/EncodeInsertPacket -> GC_PHASE(GAME) -> LandList (130) ->
+    // GC_TIME (106, get_global_time) -> GC_CHANNEL (121, g_bChannel).
+    // ------------------------------------------------------------------
+    let lands = LandRepo::new(&config.pg_conn).load_by_map(i64::from(row.map_index)).await?;
+    if lands.is_empty() {
+        eprintln!(
+            "server_realms: channel conn {conn_id}: mapa {} sin lands — el C++ no manda el paquete (building.cpp:969)",
+            row.map_index
+        );
+    }
+    let mut enter = enter_packets(&row, empire, &lands);
+    // Cola de entrada (parity input_login.cpp:648-656): TIME + CHANNEL tras
+    // el land list — el reloj del server (get_global_time) y el canal.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as u32)
+        .unwrap_or(0);
+    enter.push(TPacketGCTime::new(now).to_bytes().to_vec());
+    enter.push(TPacketGCChannel::new(config.channel).to_bytes().to_vec());
+    for pkt in enter {
+        conn.send(&pkt).await.map_err(|e| format!("enviando enter: {e}"))?;
+    }
+    eprintln!(
+        "server_realms: channel conn {conn_id}: ENTERGAME enviado (ADD + INFO + GC_PHASE(GAME) + {} lands \
+         + GC_TIME + GC_CHANNEL {}) — el cliente está DENTRO del mapa (mundo vacío: NPCs/mobs son F5)",
+        lands.len(),
+        config.channel
+    );
+
+    // 8. Loop de juego (estático): el mundo no tiene NPCs/mobs todavía (F5) —
+    //    la conexión se mantiene viva. El HEARTBEAT es del SERVIDOR (parity
+    //    `ping_event`, desc.cpp:179-214): el cliente en reposo no manda nada;
+    //    el canal envía GC_PING (44, 1 B) cada `ping_interval_ms` y el cliente
+    //    responde CG_PONG (0xfe — ya en la tabla del framer), que resetea el
+    //    timeout de inactividad. El ping es INDEPENDIENTE del tráfico entrante
+    //    (tokio::select! — se envía incluso si llegan MOVE). Los paquetes de
+    //    juego legítimos se ignoran con log (procesamiento F5); el cierre para
+    //    headers desconocidos/variables lo hace el FRAMER (parity
+    //    input.cpp:77-84) — este loop no lo relaja.
+    let mut ping_timer = tokio::time::interval_at(
+        tokio::time::Instant::now() + Duration::from_millis(config.ping_interval_ms),
+        Duration::from_millis(config.ping_interval_ms),
+    );
+    // Deadline de inactividad PERSISTENTE (basado en el último paquete
+    // recibido): el select! cancela los brazos al ganar uno, así que el timer
+    // del idle se recrea por iteración — pero con el MISMO deadline (derivado
+    // de `last_packet`, que solo cambia al RECIBIR) → el ping del canal NO
+    // resetea el idle; solo los paquetes del cliente lo hacen.
+    let mut last_packet = tokio::time::Instant::now();
+    loop {
+        let idle_deadline = last_packet + config.timeout;
+        let idle = tokio::time::sleep_until(idle_deadline);
+        tokio::pin!(idle);
+        tokio::select! {
+            pkt = framer.next_packet(&mut conn) => {
+                let pkt = pkt.map_err(|e| format!("framer (game): {e}"))?;
+                last_packet = tokio::time::Instant::now();
+                match pkt[0] {
+                    header::CG_TIME_SYNC | header::CG_PONG | header::CG_MARK_LOGIN => continue,
+                    header::CG_CLIENT_VERSION2 => {
+                        // El cliente puede re-mandar la versión en la fase game
+                        // (parity input.cpp:205-213 — sin validación, sin respuesta).
+                        let name_end = pkt[1..34].iter().position(|&b| b == 0).unwrap_or(33);
+                        eprintln!(
+                            "server_realms: channel conn {conn_id}: VERSION {} (game) — ignorado",
+                            String::from_utf8_lossy(&pkt[1..1 + name_end])
+                        );
+                        continue;
+                    }
+                    other => {
+                        eprintln!(
+                            "server_realms: channel conn {conn_id}: paquete de juego 0x{other:02x} ignorado \
+                             (el procesamiento — movimiento/combate — es F5)"
+                        );
+                    }
+                }
+            }
+            _ = &mut idle => {
+                return Err(format!(
+                    "timeout de inactividad de {} ms — sin paquetes del cliente, conexión cerrada",
+                    config.timeout.as_millis()
+                ));
+            }
+            _ = ping_timer.tick() => {
+                // Heartbeat del server (parity desc.cpp:205-208): GC_PING cada
+                // ping_interval_ms; el cliente responde CG_PONG (que resetea
+                // `last_packet` al llegar por el brazo del recv).
+                conn.send(&[header::GC_PING]).await
+                    .map_err(|e| format!("enviando GC_PING: {e}"))?;
             }
         }
     }
 }
 
-/// Los paquetes del spawn best-effort en orden wire (parity
-/// `input_db.cpp:428-429` SetPhase(PHASE_LOADING) + `char.cpp:876-948`
-/// EncodeInsertPacket): `GC_PHASE(LOADING)` → `TPacketGCCharacterAdd` →
-/// `TPacketGCCharacterAdditionalInfo`. Función pura (testeable sin red).
-fn spawn_packets(row: &database::player::PlayerRow, empire: u8) -> Vec<Vec<u8>> {
-    vec![
+/// Paquetes del PLAYER LOAD (parity `input_db.cpp:428-459` + los DG_*
+/// asíncronos del db — `ItemLoad`/`AffectLoad`): `GC_PHASE(LOADING)` ->
+/// `TPacketGCMainCharacter` (113) -> 36×`TPacketGCQuickSlotAdd` (28) ->
+/// `TPacketGCPoints` (16, con los MÁXIMOS del subset ComputePoints +
+/// NEXT_EXP) -> `TPacketGCSkillLevel` (76) -> N×`TPacketGCItemSet` (21) ->
+/// M×`TPacketGCAffectAdd` (126). El SDB (153) no se manda (runtime sin
+/// package — parity del C++ actual). Función pura (testeable sin red).
+fn entry_packets(
+    row: &database::player::PlayerRow,
+    next_exp: i64,
+    items: &[database::item::ItemRow],
+    affects: &[database::affect::AffectRow],
+) -> Vec<Vec<u8>> {
+    let mut out = vec![
         TPacketGCPhase::new(phase::LOADING).to_bytes().to_vec(),
+        packets::main_character(row).to_bytes().to_vec(),
+    ];
+    out.extend(packets::quickslot_packets(row.quickslot.as_ref()));
+    out.push(packets::points_packet(row, next_exp).to_bytes().to_vec());
+    out.push(packets::skill_level_packet(row.skill_level.as_ref()).to_bytes().to_vec());
+    out.extend(packets::item_set_packets(items));
+    out.extend(packets::affect_add_packets(affects));
+    out
+}
+
+/// Paquetes del ENTERGAME (parity `input_login.cpp:611-616,644`):
+/// `TPacketGCCharacterAdd` (1) + `TPacketGCCharacterAdditionalInfo` (136)
+/// [Show/EncodeInsertPacket, `char.cpp:876-948`] -> `GC_PHASE(GAME)` ->
+/// `TPacketGCLandList` (130, `building.cpp:931-979`). Función pura.
+fn enter_packets(
+    row: &database::player::PlayerRow,
+    empire: u8,
+    lands: &[database::land::LandRow],
+) -> Vec<Vec<u8>> {
+    let mut out = vec![
         packets::character_add(row).to_bytes().to_vec(),
         packets::character_additional_info(row, empire).to_bytes().to_vec(),
-    ]
+        TPacketGCPhase::new(phase::GAME).to_bytes().to_vec(),
+    ];
+    if !lands.is_empty() {
+        out.push(packets::land_list(lands));
+    }
+    out
 }
 
 /// Armado del 449 B: slots del índice (orden del player_index) emparejados con
@@ -267,11 +459,20 @@ fn spawn_packets(row: &database::player::PlayerRow, empire: u8) -> Vec<Vec<u8>> 
 /// — el C++ empareja por dwID; un slot con pid pero sin fila Q3 queda como
 /// TSimplePlayer zeroed, divergencia menor documentada: el C++ deja el dwID
 /// puesto y stats 0, el Rust lo deja todo a 0).
+///
+/// El `lAddr`/`wPort` de cada slot = la dirección REAL del canal (del config
+/// `listen`): el DirectEnter del cliente conecta ahí
+/// (`introselect.cpp` → `ConnectGameServer`, `PythonNetworkStream.cpp:458-469`).
+/// Con 0/0 el cliente conecta a `0.0.0.0:0` → OnConnectFailure → ClosePhase
+/// (causa del cierre en el select, slice 3.5).
 async fn build_login_success(
     store: &WorldStore,
     account_id: i64,
     handle: u32,
+    listen: &str,
 ) -> Result<TPacketGCLoginSuccess, String> {
+    let (ip, port) = parse_listen(listen)?;
+    let server_ip = packets::ip_to_inet_addr(&ip)?;
     let slots = store.account_slots(account_id).await?;
     let summaries = store.list_characters(account_id).await?;
     let mut players: [Option<database::player::PlayerSummary>; PLAYER_PER_ACCOUNT] =
@@ -283,7 +484,24 @@ async fn build_login_success(
             }
         }
     }
-    Ok(packets::login_success(&players, handle, rand32()))
+    eprintln!(
+        "server_realms: 449 B con server de juego {}:{} (DirectEnter)",
+        ip, port
+    );
+    Ok(packets::login_success(&players, handle, rand32(), server_ip, port))
+}
+
+/// `"addr:port"` del config `listen` -> (addr, port). El puerto del canal es
+/// el que el cliente usa en el DirectEnter (wPort del 449 B).
+fn parse_listen(listen: &str) -> Result<(String, u16), String> {
+    let Some(colon) = listen.rfind(':') else {
+        return Err(format!("listen sin puerto: {listen}"));
+    };
+    let ip = listen[..colon].to_string();
+    let port: u16 = listen[colon + 1..]
+        .parse()
+        .map_err(|_| format!("listen con puerto inválido: {listen}"))?;
+    Ok((ip, port))
 }
 
 /// Empire del `GC_EMPIRE`: 1..3 de la cuenta -> su valor; `None`/0 -> random
@@ -367,6 +585,11 @@ impl Drop for ChannelLoginGuard {
 mod tests {
     use super::*;
     use database::player::PlayerRow;
+    use std::time::Duration;
+    use protocol::world::{
+        TPacketGCAffectAdd, TPacketGCItemSet, TPacketGCMainCharacter, TPacketGCPoints,
+        TPacketGCSkillLevel,
+    };
     use protocol::{
         TPacketGCCharacterAdd, TPacketGCCharacterAdditionalInfo, TPacketGCEmpire,
         TPacketGCLoginFailure, TPacketGCLoginSuccess,
@@ -391,22 +614,99 @@ mod tests {
         assert!(seen.len() >= 2, "el random no degenera: {seen:?}");
     }
 
-    /// Spawn best-effort: 3 paquetes en orden wire con tamanos byte-exactos.
+    /// Entry (PLAYER LOAD): la cola completa — LOADING + MAIN_CHARACTER +
+    /// 36×QUICKSLOT + POINTS + SKILLS + items + affects (parity input_db.cpp
+    /// 428-459 + ItemLoad/AffectLoad). Tamaños byte-exactos.
     #[test]
-    fn spawn_packets_order_and_sizes() {
+    fn entry_packets_order_and_sizes() {
+        use database::affect::AffectRow;
+        use database::item::ItemRow;
         let row = dummy_row();
-        let pkts = spawn_packets(&row, 3);
-        assert_eq!(pkts.len(), 3, "LOADING + ADD + ADDITIONAL_INFO");
+        let items = vec![ItemRow {
+            id: 100,
+            window: "INVENTORY".into(),
+            pos: 0,
+            count: 1,
+            vnum: 27001,
+            sockets: [0, 0, 0],
+            attrs: [(0, 0); 7],
+        }];
+        let affects = vec![AffectRow {
+            dw_pid: 2,
+            b_type: 1,
+            b_apply_on: 2,
+            l_apply_value: 3,
+            dw_flag: 4,
+            l_duration: 5,
+            l_sp_cost: 6,
+        }];
+        let pkts = entry_packets(&row, 300, &items, &affects);
+        // 2 (LOADING+113) + 36 quickslots + 2 (16+76) + 1 item + 1 affect.
+        assert_eq!(pkts.len(), 42, "2 + 36 + 2 + 1 + 1");
         assert_eq!(pkts[0].len(), TPacketGCPhase::SIZE);
         assert_eq!(pkts[0][0], header::GC_PHASE);
-        assert_eq!(pkts[0][1], phase::LOADING, "parity input_db.cpp:428 SetPhase(PHASE_LOADING)");
-        assert_eq!(pkts[1].len(), TPacketGCCharacterAdd::SIZE);
-        assert_eq!(pkts[1][0], header::GC_CHARACTER_ADD);
-        assert_eq!(pkts[2].len(), TPacketGCCharacterAdditionalInfo::SIZE);
-        assert_eq!(pkts[2][0], header::GC_CHAR_ADDITIONAL_INFO);
+        assert_eq!(pkts[0][1], phase::LOADING, "parity input_db.cpp:428");
+        assert_eq!(pkts[1].len(), TPacketGCMainCharacter::SIZE, "113, 48 B");
+        assert_eq!(pkts[1][0], TPacketGCMainCharacter::HEADER);
+        // Quickslots: 36 × 4 B en orden (parity input_db.cpp:455-456).
+        for (i, q) in pkts[2..38].iter().enumerate() {
+            assert_eq!(q.len(), 4, "quickslot {i}");
+            assert_eq!(q[0], 28, "header GC_QUICKSLOT_ADD");
+            assert_eq!(q[1], i as u8, "pos del slot {i}");
+        }
+        assert_eq!(pkts[38].len(), TPacketGCPoints::SIZE, "16, 1021 B");
+        assert_eq!(pkts[38][0], TPacketGCPoints::HEADER);
+        assert_eq!(pkts[39].len(), TPacketGCSkillLevel::SIZE, "76, 1531 B");
+        assert_eq!(pkts[39][0], TPacketGCSkillLevel::HEADER);
+        assert_eq!(pkts[40].len(), TPacketGCItemSet::SIZE, "item set 51 B");
+        assert_eq!(pkts[40][0], TPacketGCItemSet::HEADER, "header 21");
+        assert_eq!(pkts[41].len(), TPacketGCAffectAdd::SIZE, "affect add 22 B");
+        assert_eq!(pkts[41][0], TPacketGCAffectAdd::HEADER, "header 126");
+        // MainCharacter: vid@1, lx@34 (spot).
+        assert_eq!(u32::from_le_bytes([pkts[1][1], pkts[1][2], pkts[1][3], pkts[1][4]]), 2);
+        assert_eq!(i32::from_le_bytes([pkts[1][34], pkts[1][35], pkts[1][36], pkts[1][37]]), 969600);
+        // Points: level@5 = 5 (parity char.cpp:1562), NEXT_EXP@17 = 300,
+        // MAX_HP@25 = 1850 (650 + 30×40 — dummy job=1/ASSASSIN, ht=30).
+        assert_eq!(i32::from_le_bytes([pkts[38][5], pkts[38][6], pkts[38][7], pkts[38][8]]), 5);
+        assert_eq!(i32::from_le_bytes([pkts[38][17], pkts[38][18], pkts[38][19], pkts[38][20]]), 300, "NEXT_EXP");
+        assert_eq!(i32::from_le_bytes([pkts[38][25], pkts[38][26], pkts[38][27], pkts[38][28]]), 1850, "MAX_HP > 0 (ComputePoints subset)");
+        // MOV_SPEED@77 (1 + 19×4) = 100 (parity char.cpp:2245).
+        assert_eq!(i32::from_le_bytes([pkts[38][77], pkts[38][78], pkts[38][79], pkts[38][80]]), 100);
+        // Sin items/affects: 40 paquetes (2 + 36 + 2).
+        assert_eq!(entry_packets(&row, 300, &[], &[]).len(), 40);
     }
 
-    /// Tamano del wire del flujo select/spawn (invariante byte-exacto).
+    /// Enter (ENTERGAME): ADD + INFO + GAME (+ land list si hay lands) —
+    /// parity input_login.cpp:611-616,644.
+    #[test]
+    fn enter_packets_order_and_sizes() {
+        use database::land::LandRow;
+        let row = dummy_row();
+        let lands: Vec<LandRow> = vec![LandRow {
+            id: 201,
+            map_index: 41,
+            x: 66100,
+            y: 9400,
+            width: 3000,
+            height: 3000,
+            guild_id: 0,
+        }];
+        let pkts = enter_packets(&row, 3, &lands);
+        assert_eq!(pkts.len(), 4, "ADD + INFO + GAME + LAND_LIST");
+        assert_eq!(pkts[0].len(), TPacketGCCharacterAdd::SIZE);
+        assert_eq!(pkts[0][0], header::GC_CHARACTER_ADD);
+        assert_eq!(pkts[1].len(), TPacketGCCharacterAdditionalInfo::SIZE);
+        assert_eq!(pkts[1][0], header::GC_CHAR_ADDITIONAL_INFO);
+        assert_eq!(pkts[2].len(), TPacketGCPhase::SIZE);
+        assert_eq!(pkts[2][0], header::GC_PHASE);
+        assert_eq!(pkts[2][1], phase::GAME, "parity input_login.cpp:616");
+        assert_eq!(pkts[3][0], 130, "GC_LAND_LIST");
+        assert_eq!(u16::from_le_bytes([pkts[3][1], pkts[3][2]]), 27, "3 + 1×24");
+        // Sin lands -> 3 paquetes (el C++ no manda el paquete vacío).
+        assert_eq!(enter_packets(&row, 3, &[]).len(), 3);
+    }
+
+    /// Tamaños del wire del flujo select/spawn (invariante byte-exacto).
     #[test]
     fn select_spawn_wire_sizes() {
         assert_eq!(TPacketGCEmpire::SIZE, 2, "GC_EMPIRE 0x5a");
@@ -422,6 +722,62 @@ mod tests {
         for _ in 0..100 {
             assert_ne!(rand32(), 0);
         }
+    }
+
+    /// parse_listen: el addr:port del config — la dirección del DirectEnter.
+    #[test]
+    fn parse_listen_addr_port() {
+        assert_eq!(
+            parse_listen("172.25.104.175:30003").unwrap(),
+            ("172.25.104.175".to_string(), 30003)
+        );
+        assert_eq!(parse_listen("127.0.0.1:0").unwrap().1, 0, "puerto 0 (tests)");
+        assert!(parse_listen("sinpuerto").is_err());
+        assert!(parse_listen("a:b:c").is_err(), "puerto no numérico");
+    }
+
+    /// El timeout del canal es de INACTIVIDAD (no absoluto): cada paquete
+    /// recibido resetea el timer; el silencio > timeout dispara el cierre.
+    /// Con el reloj pausado: paquetes a t=0/150/300 (ventana 200 ms) siempre
+    /// dentro de la ventana → la conexión sigue; silencio tras t=300 →
+    /// el timer dispara.
+    #[tokio::test(start_paused = true)]
+    async fn idle_timeout_resets_on_traffic_and_fires_on_silence() {
+        use tokio::io::AsyncWriteExt;
+        let (server_side, mut client_side) = tokio::io::duplex(1024);
+        let mut conn = Connection::new(server_side);
+        let mut framer = Framer::new(ConnectionRole::Channel);
+        let timeout = Duration::from_millis(200);
+
+        // MOVE (16 B) como el paquete de juego del cliente vivo.
+        let move_pkt = [7u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+        // t=0: primer paquete → recv OK (el timer nace en la llamada).
+        client_side.write_all(&move_pkt).await.unwrap();
+        let pkt = recv_packet_idle(&mut conn, &mut framer, timeout).await.expect("t=0");
+        assert_eq!(pkt[0], 7);
+
+        // t=0..150: silencio; a t=150 llega otro paquete → recv OK
+        // (150 < 200 — dentro de la ventana de la llamada).
+        tokio::time::advance(Duration::from_millis(150)).await;
+        client_side.write_all(&move_pkt).await.unwrap();
+        let pkt = recv_packet_idle(&mut conn, &mut framer, timeout).await.expect("t=150");
+        assert_eq!(pkt[0], 7);
+
+        // t=150..300: silencio; a t=300 llega otro → recv OK (300-150=150 < 200
+        // — el timer de ESTA llamada nace en t=150).
+        tokio::time::advance(Duration::from_millis(150)).await;
+        client_side.write_all(&move_pkt).await.unwrap();
+        let pkt = recv_packet_idle(&mut conn, &mut framer, timeout).await.expect("t=300");
+        assert_eq!(pkt[0], 7);
+
+        // t=300..: silencio total → avanzar 250 > 200 → el timer dispara.
+        tokio::time::advance(Duration::from_millis(250)).await;
+        let err = recv_packet_idle(&mut conn, &mut framer, timeout).await;
+        assert!(
+            err.is_err() && err.unwrap_err().contains("inactividad"),
+            "el silencio > timeout dispara el cierre"
+        );
     }
 
     fn dummy_row() -> PlayerRow {

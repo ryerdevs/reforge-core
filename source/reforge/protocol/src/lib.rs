@@ -1,4 +1,4 @@
-//! # `protocol` — paquetes byte-exactos del wire de Metin2 (cliente↔servidor).
+﻿//! # `protocol` — paquetes byte-exactos del wire de Metin2 (cliente↔servidor).
 //!
 //! Contrato: `docs/reference/protocol/login-flow.md` §1–§3 (spec canónico;
 //! el draft anterior `docs/superpowers/specs/2026-08-08-wire-protocol-login-flow.md`
@@ -32,6 +32,7 @@
 /// 152/153 — el auth C++ los envía en login exitoso antes de `GC_AUTH_SUCCESS`
 /// (`input_db.cpp:1710-1716`). Boundary aislado y borrable en bloque en F7.
 pub mod legacy;
+pub mod world;
 
 /// Canal de datos aditivo pull-based (F3 §5.6): `CG_QUERY` (162) /
 /// `GC_RESPONSE` (163) — manifest versionado + delta (server = única fuente
@@ -51,9 +52,48 @@ pub mod header {
     pub const CG_CHARACTER_DELETE: u8 = 5;
     pub const CG_CHARACTER_SELECT: u8 = 6;
     pub const CG_ENTERGAME: u8 = 10;
+    // Fase de juego (tabla C→S del framer — tamaños del Packet.h del cliente):
+    pub const CG_ATTACK: u8 = 2;
+    /// Variable (iExtraLen) — no parseable por el framer (cierre documentado).
+    pub const CG_CHAT: u8 = 3;
+    pub const CG_MOVE: u8 = 7;
+    /// Variable (count + elements) — no parseable por el framer.
+    pub const CG_SYNC_POSITION: u8 = 8;
+    pub const CG_ITEM_USE: u8 = 11;
+    pub const CG_ITEM_DROP: u8 = 12;
+    pub const CG_ITEM_MOVE: u8 = 13;
+    pub const CG_ITEM_PICKUP: u8 = 15;
+    pub const CG_QUICKSLOT_ADD: u8 = 16;
+    pub const CG_QUICKSLOT_DEL: u8 = 17;
+    pub const CG_QUICKSLOT_SWAP: u8 = 18;
+    /// Variable (nombre + mensaje) — no parseable por el framer.
+    pub const CG_WHISPER: u8 = 19;
+    pub const CG_ITEM_DROP2: u8 = 20;
+    pub const CG_ON_CLICK: u8 = 26;
+    pub const CG_EXCHANGE: u8 = 27;
+    pub const CG_CHARACTER_POSITION: u8 = 28;
+    pub const CG_SCRIPT_ANSWER: u8 = 29;
+    pub const CG_QUEST_INPUT_STRING: u8 = 30;
+    pub const CG_QUEST_CONFIRM: u8 = 31;
+    pub const CG_PVP: u8 = 41;
+    pub const CG_FLY_TARGETING: u8 = 51;
+    pub const CG_USE_SKILL: u8 = 52;
+    pub const CG_SHOOT: u8 = 54;
+    pub const CG_MYSHOP: u8 = 55;
+    pub const CG_ITEM_USE_TO_ITEM: u8 = 60;
+    pub const CG_TARGET: u8 = 61;
+    pub const CG_WARP: u8 = 65;
+    pub const CG_SCRIPT_BUTTON: u8 = 66;
     /// Ping del selector de canales (`ServerStateChecker.cpp:60`, `packet.h:97`);
     /// 1 byte (solo header). Lo usa la tabla de framing de `network`.
     pub const CG_STATE_CHECKER: u8 = 206;
+    /// Login del guild mark (`packet.h:78`) — el cliente lo manda al entrar
+    /// al mundo; el canal lo ignora (marks = F5).
+    pub const CG_MARK_LOGIN: u8 = 100;
+    /// Version del cliente al terminar la carga (`Packet.h:135` — 0xf1,
+    /// `TPacketCGClientVersion2` 67 B): el canal lo ignora sin validar
+    /// (parity `input.cpp:205-213`).
+    pub const CG_CLIENT_VERSION2: u8 = 0xf1;
     pub const CG_LOGIN2: u8 = 109;
     pub const CG_LOGIN3: u8 = 111;
 
@@ -136,42 +176,42 @@ pub type Result<T> = std::result::Result<T, ProtocolError>;
 
 // Lectura LE sin panics: solo se llama tras comprobar `len() == SIZE`.
 #[inline]
-fn rd_u16(b: &[u8], off: usize) -> u16 {
+pub(crate) fn rd_u16(b: &[u8], off: usize) -> u16 {
     u16::from_le_bytes([b[off], b[off + 1]])
 }
 #[inline]
-fn rd_u32(b: &[u8], off: usize) -> u32 {
+pub(crate) fn rd_u32(b: &[u8], off: usize) -> u32 {
     u32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]])
 }
 #[inline]
-fn rd_i32(b: &[u8], off: usize) -> i32 {
+pub(crate) fn rd_i32(b: &[u8], off: usize) -> i32 {
     i32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]])
 }
 #[inline]
-fn rd_f32(b: &[u8], off: usize) -> f32 {
+pub(crate) fn rd_f32(b: &[u8], off: usize) -> f32 {
     f32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]])
 }
 #[inline]
-fn rd_arr<const N: usize>(b: &[u8], off: usize) -> [u8; N] {
+pub(crate) fn rd_arr<const N: usize>(b: &[u8], off: usize) -> [u8; N] {
     let mut a = [0u8; N];
     a.copy_from_slice(&b[off..off + N]);
     a
 }
 
 #[inline]
-fn wr_u16(b: &mut [u8], off: usize, v: u16) {
+pub(crate) fn wr_u16(b: &mut [u8], off: usize, v: u16) {
     b[off..off + 2].copy_from_slice(&v.to_le_bytes());
 }
 #[inline]
-fn wr_u32(b: &mut [u8], off: usize, v: u32) {
+pub(crate) fn wr_u32(b: &mut [u8], off: usize, v: u32) {
     b[off..off + 4].copy_from_slice(&v.to_le_bytes());
 }
 #[inline]
-fn wr_i32(b: &mut [u8], off: usize, v: i32) {
+pub(crate) fn wr_i32(b: &mut [u8], off: usize, v: i32) {
     b[off..off + 4].copy_from_slice(&v.to_le_bytes());
 }
 #[inline]
-fn wr_f32(b: &mut [u8], off: usize, v: f32) {
+pub(crate) fn wr_f32(b: &mut [u8], off: usize, v: f32) {
     b[off..off + 4].copy_from_slice(&v.to_le_bytes());
 }
 

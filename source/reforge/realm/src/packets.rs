@@ -16,7 +16,15 @@
 //! a su default (0) y quedan documentados como GAP del slice (los alimentan
 //! los subsistemas de F4/F5).
 
+use database::affect::AffectRow;
+use database::item::ItemRow;
+use database::land::LandRow;
 use database::player::{PlayerRow, PlayerSummary};
+use protocol::world::{
+    land_list_bytes as wire_land_list, TLandPacketElement, TPacketGCAffectAdd, TPacketGCItemSet,
+    TPacketGCMainCharacter, TPacketGCPoints, TPacketGCQuickSlotAdd, TPacketGCSkillLevel,
+    TPacketAffectElement, TItemPos, TPlayerSkill, TQuickslot,
+};
 use protocol::{
     from_cstr, TPacketGCCharacterAdd, TPacketGCCharacterAdditionalInfo, TPacketGCLoginSuccess,
     TSimplePlayer, PLAYER_PER_ACCOUNT,
@@ -36,10 +44,17 @@ const EQUIPPART_HAIR: usize = 3;
 ///
 /// Parity `ClientManagerLogin.cpp:324-383` (branch sin cache — el C++ mapea
 /// las columnas del Q3 una a una; los stats van como `BYTE`/`DWORD`).
-/// `l_addr`/`w_port` quedan 0: el db los manda 0 (memset del TAccountTable) y
-/// el game solo sobreescribe `lAddr` con la IP del proxy si `ENABLE_NEWSTUFF`
-/// (`desc.cpp:969-972`).
-pub fn summary_to_simple_player(s: &PlayerSummary) -> TSimplePlayer {
+/// `l_addr`/`w_port` = la dirección del server de juego que el cliente usa en
+/// el DirectEnter (`introselect.py:739-741` → `ConnectGameServer` →
+/// `CNetworkStream::Connect(lAddr, wPort)`, `PythonNetworkStream.cpp:458-469`):
+/// - `l_addr`: `inet_addr(ip)` — network byte order (el cliente decodifica los
+///   4 bytes desde el byte BAJO, `NetStream.cpp:467-473`; el C++ lo rellena
+///   con `inet_addr(g_stProxyIP)`, `desc.cpp:970-971` ENABLE_NEWSTUFF).
+/// - `w_port`: el puerto del canal en HOST order (el cliente hace `htons`,
+///   `NetAddress.cpp:79-82`).
+/// Con 0/0 el DirectEnter conecta a `0.0.0.0:0` → `OnConnectFailure` →
+/// ClosePhase → vuelta al login en silencio (evidencia del slice 3.5).
+pub fn summary_to_simple_player(s: &PlayerSummary, l_addr: u32, w_port: u16) -> TSimplePlayer {
     TSimplePlayer {
         dw_id: s.id as u32,
         sz_name: from_cstr(&s.name),
@@ -60,10 +75,31 @@ pub fn summary_to_simple_player(s: &PlayerSummary) -> TSimplePlayer {
         b_dummy: [0; 4],
         x: s.x,
         y: s.y,
-        l_addr: 0,
-        w_port: 0,
+        l_addr: l_addr as i32, // el wire es long x86 — los bits del inet_addr
+        w_port,
         skill_group: s.skill_group as u8,
     }
+}
+
+/// `"a.b.c.d"` -> DWORD en el formato de `inet_addr` (el valor que en memoria
+/// LE tiene los bytes [a, b, c, d] = `d<<24 | c<<16 | b<<8 | a` — el cliente
+/// decodifica los 4 bytes desde el byte bajo, `NetStream.cpp:467-473`).
+pub fn ip_to_inet_addr(ip: &str) -> Result<u32, String> {
+    let parts: Vec<&str> = ip.split('.').collect();
+    if parts.len() != 4 {
+        return Err(format!("ip inválida: {ip}"));
+    }
+    let mut octets = [0u32; 4];
+    for (i, p) in parts.iter().enumerate() {
+        let octet: u32 = p
+            .parse()
+            .map_err(|_| format!("ip inválida: {ip} (octeto '{p}')"))?;
+        if octet > 255 {
+            return Err(format!("ip inválida: {ip} (octeto {octet} > 255)"));
+        }
+        octets[i] = octet;
+    }
+    Ok((octets[3] << 24) | (octets[2] << 16) | (octets[1] << 8) | octets[0])
 }
 
 /// `[Option<PlayerSummary>; 5]` (por slot del `player_index`) ->
@@ -77,10 +113,16 @@ pub fn summary_to_simple_player(s: &PlayerSummary) -> TSimplePlayer {
 ///   F5 (GAP documentado).
 /// - `handle`/`random_key` los provee el caller (`desc.cpp:963-964`:
 ///   `GetHandle()` y `DESC_MANAGER::MakeRandomKey(handle)` — runtime del desc).
+/// - `server_ip`/`server_port`: el server de juego del DirectEnter (ver
+///   `summary_to_simple_player`) — el C++ los pone en `lAddr`/`wPort` de cada
+///   slot (desc.cpp:969-972; el wPort queda 0 en el C++ pero el cliente lo
+///   usa — el canal los rellena con la dirección real del listener).
 pub fn login_success(
     players: &[Option<PlayerSummary>; PLAYER_PER_ACCOUNT],
     handle: u32,
     random_key: u32,
+    server_ip: u32,
+    server_port: u16,
 ) -> TPacketGCLoginSuccess {
     let mut out = TPacketGCLoginSuccess {
         header: TPacketGCLoginSuccess::HEADER,
@@ -112,7 +154,7 @@ pub fn login_success(
     };
     for (i, slot) in players.iter().enumerate() {
         if let Some(s) = slot {
-            out.players[i] = summary_to_simple_player(s);
+            out.players[i] = summary_to_simple_player(s, server_ip, server_port);
         }
     }
     out
@@ -179,9 +221,300 @@ pub fn character_additional_info(row: &PlayerRow, empire: u8) -> TPacketGCCharac
     }
 }
 
+// ---------------------------------------------------------------------------
+// F4 slice 3: paquetes del world entry (fase Loading/Game)
+// ---------------------------------------------------------------------------
+
+/// Índices del enum `EPointTypes` (`char.h:133+`) que el entry usa — el
+/// resto del array (255 INTs) va a 0.
+const POINT_LEVEL: usize = 1;
+const POINT_VOICE: usize = 2;
+const POINT_EXP: usize = 3;
+const POINT_NEXT_EXP: usize = 4;
+const POINT_HP: usize = 5;
+const POINT_MAX_HP: usize = 6;
+const POINT_SP: usize = 7;
+const POINT_MAX_SP: usize = 8;
+const POINT_STAMINA: usize = 9;
+const POINT_MAX_STAMINA: usize = 10;
+const POINT_GOLD: usize = 11;
+const POINT_ST: usize = 12;
+const POINT_HT: usize = 13;
+const POINT_DX: usize = 14;
+const POINT_IQ: usize = 15;
+const POINT_ATT_SPEED: usize = 17;
+const POINT_MOV_SPEED: usize = 19;
+const POINT_CASTING_SPEED: usize = 21;
+const POINT_LEVEL_STEP: usize = 25;
+const POINT_STAT: usize = 26;
+const POINT_SUB_SKILL: usize = 27;
+const POINT_SKILL: usize = 28;
+const POINT_PLAYTIME: usize = 31;
+
+/// Tabla `JobInitialPoints[JOB_MAX_NUM]` del C++ (`constants.cpp:18-24` —
+/// por JOB: st, ht, dx, iq, max_hp, max_sp, hp_per_ht, sp_per_iq, ...,
+/// max_stamina, stamina_per_con). Solo los campos del subset ComputePoints.
+struct JobPoints {
+    max_hp: i32,
+    hp_per_ht: i32,
+    max_sp: i32,
+    sp_per_iq: i32,
+    max_stamina: i32,
+    stamina_per_con: i32,
+}
+
+const JOB_POINTS: [JobPoints; 4] = [
+    // JOB_WARRIOR (0)
+    JobPoints { max_hp: 600, hp_per_ht: 40, max_sp: 200, sp_per_iq: 20, max_stamina: 800, stamina_per_con: 5 },
+    // JOB_ASSASSIN (1)
+    JobPoints { max_hp: 650, hp_per_ht: 40, max_sp: 200, sp_per_iq: 20, max_stamina: 800, stamina_per_con: 5 },
+    // JOB_SURA (2)
+    JobPoints { max_hp: 650, hp_per_ht: 40, max_sp: 200, sp_per_iq: 20, max_stamina: 800, stamina_per_con: 5 },
+    // JOB_SHAMAN (3)
+    JobPoints { max_hp: 700, hp_per_ht: 40, max_sp: 200, sp_per_iq: 20, max_stamina: 800, stamina_per_con: 5 },
+];
+
+/// `RaceToJob` (`input_login.cpp:356-405` + `char.h:48-62`: MAIN_RACE_WARRIOR_M
+/// =0, ASSASSIN_W=1, SURA_M=2, SHAMAN_W=3, WARRIOR_W=4, ASSASSIN_M=5,
+/// SURA_W=6, SHAMAN_M=7, WOLFMAN_M=8): el `job` almacenado en el player ES el
+/// race. Sin WOLFMAN en el subset (ningún personaje lo usa; si llega -> Err
+/// documentado en el caller).
+pub fn race_to_job(race: i16) -> Result<i16, String> {
+    Ok(match race {
+        0 | 4 => 0, // WARRIOR
+        1 | 5 => 1, // ASSASSIN
+        2 | 6 => 2, // SURA
+        3 | 7 => 3, // SHAMAN
+        other => return Err(format!("race_to_job: race {other} fuera del subset (0..7)")),
+    })
+}
+
+/// Subset de `ComputePoints` (`char.cpp:2228-2232` + `:2245-2248`, PC branch):
+/// los máximos y las speeds base — las fórmulas EXACTAS del C++:
+/// `iMaxHP = JobInitialPoints[job].max_hp + random_hp + ht * hp_per_ht`
+/// `iMaxSP = JobInitialPoints[job].max_sp + random_sp + iq * sp_per_iq`
+/// `iMaxStamina = JobInitialPoints[job].max_stamina + ht * stamina_per_con`
+/// `MOV_SPEED = ATT_SPEED = CASTING_SPEED = 100`
+/// (el bonus SKILL_ADD_HP y el resto de derivados — defensas, regens,
+/// resistencias — quedan fuera: requieren skills/items, son F5).
+pub fn compute_max_points(row: &PlayerRow) -> Result<[i32; 3], String> {
+    let job = race_to_job(row.job)?;
+    let jp = &JOB_POINTS[job as usize];
+    let max_hp = jp.max_hp + i32::from(row.random_hp) + i32::from(row.ht) * jp.hp_per_ht;
+    let max_sp = jp.max_sp + i32::from(row.random_sp) + i32::from(row.iq) * jp.sp_per_iq;
+    let max_stamina = jp.max_stamina + i32::from(row.ht) * jp.stamina_per_con;
+    Ok([max_hp, max_sp, max_stamina])
+}
+
+/// `PlayerRow` -> `TPacketGCPoints` (1021 B, header 16).
+///
+/// Parity `char.cpp:1553-1581` (PointsPacket): los puntos DIRECTOS del row
+/// (level/exp/hp/sp/stamina/gold/st/ht/dx/iq/level_step/stat/skill points/
+/// playtime) + `POINT_VOICE` + los MAXIMOS y speeds del subset
+/// `ComputePoints` (`compute_max_points`, char.cpp:2228-2248) + `NEXT_EXP`
+/// (del caller — `exp_table[level]`, char.cpp:7190).
+///
+/// GAP documentado: el resto de derivados (def_grade, regens, resistencias,
+/// ataque/defensa — `ComputeBattlePoints` y los items) van a 0; los
+/// alimentan los subsistemas de F5.
+pub fn points_packet(row: &PlayerRow, next_exp: i64) -> TPacketGCPoints {
+    let mut p = TPacketGCPoints { header: TPacketGCPoints::HEADER, points: [0; 255] };
+    p.points[POINT_LEVEL] = i32::from(row.level);
+    p.points[POINT_VOICE] = i32::from(row.voice);
+    p.points[POINT_EXP] = row.exp;
+    p.points[POINT_NEXT_EXP] = next_exp as i32;
+    p.points[POINT_HP] = row.hp;
+    p.points[POINT_SP] = row.mp;
+    p.points[POINT_STAMINA] = i32::from(row.stamina);
+    p.points[POINT_GOLD] = row.gold;
+    p.points[POINT_ST] = i32::from(row.st);
+    p.points[POINT_HT] = i32::from(row.ht);
+    p.points[POINT_DX] = i32::from(row.dx);
+    p.points[POINT_IQ] = i32::from(row.iq);
+    p.points[POINT_ATT_SPEED] = 100; // parity char.cpp:2246
+    p.points[POINT_MOV_SPEED] = 100; // parity char.cpp:2245
+    p.points[POINT_CASTING_SPEED] = 100; // parity char.cpp:2248
+    p.points[POINT_LEVEL_STEP] = i32::from(row.level_step);
+    p.points[POINT_STAT] = i32::from(row.stat_point);
+    p.points[POINT_SUB_SKILL] = i32::from(row.sub_skill_point);
+    p.points[POINT_SKILL] = i32::from(row.skill_point);
+    p.points[POINT_PLAYTIME] = row.playtime;
+    // Máximos del ComputePoints subset (char.cpp:2228-2232). Si el race es
+    // inválido los puntos quedan en 0 (defensivo — el row viene del PG).
+    if let Ok([max_hp, max_sp, max_stamina]) = compute_max_points(row) {
+        p.points[POINT_MAX_HP] = max_hp;
+        p.points[POINT_MAX_SP] = max_sp;
+        p.points[POINT_MAX_STAMINA] = max_stamina;
+    }
+    p
+}
+
+/// `player.skill_level` (bytea, 255 × `TPlayerSkill` x86 6 B) ->
+/// `TPacketGCSkillLevel` (1531 B, header 76).
+///
+/// Parity `char_skill.cpp:184-194` (SkillLevelPacket — el C++ copia el array
+/// tal cual). El bytea del PG ES la serie cruda (verificado: 1530 B para los
+/// personajes reales). Un bytea de tamaño distinto (None/corto — defensivo)
+/// produce skills zeroed (el C++ con tabla vacía manda todo 0).
+pub fn skill_level_packet(skill_level: Option<&Vec<u8>>) -> TPacketGCSkillLevel {
+    let mut p = TPacketGCSkillLevel {
+        header: TPacketGCSkillLevel::HEADER,
+        skills: [TPlayerSkill { b_master_type: 0, b_level: 0, t_next_read: 0 }; 255],
+    };
+    if let Some(blob) = skill_level {
+        if blob.len() == 255 * TPlayerSkill::SIZE {
+            for (i, s) in p.skills.iter_mut().enumerate() {
+                let Ok(skill) = TPlayerSkill::from_bytes(&blob[i * 6..(i + 1) * 6]) else {
+                    break;
+                };
+                *s = skill;
+            }
+        }
+    }
+    p
+}
+
+/// `PlayerRow` -> `TPacketGCMainCharacter` (47 B, header 113 — layout del
+/// CLIENTE, `Packet.h:1349-1357`; el C++ manda este struct cuando el mapa NO
+/// tiene BGM configurado, `char.cpp:1536-1550`; con BGM manda 137/138 — GAP
+/// documentado: el runtime actual no configura BGM por mapa).
+///
+/// Parity `char.cpp:1539-1549`: vid = row.id, wRaceNum = job (GetRaceNum),
+/// name, lx/ly/lz = x/y/z UNITS, skill_group del row.
+///
+/// ⚠️ NO lleva empire: el struct del cliente no tiene el campo (47 B) — el
+/// canal emite el layout del cliente (discrepancia 48 vs 47 verificada en el
+/// slice 3.4 — emitir 48 B desalinea el stream del cliente).
+pub fn main_character(row: &PlayerRow) -> TPacketGCMainCharacter {
+    TPacketGCMainCharacter {
+        header: TPacketGCMainCharacter::HEADER,
+        dw_vid: row.id as u32,
+        w_race_num: row.job as u32,
+        sz_name: from_cstr(&row.name),
+        lx: row.x,
+        ly: row.y,
+        lz: row.z,
+        skill_group: row.skill_group as u8,
+    }
+}
+
+/// `LandRow` -> `TLandPacketElement` (24 B — el wire trunca a DWORD/long;
+/// los valores del runtime caben: ids 201..218, cells 4600..77000).
+fn land_element(l: &LandRow) -> TLandPacketElement {
+    TLandPacketElement {
+        dw_id: l.id as u32,
+        x: l.x as i32,
+        y: l.y as i32,
+        width: l.width as i32,
+        height: l.height as i32,
+        dw_guild_id: l.guild_id as u32,
+    }
+}
+
+/// `Vec<LandRow>` -> paquete `TPacketGCLandList` (3 B + 24 B×N, header 130).
+/// Parity `building.cpp:931-979` (SendLandList — el game manda SOLO los lands
+/// del mapa del ch; con 0 lands el C++ no manda el paquete — el caller decide).
+pub fn land_list(lands: &[LandRow]) -> Vec<u8> {
+    let elements: Vec<TLandPacketElement> = lands.iter().map(land_element).collect();
+    wire_land_list(&elements)
+}
+
+// ---------------------------------------------------------------------------
+// F4 slice 3.3: quickslots / items / affects del entry (el diff completo)
+// ---------------------------------------------------------------------------
+
+/// `player.quickslot` (bytea, 36 × `TQuickslot` 2 B) -> los 36 paquetes
+/// `GC_QUICKSLOT_ADD` (4 B c/u, header 28).
+///
+/// Parity `input_db.cpp:455-456` (el PlayerLoad hace `SetQuickslot` por slot —
+/// y `SetQuickslot` manda el paquete SIEMPRE, `char_quickslot.cpp:96-103`).
+/// Un bytea de tamaño raro (None/corto — defensivo) produce 36 slots vacíos
+/// (el C++ con tabla memset manda los 36 con type 0 — el cliente los ignora).
+pub fn quickslot_packets(quickslot: Option<&Vec<u8>>) -> Vec<Vec<u8>> {
+    let slots: [TQuickslot; TPacketGCQuickSlotAdd::QUICKSLOT_MAX_NUM] = match quickslot {
+        Some(blob) if blob.len() == 36 * TQuickslot::SIZE => {
+            let mut out = [TQuickslot { slot_type: 0, pos: 0 }; 36];
+            for (i, s) in out.iter_mut().enumerate() {
+                if let Ok(q) = TQuickslot::from_bytes(&blob[i * 2..(i + 1) * 2]) {
+                    *s = q;
+                }
+            }
+            out
+        }
+        _ => [TQuickslot { slot_type: 0, pos: 0 }; 36],
+    };
+    slots
+        .iter()
+        .enumerate()
+        .map(|(i, s)| TPacketGCQuickSlotAdd::new(i as u8, *s).to_bytes().to_vec())
+        .collect()
+}
+
+/// `Vec<ItemRow>` (los 4 windows del load) -> los paquetes `GC_ITEM_SET`
+/// (58 B c/u, header 21) en el orden del repo (id).
+///
+/// Parity `input_db.cpp:1453-1561` (ItemLoad → AddToCharacter → paquete por
+/// item). El `window` TEXT del PG se convierte al índice del enum wire
+/// (`GameType.h:175-186`): INVENTORY=1, EQUIPMENT=2, DRAGON_SOUL=5, BELT=6.
+/// GAP del slice: `flags`/`anti_flags`/`highlight` a 0 (el C++ los lee del
+/// item_proto — `item->GetFlags()`; el cliente no los exige para pintar el
+/// slot) y `count` truncado a BYTE (parity del struct wire).
+pub fn item_set_packets(items: &[ItemRow]) -> Vec<Vec<u8>> {
+    items.iter().map(item_set_packet).collect()
+}
+
+fn item_set_packet(it: &ItemRow) -> Vec<u8> {
+    let window = match it.window.as_str() {
+        "INVENTORY" => TItemPos::WINDOW_INVENTORY,
+        "EQUIPMENT" => TItemPos::WINDOW_EQUIPMENT,
+        "DRAGON_SOUL_INVENTORY" => TItemPos::WINDOW_DRAGON_SOUL,
+        "BELT_INVENTORY" => TItemPos::WINDOW_BELT,
+        // Defensivo: un window fuera de los 4 del load no llega nunca (la
+        // query los filtra); si llegara, se descarta el paquete.
+        _ => return Vec::new(),
+    };
+    TPacketGCItemSet {
+        header: TPacketGCItemSet::HEADER,
+        cell: TItemPos { window, cell: it.pos as u16 },
+        vnum: it.vnum as u32,
+        count: it.count as u8,
+        flags: 0,
+        anti_flags: 0,
+        highlight: 0,
+        sockets: it.sockets,
+        attrs: it.attrs,
+    }
+    .to_bytes()
+    .to_vec()
+}
+
+/// `Vec<AffectRow>` -> los paquetes `GC_AFFECT_ADD` (22 B c/u, header 126).
+///
+/// Parity `input_db.cpp:1563-1583` (AffectLoad → LoadAffect → AddAffect →
+/// paquete por affect). El `b_type` del row (i32) es el `dwType` del wire;
+/// `dwFlag`/`lApplyValue`/`lDuration`/`lSPCost` directos.
+pub fn affect_add_packets(affects: &[AffectRow]) -> Vec<Vec<u8>> {
+    affects
+        .iter()
+        .map(|a| {
+            TPacketGCAffectAdd::new(TPacketAffectElement {
+                dw_type: a.b_type as u32,
+                b_apply_on: a.b_apply_on as u8,
+                l_apply_value: a.l_apply_value,
+                dw_flag: a.dw_flag as u32,
+                l_duration: a.l_duration,
+                l_sp_cost: a.l_sp_cost,
+            })
+            .to_bytes()
+            .to_vec()
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use database::land::LandRow;
     use database::player::{PlayerRow, PlayerSummary};
 
     /// Índices GAP del `awPart` (WEAPON/HEAD/ACCE — runtime de items,
@@ -262,10 +595,13 @@ mod tests {
     }
 
     /// summary -> TSimplePlayer: 71 B y campos spot (parity
-    /// `ClientManagerLogin.cpp:324-383`).
+    /// `ClientManagerLogin.cpp:324-383`) — con la dirección del server de
+    /// juego del DirectEnter (lAddr = inet_addr network order; wPort host).
     #[test]
     fn summary_to_simple_player_fields_and_size() {
-        let p = summary_to_simple_player(&summary());
+        let ip = ip_to_inet_addr("172.25.104.175").expect("ip");
+        assert_eq!(ip, 0xAF_68_19_AC, "inet_addr('172.25.104.175') — network byte order");
+        let p = summary_to_simple_player(&summary(), ip, 30003);
         let b = p.to_bytes();
         assert_eq!(b.len(), TSimplePlayer::SIZE, "71 B packed");
         assert_eq!(p.dw_id, 2);
@@ -279,7 +615,12 @@ mod tests {
         assert_eq!(p.w_acce_part, 0, "GAP part_acce (documentado)");
         assert_eq!((p.x, p.y), (969600, 278400), "units crudos");
         assert_eq!(p.skill_group, 3);
-        assert_eq!((p.l_addr, p.w_port), (0, 0), "el db los manda 0 (ENABLE_NEWSTUFF lo sobreescribe)");
+        // lAddr@64 (4 B) + wPort@68 (2 B): el DirectEnter conecta a esta
+        // dirección (PythonNetworkStream.cpp:458-469). Bytes EXACTOS: el
+        // cliente decodifica el IP desde el byte bajo (NetStream.cpp:467-473)
+        // y el puerto en host order (NetAddress.cpp:79-82 hace htons).
+        assert_eq!(&b[64..68], &[172, 25, 104, 175], "lAddr = inet_addr network order (bytes LE)");
+        assert_eq!(&b[68..70], &30003u16.to_le_bytes(), "wPort host order (30003 = 0x7533)");
         // Bytes spot en el wire (LE): dwID@0, name@4, byJob@29, x@56.
         assert_eq!(&b[0..4], &[2, 0, 0, 0]);
         assert_eq!(&b[4..10], b"ninja\0");
@@ -288,13 +629,26 @@ mod tests {
         assert_eq!(&b[60..64], &278400u32.to_le_bytes(), "y=278400 @60");
     }
 
+    /// ip_to_inet_addr: validación + formato inet_addr (el valor que en
+    /// memoria LE tiene los bytes [a, b, c, d]).
+    #[test]
+    fn ip_to_inet_addr_format_and_errors() {
+        assert_eq!(ip_to_inet_addr("127.0.0.1").unwrap(), 0x0100_007F, "memoria LE: [127, 0, 0, 1]");
+        assert_eq!(ip_to_inet_addr("172.25.104.175").unwrap(), 0xAF68_19AC);
+        assert_eq!(ip_to_inet_addr("0.0.0.0").unwrap(), 0);
+        assert!(ip_to_inet_addr("172.25.104").is_err(), "3 octetos");
+        assert!(ip_to_inet_addr("a.b.c.d").is_err());
+        assert!(ip_to_inet_addr("300.1.1.1").is_err(), "octeto > 255");
+    }
+
     /// login_success: 449 B, slots None -> zeroed, handle/random_key en los
-    /// offsets del spec (desc.cpp:955-988).
+    /// offsets del spec (desc.cpp:955-988) + lAddr/wPort del server real.
     #[test]
     fn login_success_size_slots_and_tail() {
         let mut slots: [Option<PlayerSummary>; 5] = [None, None, None, None, None];
         slots[0] = Some(summary());
-        let p = login_success(&slots, 0xDEAD_BEEF, 0xCAFE_BABE);
+        let ip = ip_to_inet_addr("172.25.104.175").unwrap();
+        let p = login_success(&slots, 0xDEAD_BEEF, 0xCAFE_BABE, ip, 30003);
         let b = p.to_bytes();
         assert_eq!(b.len(), TPacketGCLoginSuccess::SIZE, "449 B packed");
         assert_eq!(b[0], TPacketGCLoginSuccess::HEADER, "header 0x20");
@@ -303,6 +657,10 @@ mod tests {
         for i in 1..5 {
             assert_eq!(p.players[i].dw_id, 0, "slot {i} vacio -> zeroed");
         }
+        // lAddr/wPort del slot 0 (offsets del TSimplePlayer: 64/68) — el
+        // DirectEnter del cliente conecta a esta dirección.
+        assert_eq!(&b[1 + 64..1 + 68], &[172, 25, 104, 175], "lAddr slot 0");
+        assert_eq!(&b[1 + 68..1 + 70], &30003u16.to_le_bytes(), "wPort slot 0");
         // guilds a 0 (F5).
         assert_eq!(p.guild_id, [0; 5]);
         assert!(p.guild_name.iter().all(|g| *g == [0u8; 13]));
@@ -361,8 +719,247 @@ mod tests {
         let s = summary();
         let (a, b, c) = (summary(), summary(), summary());
         let slots = [Some(s.clone()), Some(s), Some(a), Some(b), Some(c)];
-        let p = login_success(&slots, 1, 2);
+        let p = login_success(&slots, 1, 2, 0, 0);
         assert_eq!(p.to_bytes().len(), 449);
         assert!(p.players.iter().all(|pl| pl.dw_id == 2));
+    }
+
+    // ---------------------------------------------------------- slice 3: entry
+
+    /// points_packet: 1021 B, los puntos del row + los MÁXIMOS del subset
+    /// ComputePoints (parity char.cpp:1553-1581 + 2228-2248).
+    #[test]
+    fn points_packet_fields_and_size() {
+        let p = points_packet(&row(), 300);
+        let b = p.to_bytes();
+        assert_eq!(b.len(), TPacketGCPoints::SIZE, "1021 B");
+        assert_eq!(b[0], TPacketGCPoints::HEADER, "header 16");
+        assert_eq!(p.points[POINT_LEVEL], 5, "level del row");
+        assert_eq!(p.points[POINT_HP], 100);
+        assert_eq!(p.points[POINT_SP], 100, "mp -> POINT_SP");
+        assert_eq!(p.points[POINT_STAMINA], 100);
+        assert_eq!(p.points[POINT_GOLD], 0);
+        assert_eq!((p.points[POINT_ST], p.points[POINT_HT], p.points[POINT_DX], p.points[POINT_IQ]), (30, 30, 30, 30));
+        assert_eq!(p.points[POINT_EXP], 0);
+        assert_eq!(p.points[POINT_NEXT_EXP], 300, "exp_table[level] del caller");
+        assert_eq!(p.points[POINT_PLAYTIME], 0);
+        assert_eq!((p.points[POINT_MOV_SPEED], p.points[POINT_ATT_SPEED], p.points[POINT_CASTING_SPEED]), (100, 100, 100), "parity char.cpp:2245-2248");
+        // El dummy row es job=1 (ASSASSIN_W -> ASSASSIN): ht=30, iq=30,
+        // random_hp/sp=0 -> 650+1200=1850 / 200+600=800 / 800+150=950.
+        assert_eq!(p.points[POINT_MAX_HP], 1850, "650 + 30×40");
+        assert_eq!(p.points[POINT_MAX_SP], 800, "200 + 30×20");
+        assert_eq!(p.points[POINT_MAX_STAMINA], 950, "800 + 30×5");
+        // Wire spot: level@5 (1 + 4×1), hp@21 (1 + 4×5), max_hp@25.
+        assert_eq!(&b[5..9], &5i32.to_le_bytes());
+        assert_eq!(&b[21..25], &100i32.to_le_bytes());
+        assert_eq!(&b[25..29], &1850i32.to_le_bytes());
+    }
+
+    /// ComputePoints subset — vectores REALES del runtime (4 personajes):
+    /// el hp/mp/stamina almacenados en el row SON los máximos que el C++
+    /// calculó en el último login (parity empírica de char.cpp:2230-2232).
+    #[test]
+    fn compute_max_points_real_vectors() {
+        // lkjsnlfknlsk: job=5 (ASSASSIN_M -> ASSASSIN), lvl 1, ht=3, iq=3.
+        let mut a = row();
+        a.job = 5;
+        a.ht = 3;
+        a.iq = 3;
+        a.random_hp = 0;
+        a.random_sp = 0;
+        assert_eq!(race_to_job(5).unwrap(), 1, "RaceToJob: ASSASSIN_M -> JOB_ASSASSIN");
+        assert_eq!(compute_max_points(&a).unwrap(), [770, 260, 815], "= hp/mp/stamina reales del row (650+3×40 / 200+3×20 / 800+3×5)");
+        // ninja: job=1 (ASSASSIN_W), lvl 12, ht=8, iq=3, random_hp=430, random_sp=214.
+        let mut n = row();
+        n.job = 1;
+        n.ht = 8;
+        n.iq = 3;
+        n.random_hp = 430;
+        n.random_sp = 214;
+        assert_eq!(compute_max_points(&n).unwrap(), [1400, 474, 840], "650+430+8×40 / 200+214+3×20 / 800+8×5");
+        // Chaman: job=7 (SHAMAN_M -> SHAMAN), ht=4, iq=6.
+        let mut c = row();
+        c.job = 7;
+        c.ht = 4;
+        c.iq = 6;
+        assert_eq!(compute_max_points(&c).unwrap(), [860, 320, 820], "700+4×40 / 200+6×20 / 800+4×5");
+        // hol: job=6 (SURA_W -> SURA), ht=3, iq=5.
+        let mut h = row();
+        h.job = 6;
+        h.ht = 3;
+        h.iq = 5;
+        assert_eq!(compute_max_points(&h).unwrap(), [770, 300, 815], "650+3×40 / 200+5×20 / 800+3×5");
+        // Race fuera del subset -> Err (defensivo).
+        assert!(race_to_job(9).is_err());
+        assert!(compute_max_points(&{ let mut r = row(); r.job = 9; r }).is_err());
+    }
+
+    /// skill_level_packet: el bytea 1530 B -> 255 skills (bMasterType/bLevel/
+    /// tNextRead); None o tamaño raro -> zeroed (defensivo).
+    #[test]
+    fn skill_level_packet_parses_bytea() {
+        let mut blob = vec![0u8; 255 * 6];
+        blob[0] = 1; // skill 0: master type
+        blob[1] = 20; // skill 0: level
+        blob[2..6].copy_from_slice(&0xDEAD_BEEFu32.to_le_bytes());
+        blob[254 * 6] = 2; // skill 254
+        blob[254 * 6 + 1] = 40;
+        let p = skill_level_packet(Some(&blob));
+        let b = p.to_bytes();
+        assert_eq!(b.len(), TPacketGCSkillLevel::SIZE, "1531 B");
+        assert_eq!(b[0], TPacketGCSkillLevel::HEADER, "header 76");
+        assert_eq!(p.skills[0].b_master_type, 1);
+        assert_eq!(p.skills[0].b_level, 20);
+        assert_eq!(p.skills[0].t_next_read, 0xDEAD_BEEF);
+        assert_eq!(p.skills[254].b_level, 40);
+        // Wire spot: skill 0 @ [1..7].
+        assert_eq!(&b[1..7], &blob[0..6]);
+        // None y bytea corto -> zeroed.
+        let p = skill_level_packet(None);
+        assert!(p.skills.iter().all(|s| *s == TPlayerSkill { b_master_type: 0, b_level: 0, t_next_read: 0 }));
+        let p = skill_level_packet(Some(&vec![1, 2, 3]));
+        assert_eq!(p.skills[0].b_level, 0, "bytea corto -> zeroed (defensivo)");
+    }
+
+    /// main_character: 47 B (layout del CLIENTE — sin empire), campos spot
+    /// (parity char.cpp:1539-1549 + Packet.h:1349-1357).
+    #[test]
+    fn main_character_fields_and_size() {
+        let p = main_character(&row());
+        let b = p.to_bytes();
+        assert_eq!(b.len(), TPacketGCMainCharacter::SIZE, "47 B (layout del cliente)");
+        assert_eq!(b[0], TPacketGCMainCharacter::HEADER, "header 113");
+        assert_eq!(p.dw_vid, 2);
+        assert_eq!(p.w_race_num, 1, "GetRaceNum() = job");
+        assert_eq!(p.name(), "ninja");
+        assert_eq!((p.lx, p.ly, p.lz), (969600, 278400, 0), "UNITS");
+        assert_eq!(p.skill_group, 3);
+        // Wire: lx@34; skill_group@46 (el empire del server NO existe en el
+        // cliente — el byte 46 del wire ES el skill_group).
+        assert_eq!(&b[34..38], &969600i32.to_le_bytes());
+        assert_eq!(b[46], 3, "skill_group@46");
+    }
+
+    /// land_list: 18 lands del mapa 41 -> 435 B (3 + 18×24 — parity log del
+    /// core "elem_size: 432"); 0 lands -> 3 B (el C++ no manda el paquete).
+    #[test]
+    fn land_list_map_41_size() {
+        let lands: Vec<LandRow> = (201..=218)
+            .map(|id| LandRow {
+                id,
+                map_index: 41,
+                x: 66100 + (id - 201) * 100,
+                y: 9400,
+                width: 3000,
+                height: 3000,
+                guild_id: 0,
+            })
+            .collect();
+        let bytes = land_list(&lands);
+        assert_eq!(bytes.len(), 435, "3 + 18×24 (parity log del core)");
+        assert_eq!(bytes[0], 130, "header GC_LAND_LIST");
+        assert_eq!(u16::from_le_bytes([bytes[1], bytes[2]]), 435, "size WORD");
+        // Elemento 0: dwID@3 = 201, x@7 = 66100 (cells crudas).
+        assert_eq!(u32::from_le_bytes([bytes[3], bytes[4], bytes[5], bytes[6]]), 201);
+        assert_eq!(i32::from_le_bytes([bytes[7], bytes[8], bytes[9], bytes[10]]), 66100);
+        assert_eq!(u32::from_le_bytes([bytes[27], bytes[28], bytes[29], bytes[30]]), 202, "2º dwID @27");
+        // Vacío -> solo el header (el caller decide no mandarlo).
+        assert_eq!(land_list(&[]), [130, 3, 0]);
+    }
+
+    // ------------------------------------------------------ slice 3.3: cola
+
+    /// quickslot_packets: el bytea 72 B -> 36 paquetes de 4 B en orden
+    /// (parity input_db.cpp:455-456 + char_quickslot.cpp:96-103).
+    #[test]
+    fn quickslot_packets_36_slots() {
+        let mut blob = vec![0u8; 36 * 2];
+        blob[0] = 0; // slot 0: type ITEM
+        blob[1] = 5; // slot 0: pos 5
+        blob[2] = 1; // slot 1: type SKILL
+        blob[3] = 12;
+        let pkts = quickslot_packets(Some(&blob));
+        assert_eq!(pkts.len(), 36, "QUICKSLOT_MAX_NUM");
+        assert_eq!(pkts[0], [28, 0, 0, 5], "slot 0: header+pos+type+pos");
+        assert_eq!(pkts[1], [28, 1, 1, 12], "slot 1");
+        assert_eq!(pkts[35], [28, 35, 0, 0], "slot 35 vacío");
+        assert!(pkts.iter().all(|p| p.len() == 4));
+        // None / bytea corto -> 36 vacíos (defensivo).
+        let pkts = quickslot_packets(None);
+        assert_eq!(pkts.len(), 36);
+        assert!(pkts.iter().all(|p| p[2] == 0 && p[3] == 0));
+    }
+
+    /// item_set_packets: 58 B por item, window -> índice wire (GameType.h),
+    /// sockets/attrs directos del ItemRow.
+    #[test]
+    fn item_set_packets_fields_and_windows() {
+        use database::item::ItemRow;
+        let items = vec![
+            ItemRow {
+                id: 100,
+                window: "INVENTORY".into(),
+                pos: 3,
+                count: 1,
+                vnum: 27001,
+                sockets: [0xDEAD_BEEF, 0, 0],
+                attrs: [(1, 100), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0)],
+            },
+            ItemRow {
+                id: 101,
+                window: "EQUIPMENT".into(),
+                pos: 1,
+                count: 1,
+                vnum: 19001,
+                sockets: [0, 0, 0],
+                attrs: [(0, 0); 7],
+            },
+        ];
+        let pkts = item_set_packets(&items);
+        assert_eq!(pkts.len(), 2);
+        assert_eq!(pkts[0].len(), 51, "TPacketGCItemSet::SIZE (packed)");
+        assert_eq!(pkts[0][0], 21, "header GC_ITEM_SET");
+        assert_eq!(&pkts[0][1..4], &[1, 3, 0], "window INVENTORY=1, cell=3");
+        assert_eq!(&pkts[0][4..8], &27001u32.to_le_bytes(), "vnum");
+        assert_eq!(pkts[0][8], 1, "count BYTE");
+        assert_eq!(&pkts[0][18..26], &0xDEAD_BEEFi64.to_le_bytes(), "socket0");
+        assert_eq!(&pkts[1][1..4], &[2, 1, 0], "window EQUIPMENT=2, cell=1");
+        // Window fuera del load -> paquete vacío (defensivo).
+        let bad = ItemRow {
+            id: 102,
+            window: "SAFEBOX".into(),
+            pos: 0,
+            count: 1,
+            vnum: 1,
+            sockets: [0, 0, 0],
+            attrs: [(0, 0); 7],
+        };
+        assert!(item_set_packets(&[bad]).iter().all(|p| p.is_empty()), "SAFEBOX fuera del load");
+    }
+
+    /// affect_add_packets: 22 B por affect con el mapeo del row (b_type ->
+    /// dwType; parity input_db.cpp:1563-1583 + tables.h:808-816).
+    #[test]
+    fn affect_add_packets_mapping() {
+        use database::affect::AffectRow;
+        let affects = vec![AffectRow {
+            dw_pid: 1,
+            b_type: 5,
+            b_apply_on: 2,
+            l_apply_value: 100,
+            dw_flag: 0xDEAD_BEEF,
+            l_duration: 60,
+            l_sp_cost: 0,
+        }];
+        let pkts = affect_add_packets(&affects);
+        assert_eq!(pkts.len(), 1);
+        assert_eq!(pkts[0].len(), 22, "TPacketGCAffectAdd::SIZE");
+        assert_eq!(pkts[0][0], 126, "header GC_AFFECT_ADD");
+        assert_eq!(&pkts[0][1..5], &5u32.to_le_bytes(), "dwType = b_type");
+        assert_eq!(pkts[0][5], 2, "bApplyOn");
+        assert_eq!(&pkts[0][6..10], &100i32.to_le_bytes(), "lApplyValue");
+        assert_eq!(&pkts[0][10..14], &0xDEAD_BEEFu32.to_le_bytes(), "dwFlag");
+        assert_eq!(&pkts[0][14..18], &60i32.to_le_bytes(), "lDuration");
+        assert_eq!(pkts[0][18..22], [0, 0, 0, 0], "lSPCost");
     }
 }

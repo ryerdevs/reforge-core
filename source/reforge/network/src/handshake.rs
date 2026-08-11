@@ -142,6 +142,11 @@ pub enum HandshakeError {
     Io(io::Error),
     /// Error de framing al leer el eco (header desconocido, EOF, ...).
     Framing(FramingError),
+    /// La conexión respondió al handshake con `CG_MARK_LOGIN` (0x64) — la
+    /// conexión del guild mark del cliente (`GuildMarkDownloader.cpp:213-229`).
+    /// El canal normal (`guild_mark_server` OFF) la cierra sin responder
+    /// (`input.cpp:560-572`); el caller decide (ver `server_realms::channel`).
+    MarkLogin(protocol::world::TPacketCGMarkLogin),
 }
 
 impl fmt::Display for HandshakeError {
@@ -154,6 +159,12 @@ impl fmt::Display for HandshakeError {
             ),
             HandshakeError::Io(e) => write!(f, "handshake io error: {e}"),
             HandshakeError::Framing(e) => write!(f, "handshake framing error: {e}"),
+            HandshakeError::MarkLogin(p) => write!(
+                f,
+                "guild mark login (0x64, handle 0x{:08x}) — canal normal: cierre sin respuesta \
+                 (parity input.cpp:560-572)",
+                p.handle
+            ),
         }
     }
 }
@@ -163,7 +174,7 @@ impl std::error::Error for HandshakeError {
         match self {
             HandshakeError::Io(e) => Some(e),
             HandshakeError::Framing(e) => Some(e),
-            HandshakeError::RetriesExhausted { .. } => None,
+            HandshakeError::RetriesExhausted { .. } | HandshakeError::MarkLogin(_) => None,
         }
     }
 }
@@ -304,6 +315,21 @@ async fn wait_for_echo<S: AsyncRead + Unpin>(
                         TPacketCGHandshake::SIZE
                     ),
                 });
+            }
+            // La conexión del guild mark responde al handshake con 0x64 en vez
+            // del eco (GuildMarkDownloader.cpp:213-229). El framer ya entrega
+            // el paquete completo (9 B — tabla packet_info.cpp:141); el canal
+            // normal lo cierra sin responder (input.cpp:560-572).
+            header::CG_MARK_LOGIN => {
+                return Err(HandshakeError::MarkLogin(
+                    match protocol::world::TPacketCGMarkLogin::from_bytes(&pkt) {
+                        Ok(p) => p,
+                        Err(_) => unreachable!(
+                            "framer guarantees {} bytes for CG_MARK_LOGIN (0x64)",
+                            protocol::world::TPacketCGMarkLogin::SIZE
+                        ),
+                    },
+                ));
             }
             // Paquete conocido fuera de orden durante el handshake → se
             // descarta y se sigue esperando (parity input.cpp:625-626).
@@ -482,6 +508,34 @@ mod tests {
 
         let err = server.await.unwrap().unwrap_err();
         assert!(matches!(err, HandshakeError::RetriesExhausted { attempts: 2 }));
+    }
+
+    /// (g) La conexión del guild mark responde con CG_MARK_LOGIN (0x64) en vez
+    /// del eco → `HandshakeError::MarkLogin` con el paquete (el canal normal
+    /// cierra sin responder, parity input.cpp:560-572).
+    #[tokio::test]
+    async fn mark_login_responds_with_marklogin_error() {
+        let (server_side, mut client_side) = duplex(1024);
+        let server = spawn_server(HandshakeConfig::default(), NOW, server_side);
+
+        // El cliente mark recibe el handshake y responde 0x64 (9 B) — NO el
+        // eco (GuildMarkDownloader.cpp:213-229).
+        let hs = recv_handshake(&mut client_side).await;
+        let mark = protocol::world::TPacketCGMarkLogin {
+            header: 100,
+            handle: 0xDEAD_BEEF,
+            random_key: hs.dw_handshake,
+        };
+        client_side.write_all(&mark.to_bytes()).await.unwrap();
+
+        let err = server.await.unwrap().unwrap_err();
+        match err {
+            HandshakeError::MarkLogin(p) => {
+                assert_eq!(p.handle, 0xDEAD_BEEF);
+                assert_eq!(p.random_key, hs.dw_handshake);
+            }
+            other => panic!("esperaba MarkLogin, got {other:?}"),
+        }
     }
 
     /// (f) Un intento con bias malo no es fatal: el retry con eco correcto
