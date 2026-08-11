@@ -49,4 +49,36 @@ Rules for running the legacy test stack on the WSL Debian-M2 environment. Source
 - **Consequence:** repo bloat, secret/asset leaks, CI breakage.
 - **Status:** Active.
 
+## 6. WSL memory pressure kills stack processes silently
+
+- **Rule:** WSL builds (cargo/gcc) with the game stack running can kill stack processes WITHOUT any log or OOM entry in dmesg — the process just disappears. Build with the game idle (or accept a possible core restart), and ALWAYS verify the stack processes after a WSL build (`pgrep` + `ss -ltn` on 30000/30001/30003/3307).
+- **Why:** a killed core1 looks like a crash with no evidence trail; hours can go into "why did the core die" when the answer is memory pressure (4 GB host / 2 GB WSL cap — §1).
+- **Evidence:** 2026-08-11: core1 died 2× during WSL builds, no SYSERR, no OOM in dmesg (session logs; stack re-verified with `pgrep`/`ss` after builds).
+- **Consequence:** silent session drops (players disconnect), lost verification state, false "instability" hypotheses.
+- **Status:** Active.
+
+## 7. Never `cp` over a running binary
+
+- **Rule:** `cp` over a binary that is executing fails with `Text file busy`. Deploy sequence: `pkill` the process → WAIT until it is gone (`pgrep` empty) → `cp` → `sync` → relaunch with the same command line → verify with `ss -ltnp`/`pgrep`.
+- **Why:** 2026-08-11 the deploy pattern failed 2× with Text file busy when the target process was still running.
+- **Evidence:** `scripts/gpg`-adjacent deploy scripts (pkill → cp → sync → relaunch, e.g. the mysql_proxy redeploys); `ss -ltnp` verification after relaunch.
+- **Consequence:** failed deploy, stale binary running, or a half-copied file.
+- **Status:** Active.
+
+## 8. `wsl.exe` mangles quoted arguments from PowerShell
+
+- **Rule:** PowerShell passes arguments to `wsl -d … -- bash -c "…"` after its own quote processing: inner double quotes, `$VAR`, parentheses and `%` get mangled/expanded. For WSL commands needing quoting, write a script file (`.sh`) in the temp dir and run `wsl -d Debian-M2 -- bash <file>` — no inline quoting.
+- **Why:** 2026-08-11: 5+ attempts with inline quoting failed (mariadb `-e` with quotes, `python3 -c`, grep with parentheses); the script-file pattern worked first try every time.
+- **Evidence:** session log of failed inline commands vs the script-file pattern (SQL/script files run via `wsl -- bash <file>`).
+- **Consequence:** wasted round trips, corrupted commands that look right.
+- **Status:** Active.
+
+## 9. E2E tests must leave no residue
+
+- **Rule:** E2E suites use UNIQUE names per run (`e2e_<ts>` / `m2e2_<ts>`) and a `trap cleanup EXIT` that deletes exactly those rows. Do a periodic sweep for residue (`WHERE name/login/account LIKE 'e2e_%'` / `m2e2_%`) — leftovers from old suites survive their cleanups.
+- **Why:** 2026-08-11 a parity run found 2 `e2e_rust_*` players and 4 `m2e2_*` messenger rows from previous suites; swept manually (documented in the parity snapshot header).
+- **Evidence:** `parity_check.py --snapshot` DIFF output (2026-08-11); the `e2e_db.sh` trap — verified 0 residue after the full 98-assert run.
+- **Consequence:** parity false positives, DB pollution, throwaway rows mixed with the user's real data.
+- **Status:** Active.
+
 Related: [`rust-rewrite.md`](rust-rewrite.md) (two source copies), [`data-and-encoding.md`](data-and-encoding.md).

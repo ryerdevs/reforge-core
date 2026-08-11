@@ -160,3 +160,31 @@ async fn player_create_save_roundtrip_throwaway() {
     delete_throwaway(&client, &name).await;
     result.expect("create/save/load round-trip contra PG real");
 }
+
+/// player_index_pid contra el índice real de la cuenta test:
+/// pid1..pid5 = [1, 3, 5, 0, 2] (E2E Q1) — slots 0/1/2/4 con pid, slot 3
+/// vacío (pid=0) -> None; cuenta sin fila de índice -> None; slot 5 -> Err.
+#[tokio::test]
+#[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
+async fn player_index_pid_live_account_slots() {
+    let repo = PlayerRepo::new(pg_conn());
+    // pids del E2E Q1 (QUERY_LOGIN col 6..10: pi.pid1..pid5 de la cuenta test).
+    let expected = [Some(1i64), Some(3), Some(5), None, Some(2)];
+    for (slot, want) in expected.iter().enumerate() {
+        let got = repo
+            .player_index_pid(1, slot as u8)
+            .await
+            .expect("player_index_pid no falla");
+        assert_eq!(&got, want, "slot {slot}: pid{} de la cuenta test", slot + 1);
+    }
+    // Cuenta sin fila de índice -> None.
+    assert_eq!(
+        repo.player_index_pid(999_999_999, 0).await.expect("DB up"),
+        None,
+        "sin fila de player_index -> None"
+    );
+    // Slot inválido -> Err (el game valida antes, input_login.cpp:260-264).
+    for slot in [5u8, 200] {
+        assert!(repo.player_index_pid(1, slot).await.is_err(), "slot {slot} -> Err");
+    }
+}

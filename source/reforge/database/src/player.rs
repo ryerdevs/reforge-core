@@ -228,6 +228,40 @@ $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26) RETURNING id",
             .map_err(|e| pg_err("PLAYER_CREATE", &e))?;
         row.try_get(0).map_err(|e| format!("PLAYER_CREATE id: {e}"))
     }
+
+    /// Pid del slot en `player.player_index` (parity `ClientManagerPlayer.cpp:794`
+    /// — `SELECT pid%u ...` con `account_index + 1`).
+    ///
+    /// - `slot` 0..4 -> `Some(pid)` si el índice tiene fila y `pid > 0`;
+    ///   `None` = slot vacío (pid 0) o cuenta sin fila de índice.
+    /// - `slot` >= 5 -> `Err` (el game valida antes, `input_login.cpp:260-264`).
+    pub async fn player_index_pid(&self, account_id: i64, slot: u8) -> Result<Option<i64>, String> {
+        let client = self.connect().await?;
+        let sql = index_sql(slot)?;
+        let rows = client
+            .query(&sql, &[&account_id])
+            .await
+            .map_err(|e| pg_err("PLAYER_INDEX", &e))?;
+        Ok(rows
+            .first()
+            .and_then(|r| r.try_get(0).ok())
+            .filter(|&pid| pid > 0))
+    }
+}
+
+/// Nombres de columna del índice por slot (parity `ClientManagerPlayer.cpp:794`
+/// — `pid%u` con `account_index + 1` = pid1..pid5). Constante cerrada: el slot
+/// se valida antes de indexar (`index_sql`).
+const PID_COLUMNS: [&str; 5] = ["pid1", "pid2", "pid3", "pid4", "pid5"];
+
+/// SQL del índice para el slot: `SELECT pid{n} FROM player.player_index
+/// WHERE id = $1`. `Err` si el slot está fuera de 0..4 (nunca se interpola un
+/// valor del caller — la columna viene de la constante cerrada).
+fn index_sql(slot: u8) -> Result<String, String> {
+    let col = PID_COLUMNS
+        .get(slot as usize)
+        .ok_or_else(|| format!("player_index: slot {slot} fuera de rango 0..4"))?;
+    Ok(format!("SELECT {col} FROM player.player_index WHERE id = $1"))
 }
 
 /// `ip` no esta en el load (42 columnas) — el save usa el default del C++.
@@ -498,6 +532,27 @@ mod tests {
             change_name: 0,
         };
         assert_eq!(s.id, 2);
+    }
+
+    /// Índice: el SQL por slot es la query LITERAL del C++
+    /// (`ClientManagerPlayer.cpp:794` — `SELECT pid%u` con slot+1); el slot
+    /// fuera de 0..4 falla ANTES de interpolar (columna de constante cerrada).
+    #[test]
+    fn index_sql_shape_and_slot_validation() {
+        assert_eq!(
+            index_sql(0).unwrap(),
+            "SELECT pid1 FROM player.player_index WHERE id = $1"
+        );
+        assert_eq!(index_sql(1).unwrap(), "SELECT pid2 FROM player.player_index WHERE id = $1");
+        assert_eq!(index_sql(3).unwrap(), "SELECT pid4 FROM player.player_index WHERE id = $1");
+        assert_eq!(index_sql(4).unwrap(), "SELECT pid5 FROM player.player_index WHERE id = $1");
+        // El C++ usa account_index+1: slot 0 -> pid1 .. slot 4 -> pid5.
+        assert!(PID_COLUMNS.iter().enumerate().all(|(i, c)| c == &format!("pid{}", i + 1)));
+        // Slots inválidos -> Err (parity input_login.cpp:260-264: el game
+        // valida antes de preguntar al db).
+        for slot in [5u8, 6, 200] {
+            assert!(index_sql(slot).is_err(), "slot {slot} debe fallar");
+        }
     }
 
     fn dummy_row() -> PlayerRow {

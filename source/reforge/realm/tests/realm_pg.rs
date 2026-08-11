@@ -116,6 +116,26 @@ async fn realm_select_player_each_live_character() {
     assert!(p.x > 0 && p.y > 0, "x/y units positivos: {},{}", p.x, p.y);
 }
 
+/// account_slots: los 5 pids de la cuenta test EN ORDEN de slot
+/// (pid1..pid5 = [1, 3, 5, 0, 2], E2E Q1) — el orden es el contrato del 449B.
+#[tokio::test]
+#[ignore = "requiere PG real (WSL): cargo test --package realm -- --ignored"]
+async fn realm_account_slots_live_account() {
+    let store = WorldStore::new(pg_conn()).await.expect("WorldStore::new");
+    let slots = store.account_slots(TEST_ACCOUNT).await.expect("account_slots");
+    assert_eq!(
+        slots,
+        [Some(1), Some(3), Some(5), None, Some(2)],
+        "pid1..pid5 de la cuenta test (E2E Q1), en orden de slot"
+    );
+    // Cuenta sin fila de índice -> 5 × None.
+    assert_eq!(
+        store.account_slots(999_999_999).await.expect("DB up"),
+        [None; 5],
+        "sin fila de player_index -> slots vacios"
+    );
+}
+
 /// select_player con slot inválido -> Err (parity: el game valida antes,
 /// input_login.cpp:260-264).
 #[tokio::test]
