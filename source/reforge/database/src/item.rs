@@ -101,13 +101,16 @@ pub struct ItemRepo {
 /// Fila del item_proto (subset uso+combate): `type`/`sub_type` (el
 /// `bType`/`bSubType` del TItemTable — ITEM_TYPE_WEAPON=1, ITEM_TYPE_ARMOR=2,
 /// ARMOR_BODY=0/HEAD=1/SHIELD=2/FOOTS=4, ItemData.h:71-74,169-185) +
-/// `value0..5` (`alValues`). El combate usa value3/4 (daño del arma) y
-/// value5 (bonus); la armadura value1 + 2×value5; las pociones value0/1/3/4.
+/// `value0..5` (`alValues`) + `wearflag` (los bits `WEARABLE_*` —
+/// item_length.h:379-392, el slot del equip lo decide `FindEquipCell`,
+/// item.cpp:509-623). El combate usa value3/4 (daño del arma) y value5
+/// (bonus); la armadura value1 + 2×value5; las pociones value0/1/3/4.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProtoItem {
     pub b_type: i16,
     pub b_sub_type: i16,
     pub values: [i32; 6],
+    pub wear_flag: u32,
 }
 
 impl ItemRepo {
@@ -179,7 +182,7 @@ impl ItemRepo {
         let client = self.connect().await?;
         let rows = client
             .query(
-                "SELECT type, sub_type, value0, value1, value2, value3, value4, value5 \
+                "SELECT type, sub_type, value0, value1, value2, value3, value4, value5, wearflag \
                  FROM player.item_proto WHERE vnum = $1",
                 &[&vnum],
             )
@@ -196,6 +199,7 @@ impl ItemRepo {
             b_type: r.try_get(0).map_err(|e| format!("item_proto.type: {e}"))?,
             b_sub_type: r.try_get(1).map_err(|e| format!("item_proto.sub_type: {e}"))?,
             values,
+            wear_flag: r.try_get(8).map_err(|e| format!("item_proto.wearflag: {e}"))?,
         }))
     }
 
