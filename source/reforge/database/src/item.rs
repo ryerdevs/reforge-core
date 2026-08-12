@@ -98,6 +98,18 @@ pub struct ItemRepo {
     pg_conn: String,
 }
 
+/// Fila del item_proto (subset uso+combate): `type`/`sub_type` (el
+/// `bType`/`bSubType` del TItemTable — ITEM_TYPE_WEAPON=1, ITEM_TYPE_ARMOR=2,
+/// ARMOR_BODY=0/HEAD=1/SHIELD=2/FOOTS=4, ItemData.h:71-74,169-185) +
+/// `value0..5` (`alValues`). El combate usa value3/4 (daño del arma) y
+/// value5 (bonus); la armadura value1 + 2×value5; las pociones value0/1/3/4.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtoItem {
+    pub b_type: i16,
+    pub b_sub_type: i16,
+    pub values: [i32; 6],
+}
+
 impl ItemRepo {
     pub fn new(pg_conn: impl Into<String>) -> Self {
         Self { pg_conn: pg_conn.into() }
@@ -151,17 +163,23 @@ impl ItemRepo {
             .map_err(|e| pg_err("ITEM_DESTROY", &e))
     }
 
-    /// Valores de USO del item_proto (`player.item_proto.value0..4` — el
-    /// `alValues` del TItemTable del C++). El efecto de las pociones
-    /// (`UseItemEx` → USE_POTION, char_item.cpp:4172-4204): `value0` = HP
-    /// flat, `value1` = SP flat, `value3` = HP % (del máximo), `value4` =
-    /// SP % (del máximo). `None` = el vnum no existe en item_proto.
-    /// SQL inline (sin dependencia del mapeo de filas).
-    pub async fn load_proto_use_values(&self, vnum: i64) -> Result<Option<[i32; 5]>, String> {
+    /// Valores de USO y COMBATE del item_proto (`player.item_proto` —
+    /// `alValues` + `type`/`sub_type` del TItemTable del C++). El efecto de
+    /// las pociones (`UseItemEx` → USE_POTION, char_item.cpp:4172-4204):
+    /// `value0` = HP flat, `value1` = SP flat, `value3` = HP % (del máximo),
+    /// `value4` = SP % (del máximo). El combate (`Item_GetDamage`,
+    /// battle.cpp:442-462 + CalcMeleeDamage:533,548): arma →
+    /// `value3`/`value4` = daño min/max, `value5` = bonus ×2; armadura
+    /// (char.cpp:2124-2125): `value1` + `2×value5`. `None` = el vnum no
+    /// existe en item_proto. SQL inline (sin dependencia del mapeo de filas).
+    pub async fn load_proto_use_values(
+        &self,
+        vnum: i64,
+    ) -> Result<Option<ProtoItem>, String> {
         let client = self.connect().await?;
         let rows = client
             .query(
-                "SELECT value0, value1, value2, value3, value4 \
+                "SELECT type, sub_type, value0, value1, value2, value3, value4, value5 \
                  FROM player.item_proto WHERE vnum = $1",
                 &[&vnum],
             )
@@ -170,11 +188,15 @@ impl ItemRepo {
         let Some(r) = rows.first() else {
             return Ok(None);
         };
-        let mut v = [0i32; 5];
-        for (i, slot) in v.iter_mut().enumerate() {
-            *slot = r.try_get(i).map_err(|e| format!("item_proto.value{i}: {e}"))?;
+        let mut values = [0i32; 6];
+        for (i, slot) in values.iter_mut().enumerate() {
+            *slot = r.try_get(2 + i).map_err(|e| format!("item_proto.value{i}: {e}"))?;
         }
-        Ok(Some(v))
+        Ok(Some(ProtoItem {
+            b_type: r.try_get(0).map_err(|e| format!("item_proto.type: {e}"))?,
+            b_sub_type: r.try_get(1).map_err(|e| format!("item_proto.sub_type: {e}"))?,
+            values,
+        }))
     }
 
     /// Probe del rango de ids (`ItemIDRangeManager.cpp:93,121` — E2E Q8):
