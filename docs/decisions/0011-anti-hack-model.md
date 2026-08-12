@@ -1,6 +1,6 @@
 ---
 Type: Decision
-Status: Proposed (2026-08-12)
+Status: Accepted (2026-08-12)
 Audience: Contributors, maintainers
 Date: 2026-08-12
 Last verified: 2026-08-12
@@ -12,7 +12,7 @@ Superseded by: —
 
 ## Status
 
-Proposed (2026-08-12). Ratifies the controls already implemented (verified
+Accepted (2026-08-12). Ratifies the controls already implemented (verified
 2026-08-12 with file:line), decides the signed-clock-wrap question, and sets
 the pending roadmap. User principle (2026-08-12): "as an MMORPG we are highly
 hackable" — anti-hack is a first-class property of the core, not a checkbox.

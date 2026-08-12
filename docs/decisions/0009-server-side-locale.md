@@ -1,6 +1,6 @@
 ---
 Type: Decision
-Status: Proposed (2026-08-11)
+Status: Accepted (2026-08-12)
 Audience: Contributors, maintainers
 Last verified: 2026-08-12
 ---
@@ -9,7 +9,7 @@ Last verified: 2026-08-12
 
 ## Status
 
-Proposed (2026-08-11). Design closed with the user — see `docs/plans/locale-redesign.md`.
+Accepted (2026-08-12). Design closed with the user — see `docs/plans/locale-redesign.md`.
 
 ## Context
 

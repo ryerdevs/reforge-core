@@ -7,7 +7,25 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
-## [2026-08-12] (28th part) — Strategic analysis: plan vs reality, staleness sweep, ADR-0010/0011
+## [2026-08-12] (29th part) — bevy_ecs adopted NOW + client F7 = bevy + Slint; ADR-0010/0011/0009 Accepted
+
+> User decision after the strategic review: "Metin2 es un juego de farmeo — el lag con muchos mobs es el problema core; con ECS mejoraría muchísimo el rendimiento. Y para el cliente futuro, bevy (no wgpu desde cero)." Documented in ADR-0010 §2 (amended) + ADR-0007 (amended) + plan/ROADMAP.
+
+### Decided — ECS and client stack
+
+- **ADR-0010 amended + Accepted**: §1 realm architecture now has FOUR layers — pure domain modules + **bevy_ecs World** (components Position/Hp/Aggro/Mob/Item; systems AI 500 ms/movement/combat/drops; `default-features = false`, no bevy_reflect) + per-connection tokio tasks (intents via mpsc, Veloren pattern) + WorldStore/Batcher+WAL. §2 replaces the benchmark gate with **adoption NOW**: mob-farming density is the core requirement (145,876 spawns, map 41 = 10,026), solo-dev maintenance (ecosystem maintains archetypes/queries), one paradigm with the future client; the F5 benchmark validates the choice instead of gating entry. Alternatives/Consequences rewritten (hand-rolled SoA rejected — would grow into a mini-ECS; actor model rejected).
+- **Client F7 = bevy + Slint (user decision)**: replaces the wgpu-from-scratch plan (months of work reinventing what bevy provides: render, assets, ECS, input). ADR-0007 amended accordingly. Same ecosystem on server and client.
+- **ADR-0011 → Accepted** (anti-hack model: server-authoritative invariant, always-on controls ratified with file:line, signed clock wrap decided → modular difference with tolerance).
+- **ADR-0009 → Accepted** (server-side locale, implementation live since 2026-08-11).
+
+### Changed — docs (aligned with the decision)
+
+- `ROADMAP.md`: ECS line 158 superseded by ADR-0010 **Accepted** (bevy adopted); F7 note/client/engine (213/215/234) → bevy + Slint; deferral 227 → bevy_ecs ADOPTED 2026-08-12.
+- `docs/plans/server-rewrite.md`: §2 item 9 (defer list — bevy_ecs adopted, WAL DONE), §5.2 (182) ECS adopted, §5.5 (262-263) WAL DONE + contract fixed in ADR-0008, §7 table (385) Entities → bevy_ecs adopted, deferred list (393), F7 row (418), §11 ADR table (0009/0010/0011 → Accepted).
+- `AGENTS.md` guardrails: ADR-0009/0010/0011 → Accepted with the bevy_ecs decision summarized.
+- `docs/decisions/0007` amended: new client = bevy + Slint (decided 2026-08-12).
+- `source/reforge/README.md`: realm row → bevy_ecs World adoptado (ADR-0010 §2).
+- **Next slice**: ECS adoption implementation — `MobCache` → World components/systems with the 371 existing tests staying green (ADR-0010 Consequences).
 
 > User-requested full-project review ("are we only transcribing, not innovating?"). Three recon lanes (explorer inventory, librarian plan digest, oracle verdict) + two doc lanes (librarian staleness sweep x2). No code changed.
 
@@ -37,8 +55,6 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 - **ADR-0010 — Domain boundaries and data ownership**: ratifies the real realm architecture (pure functions + per-connection state + WorldStore, NOT the plan's ECS); ECS entry criterion = F5 benchmark failing 1,000+/instance with ≥2–5x CPU headroom or AI-tick >500ms; data ownership volatile/durable/derived; **translator-vs-core governing boundary** (user principle codified); wire debt inventory D1–D6 with F7 removal plan.
 - **ADR-0011 — Anti-hack model**: invariant server-authoritative zero client trust; ratifies implemented controls (timer speedhack always-on, anti-teleport, 0x00→close, DB fail-fast, idle timeout, server-clock cooldowns); **decides signed clock wrap** → modular difference with tolerance (kick stays as policy); pending controls with phase (speed envelope, walkability from PG, floods, god-mode, dupe completion, farm bots); attack-class table.
-
-
 
 > Team model change (user-directed, defined before implementation). Config: `~/.config/opencode/oh-my-opencode-slim.json` + `.opencode/agents/*.md` (local, gitignored). Docs: this repo.
 
@@ -799,7 +815,6 @@ The client reached the select screen early, but world entry failed silently (cle
 
 - **El selector de banderas causó pantalla NEGRA al abrir el login** (primera versión 18:04): `btn.SetEvent(ui.__mem_func__(self.__OnClickLanguageFlag(...)))` envolvía una **closure** con `__mem_func__` (wrapper pensado para métodos bound estilo `self.__OnClickLoginButton`) → excepción en `__CreateLanguageSelector` durante `LoginWindow.Open()` → el login no se construye → negro. **Fix:** `SetEvent` directo con la closure (igual que las lambdas del teclado virtual, `key_space.SetEvent(lambda ...)`) + **try/except blindado** en `__CreateLanguageSelector` (`print` del error, el login se muestra igual aunque el selector falle). Repack 538368 B 18:12, desplegado a `client\pack` y verificado por desempaquetado (línea 379 sin `__mem_func__`, 32 banderas dentro del epk).
 - **Verificado el `.rar` del sistema completo** (`systems\Language System 1.2.6.rar`, UnRAR l): contenido idéntico a la carpeta extraída, **sin ninguna imagen de bandera de país** y sin lógica de selector de login. Los 8 `02. Client\root\*.py` del mod son parches del coliseo PVP (dependen de `__LANGUAGE_SYSTEM__` en el C++ del cliente, no integrado) — **copiarlos rompería el login** (ImportError `uiLanguageSystem`, AttributeError `app.LANGUAGE_SYSTEM`, `player.IsLanguageSystem()` inexistente). Confirmada la decisión #8 del doc de estado (no integrar ese root).
-
 
 ## [2026-08-09] (3ª sesión, 2ª parte) — Crash de entrada al mundo: diagnóstico en curso + auditoría del Language System
 

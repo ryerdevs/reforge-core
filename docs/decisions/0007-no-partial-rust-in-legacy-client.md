@@ -18,7 +18,7 @@ The legacy client (v40999) is frozen as the wire contract during F0–F6; only a
 
 ## Decision
 
-**No partial Rust embedded in the legacy client during F0–F6.** The Rust client ships standalone: the Slint login/select/HUD UI is built as a standalone app in F5 and integrated into the new client (wgpu) in F7. Client-side work during F0–F6 remains limited to the agreed additive C++ changes.
+**No partial Rust embedded in the legacy client during F0–F6.** The Rust client ships standalone: the Slint login/select/HUD UI is built as a standalone app in F5 and integrated into the new client (bevy + Slint — engine decided 2026-08-12, replacing the wgpu-from-scratch plan; ADR-0010 §2 shares the same ECS ecosystem) in F7. Client-side work during F0–F6 remains limited to the agreed additive C++ changes.
 
 This ADR is **Accepted only for the boundary that was already agreed** (client frozen as contract; no partial Rust embedding during F0–F6; standalone/new client later). Everything else about the new client — engine, protocol, encryption, pack formats — remains open and needs its own ADRs at F7.
 
