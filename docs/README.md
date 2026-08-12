@@ -61,6 +61,7 @@ Real state as of 2026-08-10 (see [`CURRENT.md`](CURRENT.md) for the full snapsho
 ## Plans
 
 - [`plans/server-rewrite.md`](plans/server-rewrite.md) — canonical single-file design: architecture, anti-hack, data layer, migration order (G-PG before F2), quest DSL, regional channels, modifiable client. Status: **Draft v0.3 (canonical)**.
+- [`plans/locale-redesign.md`](plans/locale-redesign.md) — server-side locale: one PG table + one packet (GC_LOCALE) + client cache; per-language text owned by the server. Status: **Draft (2026-08-11)**.
 
 ## Decisions (ADRs)
 

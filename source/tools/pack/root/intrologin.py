@@ -147,6 +147,10 @@ class LoginWindow(ui.ScriptWindow):
 		self.virtualKeyboardMode = "ALPHABET"
 		self.virtualKeyboardIsUpper = False
 
+		# F5: dict de canales del auth (GC_CHANNEL_LIST) en formato serverinfo —
+		# se cachea por ventana (la lista solo cambia con un login nuevo).
+		self.authChannelDict = None
+
 		# @fixme001 BEGIN (timeOutMsg and timeOutOk undefined)
 		self.timeOutMsg = False
 		self.timeOutOk = False
@@ -980,12 +984,15 @@ class LoginWindow(ui.ScriptWindow):
 					account_addr = serverInfo.REGION_AUTH_SERVER_DICT[0][k]["ip"]
 					account_port = serverInfo.REGION_AUTH_SERVER_DICT[0][k]["port"]
 
-					channel_info = v["channel"][channel_idx]
+					# F5: la lista del auth si llegó; serverinfo.py si no.
+					channelDict = self.__GetChannelDict(0, k)
+					channel_info = channelDict[channel_idx]
 					channel_name = channel_info["name"]
 					addr = channel_info["ip"]
 					port = channel_info["tcp_port"]
 
 					net.SetMarkServer(addr, port)
+					net.SetChannelIndex(channel_idx)
 					self.stream.SetConnectInfo(addr, port, account_addr, account_port)
 
 					matched = True
@@ -1208,12 +1215,46 @@ class LoginWindow(ui.ScriptWindow):
 		self.__RequestServerStateList()
 		self.__RefreshServerStateList()
 
+	def __GetAuthChannelDict(self):
+		# F5: dict de canales del auth (GC_CHANNEL_LIST 164) en el formato de
+		# serverinfo (ids 0..N-1, key 10+i, ip/puerto del AUTH — adiós al IP
+		# bakeado de serverinfo.py). None si el auth no mandó lista (auth C++
+		# legacy o primer arranque) → fallback a serverinfo.py.
+		if self.authChannelDict is not None:
+			return self.authChannelDict
+
+		chList = net.GetChannelList()
+		if not chList:
+			return None
+
+		chDict = {}
+		for i, ch in enumerate(chList):
+			name, ip, port, players = ch
+			chDict[i] = {
+				"key": 10 + i,
+				"name": name,
+				"ip": ip,
+				"tcp_port": port,
+				"udp_port": port,
+				"state": serverInfo.STATE_DICT[1],
+			}
+
+		self.authChannelDict = chDict
+		return chDict
+
+	def __GetChannelDict(self, regionID, serverID):
+		# F5: la lista del auth si llegó; serverinfo.py si no.
+		chDict = self.__GetAuthChannelDict()
+		if chDict is not None:
+			return chDict
+		return serverInfo.REGION_DICT[regionID][serverID]["channel"]
+
 	def __RequestServerStateList(self):
 		regionID = self.__GetRegionID()
 		serverID = self.__GetServerID()
 
 		try:
-			channelDict = serverInfo.REGION_DICT[regionID][serverID]["channel"]
+			channelDict = self.__GetChannelDict(regionID, serverID)
 		except:
 			print(" __RequestServerStateList - serverInfo.REGION_DICT(%d, %d)" % (regionID, serverID))
 			return
@@ -1236,7 +1277,7 @@ class LoginWindow(ui.ScriptWindow):
 		self.channelList.ClearItem()
 
 		try:
-			channelDict = serverInfo.REGION_DICT[regionID][serverID]["channel"]
+			channelDict = self.__GetChannelDict(regionID, serverID)
 		except:
 			print(" __RequestServerStateList - serverInfo.REGION_DICT(%d, %d)" % (regionID, serverID))
 			return
@@ -1268,7 +1309,12 @@ class LoginWindow(ui.ScriptWindow):
 		channelID=addrKey%10
 
 		try:
-			serverInfo.REGION_DICT[regionID][serverID]["channel"][channelID]["state"] = stateName
+			# F5: si la lista activa es la del auth, el estado del
+			# ServerStateChecker se guarda ahí (los canales del auth).
+			if self.authChannelDict is not None:
+				self.authChannelDict[channelID]["state"] = stateName
+			else:
+				serverInfo.REGION_DICT[regionID][serverID]["channel"][channelID]["state"] = stateName
 			self.__RefreshServerStateList()
 
 		except:
@@ -1321,7 +1367,7 @@ class LoginWindow(ui.ScriptWindow):
 			return
 
 		try:
-			channelDict = serverInfo.REGION_DICT[regionID][serverID]["channel"]
+			channelDict = self.__GetChannelDict(regionID, serverID)
 		except KeyError:
 			return
 
@@ -1339,8 +1385,8 @@ class LoginWindow(ui.ScriptWindow):
 
 		try:
 			serverName = serverInfo.REGION_DICT[regionID][serverID]["name"]
-			channelName = serverInfo.REGION_DICT[regionID][serverID]["channel"][channelID]["name"]
-			addrKey = serverInfo.REGION_DICT[regionID][serverID]["channel"][channelID]["key"]
+			channelName = channelDict[channelID]["name"]
+			addrKey = channelDict[channelID]["key"]
 
 		except:
 			print(" ERROR __OnClickSelectServerButton(%d, %d, %d)" % (regionID, serverID, channelID))
@@ -1350,8 +1396,8 @@ class LoginWindow(ui.ScriptWindow):
 		self.__SetServerInfo("%s, %s " % (serverName, channelName))
 
 		try:
-			ip = serverInfo.REGION_DICT[regionID][serverID]["channel"][channelID]["ip"]
-			tcp_port = serverInfo.REGION_DICT[regionID][serverID]["channel"][channelID]["tcp_port"]
+			ip = channelDict[channelID]["ip"]
+			tcp_port = channelDict[channelID]["tcp_port"]
 		except:
 			import exception
 			exception.Abort("LoginWindow.__OnClickSelectServerButton")
@@ -1377,6 +1423,10 @@ class LoginWindow(ui.ScriptWindow):
 			exception.Abort("LoginWindow.__OnClickSelectServerButton")
 
 		self.stream.SetLoginInfo(self.idEditLine.GetText(), self.pwdEditLine.GetText())
+
+		# F5: el canal elegido (key 0-based del dict) — RecvAuthSuccess conecta
+		# con la lista del auth (GC_CHANNEL_LIST) en vez del IP bakeado.
+		net.SetChannelIndex(channelID)
 		self.stream.SetConnectInfo(ip, tcp_port, account_ip, account_port)
 		self.__OpenLoginBoard()
 

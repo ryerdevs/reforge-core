@@ -6,6 +6,7 @@
 #include "PythonApplication.h"
 #include "AbstractPlayer.h"
 #include "../gamelib/ActorInstance.h"
+#include "PythonLocale.h" // F1: nombres del bundle del auth (GC_LOCALE)
 
 void CPythonNetworkStream::__GlobalPositionToLocalPosition(LONG& rGlobalX, LONG& rGlobalY) const
 {
@@ -133,8 +134,14 @@ bool CPythonNetworkStream::RecvCharacterAppendPacket()
 		kNetActorData.m_bType != CActorInstance::TYPE_NPC)
 	{
 		const char * c_szName;
+		// F1 (locale redesign): nombre del bundle del auth (GC_LOCALE) primero,
+		// luego el pack (CPythonNonPlayer), luego vacío. El fallback al nombre
+		// del server sigue comentado (parity previa).
+		const std::string* pLocaleName = CPythonLocale::Instance().GetMobName(kNetActorData.m_dwRace);
 		CPythonNonPlayer& rkNonPlayer=CPythonNonPlayer::Instance();
-		if (rkNonPlayer.GetName(kNetActorData.m_dwRace, &c_szName))
+		if (pLocaleName && !pLocaleName->empty())
+			kNetActorData.m_stName = *pLocaleName;
+		else if (rkNonPlayer.GetName(kNetActorData.m_dwRace, &c_szName))
 			kNetActorData.m_stName = c_szName;
 		//else
 		//	kNetActorData.m_stName=chrAddPacket.name;
@@ -163,9 +170,13 @@ bool CPythonNetworkStream::RecvCharacterAdditionalInfo()
 	{
 		if (kNetActorData.m_bType == CActorInstance::TYPE_NPC)
 		{
-			// Language System: NPC name from client pack (like mobs), server name as fallback
+			// F1 (locale redesign): nombre del bundle del auth (GC_LOCALE)
+			// primero, luego el pack, luego el nombre del server.
+			const std::string* pLocaleName = CPythonLocale::Instance().GetMobName(kNetActorData.m_dwRace);
 			const char * c_szPackName;
-			if (CPythonNonPlayer::Instance().GetName(kNetActorData.m_dwRace, &c_szPackName))
+			if (pLocaleName && !pLocaleName->empty())
+				kNetActorData.m_stName = *pLocaleName;
+			else if (CPythonNonPlayer::Instance().GetName(kNetActorData.m_dwRace, &c_szPackName))
 				kNetActorData.m_stName = c_szPackName;
 			else
 				kNetActorData.m_stName = chrInfoPacket.name;

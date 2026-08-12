@@ -1,5 +1,5 @@
 [package]
-name = "database"
+name = "locale_import"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,7 +8,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-tokio-postgres.workspace = true
+realm = { path = "../realm" }
 tokio.workspace = true
-uuid.workspace = true
-protocol = { path = "../protocol" }
+tokio-postgres.workspace = true
+encoding_rs = "0.8"

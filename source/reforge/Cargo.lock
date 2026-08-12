@@ -112,6 +112,7 @@ dependencies = [
 name = "database"
 version = "0.1.0"
 dependencies = [
+ "protocol",
  "tokio",
  "tokio-postgres",
  "uuid",
@@ -127,6 +128,15 @@ dependencies = [
  "const-oid",
  "crypto-common",
  "ctutils",
+]
+
+[[package]]
+name = "encoding_rs"
+version = "0.8.35"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75030f3c4f45dafd7586dd6780965a8c7e8e285a5ecb86713e63a79c5b2766f3"
+dependencies = [
+ "cfg-if",
 ]
 
 [[package]]
@@ -230,6 +240,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2026a5056764a10b2bf5d56488cba40da507f5493a6a429340e2004d9ed085fa"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "locale_import"
+version = "0.1.0"
+dependencies = [
+ "encoding_rs",
+ "realm",
+ "tokio",
+ "tokio-postgres",
 ]
 
 [[package]]

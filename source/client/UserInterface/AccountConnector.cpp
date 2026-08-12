@@ -2,6 +2,7 @@
 #include "AccountConnector.h"
 #include "Packet.h"
 #include "PythonNetworkStream.h"
+#include "PythonLocale.h" // F1: caché del bundle GC_LOCALE
 #include "Version.h"
 #include "Hwid.h"
 #include "../EterBase/tea.h"
@@ -87,6 +88,12 @@ bool CAccountConnector::__HandshakeState_Process()
 	if (!__AnalyzePacket(HEADER_GC_PING, sizeof(TPacketGCPing), &CAccountConnector::__AuthState_RecvPing))
 		return false;
 
+	// F1: GC_LOCALE (140) puede llegar en cuanto el server recibe el
+	// CG_LOCALE_REQUEST (que se envía tras el eco del handshake) — es decir,
+	// AÚN en STATE_HANDSHAKE. Var-size con u16 = payload_len (flag + chunk).
+	if (!__AnalyzeLocalePacket(&CAccountConnector::__AuthState_RecvLocale))
+		return false;
+
 #ifdef _IMPROVED_PACKET_ENCRYPTION_
 	if (!__AnalyzePacket(HEADER_GC_KEY_AGREEMENT, sizeof(TPacketKeyAgreement), &CAccountConnector::__AuthState_RecvKeyAgreement))
 		return false;
@@ -107,6 +114,20 @@ bool CAccountConnector::__AuthState_Process()
 		return false;
 
 	if (!__AnalyzePacket(HEADER_GC_PING, sizeof(TPacketGCPing), &CAccountConnector::__AuthState_RecvPing))
+		return false;
+
+	// F5: GC_CHANNEL_LIST (164) — lista de canales + manifest (rates) del
+	// auth. El auth lo envía ANTES del GC_AUTH_SUCCESS en login exitoso (el
+	// cliente consume un paquete por frame y desconecta del auth al despachar
+	// el 150 — con 164 después nunca lo leería).
+	if (!__AnalyzePacket(HEADER_GC_CHANNEL_LIST, sizeof(TPacketGCChannelList), &CAccountConnector::__AuthState_RecvChannelList))
+		return false;
+
+	// F1: GC_LOCALE (140) — bundle de texto del auth (chunked, var-size).
+	// Llega tras el CG_LOCALE_REQUEST; si el server lo manda después del
+	// GC_AUTH_SUCCESS no se lee (la conexión auth se cierra al despachar el
+	// 150) — el server lo envía antes (contrato F1, spec locale-redesign.md).
+	if (!__AnalyzeLocalePacket(&CAccountConnector::__AuthState_RecvLocale))
 		return false;
 
 	if (!__AnalyzePacket(HEADER_GC_AUTH_SUCCESS, sizeof(TPacketGCAuthSuccess), &CAccountConnector::__AuthState_RecvAuthSuccess))
@@ -227,7 +248,100 @@ bool CAccountConnector::__AuthState_RecvHandshake()
 		}
 	}
 
+	// F1 (locale redesign): tras el eco del handshake, pedir el bundle de
+	// texto (una vez por conexión — los retries del handshake no lo repiten).
+	if (!m_bLocaleRequested)
+	{
+		if (!SendLocaleRequest())
+			return false;
+		m_bLocaleRequested = true;
+	}
+
 	return true;
+}
+
+bool CAccountConnector::SendLocaleRequest()
+{
+	// CG_LOCALE_REQUEST (132): 0x84 + lang[3] ("es\0") — parity del
+	// szLanguage del LOGIN3 (LocaleService_GetLocaleName).
+	BYTE buf[4];
+	buf[0] = HEADER_CG_LOCALE_REQUEST;
+	const char* szLocale = LocaleService_GetLocaleName();
+	buf[1] = szLocale && szLocale[0] ? szLocale[0] : 'e';
+	buf[2] = szLocale && szLocale[1] ? szLocale[1] : 's';
+	buf[3] = '\0';
+
+	CPythonLocale::Instance().SetLanguage(reinterpret_cast<const char*>(buf + 1));
+
+	if (!Send(sizeof(buf), buf))
+	{
+		Tracen(" CAccountConnector::SendLocaleRequest - Send Error");
+		return false;
+	}
+
+	Tracenf("CG_LOCALE_REQUEST lang=%c%c", buf[1], buf[2]);
+	return true;
+}
+
+bool CAccountConnector::__AuthState_RecvLocale(int iTotalSize)
+{
+	// GC_LOCALE (140): 0x8c + u16 payload_len + u8 chunk_flag + chunk bytes.
+	// El u16 del wire es payload_len = flag + chunk (TODO lo que sigue al
+	// campo — parity locale.rs `encode_chunks`); el paquete total mide
+	// 3 + payload_len. El dispatch garantiza el paquete completo en el
+	// buffer (ver __AnalyzeLocalePacket).
+	TPacketGCLocale kLocale;
+	if (!Recv(sizeof(kLocale), &kLocale))
+		return false;
+
+	const int iChunkLen = iTotalSize - 1; // payload_len - flag(1) = chunk
+	if (iChunkLen < 0)
+		return false;
+
+	if (iChunkLen > 0)
+	{
+		std::string chunk(iChunkLen, '\0');
+		if (!Recv(iChunkLen, &chunk[0]))
+			return false;
+
+		if (!CPythonLocale::Instance().AppendChunk(kLocale.chunk_flag, reinterpret_cast<const BYTE*>(chunk.data()), iChunkLen))
+		{
+			Tracen(" CAccountConnector::__AuthState_RecvLocale - AppendChunk error");
+			return false;
+		}
+	}
+	else if (kLocale.chunk_flag == 0)
+	{
+		// Chunk final vacío: parsea el buffer acumulado (o limpia si no hay).
+		CPythonLocale::Instance().AppendChunk(0, nullptr, 0);
+	}
+
+	return true;
+}
+
+bool CAccountConnector::__AnalyzeLocalePacket(bool (CAccountConnector::*pfnDispatchPacket)(int))
+{
+	// Igual que __AnalyzeVarSizePacket pero con la semántica del GC_LOCALE:
+	// el u16 del wire es payload_len (flag + chunk), NO el tamaño total — el
+	// paquete completo mide 3 + payload_len. Se espera el paquete COMPLETO
+	// antes de despachar (parity de la garantía anti-race de
+	// __AnalyzeVarSizePacket con hybrid-crypt: Recv nunca ve un paquete a
+	// medias en el handler).
+	BYTE bHeader;
+	if (!Peek(sizeof(bHeader), &bHeader))
+		return true;
+
+	if (bHeader != HEADER_GC_LOCALE)
+		return true;
+
+	TDynamicSizePacketHeader dynamicHeader;
+	if (!Peek(sizeof(dynamicHeader), &dynamicHeader))
+		return true;
+
+	if (!PeekNoFetch(dynamicHeader.size + sizeof(dynamicHeader)))
+		return true;
+
+	return (this->*pfnDispatchPacket)(dynamicHeader.size);
 }
 
 bool CAccountConnector::__AuthState_RecvPanamaPack()
@@ -297,6 +411,30 @@ bool CAccountConnector::__AuthState_SendPong()
 	return true;
 }
 
+bool CAccountConnector::__AuthState_RecvChannelList()
+{
+	TPacketGCChannelList kPacket;
+	if (!Recv(sizeof(kPacket), &kPacket))
+		return false;
+
+	// Defensa del contrato de tamaño fijo: count nunca puede exceder el
+	// array del struct (un auth malformado no debe leer fuera de límites).
+	if (kPacket.count > GC_CHANNEL_LIST_MAX_CHANNELS)
+		kPacket.count = GC_CHANNEL_LIST_MAX_CHANNELS;
+
+	m_ChannelList = kPacket;
+	m_bHasChannelList = true;
+
+	Tracenf("GC_CHANNEL_LIST: %d canal(es), rates exp %d gold %d drop %d",
+		kPacket.count, kPacket.wExpRate, kPacket.wGoldRate, kPacket.wDropRate);
+	for (int i = 0; i < kPacket.count; ++i)
+		Tracenf("  ch%d: %s %s:%d (%d jugadores)",
+			i + 1, kPacket.aChannels[i].szName, kPacket.aChannels[i].szIP,
+			kPacket.aChannels[i].wPort, kPacket.aChannels[i].wPlayers);
+
+	return true;
+}
+
 bool CAccountConnector::__AuthState_RecvAuthSuccess()
 {
 	TPacketGCAuthSuccess kAuthSuccessPacket;
@@ -315,7 +453,24 @@ bool CAccountConnector::__AuthState_RecvAuthSuccess()
 
 		CPythonNetworkStream & rkNet = CPythonNetworkStream::Instance();
 		rkNet.SetLoginKey(kAuthSuccessPacket.dwLoginKey);
-		rkNet.Connect(m_strAddr.c_str(), m_iPort);
+
+		// F5: la lista de canales del auth (GC_CHANNEL_LIST) tiene prioridad —
+		// el IP del canal ya NO depende de serverinfo.py. Sin lista (auth C++
+		// legacy) → fallback a la dirección bakeada (m_strAddr/m_iPort).
+		if (m_bHasChannelList && m_ChannelList.count > 0)
+		{
+			int iIndex = m_iChannelIndex;
+			if (iIndex < 0 || iIndex >= m_ChannelList.count)
+				iIndex = 0;
+
+			const TPacketGCChannelListInfo & rkChannel = m_ChannelList.aChannels[iIndex];
+			Tracenf("F5: canal %d del auth (%s %s:%d)", iIndex, rkChannel.szName, rkChannel.szIP, rkChannel.wPort);
+			rkNet.Connect(rkChannel.szIP, rkChannel.wPort);
+		}
+		else
+		{
+			rkNet.Connect(m_strAddr.c_str(), m_iPort);
+		}
 	}
 
 	Disconnect();
@@ -493,6 +648,7 @@ void CAccountConnector::__Inialize()
 {
 	m_eState=STATE_OFFLINE;
 	m_isWaitKey = FALSE;
+	m_bLocaleRequested = FALSE; // F1: el bundle se pide una vez por conexión
 }
 
 CAccountConnector::CAccountConnector()
@@ -500,6 +656,9 @@ CAccountConnector::CAccountConnector()
 	m_poHandler = nullptr;
 	m_strAddr = "";
 	m_iPort = 0;
+	m_bHasChannelList = false;
+	m_iChannelIndex = -1; // F5: sin selección → primer canal del auth / serverinfo
+	m_bLocaleRequested = false;
 
 	SetLoginInfo("", "");
 	SetRecvBufferSize(1024 * 128);

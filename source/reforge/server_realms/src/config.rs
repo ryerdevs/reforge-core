@@ -11,6 +11,13 @@
 //! timeout_ms = 15000
 //! no_more_clients = false
 //! legacy_dir = ""          # dir de panama/ + cshybridcrypt* (vacío = sin legacy)
+//! # F5 — lista de canales + manifest (rates) que el auth manda al cliente
+//! # (GC_CHANNEL_LIST): el cliente conecta al canal con ESTA lista (adiós al
+//! # IP bakeado de serverinfo.py). `players` es opcional (default 0).
+//! channels = [{name = "CH-1", ip = "172.25.104.175", port = 30003}]
+//! exp_rate = 100           # manifest: rate de exp (%)
+//! gold_rate = 100          # manifest: rate de oro (%)
+//! drop_rate = 100          # manifest: rate de drop (%)
 //! ```
 
 use std::time::Duration;
@@ -40,6 +47,11 @@ pub struct Config {
     /// config.cpp:30). DEBE ser menor que `timeout_ms` (el pong del cliente
     /// resetea el timeout de inactividad). Default 10 s < 15 s.
     pub ping_interval_ms: u64,
+    /// Directorio de los spawns del mapa (F5): el canal carga los NPCs del
+    /// mapa del jugador desde aquí (`realm::npc::load_map_spawns` — el
+    /// `index`/`npc.txt`/`regen.txt`/... del runtime). Default: el path real
+    /// del runtime srv1.
+    pub map_path: String,
     /// Directorio base de los archivos legacy (panama/ + cshybridcrypt*) —
     /// parity del cwd del auth C++. Vacío = sin legacy (el runtime srv1 actual
     /// no tiene los archivos → el auth C++ tampoco envía 151-153).
@@ -49,6 +61,30 @@ pub struct Config {
     /// constante del cliente v40999). `None` no aplica: si el LOGIN3 trae
     /// version y no coincide → cierre limpio con log.
     pub expected_version: u32,
+    /// F5: canales servidos — el auth los manda al cliente en el
+    /// `GC_CHANNEL_LIST` tras el login OK (el cliente conecta al canal con
+    /// esta lista; ya no depende del IP bakeado de serverinfo.py).
+    pub channels: Vec<ChannelCfg>,
+    /// F5 manifest: rate de exp en % (u16 — el wire del GC_CHANNEL_LIST).
+    pub exp_rate: u16,
+    /// F5 manifest: rate de oro en %.
+    pub gold_rate: u16,
+    /// F5 manifest: rate de drop en %.
+    pub drop_rate: u16,
+}
+
+/// Un canal de la lista F5 (`channels` del toml). Los mismos campos que el
+/// wire del `GC_CHANNEL_LIST` (name[16] + ip[16] + port u16 + players u16).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChannelCfg {
+    /// Nombre visible del canal (p.ej. "CH-1"; truncado a 15 chars en el wire).
+    pub name: String,
+    /// IPv4 dotted-quad (p.ej. "172.25.104.175"; truncado a 15 chars).
+    pub ip: String,
+    /// Puerto TCP del canal (p.ej. 30003).
+    pub port: u16,
+    /// Jugadores actuales (0 = desconocido; informativo).
+    pub players: u16,
 }
 
 impl Default for Config {
@@ -60,8 +96,13 @@ impl Default for Config {
             no_more_clients: false,
             channel: 1,
             ping_interval_ms: 10_000,
+            map_path: "/home/m2/source/metin2_svfiles/main/srv1/share/locale/spain/map".into(),
             legacy_dir: String::new(),
             expected_version: 40999,
+            channels: Vec::new(),
+            exp_rate: 100,
+            gold_rate: 100,
+            drop_rate: 100,
         }
     }
 }
@@ -114,11 +155,22 @@ impl Config {
                         .parse()
                         .map_err(|_| where_at("ping_interval_ms debe ser un entero (ms)"))?;
                 }
+                "map_path" => cfg.map_path = parse_string(value, &where_at)?,
                 "legacy_dir" => cfg.legacy_dir = parse_string(value, &where_at)?,
                 "expected_version" => {
                     cfg.expected_version = value
                         .parse()
                         .map_err(|_| where_at("expected_version debe ser un entero (u32)"))?;
+                }
+                "channels" => cfg.channels = parse_channels(value, &where_at)?,
+                "exp_rate" => {
+                    cfg.exp_rate = parse_u16(value, &where_at, "exp_rate")?;
+                }
+                "gold_rate" => {
+                    cfg.gold_rate = parse_u16(value, &where_at, "gold_rate")?;
+                }
+                "drop_rate" => {
+                    cfg.drop_rate = parse_u16(value, &where_at, "drop_rate")?;
                 }
                 other => return Err(where_at(&format!("clave desconocida: {other}"))),
             }
@@ -152,6 +204,95 @@ fn parse_string(raw: &str, err: &dyn Fn(&str) -> String) -> Result<String, Strin
     Ok(raw.to_string())
 }
 
+/// Entero u16 (para `exp_rate`/`gold_rate`/`drop_rate`/`port`).
+fn parse_u16(raw: &str, err: &dyn Fn(&str) -> String, what: &str) -> Result<u16, String> {
+    raw.parse().map_err(|_| err(&format!("{what} debe ser un entero (u16)")))
+}
+
+/// F5 — parsea `channels = [{name = "CH-1", ip = "172.25.104.175",
+/// port = 30003, players = 0}, ...]` (array de dicts en UNA línea; el parser
+/// del config es por líneas — el formato mínimo de la decisión TOML).
+fn parse_channels(raw: &str, err: &dyn Fn(&str) -> String) -> Result<Vec<ChannelCfg>, String> {
+    let inner = raw.trim();
+    let inner = inner
+        .strip_prefix('[')
+        .ok_or_else(|| err("channels: se esperaba `[{name = ..., ip = ..., port = ...}]`"))?;
+    let inner = inner
+        .strip_suffix(']')
+        .ok_or_else(|| err("channels: falta el `]` final"))?;
+
+    let mut out = Vec::new();
+    for entry in split_top_level(inner, ',').iter() {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let entry = entry
+            .strip_prefix('{')
+            .and_then(|e| e.strip_suffix('}'))
+            .ok_or_else(|| err("channels: cada canal debe ser `{name = ..., ip = ..., port = ...}`"))?;
+
+        let mut ch = ChannelCfg { name: String::new(), ip: String::new(), port: 0, players: 0 };
+        let mut have_name = false;
+        let mut have_ip = false;
+        let mut have_port = false;
+        for field in split_top_level(entry, ',').iter() {
+            let field = field.trim();
+            if field.is_empty() {
+                continue;
+            }
+            let Some(eq) = field.find('=') else {
+                return Err(err("channels: campo sin `=`"));
+            };
+            let key = field[..eq].trim();
+            let value = field[eq + 1..].trim();
+            match key {
+                "name" => {
+                    ch.name = parse_string(value, err)?;
+                    have_name = true;
+                }
+                "ip" => {
+                    ch.ip = parse_string(value, err)?;
+                    have_ip = true;
+                }
+                "port" => {
+                    ch.port = parse_u16(value, err, "port")?;
+                    have_port = true;
+                }
+                "players" => ch.players = parse_u16(value, err, "players")?,
+                other => return Err(err(&format!("channels: campo desconocido: {other}"))),
+            }
+        }
+        if !have_name || !have_ip || !have_port {
+            return Err(err("channels: cada canal necesita name, ip y port"));
+        }
+        out.push(ch);
+    }
+    Ok(out)
+}
+
+/// Divide `s` por `sep` en profundidad 0 (respeta `{...}` y `"..."`).
+fn split_top_level(s: &str, sep: char) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut depth = 0i32;
+    let mut in_str = false;
+    let mut start = 0usize;
+    for (i, c) in s.char_indices() {
+        match c {
+            '"' => in_str = !in_str,
+            '{' if !in_str => depth += 1,
+            '}' if !in_str => depth -= 1,
+            c if !in_str && depth == 0 && c == sep => {
+                parts.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&s[start..]);
+    parts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,5 +321,61 @@ mod tests {
         assert!(Config::parse("timeout_ms = \"x\"\n").is_err());
         assert!(Config::parse("no_more_clients = maybe\n").is_err());
         assert!(Config::parse("listen\n").is_err());
+    }
+
+    /// F5: `channels` (array de dicts en una línea) + rates con defaults.
+    #[test]
+    fn parses_channels_and_rates() {
+        let cfg = Config::parse(
+            "listen = \"127.0.0.1:30001\"\n\
+             channels = [{name = \"CH-1\", ip = \"172.25.104.175\", port = 30003}, {name = \"CH-2\", ip = \"172.25.104.175\", port = 30007, players = 42}]\n\
+             exp_rate = 150\n\
+             gold_rate = 200\n\
+             drop_rate = 100\n",
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.channels,
+            vec![
+                ChannelCfg { name: "CH-1".into(), ip: "172.25.104.175".into(), port: 30003, players: 0 },
+                ChannelCfg { name: "CH-2".into(), ip: "172.25.104.175".into(), port: 30007, players: 42 },
+            ]
+        );
+        assert_eq!(cfg.exp_rate, 150);
+        assert_eq!(cfg.gold_rate, 200);
+        assert_eq!(cfg.drop_rate, 100);
+    }
+
+    /// F5: sin `channels`/rates en el toml → lista vacía y rates default 100
+    /// (compatibilidad: el config actual del runtime no los tiene).
+    #[test]
+    fn channels_default_to_empty_and_rates_100() {
+        let cfg = Config::parse("listen = \"127.0.0.1:30001\"\n").unwrap();
+        assert!(cfg.channels.is_empty());
+        assert_eq!((cfg.exp_rate, cfg.gold_rate, cfg.drop_rate), (100, 100, 100));
+    }
+
+    /// F5: errores del array — canal sin ip, malformado, campo desconocido.
+    #[test]
+    fn rejects_malformed_channels() {
+        assert!(Config::parse("channels = [\"x\"]\n").is_err());
+        assert!(Config::parse("channels = [{name = \"CH-1\", port = 30003}]\n").is_err());
+        assert!(Config::parse("channels = [{name = \"CH-1\", ip = \"1.2.3.4\", port = 30003, bogus = 1}]\n").is_err());
+        assert!(Config::parse("channels = [{name = \"CH-1\", ip = \"1.2.3.4\"}]\n").is_err());
+        assert!(Config::parse("channels = {name = \"CH-1\"}\n").is_err());
+        assert!(Config::parse("exp_rate = \"x\"\n").is_err());
+        assert!(Config::parse("exp_rate = 70000\n").is_err()); // > u16
+    }
+
+    /// F5: nombres con comas/llaves no rompen el split (profundidad 0).
+    #[test]
+    fn channel_name_with_braces_survives_splitting() {
+        let cfg = Config::parse(
+            "channels = [{name = \"CH,{1}\", ip = \"172.25.104.175\", port = 30003}]\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.channels.len(), 1);
+        assert_eq!(cfg.channels[0].name, "CH,{1}");
+        assert_eq!(cfg.channels[0].port, 30003);
     }
 }

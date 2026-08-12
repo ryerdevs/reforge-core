@@ -55,8 +55,8 @@ Chain of fixes applied in that session (each verified empirically):
 
 | Path | What it is |
 |---|---|
-| `client\` | Installed client (metin2client.exe v1.0.40999.1 — RECOMPILED 2026-08-08 with the fix; pack\*.epk, config, mark) |
-| `client-om2\` | Reference client source ("Old Metin2 Project", corresponds to tmp4-server) |
+| `C:\projects\metin2-extra\client` | Installed client (metin2client.exe v1.0.40999.1 — RECOMPILED 2026-08-08 with the fix; pack\*.epk, config, mark) — **MOVED OUTSIDE THE REPO 2026-08-11** (cleanup; testing only) |
+| `client-om2\` | Reference client source ("Old Metin2 Project", corresponds to tmp4-server) — **DELETED** (cleanup 2026-08-11) |
 | `source\client\` | CLIENT SOURCE (S3llMetin2 v24 / MartySama). Build: MSBuild `Metin2Client.sln` (in `source\client\`) Release\|Win32 (VS Build Tools 18). Build deps in `source\client\Extern\` (gitignored) |
 | `source\server\` | SERVER SOURCE (MartySama 5.9). `{common,db,game,libgame,liblua,libpoly,libsql,libthecore}`, Makefile ported to Debian/gcc |
 | `source\reforge\` | **RUST REWRITE (new, 2026-08-10, flat layout — ADR-0004)** — Cargo workspace: `protocol` (F0: byte-exact wire, 30/30), `network` (F1: tokio+framer+handshake, 23/23; includes `auth` module for F2), `database` (F3), `realm` (F4+), `server_realms` (single binary, roles `auth\|channel` by config — provisional user name). ADR-0003/0004. **Do not touch the C++ baseline from here; the baseline is the oracle** |
@@ -64,7 +64,9 @@ Chain of fixes applied in that session (each verified empirically):
 | `source\tools\pack\` | Client pack source (`root\serverinfo.py` = server list; `PackMakerLite.exe` + `.json` = repack tool) |
 | `source\tools\` | Tools: `DBManager` (PHP/bash txt↔mysql import/export), `DumpProto`, `Mysql2Proto` (MySQL→proto export), `switch_compiler.py` |
 | `source\tools\proto\` | Protocol metadata |
-| `archive\`, `.commandcode\` | Backups, skills |
+| `C:\projects\metin2-extra\archive` | Backups (client + source) — **MOVED OUTSIDE THE REPO 2026-08-11** (cleanup) |
+| `.commandcode\` | Skills |
+| `C:\projects\metin2-extra\` | OUTSIDE THE REPO (cleanup 2026-08-11): installed `client\` (2.2 GB), `archive\` backups (1.6 GB) |
 | `docs\` | Documentation hub: `README.md` (index), `CURRENT.md` (current status), `DOCUMENTATION.md` (rules/workflow); `plans/` (active plans), `decisions/` (ADRs), `reference/` (protocol, quests, legacy compat), `guardrails/` (lessons/rules not to repeat), `history/` (superseded docs, read-only). Diátaxis modes (`tutorials/`, `how-to/`, `explanation/`) are created on demand — no empty dirs. Old `docs\superpowers\` content is preserved and indexed under `docs\history\` |
 | `ROADMAP.md`, `CHANGELOG.md` | Master plan of the Rust rewrite and chronological change record |
 | `scripts\` | Startup/recovery scripts (`start_m2_min.sh`, `start_m2_full.sh`, `mem_audit.sh`, `watch_*.sh`) |
@@ -99,7 +101,7 @@ Chain of fixes applied in that session (each verified empirically):
 # 1. Minimal start (db + auth + ch1-core1) — enough for login
 wsl -d Debian-M2 -- bash /mnt/c/projects/Metin2/scripts/start_m2_min.sh
 # 2. Verify: ports 30000-30004; Test-NetConnection 172.25.104.175 -Port 30001
-# 3. Test login in the client (C:\projects\Metin2\client\metin2client.exe, test/1234)
+# 3. Test login in the client (C:\projects\metin2-extra\client\metin2client.exe, test/1234)
 # 4. Logs: auth1 = auth/syslog; core1 = chan/ch1/core1/syslog ("LoginSuccess" = OK);
 #    db = db/syslog
 ```
@@ -107,8 +109,8 @@ wsl -d Debian-M2 -- bash /mnt/c/projects/Metin2/scripts/start_m2_min.sh
 - **The full stack (9 cores) blows this machine's memory** (4GB host, WSL cap 2GB). Use `start_m2_min.sh` unless there is more RAM.
 - **WSL unstable:** `Wsl/Service/E_UNEXPECTED` crashes during heavy I/O (builds, syncs, restarts) — 4GB RAM machine, Windows 10 22H2, WSL 2.7.3, WHEA PCIe errors. The SSD was FULL (5GB free) — cleaned (npm-cache, TEMP, WSL logs, build artifacts, backups) → 23GB free on host, 3.2G used in WSL. Config in `C:\Users\Ricardo Casamayor\.wslconfig` (memory=2GB, swap=8GB). After each crash: `wsl --shutdown` → `start_m2_min.sh`.
 - **Recompile the server:** in WSL: libraries first (`cd /home/m2/source/metin2_server/Srcs/Server && make -C liblua/5.0 && make -C libsql && make -C libgame/src && make -C libpoly && make -C libthecore/src`), then `make -C game/src` → `game_r41023` and `make -C db/src` → `db_r41023`; deploy to `main/srv1/share/bin/{game,db}` and restart auth+cores. **Always `sync` after deploy.**
-- **Recompile the client:** MSBuild `source\client\Metin2Client.sln` /p:Configuration=Release /p:Platform=Win32 → `source\client\bin\Release\metin2client.exe` → copy to `client\metin2client.exe`.
-- **Repack the pack:** edit `source\tools\pack\root\*.py` → `cd source\tools\pack && PackMakerLite.exe --nolog --parallel -p root` → copy `root.epk`/`root.eix` to `client\pack\`.
+- **Recompile the client:** MSBuild `source\client\Metin2Client.sln` /p:Configuration=Release /p:Platform=Win32 → `source\client\bin\Release\metin2client.exe` → copy to `C:\projects\metin2-extra\client\metin2client.exe`.
+- **Repack the pack:** edit `source\tools\pack\root\*.py` → `cd source\tools\pack && PackMakerLite.exe --nolog --parallel -p root` → copy `root.epk`/`root.eix` to `C:\projects\metin2-extra\client\pack\`.
 - **Mandatory boot order:** mariadb → srv1-db → srv1-auth1 → cores.
 
 ## Known pending items (2026-08-08, updated)
@@ -132,7 +134,7 @@ wsl -d Debian-M2 -- bash /mnt/c/projects/Metin2/scripts/start_m2_min.sh
 1. **Decisive evidence: the client's own minidumps** (`client\logs\metin2client_*.dmp`, written by `EterExceptionFilter` in `EterBase\error.cpp` — they were always there, nobody had read them). Two dumps of today's crash (13:15:00, 13:15:25) identical: exception `0xC0000005` in `string_replace_word` (`PythonSkill.cpp:62`), instruction `mov eax,[ecx]` at RVA 0x95110 (`disasm` with dumpbin + PDB), with ECX=0x96510FFD — garbage pointer.
 2. **Cause:** `string_replace_word` does `memcmp(base + cur, src, src_len)` WITHOUT checking `cur + src_len <= base_len` → over-read past the end of the string `base` (a `std::string` in `TokenVector[POINT_POLY]` from parsing `SkillTable.txt`, loaded in the character-select phase). The garbage read could spuriously "match" "number"/"atk"/"mwep" → corrupted skill formulas stored in `m_SkillDataMap` → on world entry, evaluating those formulas corrupted the heap → 0xc0000374. With AppVerifier (guard pages) the over-read was detected instantly at login (that is why the timing changed: "now it closes right after login").
 3. **Fix (2 lines):** bounds check `cur + src_len <= base_len` before the `memcmp` (`PythonSkill.cpp:72-90`). Rebuild Release|Win32 → `client\metin2client.exe` 5,115,904 B, 14:12, hash `C7EAD7CC...` deployed and verified. **CLOSED (2026-08-09, field test 2/2):** after the coordinate fix (`UPDATE player SET x=969600, y=278400`) the user entered the world twice in a row with the recovered characters (CHANGELOG 2026-08-09 3rd session, 4th part).
-4. Lessons: (a) the server syserr will NEVER see client crashes (local memory; the server only sees the socket close) — client close errors are in `client\logs\*.dmp` (binary, parseable with the session's `parse_dump3.py` script or dumpbin/cdb); (b) App Verifier Heaps changes the detection timing (guard pages detect the over-read at the write) — useful to isolate, not to reproduce the original symptom.
+4. Lessons: (a) the server syserr will NEVER see client crashes (local memory; the server only sees the socket close) — client close errors are in `C:\projects\metin2-extra\client\logs\*.dmp` (binary, parseable with the session's `parse_dump3.py` script or dumpbin/cdb); (b) App Verifier Heaps changes the detection timing (guard pages detect the over-read at the write) — useful to isolate, not to reproduce the original symptom.
 
 ## Work rules
 

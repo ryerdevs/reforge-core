@@ -1610,6 +1610,50 @@ PyObject* netRegisterErrorLog(PyObject* poSelf, PyObject* poArgs)
 	return Py_BuildNone();
 }
 
+// F5 — lista de canales + manifest (rates) del auth (GC_CHANNEL_LIST 164).
+// intrologin.py usa net.GetChannelList() para el selector y el ip/puerto del
+// canal (fallback a serverinfo.py si el auth no mandó lista / es el C++).
+
+PyObject* netSetChannelIndex(PyObject* poSelf, PyObject* poArgs)
+{
+	int iChannelIndex;
+	if (!PyTuple_GetInteger(poArgs, 0, &iChannelIndex))
+		return Py_BuildException();
+
+	CAccountConnector & rkAccountConnector = CAccountConnector::Instance();
+	rkAccountConnector.SetChannelIndex(iChannelIndex);
+	return Py_BuildNone();
+}
+
+PyObject* netGetChannelList(PyObject* poSelf, PyObject* poArgs)
+{
+	CAccountConnector & rkAccountConnector = CAccountConnector::Instance();
+	if (!rkAccountConnector.HasChannelList())
+		return Py_BuildNone();
+
+	int iCount = rkAccountConnector.GetChannelCount();
+	PyObject* poList = PyList_New(iCount);
+	for (int i = 0; i < iCount; ++i)
+	{
+		const TPacketGCChannelListInfo & ch = rkAccountConnector.GetChannel(i);
+		PyObject* poTuple = Py_BuildValue("(ssii)", ch.szName, ch.szIP, (int) ch.wPort, (int) ch.wPlayers);
+		PyList_SetItem(poList, i, poTuple); // roba la referencia
+	}
+	return poList;
+}
+
+PyObject* netGetRates(PyObject* poSelf, PyObject* poArgs)
+{
+	CAccountConnector & rkAccountConnector = CAccountConnector::Instance();
+	if (!rkAccountConnector.HasChannelList())
+		return Py_BuildNone();
+
+	return Py_BuildValue("(iii)",
+		(int) rkAccountConnector.GetExpRate(),
+		(int) rkAccountConnector.GetGoldRate(),
+		(int) rkAccountConnector.GetDropRate());
+}
+
 void initnet()
 {
 	static PyMethodDef s_methods[] =
@@ -1618,6 +1662,9 @@ void initnet()
 		{ "EnableChatInsultFilter",				netEnableChatInsultFilter,				METH_VARARGS },
 		{ "SetServerInfo",						netSetServerInfo,						METH_VARARGS },
 		{ "GetServerInfo",						netGetServerInfo,						METH_VARARGS },
+		{ "SetChannelIndex",					netSetChannelIndex,						METH_VARARGS },
+		{ "GetChannelList",						netGetChannelList,						METH_VARARGS },
+		{ "GetRates",							netGetRates,							METH_VARARGS },
 		{ "PreserveServerCommand",				netPreserveServerCommand,				METH_VARARGS },
 		{ "GetPreservedServerCommand",			netGetPreservedServerCommand,			METH_VARARGS },
 

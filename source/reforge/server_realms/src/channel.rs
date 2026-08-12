@@ -72,14 +72,19 @@ pub async fn run(config: Config) -> std::io::Result<()> {
     println!("server_realms: channel escuchando en {actual}");
     let mut config = config;
     config.listen = actual.to_string();
+    // Caché de mob_proto COMPARTIDA entre conexiones (F5 perf): la
+    // resolución de spawns hace UNA query batch por los vnums que falten;
+    // la caché evita el stall de minutos (10k conexiones por entrada).
+    let spawn_cache = std::sync::Arc::new(tokio::sync::Mutex::new(realm::npc::MobCache::new()));
     let mut conn_id: u32 = 1;
     loop {
         let (stream, _peer) = listener.accept().await?;
         let cfg = config.clone();
         let id = conn_id;
+        let cache = std::sync::Arc::clone(&spawn_cache);
         conn_id = conn_id.wrapping_add(1);
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, cfg, id).await {
+            if let Err(e) = handle_connection(stream, cfg, id, cache).await {
                 eprintln!("server_realms: channel conn {id}: {e}");
             }
         });
@@ -95,8 +100,13 @@ pub async fn run(config: Config) -> std::io::Result<()> {
 /// 3.8). Cada lectura lleva su propio `config.timeout`: se resetea con
 /// CUALQUIER paquete recibido (incluidos los ignorados de juego y los
 /// keepalives) y solo dispara si no llega NADA durante `timeout_ms`.
-async fn handle_connection(stream: TcpStream, config: Config, conn_id: u32) -> Result<(), String> {
-    connection_inner(stream, &config, conn_id).await
+async fn handle_connection(
+    stream: TcpStream,
+    config: Config,
+    conn_id: u32,
+    spawn_cache: std::sync::Arc<tokio::sync::Mutex<realm::npc::MobCache>>,
+) -> Result<(), String> {
+    connection_inner(stream, &config, conn_id, spawn_cache).await
 }
 
 /// Lee el siguiente paquete con timeout de inactividad: si no llega NADA en
@@ -119,7 +129,12 @@ async fn recv_packet_idle<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpi
         .map_err(|e| format!("framer: {e}"))
 }
 
-async fn connection_inner(stream: TcpStream, config: &Config, conn_id: u32) -> Result<(), String> {
+async fn connection_inner(
+    stream: TcpStream,
+    config: &Config,
+    conn_id: u32,
+    spawn_cache: std::sync::Arc<tokio::sync::Mutex<realm::npc::MobCache>>,
+) -> Result<(), String> {
     let mut conn = Connection::new(stream);
     let mut framer = Framer::new(ConnectionRole::Channel);
 
@@ -257,6 +272,8 @@ async fn connection_inner(stream: TcpStream, config: &Config, conn_id: u32) -> R
         eprintln!("server_realms: channel conn {conn_id}: slot vacío/inválido — cierre");
         return Ok(());
     };
+    // F5.1: el estado de movimiento del jugador (posición del load).
+    let mut motion = realm::movement::initial(row.x, row.y);
     eprintln!(
         "server_realms: channel conn {conn_id}: player_load {} id={} lvl={} x={} y={} map={}",
         row.name, row.id, row.level, row.x, row.y, row.map_index
@@ -339,10 +356,80 @@ async fn connection_inner(stream: TcpStream, config: &Config, conn_id: u32) -> R
     }
     eprintln!(
         "server_realms: channel conn {conn_id}: ENTERGAME enviado (ADD + INFO + GC_PHASE(GAME) + {} lands \
-         + GC_TIME + GC_CHANNEL {}) — el cliente está DENTRO del mapa (mundo vacío: NPCs/mobs son F5)",
+         + GC_TIME + GC_CHANNEL {}) — el cliente está DENTRO del mapa",
         lands.len(),
         config.channel
     );
+
+    // ------------------------------------------------------------------
+    // F5.2: el SPAWN de los NPCs del mapa (tras la cola del ENTERGAME — el
+    // orden del C++: los NPCs del mapa se insertan en el sectree y sus
+    // add/addInfo llegan contiguos por mob — `realm::npc::entry_spawns`).
+    // Los VIDs de los NPCs: rango alto (10000+) — no colisionan con los PCs
+    // (ids bajos 1..5; parity AllocVID del C++).
+    // ------------------------------------------------------------------
+    let spawns = match realm::npc::load_map_spawns(row.map_index as u32, &config.map_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("server_realms: channel conn {conn_id}: spawns del mapa {}: {e} — mundo vacío", row.map_index);
+            Vec::new()
+        }
+    };
+    let mut live_npcs: std::collections::HashMap<u32, LiveNpc> = std::collections::HashMap::new();
+    if !spawns.is_empty() {
+        // Resolución con CACHÉ COMPARTIDA + UNA query batch por los vnums
+        // que falten (F5 perf — realm::npc::MobCache): la resolución previa
+        // (10k × load_by_vnum con conexión PG por llamada) stallaba la
+        // entrada ~3-4 min. Los grupos ya vienen expandidos de
+        // load_map_spawns (kind Mob/Anywhere — la guarda vive en el cache).
+        let repo = database::npc::MobRepo::new(&config.pg_conn);
+        let mobs = spawn_cache
+            .lock()
+            .await
+            .resolve(&repo, &spawns)
+            .await
+            .unwrap_or_default();
+        let vid_base = next_npc_vid();
+        let npc_packets = realm::npc::entry_spawns(row.map_index as u32, &mobs, vid_base);
+        for pkt in &npc_packets {
+            conn.send(pkt).await.map_err(|e| format!("enviando spawn: {e}"))?;
+        }
+        // La lista de NPCs vivos: vid -> estado (el combate la consulta).
+        let mut vid = vid_base;
+        for (entry, mob) in &mobs {
+            for _ in 0..entry.count {
+                live_npcs.insert(
+                    vid,
+                    LiveNpc {
+                        state: realm::combat::NpcState {
+                            vid,
+                            x: entry.x,
+                            y: entry.y,
+                            level: mob.level,
+                            dx: mob.ht, // la "dx" del mob: columna ht del PG
+                            ht: mob.ht,
+                            wdef: mob.def,
+                            battle_type: mob.battle_type as u8,
+                            attack_range: mob.attack_range as u32,
+                        },
+                        vnum: mob.vnum,
+                        max_hp: mob.max_hp as i32,
+                        hp: mob.max_hp as i32,
+                    },
+                );
+                vid += 1;
+            }
+        }
+        eprintln!(
+            "server_realms: channel conn {conn_id}: spawn {} mobs del mapa {} ({:?} paquetes)",
+            live_npcs.len(),
+            row.map_index,
+            npc_packets.len()
+        );
+    }
+
+    // F5.2: el estado de combate del jugador (cooldown por objetivo).
+    let mut combat = realm::combat::CombatState::new();
 
     // 8. Loop de juego (estático): el mundo no tiene NPCs/mobs todavía (F5) —
     //    la conexión se mantiene viva. El HEARTBEAT es del SERVIDOR (parity
@@ -384,6 +471,148 @@ async fn connection_inner(stream: TcpStream, config: &Config, conn_id: u32) -> R
                         );
                         continue;
                     }
+                    header::CG_MOVE => {
+                        // F5.1: el movimiento del jugador. El cliente se mueve
+                        // LOCALMENTE (sin ack — el server responde el
+                        // GC_CHARACTER_MOVE solo a los observadores,
+                        // input_main.cpp:1576-1588). La validación
+                        // anti-speedhack: timer (input_main.cpp:1494-1516) +
+                        // distancia (el umbral del TP_SPEED_CHECK).
+                        match protocol::movement::TPacketCGMove::from_bytes(&pkt) {
+                            Ok(mv) => {
+                                match realm::movement::process_move(&mut motion, &mv, now32()) {
+                                    Ok(r) => {
+                                        eprintln!(
+                                            "server_realms: channel conn {conn_id}: MOVE {} -> {},{} (func {})",
+                                            row.name, r.x, r.y, mv.b_func
+                                        );
+                                    }
+                                    Err(realm::movement::MoveError::NotMove) => {
+                                        // ACCIÓN (ataque/skill/combo) — el
+                                        // procesamiento es F5; se loguea.
+                                        eprintln!(
+                                            "server_realms: channel conn {conn_id}: MOVE func {} de {} — \
+                                             acción pendiente de integración (F5)",
+                                            mv.b_func, row.name
+                                        );
+                                    }
+                                    Err(e @ (realm::movement::MoveError::SlowTimer
+                                    | realm::movement::MoveError::FastTimer)) => {
+                                        // Kick del C++ (DelayedDisconnect(3),
+                                        // input_main.cpp:1505-1515) — el canal
+                                        // cierra la conexión.
+                                        eprintln!(
+                                            "server_realms: channel conn {conn_id}: SPEEDHACK {} ({:?}) — \
+                                             cierre (parity DelayedDisconnect)",
+                                            row.name, e
+                                        );
+                                        return Err(format!("speedhack de {}", row.name));
+                                    }
+                                    Err(realm::movement::MoveError::TooFar) => {
+                                        // Corrección del C++ (Show+Stop —
+                                        // el define TP_SPEED_CHECK está
+                                        // comentado, pero es el anti-teleport
+                                        // estándar): se rechaza el MOVE, la
+                                        // posición queda.
+                                        eprintln!(
+                                            "server_realms: channel conn {conn_id}: MOVE teleport de {} — \
+                                             rechazado (posición {} ,{})",
+                                            row.name, motion.x, motion.y
+                                        );
+                                    }
+                                    Err(realm::movement::MoveError::InvalidFunc) => {
+                                        eprintln!(
+                                            "server_realms: channel conn {conn_id}: MOVE func inválido de {}",
+                                            row.name
+                                        );
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "server_realms: channel conn {conn_id}: CG_MOVE malformado: {e}"
+                                );
+                            }
+                        }
+                        continue;
+                    }
+                    header::CG_ATTACK => {
+                        // F5.2: el combate (realm::combat — el lane de
+                        // combate). CG_ATTACK (8 B) -> bType>0 = skill
+                        // (F5.2+: se ignora) -> si normal: cooldown/rango/
+                        // daño contra el NPC objetivo -> paquetes del
+                        // resultado (GcAttack + GcDamageInfo) + daño al
+                        // HP del mob; hp <= 0 -> muerte (GC_DEAD +
+                        // GC_CHARACTER_DEL — Packet.h:1349-1353/1296-1300)
+                        // + se quita de la lista de NPCs vivos.
+                        match protocol::combat::CgAttack::from_bytes(&pkt) {
+                            Ok(attack) if attack.b_type != protocol::combat::CgAttack::TYPE_NORMAL => {
+                                // Skills (bType > 0) — F5.2+ (el combat lane
+                                // las rechaza con empty()).
+                                eprintln!(
+                                    "server_realms: channel conn {conn_id}: CG_ATTACK tipo {} de {} — \
+                                     skills pendientes (F5.2+)",
+                                    attack.b_type, row.name
+                                );
+                            }
+                            Ok(attack) => {
+                                let player = realm::combat::PlayerState::from_row(&row, &motion);
+                                let target = live_npcs.get(&attack.victim_vid).map(|n| &n.state);
+                                let result = realm::combat::handle_attack(
+                                    &mut combat,
+                                    &attack,
+                                    &player,
+                                    target,
+                                    now_ms(),
+                                    &mut |min, max| {
+                                        // roll INCLUSIVE (parity number(min,max)).
+                                        let span = max - min + 1;
+                                        min + (rand32() % span as u32) as i32
+                                    },
+                                );
+                                for pkt in &result.packets {
+                                    conn.send(pkt)
+                                        .await
+                                        .map_err(|e| format!("enviando combate: {e}"))?;
+                                }
+                                if result.damage > 0 {
+                                    if let Some(npc) = live_npcs.get_mut(&attack.victim_vid) {
+                                        npc.hp -= result.damage;
+                                        if npc.hp <= 0 {
+                                            // Muerte del mob: GC_DEAD (14) +
+                                            // GC_CHARACTER_DEL (2) — el
+                                            // cliente reproduce la animación
+                                            // y remueve.
+                                            let dead = protocol::world::TPacketGCDead::new(attack.victim_vid);
+                                            let del =
+                                                protocol::world::TPacketGCCharacterDelete::new(attack.victim_vid);
+                                            conn.send(&dead.to_bytes()).await
+                                                .map_err(|e| format!("enviando GC_DEAD: {e}"))?;
+                                            conn.send(&del.to_bytes()).await
+                                                .map_err(|e| format!("enviando GC_CHARACTER_DEL: {e}"))?;
+                                            eprintln!(
+                                                "server_realms: channel conn {conn_id}: {} mató al mob vnum {} (vid {})",
+                                                row.name, npc.vnum, attack.victim_vid
+                                            );
+                                            live_npcs.remove(&attack.victim_vid);
+                                        } else {
+                                            eprintln!(
+                                                "server_realms: channel conn {conn_id}: {} golpeó mob vnum {} ({}/{})",
+                                                row.name, npc.vnum, npc.hp, npc.max_hp
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "server_realms: channel conn {conn_id}: CG_ATTACK malformado: {e}"
+                                );
+                            }
+                        }
+                        continue;
+                    }
+                    // TODO(F5 npcs): realm::npc::... para los NPCs/mobs
                     other => {
                         eprintln!(
                             "server_realms: channel conn {conn_id}: paquete de juego 0x{other:02x} ignorado \
@@ -528,10 +757,32 @@ fn cstr(bytes: &[u8]) -> &str {
     std::str::from_utf8(&bytes[..end]).unwrap_or("")
 }
 
+/// NPC vivo del mundo del canal (F5.2): el estado del combate + el HP
+/// runtime. `state` es la vista inmutable que `handle_attack` consume.
+struct LiveNpc {
+    state: realm::combat::NpcState,
+    vnum: i64,
+    max_hp: i32,
+    hp: i32,
+}
+
+/// Contador global de VIDs de NPCs del canal: arranca en 10 000 (los PCs son
+/// ids bajos 1..5 — no colisionan; parity del AllocVID del C++ que separa
+/// los rangos).
+fn next_npc_vid() -> u32 {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(10_000);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// `now_ms` — reloj del servidor en ms desde boot (parity `get_dword_time`).
 fn now_ms() -> u64 {
     static START: OnceLock<Instant> = OnceLock::new();
     START.get_or_init(Instant::now).elapsed().as_millis() as u64
+}
+
+/// `now_ms` como u32 (el wire del MOVE — parity `get_dword_time` con wrap).
+fn now32() -> u32 {
+    now_ms() as u32
 }
 
 /// Rand 32-bit determinista sin dependencias (nanos + contador — patrón del
