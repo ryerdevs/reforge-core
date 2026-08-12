@@ -7,6 +7,20 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-12] (10th part) — F5.3 item drops on kill + pickup (direct implementation)
+
+> Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests were run, unit tests only).
+
+### Added — drops (Rust, `source/reforge`, commit `9424efd`)
+
+- **`protocol/src/world.rs`**: `TPacketGCItemGroundAdd` (58 B packed, header 26 — `ENABLE_ITEM_GROUND_EX` active on BOTH sides, `packet.h:1087-1098` + `Packet.h:1724-1738`), `TPacketGCItemGroundDel` (5 B, header 27), `TPacketGCItemOwnership` (30 B, header 31) + roundtrip tests; headers `GC_ITEM_GROUND_ADD=26`, `GC_ITEM_GROUND_DEL=27`, `GC_ITEM_OWNERSHIP=31` in `protocol::header`.
+- **`database/src/npc.rs`**: `MobRow.drop_item` (i64, `player.mob_proto.drop_item` → `item_proto.vnum`) + SQL/mapper/column-order test.
+- **`server_realms/src/channel.rs`**:
+  - On mob death: primary drop (`mob_proto.drop_item`) with `drop_rate` from config, at the mob position → `GC_ITEM_GROUND_ADD` + `GC_ITEM_OWNERSHIP` (player name, parity `item.cpp:145-162`); ground items tracked in `live_items` (VIDs 50 000+, no collision with NPCs 10 000+).
+  - `CG_ITEM_PICKUP` (15, 5 B): distance ≤ 600 (`CItem::DistanceValid`, `item.cpp:461-472`) → first free inventory cell 0..90 (`INVENTORY_MAX_NUM`, `length.h:29`) → `GC_ITEM_SET` (item enters inventory) + `GC_ITEM_GROUND_DEL` → id from `ITEM_ID_RANGE` (100M-200M, parity `ItemIDRangeManager.cpp:93,121`) + `ItemRepo::upsert` durable → inventory kept mutable in the loop.
+- **Verified**: `cargo test --workspace` green (protocol 71/71 incl. 3 new ground-item tests; realm 42/42; network 26/26); clippy no new warnings in touched files (fixed the `to_vec()` unnecessary-use warnings from my own code; doc-comment list-item warning fixed).
+- **Pending**: drops are primary-only (`drop_item` column) — the C++ also uses `etc_drop_item.txt`/`common_drop_item.txt` by CP949 name (TRAP AGENTS.md §17) — not ported; item stacking (`AutoStackItem`), ownership expiry, and drop items for other players (single-player world for now).
+
 ## [2026-08-12] (9th part) — F5.3 kill rewards + chat + client locale cache (implemented directly by the orchestrator, no delegation)
 
 > **Workflow note:** the three fixer lanes dispatched earlier that session returned review reports instead of implementations (and the gameplay lane errored). The user asked to stop waiting on stalled delegated tests and solve it directly — this entry is the direct implementation, verified with pure unit tests (no gated PG tests were run).
