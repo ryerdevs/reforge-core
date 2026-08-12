@@ -7,7 +7,32 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
-## [2026-08-12] (32nd part) — CORRECTION of the 31st part: the repo IS on GitHub; context7/gh_grep ARE active (harness-provisioned); BOM bug fixed
+## [2026-08-12] (33rd part) — Agent personalities/skills development: MCPs for ALL agents + lane-focused skills
+
+> User direction: "las skills que ya tienen están perfecto — lo que quiero es que cada agente tenga habilidades enfocadas en su laburo: los MCPs que tenemos para todos, explorer con skills para explorar código a gran escala, librarian con skills de documentación, fixer con skills de debug/arreglar, coder con clean code". Deep analysis of the harness done first (lib-2: README completo + 7 docs + schema + los 8 prompts fuente de src/agents/*.ts).
+
+### Analysed — the oh-my-opencode-slim harness (v2.2.13, github.com/alvinunreal/oh-my-opencode-slim)
+
+- **Plugin de orquestación multi-agente** para OpenCode: registra los 7 agentes del panteón + council + observer + custom agents, tools propias (ast_grep, webfetch smart, cancel_task, wait_for_user), MCPs built-in (context7/gh_grep — provisionados programáticamente en v1, por eso NO están en opencode.jsonc), slash commands (/deepwork /reflect /preset), Background Job Board y wake scheduler.
+- **Skills = permission grants**: un agente solo activa las skills asignadas (lista, "*", "!x"). 8 bundled: codemap, deepwork, verification-planning, simplify, worktrees, clonedeps, reflect, oh-my-opencode-slim.
+- **MCPs = acceso por agente** (misma sintaxis; deny gana). Los propios se declaran en opencode.json y se otorgan por nombre.
+- **3 capas de personalización**: routing (description + orchestratorPrompt → se inyecta al prompt del orquestador), permission grants (skills/mcps), prompt layering ({agent}_append.md por proyecto en .opencode/oh-my-opencode-slim/). Temperatures por defecto: designer 0.7 (única alta), resto 0.1-0.2.
+- **Hallazgos**: @coder sin description/orchestratorPrompt (el orquestador no sabe rutar); Council sin configurar; 6/8 skills bundled sin conceder al orquestador; prompt layering por proyecto sin usar; variants todos "max" vs recomendación del preset (orchestrator thinking, lanes high).
+
+### Changed — config (local/gitignored, requiere reinicio)
+
+- **MCPs (graphify + context7 + gh_grep) concedidos a TODOS los agentes**: orchestrator, oracle, librarian, explorer, designer, fixer, observer, coder (antes solo orchestrator/librarian/coder tenían alguno). Verificado `opencode mcp list`: 3 servers connected; JSON sin BOM.
+- **Explorer + `clonedeps`** (ahora graphify, codemap, clonedeps — explorar fuentes de dependencias a gran escala).
+- **Fixer + `gdb`, `sanitizers`, `strace-ltrace`** (ahora 16: adversarial ×4, diagnose, clean-code ×2, verification, cpp-pro, rust-* ×3, improve-codebase-architecture, y las 3 de debug C++ legacy — para atacar el baseline C++ con herramientas reales).
+- **Docs**: `agent-organization.md` línea de especialización actualizada (skills por lane + MCPs para todos).
+- **Prompts documentados al usuario**: tabla con la esencia del prompt actual de cada agente (del harness + proyecto).
+
+### Pending
+
+- **Restart opencode** para cargar: MCPs de todos los agentes + skills nuevas de explorer/fixer (oráculo v4-pro sigue pendiente también).
+- Después: revisión de la spec del slice 18 (World compartido por canal) y el desarrollo de personalidades restante (routing de @coder, Council, prompt layering por proyecto) si el usuario lo aprueba.
+
+
 
 > The 31st part claimed (a) the GitHub repo "is not on GitHub yet" and (b) `context7`/`gh_grep` were "never registered — dead refs". **Both claims were WRONG** (user correction, verified empirically). This entry corrects the record; the 31st part stays as history.
 
@@ -31,6 +56,8 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 - **Restart opencode** to load all config changes (oracle v4-pro, fixer 13 skills, coder/librarian graphify MCP, designer brainstorming, restored MCPs).
 - After restart: **slice 18 spec review with the oracle on v4-pro** before Coder starts the bevy_ecs adoption.
 
+
+
 > User questions: "¿para qué sirven los MCPs? ¿no es mejor un GitHub MCP que el CLI? ¿no deberíamos añadir skills a los agentes sin skills?" — answered with verified facts, applied the fixes.
 
 ### Answered (verified)
@@ -50,6 +77,8 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 - **Restart opencode** to load all config changes (oracle v4-pro, fixer 13 skills, coder/librarian graphify MCP, designer brainstorming, MCP cleanup).
 - After restart: **slice 18 spec review with the oracle on v4-pro** before Coder starts the bevy_ecs adoption.
 
+
+
 > Config: `~/.config/opencode/oh-my-opencode-slim.json` (preset `opencode-go` + `agents.coder`) + `.opencode/agents/*.md` (local, gitignored). Docs: `docs/explanation/agent-organization.md`. All changes require an opencode restart (guardrail rule 7 — verified empirically with a fresh-oracle probe: the new model does NOT load hot).
 
 ### Changed — agent team config
@@ -65,6 +94,8 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 - **Restart opencode** to load: oracle v4-pro + fixer/librarian/coder skill-MCP changes.
 - After restart: **slice 18 spec review with the oracle on v4-pro** (fresh session) before Coder starts the bevy_ecs adoption (World compartido por canal, 5 pasos — spec de ora-1 aprobada).
+
+
 
 > User decision after the strategic review: "Metin2 es un juego de farmeo — el lag con muchos mobs es el problema core; con ECS mejoraría muchísimo el rendimiento. Y para el cliente futuro, bevy (no wgpu desde cero)." Documented in ADR-0010 §2 (amended) + ADR-0007 (amended) + plan/ROADMAP.
 
@@ -83,6 +114,8 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 - `docs/decisions/0007` amended: new client = bevy + Slint (decided 2026-08-12).
 - `source/reforge/README.md`: realm row → bevy_ecs World adoptado (ADR-0010 §2).
 - **Next slice**: ECS adoption implementation — `MobCache` → World components/systems with the 371 existing tests staying green (ADR-0010 Consequences).
+
+
 
 > User-requested full-project review ("are we only transcribing, not innovating?"). Three recon lanes (explorer inventory, librarian plan digest, oracle verdict) + two doc lanes (librarian staleness sweep x2). No code changed.
 
@@ -112,6 +145,8 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 - **ADR-0010 — Domain boundaries and data ownership**: ratifies the real realm architecture (pure functions + per-connection state + WorldStore, NOT the plan's ECS); ECS entry criterion = F5 benchmark failing 1,000+/instance with ≥2–5x CPU headroom or AI-tick >500ms; data ownership volatile/durable/derived; **translator-vs-core governing boundary** (user principle codified); wire debt inventory D1–D6 with F7 removal plan.
 - **ADR-0011 — Anti-hack model**: invariant server-authoritative zero client trust; ratifies implemented controls (timer speedhack always-on, anti-teleport, 0x00→close, DB fail-fast, idle timeout, server-clock cooldowns); **decides signed clock wrap** → modular difference with tolerance (kick stays as policy); pending controls with phase (speed envelope, walkability from PG, floods, god-mode, dupe completion, farm bots); attack-class table.
+
+
 
 > Team model change (user-directed, defined before implementation). Config: `~/.config/opencode/oh-my-opencode-slim.json` + `.opencode/agents/*.md` (local, gitignored). Docs: this repo.
 
@@ -872,6 +907,7 @@ The client reached the select screen early, but world entry failed silently (cle
 
 - **El selector de banderas causó pantalla NEGRA al abrir el login** (primera versión 18:04): `btn.SetEvent(ui.__mem_func__(self.__OnClickLanguageFlag(...)))` envolvía una **closure** con `__mem_func__` (wrapper pensado para métodos bound estilo `self.__OnClickLoginButton`) → excepción en `__CreateLanguageSelector` durante `LoginWindow.Open()` → el login no se construye → negro. **Fix:** `SetEvent` directo con la closure (igual que las lambdas del teclado virtual, `key_space.SetEvent(lambda ...)`) + **try/except blindado** en `__CreateLanguageSelector` (`print` del error, el login se muestra igual aunque el selector falle). Repack 538368 B 18:12, desplegado a `client\pack` y verificado por desempaquetado (línea 379 sin `__mem_func__`, 32 banderas dentro del epk).
 - **Verificado el `.rar` del sistema completo** (`systems\Language System 1.2.6.rar`, UnRAR l): contenido idéntico a la carpeta extraída, **sin ninguna imagen de bandera de país** y sin lógica de selector de login. Los 8 `02. Client\root\*.py` del mod son parches del coliseo PVP (dependen de `__LANGUAGE_SYSTEM__` en el C++ del cliente, no integrado) — **copiarlos rompería el login** (ImportError `uiLanguageSystem`, AttributeError `app.LANGUAGE_SYSTEM`, `player.IsLanguageSystem()` inexistente). Confirmada la decisión #8 del doc de estado (no integrar ese root).
+
 
 ## [2026-08-09] (3ª sesión, 2ª parte) — Crash de entrada al mundo: diagnóstico en curso + auditoría del Language System
 
