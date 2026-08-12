@@ -858,9 +858,8 @@ async fn connection_inner(
                     // header + answer BYTE — Packet.h:679). El diálogo de
                     // muerte del cliente manda la respuesta; el C++ revive
                     // con `RestartAtSamePos` (cmd_general.cpp:534 — el mismo
-                    // punto: EncodeRemovePacket + EncodeInsertPacket,
-                    // char.cpp:838-873). El warp a la ciudad (answer 1 →
-                    // WarpSet EMPIRE_START) queda pendiente (documentado).
+                    // punto) o warpea a la ciudad (cmd_general.cpp:552-554 →
+                    // WarpSet EMPIRE_START).
                     header::CG_SCRIPT_ANSWER => {
                         if row.hp <= 0 {
                             let answer = pkt.get(1).copied().unwrap_or(0);
@@ -870,28 +869,54 @@ async fn connection_inner(
                             let max = packets::compute_max_points(&row).unwrap_or([100, 100, 0]);
                             row.hp = max[0];
                             row.mp = max[1];
-                            // RestartAtSamePos: remove + insert del personaje
-                            // (el cliente reinicia la instancia en su sitio).
-                            let vid = row.id as u32;
-                            conn.send(&protocol::world::TPacketGCCharacterDelete::new(vid).to_bytes())
-                                .await
-                                .map_err(|e| format!("enviando GC_CHARACTER_DEL: {e}"))?;
-                            conn.send(&packets::character_add(&row).to_bytes().to_vec())
-                                .await
-                                .map_err(|e| format!("enviando GC_CHARACTER_ADD: {e}"))?;
-                            conn.send(&packets::character_additional_info(&row, empire).to_bytes().to_vec())
-                                .await
-                                .map_err(|e| format!("enviando GC_CHARACTER_ADDITIONAL_INFO: {e}"))?;
-                            // GC_POINTS con hp/mp restaurados + persistencia.
-                            conn.send(&packets::points_packet(&row, next_exp).to_bytes())
-                                .await
-                                .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
                             store.save_character(&row);
-                            eprintln!(
-                                "server_realms: channel conn {conn_id}: {} REVIVIÓ (answer {answer}, \
-                                 hp {}/{}, mp {}/{})",
-                                row.name, row.hp, max[0], row.mp, max[1]
-                            );
+                            if answer == 1 {
+                                // Revive EN LA CIUDAD: GC_WARP — el cliente
+                                // cierra la conexión y RECONECTA con el flujo
+                                // DirectEnter completo (RecvWarpPacket →
+                                // Connect(lAddr, wPort) — F4 ya lo sirve).
+                                // Destino: el punto de salida del personaje
+                                // (exit_x/y — el C++ usa EMPIRE_START; el
+                                // runtime actual: village del mapa 41).
+                                let (wx, wy) = if row.exit_x > 0 && row.exit_y > 0 {
+                                    (row.exit_x, row.exit_y)
+                                } else {
+                                    (969_600, 278_400) // village c1 mapa 41
+                                };
+                                let (ip, port) = parse_listen(&config.listen)?;
+                                let addr = packets::ip_to_inet_addr(&ip)?;
+                                conn.send(&protocol::world::TPacketGCWarp::new(wx, wy, addr, port).to_bytes())
+                                    .await
+                                    .map_err(|e| format!("enviando GC_WARP: {e}"))?;
+                                eprintln!(
+                                    "server_realms: channel conn {conn_id}: {} revivió EN LA CIUDAD \
+                                     (answer {answer}) — GC_WARP {wx},{wy} → {}:{port}, reconexión",
+                                    row.name, ip
+                                );
+                            } else {
+                                // RestartAtSamePos: remove + insert del
+                                // personaje (el cliente reinicia la instancia
+                                // en su sitio).
+                                let vid = row.id as u32;
+                                conn.send(&protocol::world::TPacketGCCharacterDelete::new(vid).to_bytes())
+                                    .await
+                                    .map_err(|e| format!("enviando GC_CHARACTER_DEL: {e}"))?;
+                                conn.send(&packets::character_add(&row).to_bytes().to_vec())
+                                    .await
+                                    .map_err(|e| format!("enviando GC_CHARACTER_ADD: {e}"))?;
+                                conn.send(&packets::character_additional_info(&row, empire).to_bytes().to_vec())
+                                    .await
+                                    .map_err(|e| format!("enviando GC_CHARACTER_ADDITIONAL_INFO: {e}"))?;
+                                // GC_POINTS con hp/mp restaurados.
+                                conn.send(&packets::points_packet(&row, next_exp).to_bytes())
+                                    .await
+                                    .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
+                                eprintln!(
+                                    "server_realms: channel conn {conn_id}: {} REVIVIÓ (answer {answer}, \
+                                     hp {}/{}, mp {}/{})",
+                                    row.name, row.hp, max[0], row.mp, max[1]
+                                );
+                            }
                         } else {
                             // Sin muerte: el script answer del diálogo de
                             // quests es F5.x — se ignora con log.
@@ -947,6 +972,22 @@ async fn connection_inner(
                             npc.state.x - px,
                             npc.state.y - py,
                         );
+                        // F5.3 (de-aggro por distancia): si el jugador se
+                        // aleja del mob hostil más allá del umbral, el mob
+                        // pierde el aggro y deja de perseguir (parity del
+                        // C++: el mob abandona la persecución fuera de su
+                        // rango — el data-driven con `aggressive_sight` del
+                        // mob_proto queda pendiente; umbral fijo 50 m).
+                        const DE_AGGRO_DISTANCE: i32 = 5_000;
+                        if dist > DE_AGGRO_DISTANCE {
+                            npc.aggro = false;
+                            eprintln!(
+                                "server_realms: channel conn {conn_id}: mob vnum {} (vid {}) — \
+                                 perdió el aggro (dist {dist} > {DE_AGGRO_DISTANCE})",
+                                npc.vnum, vid
+                            );
+                            continue;
+                        }
                         if dist <= realm::combat::melee_max_range(&npc.state) {
                             // EN RANGO: ataque del mob (FUNC_ATTACK + daño).
                             let mut roll = |lo: i32, hi: i32| {
