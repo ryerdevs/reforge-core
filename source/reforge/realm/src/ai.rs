@@ -57,6 +57,48 @@ pub fn attack_damage(damage_min: i32, damage_max: i32, roll: &mut dyn FnMut(i32,
     damage_min + roll(0, damage_max - damage_min)
 }
 
+/// PASO DE PATRULLAJE del mob idle (parity `UpdateState` IDLE —
+/// `char_state.cpp:668-688`): con probabilidad `1/7` por tick, el mob elige
+/// una dirección aleatoria (0..359°) y un paso de 300-700 UNITS hacia un
+/// destino DENTRO del radio de su spawn (el C++ no clampa al spawn pero el
+/// estado IDLE lo mantiene cerca; el clamp evita que el subset "pierda"
+/// mobs — documentado). `None` = este tick no patrulla.
+///
+/// El mob con `AIFLAG_NOMOVE` NO patrulla (el caller lo filtra — parity
+/// `char_state.cpp:668`: `!IS_SET(dwAIFlag, AIFLAG_NOMOVE)`).
+pub fn patrol_step(
+    x: i32,
+    y: i32,
+    home_x: i32,
+    home_y: i32,
+    spawn_radius: i32,
+    roll: &mut dyn FnMut(i32, i32) -> i32,
+) -> Option<(i32, i32)> {
+    // `!number(0, 6)` — probabilidad 1/7 (char_state.cpp:670).
+    if roll(0, 6) != 0 {
+        return None;
+    }
+    // Dirección aleatoria + paso 300-700 (char_state.cpp:672-675).
+    let deg = roll(0, 359) as f64;
+    let dist = roll(300, 700) as f64;
+    let rad = deg.to_radians();
+    let (dx, dy) = (dist * rad.cos(), dist * rad.sin());
+    let (tx, ty) = (x + dx.round() as i32, y + dy.round() as i32);
+    // Clamp al radio del spawn (documentado — el C++ no lo hace; la
+    // walkability del mapa queda pendiente, parity parcial).
+    let (hx, hy) = ((tx - home_x) as f64, (ty - home_y) as f64);
+    let d = (hx * hx + hy * hy).sqrt();
+    if d > spawn_radius as f64 && d > f64::EPSILON {
+        let f = spawn_radius as f64 / d;
+        let (cx, cy) = (home_x + (hx * f).round() as i32, home_y + (hy * f).round() as i32);
+        if (cx, cy) == (x, y) {
+            return None; // ya en el borde — sin movimiento este tick
+        }
+        return Some((cx, cy));
+    }
+    Some((tx, ty))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,5 +158,54 @@ mod tests {
         assert_eq!(attack_damage(5, 5, &mut roll), 5);
         // min > max (dato corrupto): defensivo, devuelve el min.
         assert_eq!(attack_damage(9, 4, &mut roll), 9);
+    }
+
+    /// Patrullaje: probabilidad 1/7 por tick (parity `!number(0, 6)`).
+    #[test]
+    fn patrol_step_one_in_seven() {
+        // roll devuelve 1..6 → NO patrulla este tick (None).
+        let mut roll = |_lo: i32, _hi: i32| 1;
+        assert_eq!(patrol_step(100, 100, 100, 100, 1000, &mut roll), None);
+        // roll devuelve 0 → patrulla (Some).
+        let mut roll = |lo: i32, _hi: i32| lo;
+        assert!(patrol_step(100, 100, 100, 100, 1000, &mut roll).is_some());
+    }
+
+    /// El destino se mantiene DENTRO del radio del spawn (clamp — el C++ no
+    /// lo hace pero el estado IDLE mantiene al mob cerca; documentado).
+    #[test]
+    fn patrol_step_clamps_to_spawn_radius() {
+        // roll: prob=0 (patrulla), deg=0 (este), dist=700 → destino x+700.
+        let mut roll = |lo: i32, hi: i32| match (lo, hi) {
+            (0, 6) => 0,           // probabilidad 1/7
+            (0, 359) => 0,         // 0° → +x
+            (300, 700) => 700,     // paso máximo
+            _ => panic!("roll inesperado ({lo},{hi})"),
+        };
+        // Spawn en (0,0), mob en (0,0), radio 500 → el destino (700,0) se
+        // clampa a (500,0).
+        let (tx, ty) = patrol_step(0, 0, 0, 0, 500, &mut roll).expect("patrulla");
+        assert_eq!((tx, ty), (500, 0), "clamp al radio del spawn");
+        // Ya en el borde (500,0): el clamp devolvería el mismo punto → None.
+        let mut roll = |lo: i32, hi: i32| match (lo, hi) {
+            (0, 6) => 0,
+            (0, 359) => 0,
+            (300, 700) => 700,
+            _ => panic!("roll inesperado"),
+        };
+        assert_eq!(patrol_step(500, 0, 0, 0, 500, &mut roll), None, "en el borde");
+    }
+
+    /// Destino DENTRO del radio: se usa tal cual (sin clamp).
+    #[test]
+    fn patrol_step_keeps_nearby_target() {
+        let mut roll = |lo: i32, hi: i32| match (lo, hi) {
+            (0, 6) => 0,
+            (0, 359) => 0,   // este
+            (300, 700) => 300, // paso mínimo
+            _ => panic!("roll inesperado ({lo},{hi})"),
+        };
+        let (tx, ty) = patrol_step(0, 0, 0, 0, 500, &mut roll).expect("patrulla");
+        assert_eq!((tx, ty), (300, 0), "dentro del radio: sin clamp");
     }
 }
