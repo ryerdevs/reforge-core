@@ -231,8 +231,170 @@ impl TPacketAffectElement {
     }
 }
 
-/// `TPacketGCAffectAdd` (22 B, header 126 — `packet.h:2032-2036`): un affect
-/// activo (`LoadAffect` → `AddAffect` → paquete; el server manda UNO por
+/// `TPacketGCItemGroundAdd` (58 B packed, header 26 — `packet.h:1087-1098`
+/// y `Packet.h:1724-1738`): un item EN EL SUELO (spawn de drop). Con
+/// `ENABLE_ITEM_GROUND_EX` activo en AMBOS lados (cliente `Locale_inc.h:61`,
+/// server `item.cpp:137`): header + x,y,z (long) + dwVID + dwVnum + count +
+/// sockets (3×long) + attrs (7×`TPlayerItemAttribute` = 3 B cada uno).
+/// `1 + 12 + 4 + 4 + 4 + 12 + 21 = 58`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketGCItemGroundAdd {
+    pub header: u8,
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+    pub vid: u32,
+    pub vnum: u32,
+    pub count: u32,
+    /// Wire: `long` x86 = 4 B (`ITEM_SOCKET_MAX_NUM` = 3).
+    pub sockets: [i64; 3],
+    /// Wire: `TPlayerItemAttribute` packed = type BYTE + value short (3 B).
+    pub attrs: [(i16, i16); 7],
+}
+
+impl TPacketGCItemGroundAdd {
+    pub const SIZE: usize = 58;
+    pub const HEADER: u8 = 26;
+
+    pub fn new(vid: u32, vnum: u32, x: i32, y: i32, z: i32, count: u32) -> Self {
+        Self {
+            header: Self::HEADER,
+            x,
+            y,
+            z,
+            vid,
+            vnum,
+            count,
+            sockets: [0; 3],
+            attrs: [(0, 0); 7],
+        }
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+        }
+        let mut sockets = [0i64; 3];
+        for (i, s) in sockets.iter_mut().enumerate() {
+            *s = i64::from(i32::from_le_bytes([
+                data[25 + i * 4],
+                data[26 + i * 4],
+                data[27 + i * 4],
+                data[28 + i * 4],
+            ]));
+        }
+        let mut attrs = [(0i16, 0i16); 7];
+        for (i, a) in attrs.iter_mut().enumerate() {
+            a.0 = i16::from(data[37 + i * 3]);
+            a.1 = i16::from_le_bytes([data[38 + i * 3], data[39 + i * 3]]);
+        }
+        Ok(Self {
+            header: data[0],
+            x: i32::from_le_bytes([data[1], data[2], data[3], data[4]]),
+            y: i32::from_le_bytes([data[5], data[6], data[7], data[8]]),
+            z: i32::from_le_bytes([data[9], data[10], data[11], data[12]]),
+            vid: u32::from_le_bytes([data[13], data[14], data[15], data[16]]),
+            vnum: u32::from_le_bytes([data[17], data[18], data[19], data[20]]),
+            count: u32::from_le_bytes([data[21], data[22], data[23], data[24]]),
+            sockets,
+            attrs,
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        b[1..5].copy_from_slice(&self.x.to_le_bytes());
+        b[5..9].copy_from_slice(&self.y.to_le_bytes());
+        b[9..13].copy_from_slice(&self.z.to_le_bytes());
+        b[13..17].copy_from_slice(&self.vid.to_le_bytes());
+        b[17..21].copy_from_slice(&self.vnum.to_le_bytes());
+        b[21..25].copy_from_slice(&self.count.to_le_bytes());
+        for (i, s) in self.sockets.iter().enumerate() {
+            b[25 + i * 4..29 + i * 4].copy_from_slice(&(*s as i32).to_le_bytes());
+        }
+        for (i, a) in self.attrs.iter().enumerate() {
+            b[37 + i * 3] = a.0 as u8;
+            b[38 + i * 3..40 + i * 3].copy_from_slice(&a.1.to_le_bytes());
+        }
+        b
+    }
+}
+
+/// `TPacketGCItemGroundDel` (5 B, header 27 — `packet.h:1107-1111`): quita
+/// un item del suelo (pickup / expiración).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketGCItemGroundDel {
+    pub header: u8,
+    pub vid: u32,
+}
+
+impl TPacketGCItemGroundDel {
+    pub const SIZE: usize = 5;
+    pub const HEADER: u8 = 27;
+
+    pub fn new(vid: u32) -> Self {
+        Self { header: Self::HEADER, vid }
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+        }
+        Ok(Self { header: data[0], vid: rd_u32(data, 1) })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        b[1..5].copy_from_slice(&self.vid.to_le_bytes());
+        b
+    }
+}
+
+/// `TPacketGCItemOwnership` (30 B, header 31 — `packet.h:1100-1105` +
+/// `Packet.h:1746-1751`): el dueño de un item del suelo (el cliente pinta el
+/// nombre sobre el item; `CHARACTER_NAME_MAX_LEN` = 24).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketGCItemOwnership {
+    pub header: u8,
+    pub vid: u32,
+    pub name: [u8; 25],
+}
+
+impl TPacketGCItemOwnership {
+    pub const SIZE: usize = 30;
+    pub const HEADER: u8 = 31;
+
+    pub fn new(vid: u32, name: &[u8]) -> Self {
+        let mut n = [0u8; 25];
+        let len = name.len().min(24);
+        n[..len].copy_from_slice(&name[..len]);
+        Self { header: Self::HEADER, vid, name: n }
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+        }
+        let mut name = [0u8; 25];
+        name.copy_from_slice(&data[5..30]);
+        Ok(Self { header: data[0], vid: rd_u32(data, 1), name })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        b[1..5].copy_from_slice(&self.vid.to_le_bytes());
+        b[5..30].copy_from_slice(&self.name);
+        b
+    }
+}
+
+/// `TPacketGCAffectAdd` (22 B, header 126 — `packet.h:2032-2036`): un affect/// activo (`LoadAffect` → `AddAffect` → paquete; el server manda UNO por
 /// affect al entrar).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(C)]
@@ -797,5 +959,65 @@ mod tests {
     fn land_list_empty() {
         let bytes = land_list_bytes(&[]);
         assert_eq!(bytes, [130, 3, 0], "sin lands: header + size 3");
+    }
+
+    /// Drop wire (F5.3): `GC_ITEM_GROUND_ADD` (26) = 58 B packed con
+    /// `ENABLE_ITEM_GROUND_EX` (cliente `Locale_inc.h:61` — parity
+    /// `packet.h:1087-1098` + `Packet.h:1724-1738`); el layout del struct
+    /// cliente: header + x,y,z + dwVID + dwVnum + count + sockets(3×long) +
+    /// attrs(7×3 B). `GC_ITEM_GROUND_DEL` (27) = 5 B; `GC_ITEM_OWNERSHIP`
+    /// (31) = 30 B.
+    #[test]
+    fn ground_item_packets_roundtrip_and_sizes() {
+        // Ground add: header 26 + x,y,z + vid + vnum + count + sockets + attrs.
+        let add = TPacketGCItemGroundAdd {
+            header: TPacketGCItemGroundAdd::HEADER,
+            x: 969600,
+            y: 278400,
+            z: 0,
+            vid: 50_001,
+            vnum: 2101,
+            count: 3,
+            sockets: [0x1234, 0, 0],
+            attrs: [(1, 100), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0)],
+        };
+        assert_eq!(TPacketGCItemGroundAdd::SIZE, 58, "1+12+4+4+4+12+21 (packed)");
+        let b = add.to_bytes();
+        assert_eq!(b.len(), 58);
+        assert_eq!(b[0], 26, "header");
+        assert_eq!(&b[1..5], &969600i32.to_le_bytes(), "x");
+        assert_eq!(&b[5..9], &278400i32.to_le_bytes(), "y");
+        assert_eq!(&b[9..13], &0i32.to_le_bytes(), "z");
+        assert_eq!(&b[13..17], &50_001u32.to_le_bytes(), "dwVID");
+        assert_eq!(&b[17..21], &2101u32.to_le_bytes(), "dwVnum");
+        assert_eq!(&b[21..25], &3u32.to_le_bytes(), "count");
+        assert_eq!(&b[25..29], &0x1234i32.to_le_bytes(), "socket0 (long 4 B)");
+        assert_eq!(b[37], 1, "attr0 type");
+        assert_eq!(&b[38..40], &100i16.to_le_bytes(), "attr0 value");
+        let add2 = TPacketGCItemGroundAdd::from_bytes(&b).unwrap();
+        assert_eq!(add2, add);
+
+        // Ground del: header + vid.
+        let del = TPacketGCItemGroundDel::new(50_001);
+        assert_eq!(TPacketGCItemGroundDel::SIZE, 5);
+        let b = del.to_bytes();
+        assert_eq!(b, [27, 0x51, 0xC3, 0, 0], "50_001 = 0xC351 LE");
+        assert_eq!(TPacketGCItemGroundDel::from_bytes(&b).unwrap(), del);
+
+        // Ownership: header + dwVID + name[25] (el array ya es zeroed — los
+        // bytes del nombre + NUL implícito del resto del buffer).
+        let own = TPacketGCItemOwnership::new(50_001, b"ninja");
+        assert_eq!(TPacketGCItemOwnership::SIZE, 30);
+        let b = own.to_bytes();
+        assert_eq!(b[0], 31);
+        assert_eq!(&b[1..5], &50_001u32.to_le_bytes());
+        assert_eq!(&b[5..10], b"ninja", "bytes del nombre");
+        assert_eq!(b[10], 0, "NUL tras el nombre (array zeroed)");
+        assert_eq!(TPacketGCItemOwnership::from_bytes(&b).unwrap(), own);
+
+        // Longitudes malas → Err (BadLength).
+        assert!(TPacketGCItemGroundAdd::from_bytes(&b[..20]).is_err());
+        assert!(TPacketGCItemGroundDel::from_bytes(&[27]).is_err());
+        assert!(TPacketGCItemOwnership::from_bytes(&[31, 0]).is_err());
     }
 }

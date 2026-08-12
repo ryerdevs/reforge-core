@@ -132,6 +132,15 @@ pub mod header {
     /// `HEADER_GC_CHAT` (cliente `Packet.h:148`; server `packet.h` — 9 B +
     /// mensaje variable: `TPacketGCChat` header+size+type+dwVID+bEmpire).
     pub const GC_CHAT: u8 = 4;
+    /// `HEADER_GC_ITEM_GROUND_ADD` (cliente `Packet.h:170`, server
+    /// `packet.h:139` — 26): un item EN EL SUELO (drop).
+    pub const GC_ITEM_GROUND_ADD: u8 = 26;
+    /// `HEADER_GC_ITEM_GROUND_DEL` (cliente `Packet.h:171`, server
+    /// `packet.h:140` — 27): quita un item del suelo (pickup).
+    pub const GC_ITEM_GROUND_DEL: u8 = 27;
+    /// `HEADER_GC_ITEM_OWNERSHIP` (cliente `Packet.h:175`, server
+    /// `packet.h` — 31): el dueño de un item del suelo.
+    pub const GC_ITEM_OWNERSHIP: u8 = 31;
     /// LoginSuccess "new slot" = 0x20 (server `HEADER_GC_LOGIN_SUCCESS_NEWSLOT`,
     /// cliente `HEADER_GC_LOGIN_SUCCESS4`).
     pub const GC_LOGIN_SUCCESS_NEWSLOT: u8 = 32;

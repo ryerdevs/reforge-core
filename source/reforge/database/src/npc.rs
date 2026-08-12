@@ -77,13 +77,20 @@ pub struct MobRow {
     pub gold_min: i32,
     /// `gold_max` (integer) — el gold máximo (el C++ sortea `number(min,max)`).
     pub gold_max: i32,
+    // ---- F5.3 (drops): el drop primario del mob. ----
+    /// `drop_item` (integer) — el item que dropea el mob al morir
+    /// (→ `item_proto.vnum`; 0 = sin drop). El C++ usa además las tablas
+    /// `etc_drop_item.txt`/`common_drop_item.txt` (por nombre CP949 — TRAP
+    /// documentado en AGENTS.md §17); el subset base usa solo el drop
+    /// primario de la tabla (documentado).
+    pub drop_item: i64,
 }
 
 /// Load del subset por vnum (`SELECT ... FROM player.mob_proto WHERE vnum = $1`).
 /// El orden de columnas ES el contrato del mapeo (`mob_row_from_row`).
 const LOAD_SQL: &str = "\
 SELECT vnum, name, locale_name, type, battle_type, level, size, ai_flag, folder, \
-ht, def, max_hp, attack_range, exp, gold_min, gold_max \
+ht, def, max_hp, attack_range, exp, gold_min, gold_max, drop_item \
 FROM player.mob_proto WHERE vnum = $1";
 
 /// Load por LOTE de vnums (la misma SELECT, `WHERE vnum = ANY($1::int8[])` —
@@ -91,7 +98,7 @@ FROM player.mob_proto WHERE vnum = $1";
 /// `&[i64]` como array nativo). Una sola query para los N vnums.
 const LOAD_BATCH_SQL: &str = "\
 SELECT vnum, name, locale_name, type, battle_type, level, size, ai_flag, folder, \
-ht, def, max_hp, attack_range, exp, gold_min, gold_max \
+ht, def, max_hp, attack_range, exp, gold_min, gold_max, drop_item \
 FROM player.mob_proto WHERE vnum = ANY($1::int8[])";
 
 /// Repositorio del dominio world (mob_proto). Conexion por llamada (ADR-0008).
@@ -165,6 +172,7 @@ fn mob_row_from_row(r: &Row) -> Result<MobRow, String> {
         exp: r.try_get(13).map_err(|e| format!("mob_proto.exp: {e}"))?,
         gold_min: r.try_get(14).map_err(|e| format!("mob_proto.gold_min: {e}"))?,
         gold_max: r.try_get(15).map_err(|e| format!("mob_proto.gold_max: {e}"))?,
+        drop_item: r.try_get(16).map_err(|e| format!("mob_proto.drop_item: {e}"))?,
     })
 }
 
@@ -182,20 +190,20 @@ mod tests {
     /// Contrato del SQL: el orden de columnas del mapeo (si alguien lo toca,
     /// `mob_row_from_row` y el orden del wire se desalinean — el test lo fija).
     /// F5.2: el combate añadió las columnas `ht, def, max_hp, attack_range`.
-    /// F5.3: las recompensas añadieron `exp, gold_min, gold_max`.
+    /// F5.3: las recompensas añadieron `exp, gold_min, gold_max` y `drop_item`.
     /// La query batch comparte el MISMO orden (mismo mapeo).
     #[test]
     fn load_sql_column_order() {
         assert_eq!(
             LOAD_SQL,
             "SELECT vnum, name, locale_name, type, battle_type, level, size, ai_flag, folder, \
-ht, def, max_hp, attack_range, exp, gold_min, gold_max \
+ht, def, max_hp, attack_range, exp, gold_min, gold_max, drop_item \
 FROM player.mob_proto WHERE vnum = $1"
         );
         assert_eq!(
             LOAD_BATCH_SQL,
             "SELECT vnum, name, locale_name, type, battle_type, level, size, ai_flag, folder, \
-ht, def, max_hp, attack_range, exp, gold_min, gold_max \
+ht, def, max_hp, attack_range, exp, gold_min, gold_max, drop_item \
 FROM player.mob_proto WHERE vnum = ANY($1::int8[])"
         );
     }

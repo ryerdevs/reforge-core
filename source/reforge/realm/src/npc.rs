@@ -823,6 +823,8 @@ mod tests {
             exp: 22,
             gold_min: 15,
             gold_max: 45,
+            // F5.3: drop primario del mob 101 (mob_proto.drop_item).
+            drop_item: 101,
         }
     }
 
