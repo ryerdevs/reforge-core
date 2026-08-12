@@ -50,7 +50,10 @@ use database::land::LandRepo;
 use network::framer::{ConnectionRole, Framer};
 use network::handshake::HandshakeError;
 use network::{handshake, Connection};
-use protocol::world::{TPacketGCChannel, TPacketGCTime};
+use protocol::world::{
+    TPacketGCChannel, TPacketGCItemGroundAdd, TPacketGCItemGroundDel, TPacketGCItemOwnership,
+    TPacketGCItemSet, TPacketGCTime, TItemPos,
+};
 use protocol::{
     header, phase, TPacketCGLogin3, TPacketCGPlayerSelect, TPacketGCEmpire, TPacketGCLoginFailure,
     TPacketGCLoginSuccess, TPacketGCPhase, PLAYER_PER_ACCOUNT,
@@ -289,16 +292,18 @@ async fn connection_inner(
     // ------------------------------------------------------------------
     // F5.3: next_exp MUTABLE — el level-up del kill lo recalcula por nivel.
     let mut next_exp = CommonRepo::new(&config.pg_conn).next_exp(row.level).await.unwrap_or(0);
-    let items = ItemRepo::new(&config.pg_conn).load_by_owner(row.id).await?;
+    // Inventario del jugador (F5.3): MUTABLE — el pickup (CG_ITEM_PICKUP)
+    // busca el primer cell libre y añade el item recogido.
+    let mut inventory = ItemRepo::new(&config.pg_conn).load_by_owner(row.id).await?;
     let affects = AffectRepo::new(&config.pg_conn).load(row.id).await?;
-    for pkt in entry_packets(&row, next_exp, &items, &affects) {
+    for pkt in entry_packets(&row, next_exp, &inventory, &affects) {
         conn.send(&pkt).await.map_err(|e| format!("enviando entry: {e}"))?;
     }
     eprintln!(
         "server_realms: channel conn {conn_id}: entry enviado (LOADING + MAIN_CHARACTER + {} quickslots + \
          POINTS + SKILLS + {} items + {} affects) — esperando CG_ENTERGAME del cliente",
         packets::quickslot_packets(row.quickslot.as_ref()).len(),
-        items.len(),
+        inventory.len(),
         affects.len()
     );
 
@@ -419,6 +424,7 @@ async fn connection_inner(
                         exp: mob.exp,
                         gold_min: mob.gold_min,
                         gold_max: mob.gold_max,
+                        drop_item: mob.drop_item,
                     },
                 );
                 vid += 1;
@@ -434,6 +440,11 @@ async fn connection_inner(
 
     // F5.2: el estado de combate del jugador (cooldown por objetivo).
     let mut combat = realm::combat::CombatState::new();
+
+    // F5.3: items EN EL SUELO del mundo (vid -> item). El pickup
+    // (CG_ITEM_PICKUP) los consume; el `next_item_vid` global no colisiona
+    // con los NPCs (10 000+) ni los PCs (ids bajos).
+    let mut live_items: std::collections::HashMap<u32, LiveGroundItem> = std::collections::HashMap::new();
 
     // 8. Loop de juego (estático): el mundo no tiene NPCs/mobs todavía (F5) —
     //    la conexión se mantiene viva. El HEARTBEAT es del SERVIDOR (parity
@@ -631,10 +642,55 @@ async fn connection_inner(
                                             // GC_POINTS actualizado (el
                                             // cliente muestra exp/gold/nivel)
                                             // + persistencia durable.
-                                            conn.send(&packets::points_packet(&row, next_exp).to_bytes().to_vec())
+                                            conn.send(&packets::points_packet(&row, next_exp).to_bytes())
                                                 .await
                                                 .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
                                             store.save_character(&row);
+                                            // F5.3: DROP del mob — el drop
+                                            // primario (`mob_proto.drop_item`),
+                                            // con la probabilidad del
+                                            // `drop_rate` del config. (El C++
+                                            // además usa etc_drop_item.txt por
+                                            // nombre — TRAP AGENTS.md §17 — el
+                                            // subset base usa solo la columna.)
+                                            if npc.drop_item > 0
+                                                && (rand32() % 100) < u32::from(config.drop_rate)
+                                            {
+                                                let item_vid = next_item_vid();
+                                                let gi = LiveGroundItem {
+                                                    vnum: npc.drop_item as u32,
+                                                    count: 1,
+                                                    x: npc.state.x,
+                                                    y: npc.state.y,
+                                                    z: 0,
+                                                };
+                                                conn.send(
+                                                    &TPacketGCItemGroundAdd::new(
+                                                        item_vid, gi.vnum, gi.x, gi.y, gi.z, gi.count,
+                                                    )
+                                                    .to_bytes(),
+                                                )
+                                                .await
+                                                .map_err(|e| format!("enviando GC_ITEM_GROUND_ADD: {e}"))?;
+                                                // Ownership (parity
+                                                // item.cpp:145-162 — el nombre
+                                                // del dueño sobre el item).
+                                                conn.send(
+                                                    &TPacketGCItemOwnership::new(
+                                                        item_vid,
+                                                        row.name.as_bytes(),
+                                                    )
+                                                    .to_bytes(),
+                                                )
+                                                .await
+                                                .map_err(|e| format!("enviando GC_ITEM_OWNERSHIP: {e}"))?;
+                                                live_items.insert(item_vid, gi);
+                                                eprintln!(
+                                                    "server_realms: channel conn {conn_id}: {} — drop item \
+                                                     vnum {} (vid {}) en el suelo",
+                                                    row.name, npc.drop_item, item_vid
+                                                );
+                                            }
                                             eprintln!(
                                                 "server_realms: channel conn {conn_id}: {} mató al mob vnum {} \
                                                  (vid {}): exp +{exp_gain}, gold +{gold_gain}{} (nivel {})",
@@ -690,6 +746,94 @@ async fn connection_inner(
                             row.name,
                             chat_type,
                             String::from_utf8_lossy(msg)
+                        );
+                        continue;
+                    }
+                    // F5.3: pickup de un item del suelo (parity
+                    // `ItemPickup` input_main.cpp:902-907 → `PickupItem`
+                    // char_item.cpp:5888-5947): distancia ≤ 600
+                    // (`CItem::DistanceValid`, item.cpp:461-472) → primer
+                    // slot libre del inventario (INVENTORY_MAX_NUM = 90,
+                    // length.h:29) → GC_ITEM_SET (el item entra al
+                    // inventario) + GC_ITEM_GROUND_DEL (se quita del suelo)
+                    // + persistencia (ItemRepo::upsert).
+                    header::CG_ITEM_PICKUP => {
+                        if pkt.len() < 5 {
+                            return Err(format!("CG_ITEM_PICKUP malformado ({})", pkt.len()));
+                        }
+                        let vid = u32::from_le_bytes([pkt[1], pkt[2], pkt[3], pkt[4]]);
+                        let Some(gi) = live_items.get(&vid).copied() else {
+                            eprintln!(
+                                "server_realms: channel conn {conn_id}: pickup de vid {vid} — \
+                                 no hay item en el suelo"
+                            );
+                            continue;
+                        };
+                        let dist = realm::combat::distance_approx(motion.x - gi.x, motion.y - gi.y);
+                        if dist > 600 {
+                            eprintln!(
+                                "server_realms: channel conn {conn_id}: pickup de vid {vid} — \
+                                 fuera de rango ({dist} > 600)"
+                            );
+                            continue;
+                        }
+                        // Primer cell libre del inventario (parity
+                        // `GetEmptyInventory`, char_item.cpp:709-711).
+                        let occupied: std::collections::HashSet<u16> = inventory
+                            .iter()
+                            .filter(|i| i.window == "INVENTORY")
+                            .map(|i| i.pos as u16)
+                            .collect();
+                        let Some(slot) = (0u16..90).find(|c| !occupied.contains(c)) else {
+                            eprintln!(
+                                "server_realms: channel conn {conn_id}: inventario lleno — \
+                                 el item {vid} queda en el suelo"
+                            );
+                            continue;
+                        };
+                        // Item nuevo del pickup: id del rango ITEM_ID_RANGE
+                        // (100M-200M — parity `ItemIDRangeManager.cpp:93,121`;
+                        // el E2E Q8 sondea ese rango).
+                        let id = ItemRepo::new(&config.pg_conn)
+                            .max_id_in_range(100_000_000, 200_000_000)
+                            .await?
+                            .map(|m| m + 1)
+                            .unwrap_or(100_000_000);
+                        let new_item = database::item::ItemRow {
+                            id,
+                            window: "INVENTORY".to_string(),
+                            pos: slot as i32,
+                            count: gi.count as i64,
+                            vnum: gi.vnum as i64,
+                            sockets: [0; 3],
+                            attrs: [(0, 0); 7],
+                        };
+                        // GC_ITEM_SET (51 B — el slot pintado del cliente).
+                        let set = TPacketGCItemSet {
+                            header: TPacketGCItemSet::HEADER,
+                            cell: TItemPos { window: TItemPos::WINDOW_INVENTORY, cell: slot },
+                            vnum: gi.vnum,
+                            count: gi.count as u8,
+                            flags: 0,
+                            anti_flags: 0,
+                            highlight: 0,
+                            sockets: [0; 3],
+                            attrs: [(0, 0); 7],
+                        };
+                        conn.send(&set.to_bytes())
+                            .await
+                            .map_err(|e| format!("enviando GC_ITEM_SET: {e}"))?;
+                        conn.send(&TPacketGCItemGroundDel::new(vid).to_bytes())
+                            .await
+                            .map_err(|e| format!("enviando GC_ITEM_GROUND_DEL: {e}"))?;
+                        // Persistencia durable + estado del mundo.
+                        ItemRepo::new(&config.pg_conn).upsert(&new_item, row.id).await?;
+                        live_items.remove(&vid);
+                        inventory.push(new_item);
+                        eprintln!(
+                            "server_realms: channel conn {conn_id}: {} recogió item vnum {} (vid {}) \
+                             → slot {slot} del inventario (id {id})",
+                            row.name, gi.vnum, vid
                         );
                         continue;
                     }
@@ -840,7 +984,8 @@ fn cstr(bytes: &[u8]) -> &str {
 
 /// NPC vivo del mundo del canal (F5.2): el estado del combate + el HP
 /// runtime. `state` es la vista inmutable que `handle_attack` consume.
-/// F5.3: `exp`/`gold_min`/`gold_max` = recompensas del mob (del `mob_proto`).
+/// F5.3: `exp`/`gold_min`/`gold_max`/`drop_item` = recompensas del mob
+/// (del `mob_proto`).
 struct LiveNpc {
     state: realm::combat::NpcState,
     vnum: i64,
@@ -849,6 +994,26 @@ struct LiveNpc {
     exp: i64,
     gold_min: i32,
     gold_max: i32,
+    drop_item: i64,
+}
+
+/// Item EN EL SUELO del mundo del canal (F5.3): el estado que el pickup
+/// consume (vnum/count/posición). El cliente lo pinta con el
+/// `GC_ITEM_GROUND_ADD` y lo quita con el `GC_ITEM_GROUND_DEL`.
+#[derive(Clone, Copy)]
+struct LiveGroundItem {
+    vnum: u32,
+    count: u32,
+    x: i32,
+    y: i32,
+    z: i32,
+}
+
+/// Contador global de VIDs de items del suelo del canal: arranca en
+/// 50 000 (los PCs son ids bajos 1..5 y los NPCs 10 000+ — sin colisión).
+fn next_item_vid() -> u32 {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(50_000);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Contador global de VIDs de NPCs del canal: arranca en 10 000 (los PCs son
