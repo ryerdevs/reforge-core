@@ -7,6 +7,19 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-12] (13th part) — F5.3 NPC AI slice 2: el mob ataca en rango
+
+> Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests, unit tests only).
+
+### Added — mob attack in range (Rust, commit `ee75301`)
+
+- **`database/src/npc.rs`**: `MobRow.damage_min`/`damage_max` (smallint, `mob_proto`) + SQL/mapper/column-order test.
+- **`realm/src/ai.rs`**: `attack_damage(damage_min, damage_max, roll)` — `number(min,max)` inclusive puro (min==max → fijo sin sorteo; min>max → defensivo devuelve min; NO resta la DEF del jugador — la fórmula del PC como víctima es pendiente, `char.cpp:2113-2114`) + tests.
+- **`server_realms/src/channel.rs`** (AI tick): el mob aggro **EN RANGO** (parity `melee_max_range` — 300 UNITS o el rango del mob) ahora ATACA: `GC_MOVE(FUNC_ATTACK)` (x/y = posición actual, dwDuration 0 — parity `char_state.cpp:386`) + `GC_DAMAGE_INFO` (135, el número de daño) + daño al jugador (`row.hp`, roll `number(min,max)` con rand32) + `GC_POINTS` (la barra) + `store.save_character`. Fuera de rango sigue persiguiendo (slice 1).
+- **Muerte del PC pendiente (documentado):** `row.hp` se fija en floor 1 (sin `GC_DEAD`/respawn del jugador — F5.x). El mob sí muere (slice anterior: `GC_DEAD` + `GC_CHARACTER_DEL`).
+- **Verified**: `cargo test --workspace` green excluyendo `f16_peer_smoke` — **flaky de cold-start pre-existente (F1.6)**: primera ejecución del binario tras compilar → timeout de 10 s; segunda corrida del mismo binario → 2/2 en 0.04 s (race de timing del fake-auth; no toca nada de esta ronda). Clippy sin warnings nuevos.
+- **Pending**: ataque del mob con la DEF del jugador, muerte/respawn del PC, patrullaje/estados (`ai_flag`), de-aggro por distancia, multicast.
+
 ## [2026-08-12] (12th part) — F5.3 NPC AI: aggro + persecución + broadcast GC_MOVE
 
 > Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests, unit tests only).
