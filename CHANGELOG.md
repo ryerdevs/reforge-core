@@ -7,7 +7,29 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
-## [2026-08-12] (31st part) — MCP audit + skills: only graphify is real; designer reinforced; dead refs removed
+## [2026-08-12] (32nd part) — CORRECTION of the 31st part: the repo IS on GitHub; context7/gh_grep ARE active (harness-provisioned); BOM bug fixed
+
+> The 31st part claimed (a) the GitHub repo "is not on GitHub yet" and (b) `context7`/`gh_grep` were "never registered — dead refs". **Both claims were WRONG** (user correction, verified empirically). This entry corrects the record; the 31st part stays as history.
+
+### Corrected facts (verified 2026-08-12)
+
+- **The repo IS on GitHub**: `github.com/ryerdevs/reforge-core` (PUBLIC, remote `origin`, authenticated `gh` as `ryerdevs`). The old "repo GitHub sin montar" F0 debt is superseded. ⚠️ **Local is 49 commits AHEAD of `origin/main`** (last pushed: `352b850` G-PG inventories) — everything since (ADR-0008→0011, bevy_ecs decision, parts 29-31) is local-only, NOT pushed.
+- **`context7` and `gh_grep` ARE active**: they are **provisioned by the oh-my-opencode-slim harness** (plugin v2.2.13, `github.com/alvinunreal/oh-my-opencode-slim`), not by `opencode.jsonc`. Verified live with `opencode mcp list`: **3 servers connected** — `graphify` (local `python -m graphify.serve`), `context7` (`https://mcp.context7.com/mcp`), `gh_grep` (`https://mcp.grep.app`). The `mcps` field in `oh-my-opencode-slim.json` is the per-agent access list, not the server registration.
+- **BOM bug introduced by me (fixed)**: my PowerShell `Set-Content -Encoding UTF8` wrote a **UTF-8 BOM** into `oh-my-opencode-slim.json`, breaking the plugin's JSON parser (`Invalid JSON ... Unrecognized token ''`). Fixed by rewriting with `UTF8Encoding($false)` (no BOM). Verified: `opencode mcp list` clean, JSON parses, all config changes preserved.
+- **Librarian `mcps` restored**: `context7` + `gh_grep` were wrongly removed in the 31st part → back to `graphify, context7, gh_grep`.
+- **GitHub CLI vs MCP, corrected answer**: the repo IS on GitHub, so a GitHub MCP is not premature on those grounds — but the `gh` CLI is already authenticated and sufficient for the current workflow (no PR culture yet); the harness does not bundle a GitHub MCP by default. Decision stands: keep `gh` CLI; add a GitHub MCP only when PR/issue workflow starts.
+
+### Changed — config (local/gitignored, requires restart)
+
+- `oh-my-opencode-slim.json` rewritten **UTF-8 without BOM** (was BOM-corrupted by my earlier PowerShell write).
+- `librarian.mcps` → `graphify, context7, gh_grep` (restored).
+- No other config change from the 31st part was lost (verified: oracle v4-pro, fixer 13 skills, designer 2 skills, coder graphify MCP).
+
+### Pending
+
+- **Push the 49 local commits** (user decision — the repo on the phone is 49 commits behind).
+- **Restart opencode** to load all config changes (oracle v4-pro, fixer 13 skills, coder/librarian graphify MCP, designer brainstorming, restored MCPs).
+- After restart: **slice 18 spec review with the oracle on v4-pro** before Coder starts the bevy_ecs adoption.
 
 > User questions: "¿para qué sirven los MCPs? ¿no es mejor un GitHub MCP que el CLI? ¿no deberíamos añadir skills a los agentes sin skills?" — answered with verified facts, applied the fixes.
 
