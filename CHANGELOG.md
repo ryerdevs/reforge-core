@@ -7,6 +7,17 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-12] (14th part) — F5.3 PC death + revive (GC_DEAD + RestartAtSamePos)
+
+> Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests, unit tests only).
+
+### Added — player death and revive (Rust, commit `b89bdd8`)
+
+- **Death (AI tick)**: the mob attack now subtracts from `row.hp` with NO floor; `hp <= 0` → `GC_DEAD` (14) of the player + `GC_POINTS` with hp 0 + durable save (the client shows the death screen). The previous floor-1 clamp is gone.
+- **Revive (`CG_SCRIPT_ANSWER`, 29, 2 B — `Packet.h:679`)**: `RestartAtSamePos` parity (`cmd_general.cpp:534` + `char.cpp:838-873`) — restores hp/mp to the subset maxima (`compute_max_points`) and sends `GC_CHARACTER_DEL` + `GC_CHARACTER_ADD` + `GC_CHARACTER_ADDITIONAL_INFO` + `GC_POINTS` + save (the client resets the instance in place). Script answer while alive is ignored with log (quests F5.x).
+- **Verified**: `cargo test --workspace` green (excluding the pre-existing cold-start-flaky `f16_peer_smoke`), clippy no new warnings.
+- **Pending (documented)**: warp-to-city revive (answer 1 → `WarpSet(EMPIRE_START)`), player-DEF in mob damage (`char.cpp:2113-2114`), patrol/states (`ai_flag`), de-aggro by distance, multicast.
+
 ## [2026-08-12] (13th part) — F5.3 NPC AI slice 2: el mob ataca en rango
 
 > Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests, unit tests only).
