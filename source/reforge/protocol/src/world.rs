@@ -298,6 +298,51 @@ impl TPacketCGItemUse {
     }
 }
 
+/// `TPacketCGItemMove` (8 B, header 13 — `Packet.h:593-599` +
+/// `packet.h:631-636`): el MOVIMIENTO de un item del inventario
+/// (`command_item_move`): header + TItemPos origen + TItemPos destino +
+/// BYTE num (0 = todo el stack). El C++ lo procesa en `MoveItem`
+/// (char_item.cpp:5609-5767: stack si mismo vnum+sockets, split si
+/// `0 < num < count`, si no mover todo).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketCGItemMove {
+    pub header: u8,
+    pub pos: TItemPos,
+    pub change_pos: TItemPos,
+    /// 0 = mover todo el stack; > 0 = split de esa cantidad.
+    pub num: u8,
+}
+
+impl TPacketCGItemMove {
+    /// 1 + 3 + 3 + 1 = 8 (packed).
+    pub const SIZE: usize = 8;
+    pub const HEADER: u8 = 13;
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+        }
+        Ok(Self {
+            header: data[0],
+            pos: TItemPos { window: data[1], cell: u16::from_le_bytes([data[2], data[3]]) },
+            change_pos: TItemPos { window: data[4], cell: u16::from_le_bytes([data[5], data[6]]) },
+            num: data[7],
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        b[1] = self.pos.window;
+        b[2..4].copy_from_slice(&self.pos.cell.to_le_bytes());
+        b[4] = self.change_pos.window;
+        b[5..7].copy_from_slice(&self.change_pos.cell.to_le_bytes());
+        b[7] = self.num;
+        b
+    }
+}
+
 /// `TPacketGCItemDelDeprecated` (42 B packed, header 20 — `Packet.h:1676-1684`
 /// + `packet.h:1071-1085`): el borrado de un item del INVENTARIO. El cliente
 /// lo registra con `sizeof(TPacketGCItemDelDeprecated)` (PythonNetworkStream
@@ -1244,6 +1289,28 @@ mod tests {
         assert_eq!(b, [11, 1, 7, 0], "header + window=1(INVENTORY) + cell=7");
         assert_eq!(TPacketCGItemUse::from_bytes(&b).unwrap(), u);
         assert!(TPacketCGItemUse::from_bytes(&b[..3]).is_err(), "BadLength");
+    }
+
+    /// Item move wire (F5.3): `CG_ITEM_MOVE` (13) = 8 B — header + TItemPos
+    /// origen + TItemPos destino + BYTE num (`Packet.h:593-599` +
+    /// `packet.h:631-636`). El framer ya lo tenía como 8 B.
+    #[test]
+    fn cg_item_move_wire_size_and_parse() {
+        assert_eq!(TPacketCGItemMove::SIZE, 8, "1+3+3+1 (packed)");
+        let m = TPacketCGItemMove {
+            header: TPacketCGItemMove::HEADER,
+            pos: TItemPos { window: TItemPos::WINDOW_INVENTORY, cell: 7 },
+            change_pos: TItemPos { window: TItemPos::WINDOW_INVENTORY, cell: 3 },
+            num: 5,
+        };
+        let b = m.to_bytes();
+        assert_eq!(b.len(), 8);
+        assert_eq!(b, [13, 1, 7, 0, 1, 3, 0, 5], "header + 2×TItemPos + num");
+        assert_eq!(TPacketCGItemMove::from_bytes(&b).unwrap(), m);
+        // num 0 = mover todo el stack.
+        let m0 = TPacketCGItemMove { num: 0, ..m };
+        assert_eq!(TPacketCGItemMove::from_bytes(&m0.to_bytes()).unwrap(), m0);
+        assert!(TPacketCGItemMove::from_bytes(&b[..7]).is_err(), "BadLength");
     }
 
     /// Item del deprecated wire (F5.3): `GC_ITEM_DEL` (20) = 42 B — header +
