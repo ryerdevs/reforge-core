@@ -35,10 +35,45 @@ use protocol::{
 const CHAR_TYPE_PC: u8 = 6;
 
 /// Índices de `TPacketGCCharacterAdditionalInfo.awPart` (packet.h:860-870,
-/// `CHR_EQUIPPART_*`; ACCE ON -> 5 slots). Solo los que el mapeo usa en
-/// producción; WEAPON/HEAD/ACCE (GAP runtime) viven en los tests.
+/// `CHR_EQUIPPART_*`; ACCE ON -> 5 slots). WEAPON/HEAD/ACCE se alimentan de
+/// los items equipados (`equipped_parts` — F5.3).
 const EQUIPPART_ARMOR: usize = 0;
+const EQUIPPART_WEAPON: usize = 1;
+const EQUIPPART_HEAD: usize = 2;
 const EQUIPPART_HAIR: usize = 3;
+const EQUIPPART_ACCE: usize = 4;
+
+/// Cell base del window EQUIPMENT en el wire (`INVENTORY_MAX_NUM` con
+/// `ENABLE_EXTEND_INVEN_SYSTEM` — length.h:29 + CommonDefines.h:32):
+/// el cell del equip = `180 + wear` (length.h:827 `IsEquipPosition`).
+const EQUIP_CELL_BASE: u16 = 180;
+
+/// Los slots del equip del C++ (length.h:101-111 — `WEAR_BODY // 0`,
+/// `WEAR_HEAD // 1`, `WEAR_WEAPON // 4`).
+const WEAR_BODY: u16 = 0;
+const WEAR_HEAD: u16 = 1;
+const WEAR_WEAPON: u16 = 4;
+
+/// `ComputeParts` subset (parity `char.cpp:924-932` + `item.cpp:793,833` —
+/// `SetPart(PART_WEAPON/MAIN, GetVnum())`): los 5 parts del
+/// ADDITIONAL_INFO desde los items EQUIPMENT del inventario. El part de un
+/// item = SU VNUM (el cliente resuelve el modelo por vnum). HAIR viene del
+/// row persistido (`part_hair` — parity char.cpp:1710); ACCE = 0 (GAP).
+/// Los slots sin item quedan 0 (parity: el C++ parte de 0 al quitar).
+pub fn equipped_parts(row: &PlayerRow, inventory: &[ItemRow]) -> [u32; 5] {
+    let mut parts = [0u32; 5];
+    parts[EQUIPPART_HAIR] = row.part_hair as u32;
+    for it in inventory.iter().filter(|i| i.window == "EQUIPMENT") {
+        let wear = it.pos as u16 - EQUIP_CELL_BASE;
+        match wear {
+            WEAR_BODY => parts[EQUIPPART_ARMOR] = it.vnum as u32,
+            WEAR_HEAD => parts[EQUIPPART_HEAD] = it.vnum as u32,
+            WEAR_WEAPON => parts[EQUIPPART_WEAPON] = it.vnum as u32,
+            _ => {} // otros wear (FOOTS/WRIST/NECK/...) sin part en el subset
+        }
+    }
+    parts
+}
 
 /// `PlayerSummary` -> `TSimplePlayer` (71 B packed).
 ///
@@ -195,7 +230,8 @@ pub fn character_add(row: &PlayerRow) -> TPacketGCCharacterAdd {
 /// Parity `char.cpp:924-948`:
 /// - `aw_part[ARMOR]` = row.part_main, `aw_part[HAIR]` = row.part_hair
 ///   (`GetPart(PART_MAIN/HAIR)` — el part persistido del último save).
-/// - GAP runtime: `WEAPON`/`HEAD`/`ACCE` (se derivan de los items equipados),
+/// - GAP runtime: `WEAPON`/`HEAD`/`ACCE` (se derivan de los items equipados —
+///   ver `character_additional_info_with_parts` + `equipped_parts`, F5.3),
 ///   `dw_mount_vnum`, `dw_arrow` (quiver), `b_pk_mode` -> 0.
 /// - `b_empire` viene del ACCOUNT (el row no lo tiene) — parámetro del caller
 ///   (`m_bEmpire`, `char.cpp:939`).
@@ -203,9 +239,22 @@ pub fn character_add(row: &PlayerRow) -> TPacketGCCharacterAdd {
 /// - `dw_level` = row.level (`IsPC() ? GetLevel() : 0` — siempre PC aqui).
 /// - `s_alignment` = row.alignment / 10 (`m_iAlignment / 10`, `char.cpp:947`).
 pub fn character_additional_info(row: &PlayerRow, empire: u8) -> TPacketGCCharacterAdditionalInfo {
+    // Default: los parts persistidos del row (sin items — GAP heredado).
+    let parts = equipped_parts(row, &[]);
+    character_additional_info_with_parts(row, empire, &parts)
+}
+
+/// Igual que `character_additional_info` pero con los 5 parts COMPUTADOS del
+/// runtime (F5.3 — `equipped_parts`: el personaje muestra el arma/armadura
+/// equipada; el C++ los deriva de `GetPart()` tras `SetPart` al equipar,
+/// item.cpp:793,833).
+pub fn character_additional_info_with_parts(
+    row: &PlayerRow,
+    empire: u8,
+    parts: &[u32; 5],
+) -> TPacketGCCharacterAdditionalInfo {
     let mut aw_part = [0u32; 5];
-    aw_part[EQUIPPART_ARMOR] = row.part_main as u32;
-    aw_part[EQUIPPART_HAIR] = row.part_hair as u32;
+    aw_part.copy_from_slice(parts);
     TPacketGCCharacterAdditionalInfo {
         header: TPacketGCCharacterAdditionalInfo::HEADER,
         dw_vid: row.id as u32,
@@ -690,6 +739,9 @@ mod tests {
     }
 
     /// character_additional_info: 70 B y campos spot (parity char.cpp:924-948).
+    /// Sin items equipados: `PART_MAIN` = 0 (se setea al equipar — item.cpp:833;
+    /// el `part_base` del row es la apariencia base, bBasePart char.cpp:1709);
+    /// `PART_HAIR` = part_hair persistido (char.cpp:1710).
     #[test]
     fn character_additional_info_fields_and_size() {
         let p = character_additional_info(&row(), 3);
@@ -698,7 +750,7 @@ mod tests {
         assert_eq!(b[0], TPacketGCCharacterAdditionalInfo::HEADER, "header 136");
         assert_eq!(p.dw_vid, 2);
         assert_eq!(p.name(), "ninja");
-        assert_eq!(p.aw_part[EQUIPPART_ARMOR], 0x1122_3344, "PART_MAIN persistido");
+        assert_eq!(p.aw_part[EQUIPPART_ARMOR], 0, "PART_MAIN = 0 sin items (se setea al equipar)");
         assert_eq!(p.aw_part[EQUIPPART_HAIR], 0xAABB_CCDD, "PART_HAIR persistido");
         assert_eq!(p.aw_part[EQUIPPART_WEAPON], 0, "GAP items runtime");
         assert_eq!(p.aw_part[EQUIPPART_HEAD], 0, "GAP items runtime");
@@ -711,6 +763,71 @@ mod tests {
         assert_eq!(&b[59..61], &123i16.to_le_bytes());
         // name@5 en el wire (25 B: "ninja\0" + ceros).
         assert_eq!(&b[5..11], b"ninja\0");
+    }
+
+    /// `equipped_parts` (F5.3 ComputeParts): el part de un item = su VNUM;
+    /// el slot del equip se deduce del cell wire (`EQUIP_CELL_BASE + wear`,
+    /// length.h:827). WEAR_BODY=0→ARMOR, WEAR_HEAD=1→HEAD, WEAR_WEAPON=4→
+    /// WEAPON (length.h:101-111); HAIR del row persistido; ACCE=0 (GAP).
+    #[test]
+    fn equipped_parts_from_inventory() {
+        let r = row();
+        // Sin equipo: solo HAIR del row (part_hair persistido), resto 0.
+        let p = equipped_parts(&r, &[]);
+        assert_eq!(p[EQUIPPART_HAIR], r.part_hair as u32, "HAIR del row");
+        assert_eq!(p[EQUIPPART_ARMOR], 0);
+        assert_eq!(p[EQUIPPART_WEAPON], 0);
+        assert_eq!(p[EQUIPPART_HEAD], 0);
+        assert_eq!(p[EQUIPPART_ACCE], 0);
+
+        // Items EQUIPMENT: BODY (cell 180) → ARMOR, HEAD (181) → HEAD,
+        // WEAPON (184) → WEAPON — el part = vnum del item (parity
+        // item.cpp:793,833 `SetPart(PART_WEAPON/MAIN, GetVnum())`).
+        let items = vec![
+            ItemRow {
+                id: 10,
+                window: "EQUIPMENT".into(),
+                pos: EQUIP_CELL_BASE as i32 + 0, // WEAR_BODY
+                count: 1,
+                vnum: 101_001, // armadura
+                sockets: [0; 3],
+                attrs: [(0, 0); 7],
+            },
+            ItemRow {
+                id: 11,
+                window: "EQUIPMENT".into(),
+                pos: EQUIP_CELL_BASE as i32 + 1, // WEAR_HEAD
+                count: 1,
+                vnum: 102_002, // casco
+                sockets: [0; 3],
+                attrs: [(0, 0); 7],
+            },
+            ItemRow {
+                id: 12,
+                window: "EQUIPMENT".into(),
+                pos: EQUIP_CELL_BASE as i32 + 4, // WEAR_WEAPON
+                count: 1,
+                vnum: 103_003, // espada
+                sockets: [0; 3],
+                attrs: [(0, 0); 7],
+            },
+            // Un item del inventario normal NO alimenta los parts.
+            ItemRow {
+                id: 13,
+                window: "INVENTORY".into(),
+                pos: 5,
+                count: 1,
+                vnum: 104_004,
+                sockets: [0; 3],
+                attrs: [(0, 0); 7],
+            },
+        ];
+        let p = equipped_parts(&r, &items);
+        assert_eq!(p[EQUIPPART_ARMOR], 101_001, "vnum del BODY");
+        assert_eq!(p[EQUIPPART_HEAD], 102_002, "vnum del HEAD");
+        assert_eq!(p[EQUIPPART_WEAPON], 103_003, "vnum del WEAPON");
+        assert_eq!(p[EQUIPPART_HAIR], r.part_hair as u32, "HAIR intacto");
+        assert_eq!(p[EQUIPPART_ACCE], 0, "GAP documentado");
     }
 
     /// Los 5 slots con datos -> 5×71 B ocupados (tamaño total 449).

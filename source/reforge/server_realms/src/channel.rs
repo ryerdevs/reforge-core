@@ -348,7 +348,7 @@ async fn connection_inner(
             row.map_index
         );
     }
-    let mut enter = enter_packets(&row, empire, &lands);
+    let mut enter = enter_packets(&row, empire, &lands, &packets::equipped_parts(&row, &inventory));
     // Cola de entrada (parity input_login.cpp:648-656): TIME + CHANNEL tras
     // el land list — el reloj del server (get_global_time) y el canal.
     let now = std::time::SystemTime::now()
@@ -1188,12 +1188,18 @@ async fn connection_inner(
                             ItemRepo::new(&config.pg_conn)
                                 .upsert(&inventory[src], row.id)
                                 .await?;
-                            // El ADDITIONAL_INFO (parts) se reenvía — los
-                            // parts de los items equipados son pendiente
-                            // (ComputeParts con items; hoy solo los del row).
-                            conn.send(&packets::character_additional_info(&row, empire).to_bytes().to_vec())
-                                .await
-                                .map_err(|e| format!("enviando GC_CHARACTER_ADDITIONAL_INFO: {e}"))?;
+                            // El ADDITIONAL_INFO (parts) se reenvía con los
+                            // parts COMPUTADOS de los items equipados
+                            // (ComputeParts F5.3 — el personaje muestra el
+                            // arma/armadura; el part = vnum del item).
+                            let parts = packets::equipped_parts(&row, &inventory);
+                            conn.send(
+                                &packets::character_additional_info_with_parts(&row, empire, &parts)
+                                    .to_bytes()
+                                    .to_vec(),
+                            )
+                            .await
+                            .map_err(|e| format!("enviando GC_CHARACTER_ADDITIONAL_INFO: {e}"))?;
                             eprintln!(
                                 "server_realms: channel conn {conn_id}: {} EQUIPÓ item vnum {vnum} \
                                  (wear {wear}, cell {})",
@@ -1252,9 +1258,16 @@ async fn connection_inner(
                             ItemRepo::new(&config.pg_conn)
                                 .upsert(&inventory[src], row.id)
                                 .await?;
-                            conn.send(&packets::character_additional_info(&row, empire).to_bytes().to_vec())
-                                .await
-                                .map_err(|e| format!("enviando GC_CHARACTER_ADDITIONAL_INFO: {e}"))?;
+                            // ADDITIONAL_INFO con los parts COMPUTADOS (el
+                            // arma/armadura ya no está — el part se quita).
+                            let parts = packets::equipped_parts(&row, &inventory);
+                            conn.send(
+                                &packets::character_additional_info_with_parts(&row, empire, &parts)
+                                    .to_bytes()
+                                    .to_vec(),
+                            )
+                            .await
+                            .map_err(|e| format!("enviando GC_CHARACTER_ADDITIONAL_INFO: {e}"))?;
                             eprintln!(
                                 "server_realms: channel conn {conn_id}: {} DESEQUIPÓ item vnum {vnum} \
                                  → celda {}",
@@ -1508,9 +1521,16 @@ async fn connection_inner(
                                 conn.send(&packets::character_add(&row).to_bytes().to_vec())
                                     .await
                                     .map_err(|e| format!("enviando GC_CHARACTER_ADD: {e}"))?;
-                                conn.send(&packets::character_additional_info(&row, empire).to_bytes().to_vec())
-                                    .await
-                                    .map_err(|e| format!("enviando GC_CHARACTER_ADDITIONAL_INFO: {e}"))?;
+                                // ADDITIONAL_INFO con los parts computados del
+                                // equipo (el revive reinserta la instancia).
+                                let parts = packets::equipped_parts(&row, &inventory);
+                                conn.send(
+                                    &packets::character_additional_info_with_parts(&row, empire, &parts)
+                                        .to_bytes()
+                                        .to_vec(),
+                                )
+                                .await
+                                .map_err(|e| format!("enviando GC_CHARACTER_ADDITIONAL_INFO: {e}"))?;
                                 // GC_POINTS con hp/mp restaurados.
                                 conn.send(&packets::points_packet(&row, next_exp).to_bytes())
                                     .await
@@ -1845,14 +1865,17 @@ fn entry_packets(
 /// `TPacketGCCharacterAdd` (1) + `TPacketGCCharacterAdditionalInfo` (136)
 /// [Show/EncodeInsertPacket, `char.cpp:876-948`] -> `GC_PHASE(GAME)` ->
 /// `TPacketGCLandList` (130, `building.cpp:931-979`). Función pura.
+/// F5.3: `parts` = los 5 parts COMPUTADOS del equipo (ComputeParts — el
+/// personaje muestra el arma/armadura al entrar; `equipped_parts`).
 fn enter_packets(
     row: &database::player::PlayerRow,
     empire: u8,
     lands: &[database::land::LandRow],
+    parts: &[u32; 5],
 ) -> Vec<Vec<u8>> {
     let mut out = vec![
         packets::character_add(row).to_bytes().to_vec(),
-        packets::character_additional_info(row, empire).to_bytes().to_vec(),
+        packets::character_additional_info_with_parts(row, empire, parts).to_bytes().to_vec(),
         TPacketGCPhase::new(phase::GAME).to_bytes().to_vec(),
     ];
     if !lands.is_empty() {
@@ -2068,6 +2091,7 @@ impl Drop for ChannelLoginGuard {
     }
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2178,7 +2202,8 @@ mod tests {
             height: 3000,
             guild_id: 0,
         }];
-        let pkts = enter_packets(&row, 3, &lands);
+        let parts = packets::equipped_parts(&row, &[]);
+        let pkts = enter_packets(&row, 3, &lands, &parts);
         assert_eq!(pkts.len(), 4, "ADD + INFO + GAME + LAND_LIST");
         assert_eq!(pkts[0].len(), TPacketGCCharacterAdd::SIZE);
         assert_eq!(pkts[0][0], header::GC_CHARACTER_ADD);
@@ -2190,7 +2215,7 @@ mod tests {
         assert_eq!(pkts[3][0], 130, "GC_LAND_LIST");
         assert_eq!(u16::from_le_bytes([pkts[3][1], pkts[3][2]]), 27, "3 + 1×24");
         // Sin lands -> 3 paquetes (el C++ no manda el paquete vacío).
-        assert_eq!(enter_packets(&row, 3, &[]).len(), 3);
+        assert_eq!(enter_packets(&row, 3, &[], &parts).len(), 3);
     }
 
     /// Tamaños del wire del flujo select/spawn (invariante byte-exacto).
