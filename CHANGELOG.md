@@ -7,6 +7,19 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-12] (12th part) — F5.3 NPC AI: aggro + persecución + broadcast GC_MOVE
+
+> Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests, unit tests only).
+
+### Added — NPC AI slice 1 (Rust, commit `255228a`)
+
+- **`protocol/src/movement.rs`**: `TPacketGCMove` (24 B, header 3 — S→C, `Packet.h:1912-1923` + `EncodeMovePacket` `char.cpp:825-836`): header + bFunc + bArg + bRot + dwVID + x + y + dwTime + dwDuration; consts `FUNC_WAIT/MOVE/ATTACK` (packet.h:565-572); roundtrip + bad-length tests.
+- **`database/src/npc.rs`**: `MobRow.move_speed` (smallint default 100 — `bSpeed` del mob_proto → `m_dwMoveSpeed` del C++) + SQL/mapper/column-order test.
+- **`realm/src/ai.rs`** (nuevo módulo): `step_toward` (paso normalizado hacia el objetivo, clamp al destino; **speed 0 = sin movimiento — el test unit pilló el bug del "salto al destino"**: un mob inmóvil no se teletransporta) + `rotation_5deg` (bRot en pasos de 5°, cardinales verificados 0/18/36/54) + 5 tests.
+- **`server_realms/src/channel.rs`**: `LiveNpc` + `move_speed`/`aggro`; el mob se vuelve hostil al recibir daño (`npc.aggro = true` en CG_ATTACK con damage > 0, parity `OnDamage`); **AI tick de 500 ms** en el game loop: los mobs aggro persiguen al jugador (paso por tick) y su `GC_MOVE` (FUNC_MOVE + destino + dwTime/dwDuration para la interpolación del cliente) se difunde por la conexión.
+- **Verified**: `cargo test --workspace` green (realm 47/47 incl. 5 nuevos tests de ai; protocol 73/73 incl. 2 de GC_MOVE); clippy sin warnings nuevos.
+- **Pending (documentado en `realm::ai`)**: el ataque del mob en rango (FUNC_ATTACK), patrullaje/estados (`ai_flag` COWARD/BERSERK), de-aggro por distancia, multicast a observadores.
+
 ## [2026-08-12] (11th part) — F3 phase 2: WAL local a disco + replay (ADR-0008)
 
 > Implemented directly by the orchestrator (no delegation — user directive). Follows the 8-point review spec of fix-3 (baseline gate: 25/25 gated PG tests passed 2026-08-11; no gated tests run this session, unit tests only).
