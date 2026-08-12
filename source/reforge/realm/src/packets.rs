@@ -75,6 +75,62 @@ pub fn equipped_parts(row: &PlayerRow, inventory: &[ItemRow]) -> [u32; 5] {
     parts
 }
 
+/// Bits `WEARABLE_*` del `wearflag` del item_proto (item_length.h:379-392).
+pub mod wearable {
+    pub const BODY: u32 = 1 << 0;
+    pub const HEAD: u32 = 1 << 1;
+    pub const FOOTS: u32 = 1 << 2;
+    pub const WRIST: u32 = 1 << 3;
+    pub const WEAPON: u32 = 1 << 4;
+    pub const NECK: u32 = 1 << 5;
+    pub const EAR: u32 = 1 << 6;
+    pub const UNIQUE: u32 = 1 << 7;
+    pub const SHIELD: u32 = 1 << 8;
+    pub const ARROW: u32 = 1 << 9;
+    pub const HAIR: u32 = 1 << 10;
+    pub const ABILITY: u32 = 1 << 11;
+}
+
+/// `FindEquipCell` parity (item.cpp:509-623): el slot del equip de un item
+/// según los bits `WEARABLE_*` de su `wearflag`. Orden EXACTO del C++
+/// (item.cpp:568-592): BODY→0, HEAD→1, FOOTS→2, WRIST→3, WEAPON→4,
+/// SHIELD→10, NECK→5, EAR→6, ARROW→9, UNIQUE→7, ABILITY→11 (length.h:99-119).
+/// `None` = no equipable (wearflag 0, o solo bits fuera del subset: HAIR,
+/// PENDANT, GLOVE — el C++ los gestiona por otros paths).
+pub fn find_equip_cell(proto: &database::item::ProtoItem) -> Option<u16> {
+    let w = proto.wear_flag;
+    if w == 0 {
+        return None; // item.cpp:511-519 — sin wearflag no es equipable
+    }
+    // El orden de los else-if del C++ es el que decide (item.cpp:568-592):
+    // un item con varios bits cae en el PRIMERO de este orden.
+    if w & wearable::BODY != 0 {
+        Some(0) // WEAR_BODY
+    } else if w & wearable::HEAD != 0 {
+        Some(1) // WEAR_HEAD
+    } else if w & wearable::FOOTS != 0 {
+        Some(2) // WEAR_FOOTS
+    } else if w & wearable::WRIST != 0 {
+        Some(3) // WEAR_WRIST
+    } else if w & wearable::WEAPON != 0 {
+        Some(4) // WEAR_WEAPON
+    } else if w & wearable::SHIELD != 0 {
+        Some(10) // WEAR_SHIELD
+    } else if w & wearable::NECK != 0 {
+        Some(5) // WEAR_NECK
+    } else if w & wearable::EAR != 0 {
+        Some(6) // WEAR_EAR
+    } else if w & wearable::ARROW != 0 {
+        Some(9) // WEAR_ARROW
+    } else if w & wearable::UNIQUE != 0 {
+        Some(7) // WEAR_UNIQUE1 (el C++ usa 1 si libre, si no 2)
+    } else if w & wearable::ABILITY != 0 {
+        Some(11) // WEAR_ABILITY1 (el C++ busca el primero libre)
+    } else {
+        None // solo HAIR/PENDANT/GLOVE — fuera del subset (GAP)
+    }
+}
+
 /// `PlayerSummary` -> `TSimplePlayer` (71 B packed).
 ///
 /// Parity `ClientManagerLogin.cpp:324-383` (branch sin cache — el C++ mapea
@@ -828,6 +884,40 @@ mod tests {
         assert_eq!(p[EQUIPPART_WEAPON], 103_003, "vnum del WEAPON");
         assert_eq!(p[EQUIPPART_HAIR], r.part_hair as u32, "HAIR intacto");
         assert_eq!(p[EQUIPPART_ACCE], 0, "GAP documentado");
+    }
+
+    /// `find_equip_cell` (F5.3 parity item.cpp:509-623): el slot del equip
+    /// según los bits WEARABLE_* del wearflag; el orden de los else-if del
+    /// C++ (item.cpp:568-592) decide cuando hay varios bits.
+    #[test]
+    fn find_equip_cell_matches_cpp_order() {
+        use database::item::ProtoItem;
+        let p = |wear_flag: u32| ProtoItem {
+            b_type: 1,
+            b_sub_type: 0,
+            values: [0; 6],
+            wear_flag,
+        };
+        // Bits individuales -> slots (length.h:99-119).
+        assert_eq!(find_equip_cell(&p(wearable::BODY)), Some(0), "WEAR_BODY");
+        assert_eq!(find_equip_cell(&p(wearable::HEAD)), Some(1), "WEAR_HEAD");
+        assert_eq!(find_equip_cell(&p(wearable::FOOTS)), Some(2), "WEAR_FOOTS");
+        assert_eq!(find_equip_cell(&p(wearable::WRIST)), Some(3), "WEAR_WRIST");
+        assert_eq!(find_equip_cell(&p(wearable::WEAPON)), Some(4), "WEAR_WEAPON");
+        assert_eq!(find_equip_cell(&p(wearable::SHIELD)), Some(10), "WEAR_SHIELD");
+        assert_eq!(find_equip_cell(&p(wearable::NECK)), Some(5), "WEAR_NECK");
+        assert_eq!(find_equip_cell(&p(wearable::EAR)), Some(6), "WEAR_EAR");
+        assert_eq!(find_equip_cell(&p(wearable::ARROW)), Some(9), "WEAR_ARROW");
+        assert_eq!(find_equip_cell(&p(wearable::UNIQUE)), Some(7), "WEAR_UNIQUE1");
+        assert_eq!(find_equip_cell(&p(wearable::ABILITY)), Some(11), "WEAR_ABILITY1");
+        // Sin wearflag -> None (item.cpp:511-519 — no equipable).
+        assert_eq!(find_equip_cell(&p(0)), None);
+        // Solo HAIR/PENDANT/GLOVE -> None (GAP documentado — el C++ los
+        // gestiona por otros paths).
+        assert_eq!(find_equip_cell(&p(wearable::HAIR)), None);
+        // Varios bits: gana el PRIMERO del orden del C++ (item.cpp:568-592).
+        assert_eq!(find_equip_cell(&p(wearable::WEAPON | wearable::BODY)), Some(0), "BODY antes que WEAPON");
+        assert_eq!(find_equip_cell(&p(wearable::SHIELD | wearable::NECK)), Some(10), "SHIELD antes que NECK");
     }
 
     /// Los 5 slots con datos -> 5×71 B ocupados (tamaño total 449).

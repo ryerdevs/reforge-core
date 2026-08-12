@@ -1150,6 +1150,43 @@ async fn connection_inner(
                                 );
                                 continue;
                             }
+                            // Validación de TIPO (parity `EquipItem` →
+                            // `FindEquipCell(item, iCandidateCell)`,
+                            // char_item.cpp:6139 + item.cpp:509-623): el
+                            // slot candidato debe ser el slot del item
+                            // según su `wearflag` (WEARABLE_*). Un item sin
+                            // wearflag o con slot equivocado → rechazo.
+                            let Some(proto) = ItemRepo::new(&config.pg_conn)
+                                .load_proto_use_values(inventory[src].vnum)
+                                .await?
+                            else {
+                                eprintln!(
+                                    "server_realms: channel conn {conn_id}: item vnum {} sin \
+                                     item_proto — equip rechazado",
+                                    inventory[src].vnum
+                                );
+                                continue;
+                            };
+                            match packets::find_equip_cell(&proto) {
+                                Some(slot) if slot == wear => {}
+                                Some(slot) => {
+                                    eprintln!(
+                                        "server_realms: channel conn {conn_id}: item vnum {} es \
+                                         de wear {} pero el slot pedido es {wear} — rechazado \
+                                         (parity FindEquipCell)",
+                                        inventory[src].vnum, slot
+                                    );
+                                    continue;
+                                }
+                                None => {
+                                    eprintln!(
+                                        "server_realms: channel conn {conn_id}: item vnum {} no \
+                                         equipable (wearflag 0 o fuera del subset) — rechazado",
+                                        inventory[src].vnum
+                                    );
+                                    continue;
+                                }
+                            }
                             // Mover el item: window INVENTORY → EQUIPMENT.
                             let vnum = inventory[src].vnum;
                             let cell = TItemPos {
