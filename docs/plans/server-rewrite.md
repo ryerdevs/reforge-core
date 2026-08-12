@@ -2,7 +2,7 @@
 Type: Plan
 Status: Current
 Audience: Contributors, maintainers, reviewers
-Last verified: 2026-08-10
+Last verified: 2026-08-12
 ---
 
 # Metin2 Server Rewrite in Rust — Canonical Plan
@@ -65,15 +65,15 @@ The following items were recommended in the 2026-08-10 review of the migration o
 |---|---|---|---|
 | 1 | **One canonical PostgreSQL database** for the Rust server (single operational store on the Rust side; no MySQL-backed Rust path) | **Accepted** (ADR-0005, 2026-08-10) | ADR-0001, ADR-0005 |
 | 2 | **Temporary legacy compatibility adapter**; no dual-store (a single canonical PostgreSQL; no second operational database); C++ baseline source untouched | **Accepted** (ADR-0005, 2026-08-10; spec §8.2.1c) | ADR-0005 |
-| 3 | **Pre-F2 gate G-PG**: PostgreSQL 18 provisioned as the **single canonical store**; schema/data migration groundwork; the C++ baseline operates on the **same PostgreSQL** through the temporary adapter (MariaDB is used only as the migration/export source); verification that C++ login→world→combat still passes during the transition (behavior unchanged through the adapter + data-comparison harness) | **Accepted** (ADR-0005, 2026-08-10; spec closed in §8.2.1; implementation pending) | ADR-0005 |
-| 4 | **F2 blocked** until G-PG is implemented (ADR-0005 accepted; F2a unblocks when the backlog B1–B8 is green) | **Resolved** (2026-08-10) | ADR-0005 |
+| 3 | **Pre-F2 gate G-PG**: PostgreSQL 18 provisioned as the **single canonical store**; schema/data migration groundwork; the C++ baseline operates on the **same PostgreSQL** through the temporary adapter (MariaDB is used only as the migration/export source); verification that C++ login→world→combat still passes during the transition (behavior unchanged through the adapter + data-comparison harness) | **Accepted + IMPLEMENTED** (ADR-0005, 2026-08-10; gate 4/4; backlog B1–B8 executed; parity A/B green; real client login on PG — `LoginSuccess` 21:39:34) | ADR-0005 |
+| 4 | **F2 blocked** until G-PG is implemented (ADR-0005 accepted; F2a unblocks when the backlog B1–B8 is green) | **Resolved** (2026-08-10) — B1–B8 green, **F2a unblocked**; F2a/F2b executed (see §8.2) | ADR-0005 |
 | 5 | **F2 split into F2a/F2b** (F2a = auth slice against PostgreSQL; F2b = first client batch) | **Accepted** (ADR-0005, 2026-08-10) | ADR-0005, §8.2 |
-| 6 | **Legacy packets 151/152/153** (PanamaPack, hybrid-crypt) live in `protocol::legacy` and are **deletable** at the new client (F7) | **Proposed** | ADR-0006, `../reference/protocol/legacy-compatibility.md` |
+| 6 | **Legacy packets 151/152/153** (PanamaPack, hybrid-crypt) live in `protocol::legacy` and are **deletable** at the new client (F7) | **Accepted + IMPLEMENTED** (ADR-0006; `protocol::legacy` 151–153 runtime-file conditional, F2a 2026-08-10) | ADR-0006, `../reference/protocol/legacy-compatibility.md` |
 | 7 | **No Rust embedded inside the legacy client** during F0–F6; Slint standalone login/select later (F5), integrated into the new client (F7) | **Accepted** (for the already-agreed boundary) | ADR-0007 |
 | 8 | **Minimal dependency policy** — YAGNI; stdlib before dependencies | **Approved** (project principle) | AGENTS.md, §4, §7 |
 | 9 | **Defer until justified**: local WAL + `mutation_id` replay, RLS, Patroni failover, bevy_ecs, REST API (**Docker removed from the plan 2026-08-11 — user decision**) | **Proposed** (target design kept in §5.5/§7, gated) | this plan |
 
-Note on item 1/3 wording: G-PG means **one canonical PostgreSQL** — the C++ baseline operates on the **same PostgreSQL** through a temporary compatibility adapter (its `libsql` layer speaks MySQL wire/SQL; the adapter bridges that), and MariaDB is used **only as the migration/export source** (initial data extraction), never as a second operational database. This direction was fixed by the user on 2026-08-10 and is recorded in ADR-0005 (**Accepted**, 2026-08-10); the G-PG gate closes when the implementation backlog B1–B8 is green (§8.2.1).
+Note on item 1/3 wording: G-PG means **one canonical PostgreSQL** — the C++ baseline operates on the **same PostgreSQL** through a temporary compatibility adapter (its `libsql` layer speaks MySQL wire/SQL; the adapter bridges that), and MariaDB is used **only as the migration/export source** (initial data extraction), never as a second operational database. This direction was fixed by the user on 2026-08-10 and is recorded in ADR-0005 (**Accepted**, 2026-08-10); the G-PG gate closes when the implementation backlog B1–B8 is green (§8.2.1). **Gate closed 2026-08-10 (B1–B8 executed).**
 
 ## 3. Context: the legacy server and why rewrite it
 
@@ -158,7 +158,7 @@ Legacy C++ client (frozen + 2 additive packets)   Future Rust client (F7)
 │  │  (role)  │      └─────┬─────┘   └─────┬─────┘                 │
 │  └──────────┘            │               │                       │
 │  ┌───────────────────────▼───────────────▼───────────────────┐  │
-│  │  database crate (sqlx, async): queries → results via mpsc │  │
+│  │  database crate (tokio-postgres, async): queries → results via mpsc │  │
 │  │  (regions NEVER await SQL inline)                        │  │
 │  └───────────────────────┬───────────────────────────────────┘  │
 └──────────────────────────┼──────────────────────────────────────┘
@@ -227,7 +227,7 @@ The monolith is ported **by systems over a minimal Entity core** (VID, position,
 
 ### 5.5 Data layer — final design
 
-**Base:** central PostgreSQL 18 (ADR-0001) + **sqlx 0.9 PgPool as candidate** (ADR-0001 left the concrete crate undecided; the crate choice is a G-PG task per ADR-0005). The `database` crate is organized **by domain**, each with its own schema, versioned migrations and repositories:
+**Base:** central PostgreSQL 18 (ADR-0001) + **tokio-postgres 0.7** (ADR-0008 Accepted 2026-08-11 — the sqlx 0.9 candidate is superseded; a pool can be added later via deadpool-postgres if measurement demands). The `database` crate is organized **by domain**, each with its own schema, versioned migrations and repositories:
 
 ```
 database crate
@@ -384,7 +384,7 @@ Rule: **touch the client only if (a) ≤1 week of work and (b) it unlocks someth
 | Async runtime | **tokio 1.x** | Standard; tasks, mpsc, timers |
 | Entities | Plain per-region task first; **bevy_ecs standalone** deferred until justified [Proposed] | Parallelizable queries without the graphics engine; only if profiling demands it |
 | Database | **PostgreSQL 18** | ACID, uuidv7, OLD/NEW in RETURNING, LISTEN/NOTIFY, advisory locks, RLS, incremental backups, failover |
-| DB access | **sqlx 0.9** (candidate — concrete crate decision is a G-PG task, ADR-0005) | Compile-time checked queries, migrations, own pool |
+| DB access | **tokio-postgres 0.7** (ADR-0008 Accepted 2026-08-11 — supersedes the sqlx candidate; pool later via deadpool-postgres) | Transactions, LISTEN/NOTIFY, prepared statements; proven end-to-end (Rust auth + proxy) |
 | Quests | **Own declarative DSL** (§12) | Zero scripting runtime |
 | Config | config-rs + clap 4.x (TOML, ADR-0004) | — |
 | Observability | tracing + metrics (Prometheus/Grafana) | — |
@@ -406,14 +406,14 @@ Vertical slices (client→auth→db→client) with the client frozen. The legacy
 
 | Phase | Goal | Verifiable milestone | Status |
 |---|---|---|---|
-| **F0** Foundations | Cargo workspace, ADRs, byte-exact `protocol` crate (login flow), packet capture harness | One real captured LOGIN3 parses and re-serializes identically | **Done** (30/30; capture harness pending WSL) |
-| **F1** Network/transport | tokio listener with the verified semantics (`result > 0`/EAGAIN), framing, handshake with retries | C++ auth connects to a Rust peer and vice versa without floods | **Done through F1.5** (23/23); F1.6 integration milestone pending WSL |
-| **G-PG** (gate before F2) [Accepted, ADR-0005] | PostgreSQL 18 provisioned (schemas per domain); schema/data migration groundwork + comparison harness; legacy compatibility adapter working — C++ baseline and legacy client behavior unchanged (login→world→combat smoke test) | F2 unblock checklist: ADR-0005 accepted ✓ (2026-08-10); PG provisioned; adapter verified; migration groundwork in place — implementation backlog B1–B8 (ADR-0005), spec §8.2.1 | **Spec closed; implementation pending** |
-| **F2a** Auth slice [Accepted, ADR-0005] | AUTH_SERVER role on PG: LOGIN3, hash `"*"+UPPER(SHA1(UNHEX(SHA1(pw))))`, GC_AUTH_SUCCESS, `dwLoginKey` validation, PanamaPack 151 + hybrid-crypt 152/153 in `protocol::legacy` (ADR-0006), connection timeout | Login against Rust auth on PG + C++ db; legacy client completes auth | **Blocked by G-PG implementation (B1–B8)** |
-| **F2b** Client batch 1 [Accepted, ADR-0005] | Additive client changes (≤1 week each): version check on connect, hardware ID in LOGIN3, server time | Recompiled client passes the version check | **Blocked by F2a** |
-| **F3** Data layer + data channel | `database` crate by domain on PG; port by QID; pull-based packets 162+ (CG_QUERY/GC_RESPONSE) | The C++ game runs against the Rust data layer without behavior change; the recompiled client receives additive data without desynchronizing | Planned |
-| **F4** World entry + names | CG_PLAYER_SELECT, spawn, map, stats; UTF-8 name overrides | The real client enters the world against the Rust core with correct names | Planned (requires domain-boundary ADR first, risk #2) |
-| **F5** Gameplay | Movement, combat, drops, items, NPCs, quests, chat, shops, trade, GM — by domains, side-by-side; channel list from auth; config via manifest; **Slint standalone** (Accepted, ADR-0007); scale benchmark (N bots × N regions); REST deferred until justified [Proposed] (**Docker removed 2026-08-11 — user decision**) | Full session without divergences + benchmark passed | Planned |
+| **F0** Foundations | Cargo workspace, ADRs, byte-exact `protocol` crate (login flow), packet capture harness | One real captured LOGIN3 parses and re-serializes identically | **Done** (30/30 at close; 81 test attributes by 2026-08-12); capture harness **MET 2026-08-11** (golden `auth_login3_40999.bin`, 88B) |
+| **F1** Network/transport | tokio listener with the verified semantics (`result > 0`/EAGAIN), framing, handshake with retries | C++ auth connects to a Rust peer and vice versa without floods | **Done** — F1.6 **MET 2026-08-10** (f16_peer ↔ live auth, no floods); 28 test attributes by 2026-08-12 |
+| **G-PG** (gate before F2) [Accepted, ADR-0005] | PostgreSQL 18 provisioned (schemas per domain); schema/data migration groundwork + comparison harness; legacy compatibility adapter working — C++ baseline and legacy client behavior unchanged (login→world→combat smoke test) | F2 unblock checklist: ADR-0005 accepted ✓ (2026-08-10); PG provisioned; adapter verified; migration groundwork in place — implementation backlog B1–B8 (ADR-0005), spec §8.2.1 | **COMPLETE (2026-08-10)** — ADR-0005 Accepted gate 4/4; B1–B8 executed; parity A/B green; real client login on PG (`LoginSuccess` 21:39:34) |
+| **F2a** Auth slice [Accepted, ADR-0005] | AUTH_SERVER role on PG: LOGIN3, hash `"*"+UPPER(SHA1(UNHEX(SHA1(pw))))`, GC_AUTH_SUCCESS, `dwLoginKey` validation, PanamaPack 151 + hybrid-crypt 152/153 in `protocol::legacy` (ADR-0006), connection timeout | Login against Rust auth on PG + C++ db; legacy client completes auth | **DONE (2026-08-10)** — Rust auth serving real client logins on PG (hybrid stack; 140/140 tests at close); debt: `dwLoginKey` real flow pending |
+| **F2b** Client batch 1 [Accepted, ADR-0005] | Additive client changes (≤1 week each): version check on connect, hardware ID in LOGIN3, server time | Recompiled client passes the version check | **DONE (2026-08-11)** — version check + hwid (88B LOGIN3) verified end-to-end; server time verified working (no change needed) |
+| **F3** Data layer + data channel | `database` crate by domain on PG; port by QID; pull-based packets 162+ (CG_QUERY/GC_RESPONSE) | The C++ game runs against the Rust data layer without behavior change; the recompiled client receives additive data without desynchronizing | **IN PROGRESS (2026-08-12)** — account/world repos + WAL phase 2 (Batcher + WalSink + replay); milestone pending: items/social QIDs, active data channel, PROTO_FROM_DB |
+| **F4** World entry + names | CG_PLAYER_SELECT, spawn, map, stats; UTF-8 name overrides | The real client enters the world against the Rust core with correct names | **Milestone MET 2026-08-11** (real client world entry, 50+ s sustained); domain-boundary ADR = ADR-0010 (Proposed 2026-08-12, ratifies the implemented architecture) |
+| **F5** Gameplay | Movement, combat, drops, items, NPCs, quests, chat, shops, trade, GM — by domains, side-by-side; channel list from auth; config via manifest; **Slint standalone** (Accepted, ADR-0007); scale benchmark (N bots × N regions); REST deferred until justified [Proposed] (**Docker removed 2026-08-11 — user decision**) | Full session without divergences + benchmark passed | **IN PROGRESS (2026-08-12)** — F5.3 slices 1–17 (combat/items/NPC AI); pending: walkability, skills, quests (DSL), shops, benchmark, Slint |
 | **F6** Full parity | Automated side-by-side (same input → diff), instance-by-instance cutover; legacy compatibility adapter removed (ADR-0005); final data migration verified (backup/restore) | The Rust server replaces the C++ one without client changes | Planned |
 | **F7** Client (after) | Rust client (wgpu), Slint UI (the `.slint` from F5 integrate), new protocol, real encryption; **delete `protocol::legacy`** (151/152/153) [Proposed, ADR-0006] | — | Future |
 
@@ -502,13 +502,17 @@ Data parity: `scripts/gpg/parity_check.py` — per table, row count + md5 over t
 | 0002 | Unify `game` + `db` into one process per region | Accepted |
 | 0003 | Rust workspace in `source/reforge` | Accepted (partially superseded by 0004) |
 | 0004 | Flat workspace: `protocol`, `network`, `database`, `realm`, `server_realms`; config TOML | Accepted |
-| 0005 | PostgreSQL cutover (G-PG) + temporary legacy compatibility adapter (single canonical PG; C++ operates on it through the adapter); F2 gated | **Accepted** |
-| 0006 | Legacy wire/pack compatibility boundary (`protocol::legacy`, deletion at F7) | **Proposed** |
+| 0005 | PostgreSQL cutover (G-PG) + temporary legacy compatibility adapter (single canonical PG; C++ operates on it through the adapter); F2 gated | **Accepted** (gate 4/4, 2026-08-10; implemented) |
+| 0006 | Legacy wire/pack compatibility boundary (`protocol::legacy`, deletion at F7) | **Accepted** (implemented in F2a 2026-08-10) |
 | 0007 | No partial Rust embedded in the legacy client (F0–F6) | Accepted |
+| 0008 | Data layer (F3): domain repositories, tokio-postgres 0.7, durable/volatile contract (save-by-event + WAL) | Accepted |
+| 0009 | Server-side locale (server-owned text per language) | Proposed |
+| 0010 | Domain boundaries and data ownership (pure modules + per-connection state + WorldStore; ECS gated on the F5 benchmark) | Proposed |
+| 0011 | Anti-hack model (always-on controls; signed clock wrap decided) | Proposed |
 
 **Design decisions (from this plan, previously agreed):**
 
-- Rust stack: tokio 1.x + sqlx 0.9 + config-rs + clap + tracing + proptest. No scripting (own DSL). bevy_ecs/WAL/RLS/Patroni/REST deferred until justified [Proposed] (**Docker removed 2026-08-11 — user decision**).
+- Rust stack: tokio 1.x + **tokio-postgres 0.7 (ADR-0008, Accepted 2026-08-11 — replaces the sqlx 0.9 candidate; pool later via deadpool-postgres if measured)** + config-rs + clap + tracing + proptest. No scripting (own DSL). WAL: **DONE 2026-08-12** (F3 phase 2, ADR-0008); RLS post-WAL, Patroni F5/F6; bevy_ecs gated on the F5 benchmark (ADR-0010); REST deferred until justified [Proposed] (**Docker removed 2026-08-11 — user decision**).
 - Model: server-authoritative + DB as atomic safety net.
 - Strategy: strangler by vertical slices; client frozen (+2 additive packets); cutover at F6.
 - Audit §3.3: 14 P0/P1/P2 legacy decisions are NOT carried over; the 7 good things are preserved.
@@ -535,22 +539,22 @@ Summary of the decisions:
 ## 13. Open questions for reviewers
 
 1. **Authority model**: any counterargument to «client sends intentions, server computes, DB guarantees»? Are there known Metin2 hacks this model does not cover?
-2. **Stack**: anything better than PostgreSQL 18 + sqlx for a single-node MMO in 2026? Any PG 19 feature (GA Oct 2026) worth waiting for?
-3. **Concurrency**: is world-per-region with systems (ECS deferred) the right choice for scaling? Or actors from the start? (Position: regions + deferred ECS; YAGNI on multi-process until benchmark.)
+2. **Stack**: anything better than PostgreSQL 18 + sqlx for a single-node MMO in 2026? Any PG 19 feature (GA Oct 2026) worth waiting for? — **RESOLVED 2026-08-11 (ADR-0008):** tokio-postgres 0.7 chosen over sqlx for the `database` crate (evidence: proven end-to-end in this repo; pool later via deadpool-postgres if measured); PG 18.4 (PGDG) provisioned and serving — no PG 19 wait.
+3. **Concurrency**: is world-per-region with systems (ECS deferred) the right choice for scaling? Or actors from the start? (Position: regions + deferred ECS; YAGNI on multi-process until benchmark.) — **RESOLVED 2026-08-12 (ADR-0010, Proposed):** pure-function modules + per-connection session state + `WorldStore` ratified; actors rejected; ECS entry criterion = F5 benchmark (1,000+ players/instance, ≥2–5× CPU headroom, AI tick < 500 ms), revisited at the end of F5 (ADR-0010 §2).
 4. **Quests**: is the DSL grammar elegant and complete for the corpus? Missing triggers/conditions/actions? (open decisions in the spec §11)
-5. **Migration**: is the F0→G-PG→F2a/F2b→F6 order correct? Is a validation step missing between phases?
+5. **Migration**: is the F0→G-PG→F2a/F2b→F6 order correct? Is a validation step missing between phases? — **RESOLVED BY EXECUTION (2026-08-10/11):** F0 → G-PG → F2a → F2b → F4 milestones met in order, each with per-phase verification (parity harness 30/30, boot A/B green, golden captures, E2E DB suite 59/0/0, real client world entry); no missing validation step found so far.
 6. **Scope**: is deferring events/raids/massive social to the end correct?
 7. **Audit §3.3**: is any legacy decision missing from the P0/P1/P2 table?
-8. **Adoption**: is MPL-2.0 the right license? Web API + metrics from F5 or after the cutover? (Docker removed from the plan 2026-08-11 — user decision.)
+8. **Adoption**: is MPL-2.0 the right license? Web API + metrics from F5 or after the cutover? (Docker removed from the plan 2026-08-11 — user decision.) — **PARTLY RESOLVED (2026-08-12):** MPL-2.0 confirmed in the workspace `Cargo.toml` (`license = "MPL-2.0"`, verified 2026-08-12); community confirmation still pending. Docker removed 2026-08-11 (user decision). Web API + metrics timing still open (F5 proposed).
 9. **Regional channels (§5.4)**: is «central DB + process per region, change region = logout→login» correct? Is a shared living world like EVE definitively out by design?
-10. **Persistence (§5.5)**: is the transactional batch ≤100ms pipeline correct? Is the deferral of WAL/RLS/Patroni acceptable until justified? [Deferrals confirmed with ADR-0005 acceptance, 2026-08-10 — §2.9 item 9]
+10. **Persistence (§5.5)**: is the transactional batch ≤100ms pipeline correct? Is the deferral of WAL/RLS/Patroni acceptable until justified? [Deferrals confirmed with ADR-0005 acceptance, 2026-08-10 — §2.9 item 9] — **RESOLVED 2026-08-11/12 (ADR-0008):** batch ≤100 ms confirmed and implemented (Batcher + WalSink durable-first + idempotent replay, F3 phase 2 2026-08-12); the WAL deferral is **lifted (DONE)**; RLS post-WAL and Patroni F5/F6 remain deferred per ADR-0008.
 11. **Server→client data (§5.6)**: is the versioned manifest + delta the right mechanism? Are the 2 additive client packets acceptable before F7?
 12. **What I do not see**: what are we missing?
 
 ## 14. Next steps
 
 1. Collect reviewer feedback on this document.
-2. **Confirm or reject ADRs 0005 and 0006** (G-PG cutover + adapter; `protocol::legacy` boundary) — they gate F2.
-3. Write the pending ADRs: domain boundaries (char.cpp by systems), concurrency (regions + deferred ECS), quest engine (own DSL), anti-hack model, regional channels (central DB + process per region), data layer (transactional batches; deferral list), server→client data (manifest + delta), migration review of ADR-0002.
-4. Update `../../ROADMAP.md` with the corrections (G-PG before F2, F2a/F2b, blocked-by markers) — maintained by the orchestrator.
-5. Write the formal implementation plan with granular tasks (by domain, TDD, scripted verification).
+2. ~~**Confirm or reject ADRs 0005 and 0006** (G-PG cutover + adapter; `protocol::legacy` boundary) — they gate F2.~~ — **DONE (2026-08-10): both Accepted.** ADR-0005 gate 4/4 + backlog B1–B8 executed; ADR-0006 implemented in F2a (`protocol::legacy` 151–153).
+3. Write the pending ADRs: domain boundaries (char.cpp by systems), concurrency (regions + deferred ECS), quest engine (own DSL), anti-hack model, regional channels (central DB + process per region), data layer (transactional batches; deferral list), server→client data (manifest + delta), migration review of ADR-0002. — **PARTIAL (2026-08-12):** written — data layer (ADR-0008, Accepted 2026-08-11), domain boundaries (ADR-0010, Proposed 2026-08-12), anti-hack model (ADR-0011, Proposed 2026-08-12). Pending — concurrency, quest engine (DSL), regional channels, server→client data (manifest + delta), migration review of ADR-0002.
+4. ~~Update `../../ROADMAP.md` with the corrections (G-PG before F2, F2a/F2b, blocked-by markers) — maintained by the orchestrator.~~ — **DONE** (2026-08-10 by the orchestrator; librarian staleness sweep 2026-08-12).
+5. Write the formal implementation plan with granular tasks (by domain, TDD, scripted verification). — **SUPERSEDED IN PRACTICE (2026-08-12):** the F5.3 slice taxonomy (ROADMAP/CHANGELOG, 17 slices) tracks granular tasks per domain with per-slice verification evidence; a standalone formal plan can still be produced if reviewers require it.

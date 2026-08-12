@@ -1,13 +1,13 @@
 ---
 Type: Reference
-Status: Proposed
+Status: Current
 Audience: Contributors
-Last verified: 2026-08-10
+Last verified: 2026-08-12
 ---
 
 # Legacy Wire/Pack Compatibility Boundary — PanamaPack (151) and Hybrid-Crypt (152/153)
 
-> **Status: Proposed** — the boundary itself is proposed in ADR-0006 (pending confirmation). The packet facts below are verified against code.
+> **Status: Current** — the boundary is ratified by ADR-0006 (**Accepted** 2026-08-10, implemented in F2a as `protocol::legacy`). The packet facts below are verified against code.
 > Purpose: inventory of the legacy-client-only wire constructs that the Rust server must emit while the legacy client (v40999) is the frozen contract (F0–F6), their layouts, why the legacy client requires them, and the deletion list at F7.
 > ADR: [../../decisions/0006-legacy-wire-pack-compat-boundary.md](../../decisions/0006-legacy-wire-pack-compat-boundary.md) · Login flow spec: [login-flow.md](login-flow.md) · Canonical plan: [../../plans/server-rewrite.md](../../plans/server-rewrite.md)
 
@@ -53,3 +53,18 @@ The name collides with the old "Panama" crypto concept in some forks; in this co
 
 - The EIX/EPK container formats are part of the frozen client contract during F0–F6: TEA-ECB 32 rounds + LZO1X + MMPT0/MIPX index formats stay as-is (see the pack tooling in `source/tools`).
 - **A redesign of EIX/EPK is deferred to the new client (F7)** — the pack stops being a data source of truth then (server→client manifest + delta, plan §5.6); until then only the content, never the formats, may change.
+
+## 7. Deliberate wire divergences (hardened core — ADR-0011)
+
+The Rust core enforces anti-hack controls **always-on** where the legacy C++ shipped them disabled or absent. These are deliberate, documented divergences (ADR-0011 §2/§3): the hardened core needs no client cooperation, and the wire contract stays byte-exact in the translator (`protocol` + `protocol::legacy`).
+
+| # | Divergence | Legacy C++ behavior | Rust behavior | Evidence |
+|---|---|---|---|---|
+| V1 | Header `0x00` | consumed as a 1-byte no-op (input.cpp:75-76) | **connection close** | framer.rs:44-47; ADR-0011 §2 |
+| V2 | Timer speedhack check | **OFF by default** (`gHackCheckEnable=false`, config.cpp:127; input_main.cpp:1308) | **always on** — `iDelta` vs server delta; SlowTimer/FastTimer → kick | movement.rs:94-104; ADR-0011 §2 |
+| V3 | Anti-teleport | `ENABLE_TP_SPEED_CHECK` commented out (input_main.cpp:1463-1464) | per-MOVE max distance (2500/6000 units), reject without updating position | movement.rs:106-114; ADR-0011 §2 |
+| V4 | Signed clock wrap | `(int)(dwCurTime - dwTime)` cast (u32→i32) — spurious SlowTimer/FastTimer kick beyond ±2³¹ | **modular difference with tolerance**; kick = explicit anti-cheat policy, not a cast artifact (regression test for clock bias ±2³¹) | movement.rs:95-98; ADR-0011 §3 (decided) |
+| V5 | DB down | silent hang | deterministic fail-fast at `WorldStore::new` | world.rs:39; ADR-0011 §2 |
+| V6 | Idle timeout | no global timeout | per-read, reset on ANY packet incl. keepalives | channel.rs:97-105,119-129; ADR-0011 §2 |
+
+> The wire-debt inventory D1–D6 (1-based slots, `180+wear` cells, `ITEM_ID_RANGE`, `safebox size==1`, `quest lValue==0`, default IP) is the F7 deletion checklist — ADR-0010 §5; mirroring it in this document is pending follow-up.

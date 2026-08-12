@@ -8,11 +8,13 @@ contra ella antes de avanzar (ROADMAP.md, ADR-0003, ADR-0004).
 
 | Ruta | Crate | Rol |
 |---|---|---|
-| `protocol/` | protocol | Paquetes byte-exactos del wire (F0): flujo de login, 30/30 tests |
-| `network/` | network | Transporte tokio (F1): listener, connection, framer + auth (F2, esqueleto) |
-| `database/` | database | Capa de datos por dominios (F3): account/world/social/economy/log |
-| `realm/` | realm | Lógica de juego por regiones/ECS (F4+): entidades, combate, items |
-| `server_realms/` | server_realms | Binario único con roles: `--role auth` / `--role channel` |
+| `protocol/` | protocol | Paquetes byte-exactos del wire (F0): flujo de login — 81 tests |
+| `network/` | network | Transporte tokio (F1): listener, connection, framer + auth (F2) — 28 tests |
+| `database/` | database | Capa de datos por dominios (F3): account/world/social/economy/log + WAL durable (ADR-0008) — 70 tests |
+| `realm/` | realm | Lógica de juego por regiones (F4+): funciones puras (combate, ai, packets) + estado por conexión + `WorldStore` — 64 tests. ECS diferido a benchmark (ver ADR de domain boundaries pendiente) |
+| `server_realms/` | server_realms | Binario único con roles: `--role auth` / `--role channel` — 42 tests |
+| `mysql_proxy/` | mysql_proxy | Adaptador temporal MySQL→PostgreSQL para el C++ legacy (G-PG, ADR-0005): wire v10 + translate + session — 67 tests; se elimina en F6 |
+| `locale_import/` | locale_import | Importer de locales a PG (F1, ADR-0009): un subcomando por dominio — 19 tests |
 
 ## Glosario de nombres (ADR-0004)
 
@@ -25,5 +27,6 @@ contra ella antes de avanzar (ROADMAP.md, ADR-0003, ADR-0004).
 
 ```bash
 cargo build   # workspace completo
-cargo test    # protocol 30/30 + network 23/23 (framing+handshake) + server_realms 3/3 (roles)
+cargo test    # 371 tests (conteo de atributos #[test]/#[tokio::test] por crate, 2026-08-12:
+              #   protocol 81, network 28, database 70, realm 64, server_realms 42, mysql_proxy 67, locale_import 19)
 ```

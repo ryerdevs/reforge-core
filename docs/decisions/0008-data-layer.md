@@ -3,7 +3,7 @@ Type: Decision
 Status: Accepted
 Audience: Contributors, maintainers
 Date: 2026-08-11
-Last verified: 2026-08-11
+Last verified: 2026-08-12
 Supersedes: —
 Superseded by: —
 ---
@@ -61,6 +61,16 @@ Evidence for the driver decision (both measured in this repo):
    - Idempotent replay (`ON CONFLICT DO NOTHING` + `mutation_id`) is the designed
      mechanism for the "no dupe window / crash = ≤100 ms in-flight" guarantees —
      **deferred** to the WAL phase (see Deferred).
+
+   > **AMEND (2026-08-12, F3 phase 2 — save-by-event):** the implemented contract is
+   > **save-by-event**, not a timer: every durable mutation flows
+   > event → `Batcher` (≤100 ms, one tx) → **local WAL file** (`{wal_dir}/{uuidv7}.wal`,
+   > JSONL, `sync_all` BEFORE PG) → PostgreSQL; the file is deleted only post-COMMIT and
+   > re-applied idempotently at next boot (`replay_wal`, once per process via `OnceLock`).
+   > The "volatile = saved every 30 s + logout" clause is **superseded** for durable state
+   > (position/HP remain local/volatile). Implementation: `database/src/wal.rs` +
+   > `realm::WorldStore` wiring (2026-08-12, CHANGELOG 11th part; gated `replay_wal` PG
+   > test still pending by user directive).
 6. **Schema and permissions**: one PG schema per domain (account/player/common/log already
    migrated by G-PG); permissions per schema (log cannot write to economy). **RLS
    deferred** (see Deferred).
@@ -105,8 +115,10 @@ a MariaDB-capable backend in `database` would double the test surface for zero r
 
 ## Deferred in this ADR (with target phase)
 
-- **Local WAL per region + `mutation_id` (uuidv7) + idempotent replay** (`ON CONFLICT
-  DO NOTHING`) — F3 phase 2 (WAL pipeline), gated on measurement per §5.5.
+- ~~**Local WAL per region + `mutation_id` (uuidv7) + idempotent replay** (`ON CONFLICT
+  DO NOTHING`) — F3 phase 2 (WAL pipeline), gated on measurement per §5.5.~~ **DONE
+  2026-08-12** (`WalSink` durable-first + `replay_wal` — see the AMEND in §5; the gated
+  PG replay test remains pending by user directive).
 - **RLS** (`current_setting('app.pid')`) — after the WAL phase, per §5.5.
 - **Patroni hot-standby failover** (~2 min promotion target) — F5/F6 ops phase.
 - **Pool (deadpool-postgres or sqlx adoption)** — with the batch pipeline, only if

@@ -1,7 +1,8 @@
 ---
-Type: ADR
+Type: Decision
 Status: Proposed (2026-08-11)
 Audience: Contributors, maintainers
+Last verified: 2026-08-12
 ---
 
 # ADR-0009: Server-Side Locale (text ownership)

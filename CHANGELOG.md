@@ -7,7 +7,38 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
-## [2026-08-12] (27th part) — Agent team reorganization: Coder + quality-guardian Fixer + team-lead Oracle
+## [2026-08-12] (28th part) — Strategic analysis: plan vs reality, staleness sweep, ADR-0010/0011
+
+> User-requested full-project review ("are we only transcribing, not innovating?"). Three recon lanes (explorer inventory, librarian plan digest, oracle verdict) + two doc lanes (librarian staleness sweep x2). No code changed.
+
+### Verified — inventory & plan digest
+
+- **Workspace real**: `source/reforge` = 7 crates, 49 files, **371 tests** (protocol 81, network 28, database 70, realm 64, server_realms 42, mysql_proxy 67, locale_import 19), 0 `todo!()`/`unimplemented!()`, 11 TODO. 396 "parity" + 946 C++ mentions in comments.
+- **Plan written**: F0/F1/G-PG/F2a/F2b/F4 milestone MET; F3 + F5 in progress; F6/F7 not started. 12 internal doc contradictions found (CURRENT stale, ADR-0005/0006 mislabeled Proposed, sqlx vs tokio-postgres, F2b/F4 checkboxes, F5.3 taxonomy missing, ADR-0008 §5 contract lying).
+
+### Decided — verdict (oracle, verified with file:line)
+
+- **Deviation**: execution deviation small and healthy; doc staleness large (fixable, now fixed); method deviation = "innovate first, document later" (ADR-0008/0009 written after implementation) — to cut.
+- **Transcribing vs innovating**: critique is **fair in the business-logic layer** (combat.rs/ai.rs/movement.rs replicate 25-year quirks: SPEEDHACK_LIMIT_BONUS=80 hardcoded, DISTANCE_APPROX `>>8` approximation, `number(1,5)` min-damage dice, f64→int truncations, signed clock wrap) and **unfair in infrastructure** (mysql_proxy wire codec, WAL pipeline, GC_CHANNEL_LIST, always-on anti-teleport/speedhack, server-side locale, DB fail-fast — all new, none in C++).
+- **Key distinction codified**: parity of CONTRACT (wire byte-exact, required by the frozen client — the translator) vs parity of DESIGN (internal path — must be new code). Contract parity = the product; design parity = the mistake.
+- **Innovation now (risk≈0)**: I1 constants → config TOML/game_config with same defaults; I2 signed clock wrap → modular difference with tolerance (ADR-0011 §3). **Frozen to F6/F7**: balance formulas, data-model quirks (observable output).
+
+### Changed — docs (librarian, 12 items + second pass)
+
+- `docs/CURRENT.md` → 2026-08-12, commit `c0954c5`, 371 tests by crate, F5.3 (17 slices), ADR-0008/0009, locale_import, next gates rewritten.
+- `ROADMAP.md`: open-decisions → ADR-0005/0006 **Accepted**; sqlx → **tokio-postgres 0.7 (ADR-0008)**; F2b pending → DONE; F4/F1 checkboxes → [x] with milestone; **F5.3 block added** (17 slices, operational taxonomy, not a plan sub-phase); ECS line superseded by ADR-0010.
+- `docs/decisions/0006`: body (proposed) → (accepted), aligned with frontmatter. `0008` §5: AMEND — save-by-event via Batcher+WAL (30s+logout = history). `0009`: metadata only, status still Proposed.
+- `docs/plans/server-rewrite.md`: §2/§8.2 phase tables → real states; §11 ADR table (0005/0006 Accepted, 0008/0009/0010/0011 rows); §13 questions Q2/Q3/Q5/Q8/Q10 marked resolved (none deleted); §14 next-steps → done/partial; sqlx → tokio-postgres everywhere; Last verified 2026-08-12.
+- `AGENTS.md` guardrails: ADR-0005/0006 → Accepted; ADR-0008/0009/0010/0011 rows added.
+- `docs/reference/protocol/legacy-compatibility.md`: Current + §7 "Deliberate wire divergences" V1–V6 (0x00 close, speedhack always-on, anti-teleport, **signed clock wrap → ADR-0011**, DB fail-fast, idle timeout).
+- `docs/reference/protocol/login-flow.md`: LOGIN3 **88B** variant (version+hwid) added. `source/reforge/README.md`: 7 crates, real counts, ECS claim removed.
+
+### Added — new ADRs (both Proposed, pending user approval)
+
+- **ADR-0010 — Domain boundaries and data ownership**: ratifies the real realm architecture (pure functions + per-connection state + WorldStore, NOT the plan's ECS); ECS entry criterion = F5 benchmark failing 1,000+/instance with ≥2–5x CPU headroom or AI-tick >500ms; data ownership volatile/durable/derived; **translator-vs-core governing boundary** (user principle codified); wire debt inventory D1–D6 with F7 removal plan.
+- **ADR-0011 — Anti-hack model**: invariant server-authoritative zero client trust; ratifies implemented controls (timer speedhack always-on, anti-teleport, 0x00→close, DB fail-fast, idle timeout, server-clock cooldowns); **decides signed clock wrap** → modular difference with tolerance (kick stays as policy); pending controls with phase (speed envelope, walkability from PG, floods, god-mode, dupe completion, farm bots); attack-class table.
+
+
 
 > Team model change (user-directed, defined before implementation). Config: `~/.config/opencode/oh-my-opencode-slim.json` + `.opencode/agents/*.md` (local, gitignored). Docs: this repo.
 
@@ -768,6 +799,7 @@ The client reached the select screen early, but world entry failed silently (cle
 
 - **El selector de banderas causó pantalla NEGRA al abrir el login** (primera versión 18:04): `btn.SetEvent(ui.__mem_func__(self.__OnClickLanguageFlag(...)))` envolvía una **closure** con `__mem_func__` (wrapper pensado para métodos bound estilo `self.__OnClickLoginButton`) → excepción en `__CreateLanguageSelector` durante `LoginWindow.Open()` → el login no se construye → negro. **Fix:** `SetEvent` directo con la closure (igual que las lambdas del teclado virtual, `key_space.SetEvent(lambda ...)`) + **try/except blindado** en `__CreateLanguageSelector` (`print` del error, el login se muestra igual aunque el selector falle). Repack 538368 B 18:12, desplegado a `client\pack` y verificado por desempaquetado (línea 379 sin `__mem_func__`, 32 banderas dentro del epk).
 - **Verificado el `.rar` del sistema completo** (`systems\Language System 1.2.6.rar`, UnRAR l): contenido idéntico a la carpeta extraída, **sin ninguna imagen de bandera de país** y sin lógica de selector de login. Los 8 `02. Client\root\*.py` del mod son parches del coliseo PVP (dependen de `__LANGUAGE_SYSTEM__` en el C++ del cliente, no integrado) — **copiarlos rompería el login** (ImportError `uiLanguageSystem`, AttributeError `app.LANGUAGE_SYSTEM`, `player.IsLanguageSystem()` inexistente). Confirmada la decisión #8 del doc de estado (no integrar ese root).
+
 
 ## [2026-08-09] (3ª sesión, 2ª parte) — Crash de entrada al mundo: diagnóstico en curso + auditoría del Language System
 

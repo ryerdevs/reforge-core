@@ -58,7 +58,7 @@
 Goal: Rust workspace skeleton + architecture decisions closed by ADR + protocol crate with the verified login flow.
 
 - [x] **ADR-0002: unify `game` + `db`** (ACCEPTED: one process per region, db as crate; legacy shim during F3–F5, unification in F6)
-- [x] Rust stack researched and fixed: **tokio 1.49 + bevy_ecs standalone + config-rs + clap 4.6 + tracing + proptest**; **sqlx 0.9 (PgPool) as candidate** — the concrete DB crate decision is a G-PG task (ADR-0001 left it undecided) (no mlua — quests in own DSL; regions + ECS, not actors)
+- [x] Rust stack researched and fixed: **tokio 1.49 + bevy_ecs standalone + config-rs + clap 4.6 + tracing + proptest**; **tokio-postgres 0.7 decided as the DB driver (ADR-0008 Accepted 2026-08-11 — sqlx 0.9 deferred to the WAL phase with measurements; a pool can be added later via deadpool-postgres without a driver change)** (no mlua — quests in own DSL; regions + ECS, not actors)
 - [x] Crate `protocol`: **byte-exact login-flow spec completed** (`docs/reference/protocol/login-flow.md` — supersedes the 2026-08-08 wire-protocol spec draft)
 - [x] **Unified plan written** (`docs/plans/server-rewrite.md` — original draft `docs/history/2026-08-09-server-rewrite-draft.md` preserved as historical)
 - [x] Legacy audit complete (plan §3.3)
@@ -78,7 +78,7 @@ Goal: Rust workspace skeleton + architecture decisions closed by ADR + protocol 
 
 **F0 milestone:** one real captured LOGIN3 parses and re-serializes byte-for-byte identical. — **MET 2026-08-11 (golden capture, 88B auth LOGIN3 with version+hwid).**
 
-### Phase 1 — Network and transport (IN PROGRESS 2026-08-10)
+### Phase 1 — Network and transport (DONE 2026-08-10)
 
 Goal: replace `libthecore` + fdwatch with tokio, with behavior parity.
 
@@ -101,7 +101,7 @@ Goal: PostgreSQL 18 becomes **the single canonical store** (ADR-0001 target) bef
 - [x] PostgreSQL 18 provisioned (18.4 PGDG on Debian-M2 2026-08-10: db metin2, 4 schemas, role mt2; RLS deferred) (schemas per domain, per-schema permissions, RLS)
 - [x] Temporary legacy compatibility adapter (mysql_proxy - REAL client login on PG verified 2026-08-10): the C++ baseline (source untouched) operates on the **same PostgreSQL** through the adapter (its MySQL-speaking `libsql` is bridged by translation); legacy client behavior unchanged; removed at F6. MariaDB used only as migration/export source
 - [x] Migration groundwork (30 tables + 26 log DDL + account.mysql_hash_password fn; parity_check 30/30): MySQL → PostgreSQL schema mapping (types/defaults/`ENUM`/`SET`/`UNSIGNED` adaptation per ADR-0001), data comparison harness
-- [ ] Concrete PostgreSQL crate decision (sqlx/PgPool per ADR-0001 recommendation)
+- [x] Concrete PostgreSQL crate decision — **tokio-postgres 0.7** (ADR-0008 Accepted 2026-08-11; sqlx deferred to the WAL phase with measurements, pool via deadpool-postgres if needed)
 
 **G-PG milestone:** the Rust auth (F2) persists against PostgreSQL 18 while the C++ baseline and the legacy client run unchanged. — **C++/legacy-client half MET 2026-08-10 (real login on PG); Rust-auth persistence = F2a.**
 
@@ -129,7 +129,7 @@ Goal: PostgreSQL 18 becomes **the single canonical store** (ADR-0001 target) bef
 
 **Compatibility packets (isolated — ADR-0006):** PanamaPack (151, 289B) + hybrid-crypt (152/153) are implemented only inside `protocol::legacy` — never in the new wire core. Boundary documented in `docs/reference/protocol/legacy-compatibility.md`; the whole layer is deleted at the new client (F7).
 
-**F2 milestone:** login against the Rust auth on PostgreSQL (F2a) + the recompiled client passes the version check (F2b). — **F2a half MET 2026-08-10** (real client login → select screen through the Rust auth on PostgreSQL); F2b (client version check) pending.
+**F2 milestone:** login against the Rust auth on PostgreSQL (F2a) + the recompiled client passes the version check (F2b). — **F2a half MET 2026-08-10** (real client login → select screen through the Rust auth on PostgreSQL); **F2b DONE 2026-08-11** (recompiled client passes the version check — 88B LOGIN3 with version + hwid, verified end-to-end; version 99999 rejected, 68B backward-compatible).
 
 ### Phase 3 — Data layer + data channel
 
@@ -152,10 +152,10 @@ Goal: `database` crate organized by domains behind a backend trait + porting ont
 
 Goal: character select + spawn with parity + UTF-8 name overrides.
 
-- [ ] `CG_PLAYER_SELECT` (header 6) → `GC_LOGIN_SUCCESS3`
-- [ ] Character spawn, map (`Venter_the_east.mp3`), stats
+- [x] `CG_PLAYER_SELECT` (header 6) → `GC_LOGIN_SUCCESS3` — **MET 2026-08-11** (world entry milestone, line below)
+- [x] Character spawn, map (`Venter_the_east.mp3`), stats — **MET 2026-08-11** (world entry milestone, line below)
 - [ ] **Client: in-memory overrides** (new override API to be added around `CPythonNonPlayer`/`CItemData` after `LoadLocaleData` — no `SetLocaleName`/`SetItemLocaleName` exist in the legacy client; they must be written first) — the server sends UTF-8 names from the DB; goodbye mojibake and the CP949 trap
-- [ ] Entities: minimal Entity core + ECS systems (bevy_ecs standalone) — NEVER port char.cpp as a single class
+- [ ] ~~Entities: minimal Entity core + ECS systems (bevy_ecs standalone) — NEVER port char.cpp as a single class~~ — **SUPERSEDED by ADR-0010 (Proposed 2026-08-12):** the accepted architecture is pure-function domain modules + per-connection session state + `WorldStore` (no Entity struct, no ECS in the workspace); ECS only if the F5 benchmark fails the 1,000+ players/instance target (ADR-0010 §2). Line kept as history.
 
 **F4 milestone:** the real client enters the world against the Rust core with correct names. — **MET 2026-08-11** (world entry + sustained session through the Rust channel: select → DirectEnter → loading → map 41 with the character, 50+ s; world empty — NPCs are F5; names from the client's pack).
 
@@ -173,6 +173,28 @@ Goal: playable core by domains, side-by-side, scale benchmark, and the rest of t
 - [ ] **Slint standalone** (login/select/HUD UI against the real server, in parallel — reused in F7; standalone per ADR-0007)
 - [ ] Scale benchmark: N bots × N regions (gate before considering multi-process)
 - [ ] REST API + metrics (Prometheus/Grafana) — **Docker: REMOVED from the plan (2026-08-11, user decision — no containerization for now; the docker-development skill stays available if revisited)**
+
+**F5.3 — gameplay vertical slices (operational taxonomy, 2026-08-12):** the canonical plan defines F5 as one phase; F5.3 is the execution taxonomy used by CHANGELOG/current state (not a plan sub-phase — no F5.1/F5.2 are defined). 17 slices implemented directly by the orchestrator (2026-08-12, all per-crate `cargo test` green + clippy clean):
+
+- [x] **s1** kill rewards (exp/gold + level-up loop) + chat (`CG_CHAT`/`GC_CHAT`) + client locale cache (4 C++ patches: item provider, `Utf8ToDisplay`, empty-bundle, non-player name cache)
+- [x] **s2** item drops on kill + pickup (`GC_ITEM_GROUND_ADD/DEL`, ownership, `ITEM_ID_RANGE`)
+- [x] **s3** NPC AI: aggro + chase + `GC_MOVE` broadcast (`realm::ai`)
+- [x] **s4** mob attack in range (`FUNC_ATTACK` + `GC_DAMAGE_INFO`)
+- [x] **s5** PC death (`GC_DEAD`) + revive (`RestartAtSamePos`)
+- [x] **s6** warp-to-city revive (`GC_WARP`) + de-aggro by distance
+- [x] **s7** idle mob patrol (`patrol_step`, spawn-radius clamp)
+- [x] **s8** item stacking on pickup (`AutoStackItemProto` parity)
+- [x] **s9** player DEF in mob damage (`player_def_grade`)
+- [x] **s10** proactive aggro + `aggressive_sight` data-driven
+- [x] **s11** potions (`CG_ITEM_USE`) + latent framer bug fix (16 → 4 B)
+- [x] **s12** `CG_ITEM_MOVE` move/stack/split
+- [x] **s13** equip/unequip (EQUIPMENT window, `INVENTORY_MAX_NUM=180`)
+- [x] **s14** equipped items affect combat (weapon damage ×2, iArmor in DEF)
+- [x] **s15** ComputeParts — character shows equipped weapon/armor
+- [x] **s16** FindEquipCell — type validation on equip (`wear_flag`)
+- [x] **s17** weapon `attack_speed` (`GET_ATTACK_SPEED` parity: 1250/625 ms)
+
+- [ ] F5.3 tail: walkability (`IsMovablePosition`), `dw_arrow` (quiver), skills, interactive NPCs/shops, quests (DSL engine), safebox, trade, GM — then the F5 milestones below (benchmark, Slint, REST)
 
 **F5 milestone:** a full game session with no observable divergence + benchmark passed.
 
@@ -214,7 +236,7 @@ Ponytail rule: dependencies enter only when the phase requires them.
 4. **Unified trade**: bid closing with the DB clock (principle decided; auction details in F5).
 5. **License**: MPL-2.0 proposed (AGPL repels pserver operators) — confirm with the community.
 6. **Web API + metrics timing**: from F5 (proposed) vs after the cutover.
-7. **ADR-0005 and ADR-0006 are Proposed** (PostgreSQL cutover + legacy compat boundary) — pending review/confirmation. ADR-0007 is Accepted for the already-agreed boundary only.
+7. **ADR-0005 and ADR-0006 are Accepted** (PostgreSQL cutover + legacy compat boundary — verified in the ADR files: 0005 gate 4/4 closed 2026-08-10; 0006 implemented in F2a 2026-08-10). ADR-0007 is Accepted for the already-agreed boundary only.
 
 ## GitHub repository (preparation)
 
