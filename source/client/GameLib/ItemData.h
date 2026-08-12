@@ -876,6 +876,15 @@ class CItemData
 
 		static CDynamicPool<CItemData>		ms_kPool;
 
+		// F1 (locale redesign, ADR-0009): proveedor de nombres del cache del
+		// servidor (CPythonLocale). Gamelib NO puede incluir PythonLocale.h
+		// (dirección de dependencia: solo Locale_inc.h cruza) — el registro
+		// lo hace UserInterface al crear el cache. `GetName()` consulta el
+		// provider primero y cae al pack (szLocaleName) si no hay entrada.
+		typedef const char* (*TLocaleNameProvider)(DWORD);
+		static void SetLocaleNameProvider(TLocaleNameProvider pfnProvider);
+		static TLocaleNameProvider ms_pfnLocaleName;
+
 #ifdef ENABLE_ACCE_COSTUME_SYSTEM
 	protected:
 		typedef struct SItemScaleTable
