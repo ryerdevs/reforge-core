@@ -7,6 +7,19 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-12] (19th part) — F5.3 aggro proactivo + aggressive_sight data-driven
+
+> Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests, unit tests only).
+
+### Added — proactive aggro (Rust, commit `7886e68`)
+
+- **`database/src/npc.rs`**: `MobRow.aggressive_sight` (smallint — `wAggressiveSight` del mob_proto; el rango en UNITS en el que un mob AGRESIVO detecta al jugador) + SQL/mapper/column-order test.
+- **`realm::ai::is_aggressive(ai_flag)`**: parity `AIFLAG_AGGRESSIVE` (`char_state.cpp:224-226`) — el `ai_flag` del PG es el SET legacy como TEXTO ("AGGR,COWARD"): contiene "AGGR" en cualquier posición + test (posiciones del SET, None, vacío).
+- **AI tick — AGGRO PROACTIVO**: un mob `AGGR` detecta al jugador DENTRO de su `aggressive_sight` y empieza a perseguirlo por iniciativa propia (parity `FindVictim(wAggressiveSight)`, `char_state.cpp:893`); sight 0 = nunca proactivo. Antes solo se volvía hostil al recibir daño.
+- **De-aggro DATA-DRIVEN**: el umbral fijo de 5 000 units se reemplaza por `aggressive_sight.max(2 000)` — el mob abandona la persecución cuando el jugador sale de su rango real (floor 2 000: un mob con sight 0 pero GOLPEADO sigue persiguiendo un mínimo).
+- **Verified**: `cargo test --workspace` green (excluding the pre-existing cold-start-flaky `f16_peer_smoke`), clippy no new warnings.
+- **Pending**: walkability (`IsMovablePosition`), `ITEM_FLAG_STACKABLE` from item_proto, armor (`iArmor`) in player DEF, multicast.
+
 ## [2026-08-12] (18th part) — F5.3 DEF del jugador en el daño del mob
 
 > Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests, unit tests only).
