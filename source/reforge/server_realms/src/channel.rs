@@ -810,7 +810,6 @@ async fn connection_inner(
                         // al stack y se manda `GC_ITEM_UPDATE` (38 B) en vez
                         // de crear un slot nuevo. El flag `ITEM_FLAG_STACKABLE`
                         // del item_proto no se consulta (subset documentado).
-                        const ITEM_COUNT_LIMIT: i64 = 200;
                         let mut remaining = gi.count as i64;
                         loop {
                             let Some(idx) = inventory.iter().position(|i| {
@@ -1036,6 +1035,248 @@ async fn connection_inner(
                                 "server_realms: channel conn {conn_id}: {} usó item vnum {} \
                                  (count {})",
                                 row.name, inventory[idx].vnum, inventory[idx].count
+                            );
+                        }
+                        continue;
+                    }
+                    // F5.3: MOVER items del inventario — CG_ITEM_MOVE (13,
+                    // 8 B: header + TItemPos origen + TItemPos destino +
+                    // BYTE num — Packet.h:593-599). Parity `MoveItem`
+                    // (char_item.cpp:5609-5767): stack si el destino tiene el
+                    // mismo vnum + sockets iguales + count < 200; split si
+                    // `0 < num < count`; si no, mover todo. Solo
+                    // INVENTORY→INVENTORY (equipar/belt/DS = pendiente).
+                    header::CG_ITEM_MOVE => {
+                        let mv = match protocol::world::TPacketCGItemMove::from_bytes(&pkt) {
+                            Ok(m) => m,
+                            Err(e) => {
+                                eprintln!(
+                                    "server_realms: channel conn {conn_id}: CG_ITEM_MOVE malformado: {e}"
+                                );
+                                continue;
+                            }
+                        };
+                        // Subset: solo INVENTORY→INVENTORY (el window wire de
+                        // INVENTORY = 1; equipar/belt/DS pendiente).
+                        if mv.pos.window != TItemPos::WINDOW_INVENTORY
+                            || mv.change_pos.window != TItemPos::WINDOW_INVENTORY
+                        {
+                            eprintln!(
+                                "server_realms: channel conn {conn_id}: CG_ITEM_MOVE fuera del \
+                                 subset (windows {}→{}) — equipar/belt/DS pendiente",
+                                mv.pos.window, mv.change_pos.window
+                            );
+                            continue;
+                        }
+                        if mv.pos.cell == mv.change_pos.cell {
+                            continue; // @fixme196 — misma posición
+                        }
+                        let src = inventory.iter().position(|i| {
+                            i.window == "INVENTORY" && i.pos as u16 == mv.pos.cell
+                        });
+                        let Some(src) = src else {
+                            eprintln!(
+                                "server_realms: channel conn {conn_id}: move de celda {} sin item",
+                                mv.pos.cell
+                            );
+                            continue;
+                        };
+                        let want = i64::from(mv.num);
+                        if want > inventory[src].count {
+                            continue; // parity: item->GetCount() < count → false
+                        }
+                        // Destino ocupado: stack si mismo vnum + sockets
+                        // iguales + count < límite (char_item.cpp:5709-5727);
+                        // si no, el C++ corta (slot ocupado no-stackeable).
+                        let dst = inventory.iter().position(|i| {
+                            i.window == "INVENTORY" && i.pos as u16 == mv.change_pos.cell
+                        });
+                        if let Some(dst) = dst {
+                            if inventory[src].vnum == inventory[dst].vnum
+                                && inventory[src].sockets == inventory[dst].sockets
+                            {
+                                let add = (ITEM_COUNT_LIMIT - inventory[dst].count)
+                                    .min(if want == 0 { inventory[src].count } else { want });
+                                if add <= 0 {
+                                    eprintln!(
+                                        "server_realms: channel conn {conn_id}: stack de celda {} \
+                                         lleno — move ignorado",
+                                        mv.change_pos.cell
+                                    );
+                                    continue;
+                                }
+                                inventory[src].count -= add;
+                                inventory[dst].count += add;
+                                // GC_ITEM_UPDATE en el destino (SetCount).
+                                let up = protocol::world::TPacketGCItemUpdate {
+                                    header: protocol::world::TPacketGCItemUpdate::HEADER,
+                                    cell: TItemPos {
+                                        window: TItemPos::WINDOW_INVENTORY,
+                                        cell: mv.change_pos.cell,
+                                    },
+                                    count: inventory[dst].count as u8,
+                                    sockets: inventory[dst].sockets,
+                                    attrs: inventory[dst].attrs,
+                                };
+                                conn.send(&up.to_bytes())
+                                    .await
+                                    .map_err(|e| format!("enviando GC_ITEM_UPDATE: {e}"))?;
+                                ItemRepo::new(&config.pg_conn)
+                                    .upsert(&inventory[dst], row.id)
+                                    .await?;
+                                eprintln!(
+                                    "server_realms: channel conn {conn_id}: {} apiló en move vnum {} \
+                                     (celda {} → {})",
+                                    row.name, inventory[src].vnum, mv.pos.cell, mv.change_pos.cell
+                                );
+                                if inventory[src].count <= 0 {
+                                    // El origen se agotó → GC_ITEM_DEL + delete.
+                                    let cell = TItemPos {
+                                        window: TItemPos::WINDOW_INVENTORY,
+                                        cell: mv.pos.cell,
+                                    };
+                                    let vnum = inventory[src].vnum;
+                                    let id = inventory[src].id;
+                                    conn.send(
+                                        &TPacketGCItemDelDeprecated::new(cell, vnum as u32, 0)
+                                            .to_bytes(),
+                                    )
+                                    .await
+                                    .map_err(|e| format!("enviando GC_ITEM_DEL: {e}"))?;
+                                    ItemRepo::new(&config.pg_conn).delete(id).await?;
+                                    inventory.remove(src);
+                                } else {
+                                    // El origen queda → GC_ITEM_UPDATE + upsert.
+                                    let up = protocol::world::TPacketGCItemUpdate {
+                                        header: protocol::world::TPacketGCItemUpdate::HEADER,
+                                        cell: TItemPos {
+                                            window: TItemPos::WINDOW_INVENTORY,
+                                            cell: mv.pos.cell,
+                                        },
+                                        count: inventory[src].count as u8,
+                                        sockets: inventory[src].sockets,
+                                        attrs: inventory[src].attrs,
+                                    };
+                                    conn.send(&up.to_bytes())
+                                        .await
+                                        .map_err(|e| format!("enviando GC_ITEM_UPDATE: {e}"))?;
+                                    ItemRepo::new(&config.pg_conn)
+                                        .upsert(&inventory[src], row.id)
+                                        .await?;
+                                }
+                            } else {
+                                eprintln!(
+                                    "server_realms: channel conn {conn_id}: celda {} ocupada con \
+                                     otro item — move ignorado (parity MoveItem)",
+                                    mv.change_pos.cell
+                                );
+                            }
+                            continue;
+                        }
+                        // Destino VACÍO: split (0 < num < count) o mover todo.
+                        if want > 0 && want < inventory[src].count {
+                            // SPLIT (char_item.cpp:5747-5763): el origen baja
+                            // (GC_ITEM_UPDATE) + item nuevo en el destino
+                            // (GC_ITEM_SET con id del rango ITEM_ID_RANGE).
+                            inventory[src].count -= want;
+                            let up = protocol::world::TPacketGCItemUpdate {
+                                header: protocol::world::TPacketGCItemUpdate::HEADER,
+                                cell: TItemPos {
+                                    window: TItemPos::WINDOW_INVENTORY,
+                                    cell: mv.pos.cell,
+                                },
+                                count: inventory[src].count as u8,
+                                sockets: inventory[src].sockets,
+                                attrs: inventory[src].attrs,
+                            };
+                            conn.send(&up.to_bytes())
+                                .await
+                                .map_err(|e| format!("enviando GC_ITEM_UPDATE: {e}"))?;
+                            ItemRepo::new(&config.pg_conn)
+                                .upsert(&inventory[src], row.id)
+                                .await?;
+                            let id = ItemRepo::new(&config.pg_conn)
+                                .max_id_in_range(100_000_000, 200_000_000)
+                                .await?
+                                .map(|m| m + 1)
+                                .unwrap_or(100_000_000);
+                            let new_item = database::item::ItemRow {
+                                id,
+                                window: "INVENTORY".to_string(),
+                                pos: mv.change_pos.cell as i32,
+                                count: want,
+                                vnum: inventory[src].vnum,
+                                sockets: inventory[src].sockets,
+                                attrs: inventory[src].attrs,
+                            };
+                            let set = TPacketGCItemSet {
+                                header: TPacketGCItemSet::HEADER,
+                                cell: TItemPos {
+                                    window: TItemPos::WINDOW_INVENTORY,
+                                    cell: mv.change_pos.cell,
+                                },
+                                vnum: new_item.vnum as u32,
+                                count: new_item.count as u8,
+                                flags: 0,
+                                anti_flags: 0,
+                                highlight: 0,
+                                sockets: new_item.sockets,
+                                attrs: new_item.attrs,
+                            };
+                            conn.send(&set.to_bytes())
+                                .await
+                                .map_err(|e| format!("enviando GC_ITEM_SET: {e}"))?;
+                            ItemRepo::new(&config.pg_conn).upsert(&new_item, row.id).await?;
+                            inventory.push(new_item);
+                            eprintln!(
+                                "server_realms: channel conn {conn_id}: {} split de vnum {} \
+                                 ({want} → celda {})",
+                                row.name, inventory[src].vnum, mv.change_pos.cell
+                            );
+                        } else {
+                            // MOVER TODO (char_item.cpp:5733-5746): el item
+                            // cambia de celda — GC_ITEM_DEL (origen) +
+                            // GC_ITEM_SET (destino) + upsert.
+                            let cell = TItemPos {
+                                window: TItemPos::WINDOW_INVENTORY,
+                                cell: mv.pos.cell,
+                            };
+                            let vnum = inventory[src].vnum;
+                            conn.send(
+                                &TPacketGCItemDelDeprecated::new(
+                                    cell,
+                                    vnum as u32,
+                                    inventory[src].count as u8,
+                                )
+                                .to_bytes(),
+                            )
+                            .await
+                            .map_err(|e| format!("enviando GC_ITEM_DEL: {e}"))?;
+                            inventory[src].pos = mv.change_pos.cell as i32;
+                            let set = TPacketGCItemSet {
+                                header: TPacketGCItemSet::HEADER,
+                                cell: TItemPos {
+                                    window: TItemPos::WINDOW_INVENTORY,
+                                    cell: mv.change_pos.cell,
+                                },
+                                vnum: inventory[src].vnum as u32,
+                                count: inventory[src].count as u8,
+                                flags: 0,
+                                anti_flags: 0,
+                                highlight: 0,
+                                sockets: inventory[src].sockets,
+                                attrs: inventory[src].attrs,
+                            };
+                            conn.send(&set.to_bytes())
+                                .await
+                                .map_err(|e| format!("enviando GC_ITEM_SET: {e}"))?;
+                            ItemRepo::new(&config.pg_conn)
+                                .upsert(&inventory[src], row.id)
+                                .await?;
+                            eprintln!(
+                                "server_realms: channel conn {conn_id}: {} movió item vnum {} \
+                                 (celda {} → {})",
+                                row.name, inventory[src].vnum, mv.pos.cell, mv.change_pos.cell
                             );
                         }
                         continue;
@@ -1543,6 +1784,10 @@ struct LiveGroundItem {
     y: i32,
     z: i32,
 }
+
+/// Límite del stack de items (`g_bItemCountLimit` — config.cpp:39): usado
+/// por el pickup (stacking), el move y el uso de items.
+const ITEM_COUNT_LIMIT: i64 = 200;
 
 /// Contador global de VIDs de items del suelo del canal: arranca en
 /// 50 000 (los PCs son ids bajos 1..5 y los NPCs 10 000+ — sin colisión).
