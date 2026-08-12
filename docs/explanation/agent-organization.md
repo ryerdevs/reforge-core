@@ -33,7 +33,7 @@ The rewrite touches three worlds at once: the legacy C++ server/client (the orac
 | Role | Model (all `opencode-go/deepseek-v4-flash`, variant max unless noted) | Owns | When spawned |
 |---|---|---|---|
 | **Orchestrator** | v4-flash max | Planning, delegation, verification, docs, **the only one who commits** | always (this role) |
-| **Oracle** | v4-flash max | **Team lead** — meta-review of the whole change (code + docs + plan + gates); architecture decisions (ADRs before code); roadmap priorities | at every gate (phase, commit) and when priorities/architecture are at stake |
+| **Oracle** | v4-pro max | **Team lead** — meta-review of the whole change (code + docs + plan + gates); architecture decisions (ADRs before code); roadmap priorities | at every gate (phase, commit) and when priorities/architecture are at stake |
 | **Coder** (replaces the old `build`; built-in `build` is disabled) | v4-flash max | **The expert writer**: implementation of bounded features with best practices (clean-code, rust-*, ponytail, verification-before-completion); owns the skills implementation | direct implementation work |
 | **Fixer** | v4-flash max | **The quality guardian**: Coder's adversary (finds bugs, structural problems, bad practices) AND the owner of the test suite, debugging (root cause) and scalability/maintainability — it WRITES tests and quality-scoped refactors | after Coder delivers, per task |
 | **Librarian** | v4-flash max | **Documentation maintainer** — audits AND edits docs (applies its own audit fixes); external research | doc upkeep, research, doc audits |
@@ -57,7 +57,7 @@ The rewrite touches three worlds at once: the legacy C++ server/client (the orac
 Each agent is defined by a dedicated file in `.opencode/agents/<role>.md` (local, gitignored): **mission prompt + permissions + model**. The mission is strict — what it does AND what it never does; permissions enforce it (**read-only: oracle, explorer, observer** — `edit: deny`; **writers: coder, fixer (tests/quality), librarian (docs only), designer**).
 
 - Specialization comes from **scope restriction, not context volume**: each agent receives only its lane (files, acceptance criterion, evidence sources), never the whole project.
-- Global skills exist for everyone (opencode mechanics), but each agent's mission limits it to its lane's skills (fixer → adversarial + rust-testing + diagnose; coder → rust-* + clean-code; librarian → documentation-*; explorer → graphify/codemap).
+- Global skills exist for everyone (opencode mechanics), but each agent's mission limits it to its lane's skills (fixer → adversarial + rust-* + diagnose + improve-codebase-architecture; coder → rust-* + clean-code; librarian → documentation-*; explorer → graphify/codemap). MCPs: orchestrator/coder/librarian → graphify; librarian also context7 + gh_grep.
 - More context does not make an agent smarter — it dilutes focus. A specialist gets **less, targeted** context.
 
 ## Value contract (what each agent uniquely contributes)
@@ -98,4 +98,4 @@ Delegation discipline (the antidote to "loose agents"):
 
 ## Model note
 
-All team agents share the same model (`opencode-go/deepseek-v4-flash`, variant max) including `coder` (configured 2026-08-12, replacing the disabled built-in `build`), so delegation does not change model behavior — only role, skills and permissions.
+All team agents run `opencode-go/deepseek-v4-flash` variant max **except**: **Oracle → `opencode-go/deepseek-v4-pro`** (upgraded 2026-08-12, user decision — architecture reviews and designs pass through the stronger model; requires an opencode restart to load) and **Observer → `mimo-v2.5`** (native image analysis). `coder` (configured 2026-08-12, replacing the disabled built-in `build`). Delegation changes role, skills and permissions — and for the oracle, model strength.
