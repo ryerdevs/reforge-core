@@ -7,6 +7,18 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-12] (18th part) — F5.3 DEF del jugador en el daño del mob
+
+> Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests, unit tests only).
+
+### Added — player DEF in mob damage (Rust, commit `12cf334`)
+
+- **`realm::combat::player_def_grade(level, ht)`**: `level + (int)(ht / 1.25)` — parity `char.cpp:2114` (PC as victim; subset WITHOUT armor — the `iArmor` from equipped items `char.cpp:2115-2140` and DEF_GRADE_BONUS are pending) + truncation test (ht=6 → 4.8 → 4).
+- **`realm::ai::attack_damage(min, max, victim_def, roll)`**: `iAtk = number(min,max)` (the mob_proto damage IS its attack) → `iDam = MAX(0, atk − def)` → floor `number(1,5)` if `< 3` (parity `CalcBattleDamage`, `battle.cpp:199-206` — a nearly-blocked hit still lands 1..5) + tests (subtraction, floor, degenerate range, defensive min>max).
+- **Channel AI tick**: passes `player_def_grade(row.level, row.ht)` to the mob attack.
+- **Verified**: `cargo test --workspace` green (excluding the pre-existing cold-start-flaky `f16_peer_smoke`), clippy no new warnings.
+- **Pending**: armor (`iArmor`) in player DEF, `ITEM_FLAG_STACKABLE` from item_proto, walkability (`IsMovablePosition`), `aggressive_sight` data-driven, multicast.
+
 ## [2026-08-12] (17th part) — F5.3 item stacking al recoger (AutoStackItem parity)
 
 > Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests, unit tests only).
@@ -637,7 +649,6 @@ The client reached the select screen early, but world entry failed silently (cle
 
 - **El selector de banderas causó pantalla NEGRA al abrir el login** (primera versión 18:04): `btn.SetEvent(ui.__mem_func__(self.__OnClickLanguageFlag(...)))` envolvía una **closure** con `__mem_func__` (wrapper pensado para métodos bound estilo `self.__OnClickLoginButton`) → excepción en `__CreateLanguageSelector` durante `LoginWindow.Open()` → el login no se construye → negro. **Fix:** `SetEvent` directo con la closure (igual que las lambdas del teclado virtual, `key_space.SetEvent(lambda ...)`) + **try/except blindado** en `__CreateLanguageSelector` (`print` del error, el login se muestra igual aunque el selector falle). Repack 538368 B 18:12, desplegado a `client\pack` y verificado por desempaquetado (línea 379 sin `__mem_func__`, 32 banderas dentro del epk).
 - **Verificado el `.rar` del sistema completo** (`systems\Language System 1.2.6.rar`, UnRAR l): contenido idéntico a la carpeta extraída, **sin ninguna imagen de bandera de país** y sin lógica de selector de login. Los 8 `02. Client\root\*.py` del mod son parches del coliseo PVP (dependen de `__LANGUAGE_SYSTEM__` en el C++ del cliente, no integrado) — **copiarlos rompería el login** (ImportError `uiLanguageSystem`, AttributeError `app.LANGUAGE_SYSTEM`, `player.IsLanguageSystem()` inexistente). Confirmada la decisión #8 del doc de estado (no integrar ese root).
-
 
 ## [2026-08-09] (3ª sesión, 2ª parte) — Crash de entrada al mundo: diagnóstico en curso + auditoría del Language System
 
