@@ -7,6 +7,19 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-12] (23rd part) — F5.3 items equipados afectan el combate (arma + armadura)
+
+> Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests, unit tests only).
+
+### Added — equipped items affect combat (Rust, commit `1a596b7`)
+
+- **`database/src/item.rs`**: `load_proto_use_values` → `Option<ProtoItem>` (nuevo struct: `b_type`/`b_sub_type` del item_proto + `values[6]` value0..5 — el SQL ampliado a `type, sub_type, value0..5`). El handler de pociones usa `proto.values`.
+- **`realm::combat::melee_damage`**: con arma equipada (`Option<&ProtoItem>`) → `iDam = number(value3, value4) × 2` (`Item_GetDamage`, battle.cpp:460-461,533) + `iAtk += value5 × 2` (battle.cpp:548); sin arma sigue `roll(0,1) × 2`. `handle_attack` acepta `weapon`.
+- **`realm::combat::player_def_grade(level, ht, i_armor)`**: + `iArmor` de los items ARMOR equipados (char.cpp:2124-2125: `value1 + 2×value5`); el test ampliado con casos de armadura.
+- **Channel**: `CG_ATTACK` resuelve el arma equipada (cell `INVENTORY_MAX_NUM + WEAR_WEAPON(4)` = 184) y la pasa a `handle_attack`; el AI tick (mob→jugador) suma el `iArmor` de los items `EQUIPMENT` con `b_type == ITEM_TYPE_ARMOR` y subtipo BODY/HEAD/SHIELD/FOOTS (`matches!(0|1|2|4)`) a la DEF del jugador.
+- **Verified**: `cargo test --workspace` green (excluding the pre-existing cold-start-flaky `f16_peer_smoke`), clippy no new warnings.
+- **Pending**: parts visuales de items equipados (ComputeParts — el ADDITIONAL_INFO aún usa parts del row), validación de tipo al equipar (`IsEquipable`), attack_speed del arma, skills.
+
 ## [2026-08-12] (22nd part) — F5.3 equipar/desequipar items (CG_ITEM_MOVE + EQUIPMENT window)
 
 > Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests, unit tests only).
