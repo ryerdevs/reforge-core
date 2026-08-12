@@ -92,7 +92,7 @@ pub fn packet_size(role: ConnectionRole, header: u8) -> Option<usize> {
         // ---------------------------------------------------------------
         header::CG_ATTACK => 8,             // 2, header+bType+vid+2 CRC (Packet.h:509-516)
         header::CG_MOVE => 16,              // 7, header+func+arg+rot+lx+ly+time (Packet.h:677-686)
-        header::CG_ITEM_USE => 16,          // 11, header+pos+ch_vid+victim_vid+vnum (Packet.h:1689-1697)
+        header::CG_ITEM_USE => 4, // 11, header + TItemPos (Packet.h:559-563 + packet.h:618-622) — el tamaño CORRECTO C→S (el 16 B era el GC_ITEM_USE S→C, bug latente corregido)
         header::CG_ITEM_DROP => 8,          // 12, header+pos+elk (cheque OFF en el cliente) (Packet.h:556-564)
         header::CG_ITEM_MOVE => 8,          // 13, header+pos+change_pos+num (Packet.h:577-583)
         header::CG_ITEM_PICKUP => 5,        // 15, header+vid (Packet.h:585-589)
@@ -319,7 +319,7 @@ mod tests {
         // cerraba la entrada (slice 3.7).
         assert_eq!(packet_size(ConnectionRole::Channel, header::CG_MOVE), Some(16));
         assert_eq!(packet_size(ConnectionRole::Channel, header::CG_ATTACK), Some(8));
-        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_ITEM_USE), Some(16));
+        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_ITEM_USE), Some(4), "11, header + TItemPos (Packet.h:559-563) — el 16 B era el GC S→C, bug corregido");
         assert_eq!(packet_size(ConnectionRole::Channel, header::CG_QUICKSLOT_ADD), Some(4));
         assert_eq!(packet_size(ConnectionRole::Channel, header::CG_MYSHOP), Some(35));
         assert_eq!(packet_size(ConnectionRole::Channel, header::CG_WARP), Some(15));

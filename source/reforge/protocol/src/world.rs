@@ -267,6 +267,115 @@ impl TPacketGCItemUpdate {
     }
 }
 
+/// `TPacketCGItemUse` (4 B, header 11 — `Packet.h:559-563` +
+/// `packet.h:618-622`): el USO de un item del inventario. `command_item_use`
+/// = header + TItemPos (el cliente manda la celda; el server aplica el
+/// efecto del item_proto y decrementa el count).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketCGItemUse {
+    pub header: u8,
+    pub pos: TItemPos,
+}
+
+impl TPacketCGItemUse {
+    /// 1 + 3 = 4 (packed).
+    pub const SIZE: usize = 4;
+    pub const HEADER: u8 = 11;
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+        }
+        Ok(Self {
+            header: data[0],
+            pos: TItemPos { window: data[1], cell: u16::from_le_bytes([data[2], data[3]]) },
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        [self.header, self.pos.window, self.pos.cell as u8, (self.pos.cell >> 8) as u8]
+    }
+}
+
+/// `TPacketGCItemDelDeprecated` (42 B packed, header 20 — `Packet.h:1676-1684`
+/// + `packet.h:1071-1085`): el borrado de un item del INVENTARIO. El cliente
+/// lo registra con `sizeof(TPacketGCItemDelDeprecated)` (PythonNetworkStream
+/// .cpp:71) y el handler `RecvItemSetPacket` lee el struct completo — el C++
+/// manda el layout LEGACY (header + TItemPos + vnum + count + sockets +
+/// attrs) aunque el nombre diga "Del". 1+3+4+1+12+21 = 42.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketGCItemDelDeprecated {
+    pub header: u8,
+    pub cell: TItemPos,
+    pub vnum: u32,
+    pub count: u8,
+    pub sockets: [i64; 3],
+    pub attrs: [(i16, i16); 7],
+}
+
+impl TPacketGCItemDelDeprecated {
+    pub const SIZE: usize = 42;
+    pub const HEADER: u8 = 20;
+
+    pub fn new(cell: TItemPos, vnum: u32, count: u8) -> Self {
+        Self {
+            header: Self::HEADER,
+            cell,
+            vnum,
+            count,
+            sockets: [0; 3],
+            attrs: [(0, 0); 7],
+        }
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+        }
+        let mut sockets = [0i64; 3];
+        for (i, s) in sockets.iter_mut().enumerate() {
+            *s = i64::from(i32::from_le_bytes([
+                data[9 + i * 4],
+                data[10 + i * 4],
+                data[11 + i * 4],
+                data[12 + i * 4],
+            ]));
+        }
+        let mut attrs = [(0i16, 0i16); 7];
+        for (i, a) in attrs.iter_mut().enumerate() {
+            a.0 = i16::from(data[21 + i * 3]);
+            a.1 = i16::from_le_bytes([data[22 + i * 3], data[23 + i * 3]]);
+        }
+        Ok(Self {
+            header: data[0],
+            cell: TItemPos { window: data[1], cell: u16::from_le_bytes([data[2], data[3]]) },
+            vnum: u32::from_le_bytes([data[4], data[5], data[6], data[7]]),
+            count: data[8],
+            sockets,
+            attrs,
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        b[1] = self.cell.window;
+        b[2..4].copy_from_slice(&self.cell.cell.to_le_bytes());
+        b[4..8].copy_from_slice(&self.vnum.to_le_bytes());
+        b[8] = self.count;
+        for (i, s) in self.sockets.iter().enumerate() {
+            b[9 + i * 4..13 + i * 4].copy_from_slice(&(*s as i32).to_le_bytes());
+        }
+        for (i, a) in self.attrs.iter().enumerate() {
+            b[21 + i * 3] = a.0 as u8;
+            b[22 + i * 3..24 + i * 3].copy_from_slice(&a.1.to_le_bytes());
+        }
+        b
+    }
+}
+
 /// `TPacketAffectElement` (21 B — `tables.h:808-816`): el elemento de affect
 /// del wire (sin dwPID — el del F3 es la fila de la tabla).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1118,6 +1227,44 @@ mod tests {
         assert_eq!(&b[18..20], &100i16.to_le_bytes(), "attr0 value");
         assert_eq!(TPacketGCItemUpdate::from_bytes(&b).unwrap(), u);
         assert!(TPacketGCItemUpdate::from_bytes(&b[..37]).is_err(), "BadLength");
+    }
+
+    /// Item use wire (F5.3): `CG_ITEM_USE` (11) = 4 B — header + TItemPos
+    /// (`Packet.h:559-563` + `packet.h:618-622`). El 16 B del framer era el
+    /// GC S→C (bug corregido).
+    #[test]
+    fn cg_item_use_wire_size_and_parse() {
+        assert_eq!(TPacketCGItemUse::SIZE, 4, "1+3 (header + TItemPos)");
+        let u = TPacketCGItemUse {
+            header: TPacketCGItemUse::HEADER,
+            pos: TItemPos { window: TItemPos::WINDOW_INVENTORY, cell: 7 },
+        };
+        let b = u.to_bytes();
+        assert_eq!(b.len(), 4);
+        assert_eq!(b, [11, 1, 7, 0], "header + window=1(INVENTORY) + cell=7");
+        assert_eq!(TPacketCGItemUse::from_bytes(&b).unwrap(), u);
+        assert!(TPacketCGItemUse::from_bytes(&b[..3]).is_err(), "BadLength");
+    }
+
+    /// Item del deprecated wire (F5.3): `GC_ITEM_DEL` (20) = 42 B — header +
+    /// TItemPos + vnum + count + sockets (3×long) + attrs (7×3 B)
+    /// (`Packet.h:1676-1684`; el cliente lo registra con este sizeof).
+    #[test]
+    fn gc_item_del_deprecated_wire_size_and_parse() {
+        assert_eq!(TPacketGCItemDelDeprecated::SIZE, 42, "1+3+4+1+12+21");
+        let d = TPacketGCItemDelDeprecated::new(
+            TItemPos { window: TItemPos::WINDOW_INVENTORY, cell: 7 },
+            101,
+            1,
+        );
+        let b = d.to_bytes();
+        assert_eq!(b.len(), 42);
+        assert_eq!(b[0], 20, "header GC_ITEM_DEL");
+        assert_eq!(&b[1..4], &[1, 7, 0], "TItemPos");
+        assert_eq!(&b[4..8], &101u32.to_le_bytes(), "vnum");
+        assert_eq!(b[8], 1, "count");
+        assert_eq!(TPacketGCItemDelDeprecated::from_bytes(&b).unwrap(), d);
+        assert!(TPacketGCItemDelDeprecated::from_bytes(&b[..41]).is_err(), "BadLength");
     }
 
     /// Drop wire (F5.3): `GC_ITEM_GROUND_ADD` (26) = 58 B packed con

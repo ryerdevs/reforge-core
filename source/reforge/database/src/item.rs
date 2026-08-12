@@ -151,6 +151,32 @@ impl ItemRepo {
             .map_err(|e| pg_err("ITEM_DESTROY", &e))
     }
 
+    /// Valores de USO del item_proto (`player.item_proto.value0..4` — el
+    /// `alValues` del TItemTable del C++). El efecto de las pociones
+    /// (`UseItemEx` → USE_POTION, char_item.cpp:4172-4204): `value0` = HP
+    /// flat, `value1` = SP flat, `value3` = HP % (del máximo), `value4` =
+    /// SP % (del máximo). `None` = el vnum no existe en item_proto.
+    /// SQL inline (sin dependencia del mapeo de filas).
+    pub async fn load_proto_use_values(&self, vnum: i64) -> Result<Option<[i32; 5]>, String> {
+        let client = self.connect().await?;
+        let rows = client
+            .query(
+                "SELECT value0, value1, value2, value3, value4 \
+                 FROM player.item_proto WHERE vnum = $1",
+                &[&vnum],
+            )
+            .await
+            .map_err(|e| pg_err("ITEM_PROTO_USE", &e))?;
+        let Some(r) = rows.first() else {
+            return Ok(None);
+        };
+        let mut v = [0i32; 5];
+        for (i, slot) in v.iter_mut().enumerate() {
+            *slot = r.try_get(i).map_err(|e| format!("item_proto.value{i}: {e}"))?;
+        }
+        Ok(Some(v))
+    }
+
     /// Probe del rango de ids (`ItemIDRangeManager.cpp:93,121` — E2E Q8):
     /// `MAX(id)` dentro de [min, max]. `None` = rango vacio.
     pub async fn max_id_in_range(&self, min: i64, max: i64) -> Result<Option<i64>, String> {
