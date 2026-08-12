@@ -827,6 +827,9 @@ mod tests {
             drop_item: 101,
             // F5.3: velocidad del mob (mob_proto.move_speed — UNITS/seg).
             move_speed: 100,
+            // F5.3: daño del ataque del mob 101 (mob_proto.damage_min/max).
+            damage_min: 3,
+            damage_max: 8,
         }
     }
 

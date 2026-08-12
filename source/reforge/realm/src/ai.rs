@@ -45,6 +45,18 @@ pub fn rotation_5deg(x: i32, y: i32, tx: i32, ty: i32) -> u8 {
     ((deg / 5.0).round() as u32 % 72) as u8
 }
 
+/// Daño del ATAQUE del mob (parity `number(damage_min, damage_max)` del
+/// C++ — el mob_proto define el rango; el `roll` es el `number()` inclusive
+/// inyectado por el canal, los tests uno fijo). El subset NO resta la DEF
+/// del jugador (pendiente: la fórmula completa del PC como víctima,
+/// `char.cpp:2113-2114`).
+pub fn attack_damage(damage_min: i32, damage_max: i32, roll: &mut dyn FnMut(i32, i32) -> i32) -> i32 {
+    if damage_max <= damage_min {
+        return damage_min;
+    }
+    damage_min + roll(0, damage_max - damage_min)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,5 +102,19 @@ mod tests {
         assert_eq!(rotation_5deg(0, 0, -100, 0), 36, "oeste");
         assert_eq!(rotation_5deg(0, 0, 0, -100), 54, "norte");
         assert_eq!(rotation_5deg(0, 0, 0, 0), 0, "sin movimiento");
+    }
+
+    /// Daño del ataque del mob: `number(damage_min, damage_max)` inclusive.
+    #[test]
+    fn attack_damage_within_range() {
+        let mut roll = |_lo: i32, _hi: i32| 0; // el mínimo del rango
+        assert_eq!(attack_damage(3, 8, &mut roll), 3);
+        let mut roll = |_lo: i32, hi: i32| hi; // el máximo
+        assert_eq!(attack_damage(3, 8, &mut roll), 8);
+        // Rango degenerado (min == max): daño fijo sin sorteo.
+        let mut roll = |_lo: i32, _hi: i32| panic!("no debe sortear");
+        assert_eq!(attack_damage(5, 5, &mut roll), 5);
+        // min > max (dato corrupto): defensivo, devuelve el min.
+        assert_eq!(attack_damage(9, 4, &mut roll), 9);
     }
 }

@@ -427,6 +427,8 @@ async fn connection_inner(
                         drop_item: mob.drop_item,
                         move_speed: mob.move_speed,
                         aggro: false,
+                        damage_min: mob.damage_min,
+                        damage_max: mob.damage_max,
                     },
                 );
                 vid += 1;
@@ -876,12 +878,13 @@ async fn connection_inner(
             }
             _ = ai_timer.tick() => {
                 // F5.3 (NPC AI): los mobs AGGRO persiguen al jugador. Por
-                // cada uno: paso hacia la posición del jugador (move_speed
-                // del mob × tick, realm::ai::step_toward — función pura
-                // testeada), actualización del estado del mundo y GC_MOVE
-                // (FUNC_MOVE, destino + dwTime/dwDuration — el cliente
-                // interpola). El ataque del mob en rango es F5.x (pendiente,
-                // documentado en realm::ai).
+                // cada uno: si está FUERA de rango, paso hacia el jugador
+                // (move_speed × tick, realm::ai::step_toward — pura) +
+                // GC_MOVE (FUNC_MOVE, el cliente interpola); si está EN
+                // RANGO (parity `melee_max_range` — 300 o el rango del mob),
+                // ATACA: GC_MOVE(FUNC_ATTACK) + GC_DAMAGE_INFO + daño al
+                // jugador (parity `SendMovePacket(FUNC_ATTACK, ...)`,
+                // char_state.cpp:386 + `battle_hit`).
                 if !live_npcs.is_empty() {
                     let px = motion.x;
                     let py = motion.y;
@@ -892,6 +895,65 @@ async fn connection_inner(
                         .collect();
                     for vid in vids {
                         let Some(npc) = live_npcs.get_mut(&vid) else { continue };
+                        let dist = realm::combat::distance_approx(
+                            npc.state.x - px,
+                            npc.state.y - py,
+                        );
+                        if dist <= realm::combat::melee_max_range(&npc.state) {
+                            // EN RANGO: ataque del mob (FUNC_ATTACK + daño).
+                            let mut roll = |lo: i32, hi: i32| {
+                                let span = (hi - lo + 1).max(1) as u32;
+                                lo + (rand32() % span) as i32
+                            };
+                            let dmg = realm::ai::attack_damage(
+                                npc.damage_min,
+                                npc.damage_max,
+                                &mut roll,
+                            );
+                            // GC_MOVE(FUNC_ATTACK): x/y = posición actual del
+                            // mob, dwDuration 0 (parity char_state.cpp:386).
+                            let mv = protocol::movement::TPacketGCMove {
+                                header: protocol::movement::TPacketGCMove::HEADER,
+                                b_func: protocol::movement::TPacketGCMove::FUNC_ATTACK,
+                                b_arg: 0,
+                                b_rot: 0,
+                                vid,
+                                x: npc.state.x,
+                                y: npc.state.y,
+                                dw_time: now32(),
+                                dw_duration: 0,
+                            };
+                            conn.send(&mv.to_bytes())
+                                .await
+                                .map_err(|e| format!("enviando GC_MOVE(FUNC_ATTACK): {e}"))?;
+                            // GC_DAMAGE_INFO (135) al jugador — el número de
+                            // daño (parity `SendDamagePacket`).
+                            conn.send(
+                                &protocol::combat::GcDamageInfo::new(
+                                    row.id as u32,
+                                    protocol::combat::damage_flag::NORMAL,
+                                    dmg,
+                                )
+                                .to_bytes()
+                                .to_vec(),
+                            )
+                            .await
+                            .map_err(|e| format!("enviando GC_DAMAGE_INFO: {e}"))?;
+                            // Daño al jugador + GC_POINTS (la barra) + save.
+                            // La MUERTE del PC (hp <= 0 → GC_DEAD + respawn)
+                            // es F5.x pendiente: el subset fija el floor en 1.
+                            row.hp = row.hp.saturating_sub(dmg).max(1);
+                            conn.send(&packets::points_packet(&row, next_exp).to_bytes())
+                                .await
+                                .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
+                            store.save_character(&row);
+                            eprintln!(
+                                "server_realms: channel conn {conn_id}: mob vnum {} (vid {}) \
+                                 atacó a {} por {dmg} (hp {})",
+                                npc.vnum, vid, row.name, row.hp
+                            );
+                            continue;
+                        }
                         let (nx, ny) = realm::ai::step_toward(
                             npc.state.x,
                             npc.state.y,
@@ -1064,6 +1126,9 @@ struct LiveNpc {
     move_speed: i32,
     /// Hostil: true tras recibir daño del jugador (el AI lo persigue).
     aggro: bool,
+    /// `damage_min`/`damage_max` del mob_proto — el daño del ataque del mob.
+    damage_min: i32,
+    damage_max: i32,
 }
 
 /// Item EN EL SUELO del mundo del canal (F5.3): el estado que el pickup
