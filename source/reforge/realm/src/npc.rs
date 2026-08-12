@@ -819,6 +819,10 @@ mod tests {
             def: 4,
             max_hp: 126,
             attack_range: 175,
+            // F5.3: recompensas del mob 101 (mob_proto — exp/gold).
+            exp: 22,
+            gold_min: 15,
+            gold_max: 45,
         }
     }
 
