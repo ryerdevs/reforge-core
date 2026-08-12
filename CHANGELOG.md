@@ -7,6 +7,18 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-12] (24th part) — F5.3 ComputeParts: el personaje muestra el arma/armadura equipada
+
+> Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests, unit tests only).
+
+### Added — visual parts of equipped items (Rust, commit `d391482`)
+
+- **`realm::packets::equipped_parts(row, inventory) -> [u32; 5]`** (pure): part = **vnum del item** (parity `item.cpp:793,833` — `SetPart(PART_WEAPON/MAIN, GetVnum())`); el slot del equip se deduce del cell wire (`EQUIP_CELL_BASE = 180 + wear`, length.h:827): `WEAR_BODY=0`→ARMOR, `WEAR_HEAD=1`→HEAD, `WEAR_WEAPON=4`→WEAPON (length.h:101-111); HAIR del row persistido (char.cpp:1710); ACCE=0 (GAP) + test (BODY/HEAD/WEAPON vnums, HAIR intacto, INVENTORY no afecta).
+- **`character_additional_info_with_parts(row, empire, parts)`**: la variante con los 5 parts computados; `character_additional_info` delega con `equipped_parts(row, &[])` — semántica C++ corregida: sin items `PART_MAIN` = 0 (se setea al equipar; el `part_base` del row es la apariencia base `bBasePart`, char.cpp:1709 — antes se mapeaba `row.part_main` que no se carga del DB, GAP heredado).
+- **Channel**: equipar/desequipar/revive/entry reenvían el `GC_CHARACTER_ADDITIONAL_INFO` con los parts computados de los items EQUIPMENT (`enter_packets` ahora recibe `parts`).
+- **Verified**: `cargo test --workspace` green (excluding the pre-existing cold-start-flaky `f16_peer_smoke`), clippy no new warnings.
+- **Pending**: validación de tipo al equipar (`IsEquipable`/`CanEquipNow`), `attack_speed` del arma, `dw_arrow` (quiver), skills, walkability.
+
 ## [2026-08-12] (23rd part) — F5.3 items equipados afectan el combate (arma + armadura)
 
 > Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests, unit tests only).
