@@ -1051,6 +1051,8 @@ async fn connection_inner(
                         }
                         if dist <= realm::combat::melee_max_range(&npc.state) {
                             // EN RANGO: ataque del mob (FUNC_ATTACK + daño).
+                            // El daño resta la DEF del jugador (parity
+                            // char.cpp:2114 — subset sin armadura).
                             let mut roll = |lo: i32, hi: i32| {
                                 let span = (hi - lo + 1).max(1) as u32;
                                 lo + (rand32() % span) as i32
@@ -1058,6 +1060,7 @@ async fn connection_inner(
                             let dmg = realm::ai::attack_damage(
                                 npc.damage_min,
                                 npc.damage_max,
+                                realm::combat::player_def_grade(i32::from(row.level), i32::from(row.ht)),
                                 &mut roll,
                             );
                             // GC_MOVE(FUNC_ATTACK): x/y = posición actual del

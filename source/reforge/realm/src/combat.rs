@@ -224,6 +224,15 @@ pub fn def_grade_npc(level: i32, ht: i32, wdef: i32) -> i32 {
     level + ht + wdef
 }
 
+/// `POINT_DEF_GRADE` del PC como VÍCTIMA (`char.cpp:2112-2114`):
+/// `iDef = level + (int)(ht / 1.25)` (la división es f64, truncada a int).
+/// Subset SIN armadura: el `iArmor` de los items equipados
+/// (`char.cpp:2115-2140`) y los bonus (`POINT_DEF_GRADE_BONUS`) son
+/// pendiente (items/affects).
+pub fn player_def_grade(level: i32, ht: i32) -> i32 {
+    level + (ht as f64 / 1.25) as i32
+}
+
 /// `CalcAttackRating` (`battle.cpp:227-251`) en f32. OJO: `(iERSrc*2 + 5) /
 /// (iERSrc + 95)` es división ENTERA en el C++ (los dos operandos son int).
 pub fn calc_attack_rating(attacker_dx: i32, attacker_lv: i32, victim_dx: i32, victim_lv: i32) -> f32 {
@@ -467,6 +476,19 @@ mod tests {
         let mut roll = |lo: i32, hi: i32| lo + (hi - lo) / 2;
         let r = kill_reward(22, 15, 45, 100, 100, &mut roll);
         assert_eq!(r.gold_gain, 30, "mid(15,45) = 30");
+    }
+
+    /// DEF del PC como víctima (char.cpp:2114): `level + (int)(ht / 1.25)`
+    /// — la división es f64 truncada. ht=30 → 24 (30/1.25 = 24 exacto);
+    /// ht=5 → 4 (5/1.25 = 4); ht=40 → 32. Subset sin armadura.
+    #[test]
+    fn player_def_grade_matches_cpp() {
+        assert_eq!(player_def_grade(5, 30), 29, "5 + 24");
+        assert_eq!(player_def_grade(1, 5), 5, "1 + 4");
+        assert_eq!(player_def_grade(50, 40), 82, "50 + 32");
+        assert_eq!(player_def_grade(0, 0), 0);
+        // Truncación f64: ht=6 → 6/1.25 = 4.8 → 4.
+        assert_eq!(player_def_grade(1, 6), 5, "1 + (int)4.8");
     }
 
     /// Atacante del harness E2E (channel.rs `dummy_row` — ninja: job 1
