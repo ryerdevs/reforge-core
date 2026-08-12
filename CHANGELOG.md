@@ -7,7 +7,30 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
-## [2026-08-12] (34th part) — Coder personality: "The Reforger" + routing + corrupt inline prompt removed
+## [2026-08-12] (35th part) — Skill adjustments per agent (approved inventory)
+
+> User asked for the full skill inventory per agent (current / candidates / unnecessary). Analysis delivered from verified config + skill descriptions (config skills dir, `~/.agents/skills`, project `.agents/skills`). Applied the 3 approved changes; the rest of the roster is already correct.
+
+### Inventory highlights (verified 2026-08-12)
+
+- **Unnecessary in the pool (never assigned, from other projects)**: playwright-*, webapp-testing, shadcn, svelte-*, tailored-resume-generator — web/resume skills irrelevant to a Rust game server + Slint/bevy client. Left installed (no harm), never assigned.
+- **Observer 0 skills**: correct — its skill is the model itself (mimo-v2.5 native vision).
+- **Librarian 4 / Explorer 3 / Designer 2 / Oracle 12**: already correct for their lanes (no changes).
+
+### Changed — config (local/gitignored, requires restart)
+
+- **Orchestrator 8 → 9**: removed `docker-development` (Docker out of the plan since 2026-08-11 — dead weight); added `verification-planning` + `deepwork` (the bundled scheduler skills it lacked).
+- **Fixer 16 → 17**: added `zeroize-audit` (missing-zeroization detection for sensitive data — passwords/keys in memory; aligns with ADR-0011 anti-hack).
+- **Coder 9 → 7**: removed `cpp-pro` + `make` (they were for the G-PG legacy adapter — already DONE, deleted at F6; note recorded in coder.md toolkit line).
+- **Docs**: `coder.md` toolkit line updated (cpp-pro/make note); `agent-organization.md` specialization line updated (fixer +zeroize-audit, orchestrator skills, docker removed).
+- **Verified**: JSON parses, UTF-8 without BOM, counts confirmed (orchestrator 9, fixer 17, coder 7).
+
+### Pending
+
+- **Restart opencode** to load everything accumulated: coder "The Reforger" + routing, MCPs for all agents, skill adjustments, oracle v4-pro.
+- After restart: slice 18 spec review with the oracle on v4-pro, then the bevy_ecs adoption.
+
+
 
 > User: "solo crea la del coder que todavía no tiene personalidad — ¿omo-slim trae un .md prompt ya enriquecido del cual podamos usar?" Answer: NO — coder does not exist in the harness pantheon (it is our custom agent replacing `build`); the harness ships agent prompts as `.ts` template strings (functional Role/Behavior/Constraints, no narrative — "The Last Builder" etc. is README marketing only, verified in `fixer.ts`); the `.md` mechanism is for USER overrides, not pre-made prompts. So the personality was created modeled on the harness style + our project rules.
 
