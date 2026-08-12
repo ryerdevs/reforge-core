@@ -226,11 +226,11 @@ pub fn def_grade_npc(level: i32, ht: i32, wdef: i32) -> i32 {
 
 /// `POINT_DEF_GRADE` del PC como VÍCTIMA (`char.cpp:2112-2114`):
 /// `iDef = level + (int)(ht / 1.25)` (la división es f64, truncada a int).
-/// Subset SIN armadura: el `iArmor` de los items equipados
-/// (`char.cpp:2115-2140`) y los bonus (`POINT_DEF_GRADE_BONUS`) son
-/// pendiente (items/affects).
-pub fn player_def_grade(level: i32, ht: i32) -> i32 {
-    level + (ht as f64 / 1.25) as i32
+/// F5.3 (items): + `iArmor` — la suma de `value1 + 2×value5` de los items
+/// ARMOR equipados (char.cpp:2124-2125; el canal la calcula de los
+/// `ProtoItem` de los items EQUIPMENT).
+pub fn player_def_grade(level: i32, ht: i32, i_armor: i32) -> i32 {
+    level + (ht as f64 / 1.25) as i32 + i_armor
 }
 
 /// `CalcAttackRating` (`battle.cpp:227-251`) en f32. OJO: `(iERSrc*2 + 5) /
@@ -270,25 +270,39 @@ pub fn melee_max_range(victim: &NpcState) -> i32 {
 /// El daño melee del subset base (`CalcMeleeDamage` + `CalcBattleDamage` +
 /// `battle_hit` — ver la cabecera del módulo para el desglose con file:line).
 ///
+/// F5.3 (items): `weapon` = el `ProtoItem` del arma equipada (`WEAR_WEAPON`).
+/// Con arma: `iDamMin/Max = value3/value4` (`Item_GetDamage`,
+/// battle.cpp:460-461) → `iDam = number(min,max) × 2` (battle.cpp:533) y
+/// `iAtk += value5 × 2` (battle.cpp:548). Sin arma: `roll(0,1) × 2` y sin
+/// bonus (subset original).
+///
 /// `roll(min, max)` = el `number(min, max)` del C++ (inclusive; `number(0,1)`
 /// del arma y el floor `number(1,5)` de `CalcBattleDamage`). El canal provee
 /// uno con su RNG; los tests uno fijo (determinismo byte-exacto).
 pub fn melee_damage(
     attacker: &PlayerState,
     victim: &NpcState,
+    weapon: Option<&database::item::ProtoItem>,
     roll: &mut dyn FnMut(i32, i32) -> i32,
 ) -> i32 {
-    // Sin arma → 0..1 (Item_GetDamage, battle.cpp:442-462 + 521-526 + :533).
-    let i_dam = roll(0, 1) * 2;
+    // Sin arma → 0..1 (Item_GetDamage con item null, battle.cpp:442-462 +
+    // 521-526 + :533). Con arma → value3/value4 (battle.cpp:460-461).
+    let i_dam = match weapon {
+        Some(w) => roll(w.values[3], w.values[4]) * 2,
+        None => roll(0, 1) * 2,
+    };
     let f_ar = calc_attack_rating(attacker.dx, attacker.level, victim.dx, victim.level);
 
     // iAtk = (ATT_GRADE + iDam - lv*2) * fAR + lv*2 (battle.cpp:542-544).
     let att_grade = attack_grade(attacker.level, attacker.job, attacker.st, attacker.dx, attacker.iq);
     let mut i_atk = ((att_grade + i_dam - attacker.level * 2) as f32 * f_ar) as i32;
     i_atk += attacker.level * 2;
-    // + arma.Value(5)*2 = 0 (sin arma, :546-553); party = 0 (:555);
-    // × (100 + ATT_BONUS + MELEE_MAGIC_ATT_BONUS_PER)/100 = ×1 (:556);
-    // CalcAttBonus = identidad en el subset base (:305-440).
+    // Con arma: + arma.Value(5)*2 (battle.cpp:546-553).
+    if let Some(w) = weapon {
+        i_atk += w.values[5] * 2;
+    }
+    // party = 0 (:555); × (100 + ATT_BONUS + MELEE_MAGIC_ATT_BONUS_PER)/100
+    // = ×1 (:556); CalcAttBonus = identidad en el subset base (:305-440).
 
     // iDef = DEF_GRADE * (100 + DEF_BONUS)/100 = DEF_GRADE (battle.cpp:564).
     let i_def = def_grade_npc(victim.level, victim.ht, victim.wdef);
@@ -321,8 +335,9 @@ pub fn melee_damage(
 /// let atk = protocol::combat::CgAttack::from_bytes(&pkt)?;       // ya parseado
 /// let player = realm::combat::PlayerState::from_row(&row, &motion); // ataque_speed default
 /// let target = <npc lane: lookup por atk.victim_vid>;             // Option<&NpcState>
+/// let weapon = <arma equipada: Option<&ProtoItem>>;               // F5.3 items
 /// let result = realm::combat::handle_attack(&mut combat, &atk, &player,
-///                                           target, now_ms(), &mut roll);
+///                                           target, weapon, now_ms(), &mut roll);
 /// for pkt in result.packets { conn.send(&pkt).await?; }
 /// // result.damage → aplicar HP al mundo (lane NPCs, F5).
 /// ```
@@ -355,6 +370,7 @@ pub fn handle_attack(
     attack: &CgAttack,
     attacker: &PlayerState,
     target: Option<&NpcState>,
+    weapon: Option<&database::item::ProtoItem>,
     now_ms: u64,
     roll: &mut dyn FnMut(i32, i32) -> i32,
 ) -> CombatResult {
@@ -385,7 +401,7 @@ pub fn handle_attack(
     }
 
     // (5) Daño (battle.cpp:731-755).
-    let damage = melee_damage(attacker, target, roll);
+    let damage = melee_damage(attacker, target, weapon, roll);
     let mut packets = vec![
         GcAttack::new(attacker.vid, target.vid, attack.b_type).to_bytes().to_vec(),
     ];
@@ -480,15 +496,19 @@ mod tests {
 
     /// DEF del PC como víctima (char.cpp:2114): `level + (int)(ht / 1.25)`
     /// — la división es f64 truncada. ht=30 → 24 (30/1.25 = 24 exacto);
-    /// ht=5 → 4 (5/1.25 = 4); ht=40 → 32. Subset sin armadura.
+    /// ht=5 → 4 (5/1.25 = 4); ht=40 → 32. F5.3: + iArmor (los items ARMOR
+    /// equipados — char.cpp:2124-2125).
     #[test]
     fn player_def_grade_matches_cpp() {
-        assert_eq!(player_def_grade(5, 30), 29, "5 + 24");
-        assert_eq!(player_def_grade(1, 5), 5, "1 + 4");
-        assert_eq!(player_def_grade(50, 40), 82, "50 + 32");
-        assert_eq!(player_def_grade(0, 0), 0);
+        assert_eq!(player_def_grade(5, 30, 0), 29, "5 + 24");
+        assert_eq!(player_def_grade(1, 5, 0), 5, "1 + 4");
+        assert_eq!(player_def_grade(50, 40, 0), 82, "50 + 32");
+        assert_eq!(player_def_grade(0, 0, 0), 0);
         // Truncación f64: ht=6 → 6/1.25 = 4.8 → 4.
-        assert_eq!(player_def_grade(1, 6), 5, "1 + (int)4.8");
+        assert_eq!(player_def_grade(1, 6, 0), 5, "1 + (int)4.8");
+        // Con armadura: se suma el iArmor del equipo (char.cpp:2146).
+        assert_eq!(player_def_grade(5, 30, 100), 129, "29 + 100");
+        assert_eq!(player_def_grade(1, 5, 20), 25, "5 + 20");
     }
 
     /// Atacante del harness E2E (channel.rs `dummy_row` — ninja: job 1
@@ -542,10 +562,10 @@ mod tests {
         assert_eq!(job_stat_attack(job::ASSASSIN, 30, 30, 30), 60);
         // roll(0,1) = 0 → iDam = 0 → iAtk = (70+0-10)*0.77+10 = 56 → dam 46.
         let mut roll = roll_fixed(0);
-        assert_eq!(melee_damage(&a, &m, &mut roll), 46);
+        assert_eq!(melee_damage(&a, &m, None, &mut roll), 46);
         // roll(0,1) = 1 → iDam = 2 → iAtk = (62)*0.77+10 = 57 → dam 47.
         let mut roll = roll_fixed(1);
-        assert_eq!(melee_damage(&a, &m, &mut roll), 47);
+        assert_eq!(melee_damage(&a, &m, None, &mut roll), 47);
     }
 
     /// La división ENTERA del C++ se respeta: assassin st=1, dx=2 →
@@ -580,7 +600,7 @@ mod tests {
         };
         let m = mob101();
         let mut roll = roll_fixed(3);
-        assert_eq!(melee_damage(&a, &m, &mut roll), 3, "0 < 3 → number(1,5) = 3");
+        assert_eq!(melee_damage(&a, &m, None, &mut roll), 3, "0 < 3 → number(1,5) = 3");
         // El cálculo previo al floor: 7 - 10 = max(0, -3) = 0.
         let f_ar = calc_attack_rating(a.dx, a.level, m.dx, m.level);
         let att = attack_grade(a.level, a.job, a.st, a.dx, a.iq);
@@ -602,26 +622,26 @@ mod tests {
 
         // t=1000: primer ataque → golpe (timer anclado).
         let mut roll = roll_fixed(0);
-        let r = handle_attack(&mut combat, &atk(m.vid), &a, Some(&m), 1000, &mut roll);
+        let r = handle_attack(&mut combat, &atk(m.vid), &a, Some(&m), None, 1000, &mut roll);
         assert_eq!(r.damage, 46);
         assert_eq!(combat.last_attack_time, 1000);
         assert_eq!(combat.last_attack_vid, m.vid);
 
         // t=2000: mismo objetivo, delta 1000 < 1250 → rechazo (vacío), pero el
         // timer se actualiza a 2000 (parity battle.cpp:833).
-        let r = handle_attack(&mut combat, &atk(m.vid), &a, Some(&m), 2000, &mut roll);
+        let r = handle_attack(&mut combat, &atk(m.vid), &a, Some(&m), None, 2000, &mut roll);
         assert_eq!(r, CombatResult::empty());
         assert_eq!(combat.last_attack_time, 2000);
 
         // t=3250: delta 1250 ≥ 1250 → golpe de nuevo.
-        let r = handle_attack(&mut combat, &atk(m.vid), &a, Some(&m), 3250, &mut roll);
+        let r = handle_attack(&mut combat, &atk(m.vid), &a, Some(&m), None, 3250, &mut roll);
         assert_eq!(r.damage, 46);
 
         // Objetivo distinto dentro del intervalo → SIN cooldown (parity).
         let m2 = NpcState { vid: 102, ..m };
         let mut combat2 = CombatState::new();
-        handle_attack(&mut combat2, &atk(m.vid), &a, Some(&m), 1000, &mut roll);
-        let r = handle_attack(&mut combat2, &atk(m2.vid), &a, Some(&m2), 2000, &mut roll);
+        handle_attack(&mut combat2, &atk(m.vid), &a, Some(&m), None, 1000, &mut roll);
+        let r = handle_attack(&mut combat2, &atk(m2.vid), &a, Some(&m2), None, 2000, &mut roll);
         assert_eq!(r.damage, 46, "target distinto: sin rechazo");
     }
 
@@ -638,22 +658,22 @@ mod tests {
 
         // 400 UNITS (dist 384) > 300 → sin golpe. (vid 101 — timer anclado.)
         let far = NpcState { vid: 101, x: a.x + 400, y: a.y, ..m };
-        let r = handle_attack(&mut combat, &atk(far.vid), &a, Some(&far), 1000, &mut roll);
+        let r = handle_attack(&mut combat, &atk(far.vid), &a, Some(&far), None, 1000, &mut roll);
         assert_eq!(r, CombatResult::empty());
 
         // 200,200 (dist 271) ≤ 300 → golpe. (vid distinto — el cooldown solo
         // aplica contra el MISMO objetivo, battle.cpp:812.)
         let near = NpcState { vid: 102, x: a.x + 200, y: a.y + 200, ..m };
-        let r = handle_attack(&mut combat, &atk(near.vid), &a, Some(&near), 2000, &mut roll);
+        let r = handle_attack(&mut combat, &atk(near.vid), &a, Some(&near), None, 2000, &mut roll);
         assert_eq!(r.damage, 46);
 
         // Mob MELEE grande (rango 1000 → max = MAX(300, 1150)): 500 OK, 1200 no.
         let big = NpcState { vid: 103, x: a.x + 500, y: a.y, battle_type: BATTLE_TYPE_MELEE, attack_range: 1000, ..m };
         assert_eq!(melee_max_range(&big), 1150, "(int)(1000*1.15f)");
-        let r = handle_attack(&mut combat, &atk(big.vid), &a, Some(&big), 3000, &mut roll);
+        let r = handle_attack(&mut combat, &atk(big.vid), &a, Some(&big), None, 3000, &mut roll);
         assert_eq!(r.damage, 46, "500 ≤ 1150");
         let far_big = NpcState { vid: 104, x: a.x + 1200, y: a.y, ..big };
-        let r = handle_attack(&mut combat, &atk(far_big.vid), &a, Some(&far_big), 4000, &mut roll);
+        let r = handle_attack(&mut combat, &atk(far_big.vid), &a, Some(&far_big), None, 4000, &mut roll);
         assert_eq!(r, CombatResult::empty(), "1200 > 1150");
     }
 
@@ -664,12 +684,12 @@ mod tests {
         let a = ninja();
         let mut combat = CombatState::new();
         let mut roll = roll_fixed(0);
-        assert_eq!(handle_attack(&mut combat, &atk(101), &a, None, 1000, &mut roll), CombatResult::empty());
+        assert_eq!(handle_attack(&mut combat, &atk(101), &a, None, None, 1000, &mut roll), CombatResult::empty());
         assert_eq!(combat.last_attack_time, 0, "sin objetivo: ni timer");
         let m = mob101();
         let mut atk_skill = atk(m.vid);
         atk_skill.b_type = 42;
-        assert_eq!(handle_attack(&mut combat, &atk_skill, &a, Some(&m), 1000, &mut roll), CombatResult::empty());
+        assert_eq!(handle_attack(&mut combat, &atk_skill, &a, Some(&m), None, 1000, &mut roll), CombatResult::empty());
     }
 
     /// Los paquetes del resultado: `[GcAttack(12), GcDamageInfo(135)]` con los
@@ -680,7 +700,7 @@ mod tests {
         let m = mob101();
         let mut combat = CombatState::new();
         let mut roll = roll_fixed(0);
-        let r = handle_attack(&mut combat, &atk(m.vid), &a, Some(&m), 1000, &mut roll);
+        let r = handle_attack(&mut combat, &atk(m.vid), &a, Some(&m), None, 1000, &mut roll);
         assert_eq!(r.damage, 46);
         assert_eq!(r.packets.len(), 2);
         // GC_ATTACK: header 12, dwVID=2 (player id), dwVictimVID=101, bType=0.

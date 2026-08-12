@@ -593,11 +593,25 @@ async fn connection_inner(
                             Ok(attack) => {
                                 let player = realm::combat::PlayerState::from_row(&row, &motion);
                                 let target = live_npcs.get(&attack.victim_vid).map(|n| &n.state);
+                                // F5.3 (items): el ARMA equipada (WEAR_WEAPON =
+                                // 4 → cell = INVENTORY_MAX_NUM + 4 = 184) — su
+                                // ProtoItem (value3/4 daño, value5 bonus).
+                                let weapon = if let Some(w) = inventory.iter().find(|i| {
+                                    i.window == "EQUIPMENT"
+                                        && i.pos as u16 == INVENTORY_MAX_NUM + 4
+                                }) {
+                                    ItemRepo::new(&config.pg_conn)
+                                        .load_proto_use_values(w.vnum)
+                                        .await?
+                                } else {
+                                    None
+                                };
                                 let result = realm::combat::handle_attack(
                                     &mut combat,
                                     &attack,
                                     &player,
                                     target,
+                                    weapon.as_ref(),
                                     now_ms(),
                                     &mut |min, max| {
                                         // roll INCLUSIVE (parity number(min,max)).
@@ -944,7 +958,7 @@ async fn connection_inner(
                             );
                             continue;
                         };
-                        let Some(values) = ItemRepo::new(&config.pg_conn)
+                        let Some(proto) = ItemRepo::new(&config.pg_conn)
                             .load_proto_use_values(inventory[idx].vnum)
                             .await?
                         else {
@@ -955,6 +969,7 @@ async fn connection_inner(
                             );
                             continue;
                         };
+                        let values = proto.values;
                         let max = packets::compute_max_points(&row).unwrap_or([100, 100, 0]);
                         let mut used = false;
                         // value0: HP flat (char_item.cpp:4172-4180).
@@ -1582,7 +1597,25 @@ async fn connection_inner(
                         if dist <= realm::combat::melee_max_range(&npc.state) {
                             // EN RANGO: ataque del mob (FUNC_ATTACK + daño).
                             // El daño resta la DEF del jugador (parity
-                            // char.cpp:2114 — subset sin armadura).
+                            // char.cpp:2114) + el iArmor de los items ARMOR
+                            // equipados (char.cpp:2120-2126: ARMOR_BODY/HEAD/
+                            // SHIELD/FOOTS → value1 + 2×value5). Las queries
+                            // del proto por item son el subset (un cache
+                            // vendría con el pipeline de items).
+                            let mut armor = 0i32;
+                            for w in inventory.iter().filter(|i| i.window == "EQUIPMENT") {
+                                if let Some(p) = ItemRepo::new(&config.pg_conn)
+                                    .load_proto_use_values(w.vnum)
+                                    .await?
+                                {
+                                    const ITEM_TYPE_ARMOR: i16 = 2; // ItemData.h:73
+                                    if p.b_type == ITEM_TYPE_ARMOR
+                                        && matches!(p.b_sub_type, 0 | 1 | 2 | 4)
+                                    {
+                                        armor += p.values[1] + 2 * p.values[5];
+                                    }
+                                }
+                            }
                             let mut roll = |lo: i32, hi: i32| {
                                 let span = (hi - lo + 1).max(1) as u32;
                                 lo + (rand32() % span) as i32
@@ -1590,7 +1623,11 @@ async fn connection_inner(
                             let dmg = realm::ai::attack_damage(
                                 npc.damage_min,
                                 npc.damage_max,
-                                realm::combat::player_def_grade(i32::from(row.level), i32::from(row.ht)),
+                                realm::combat::player_def_grade(
+                                    i32::from(row.level),
+                                    i32::from(row.ht),
+                                    armor,
+                                ),
                                 &mut roll,
                             );
                             // GC_MOVE(FUNC_ATTACK): x/y = posición actual del
