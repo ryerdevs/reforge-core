@@ -267,7 +267,7 @@ async fn connection_inner(
     };
     eprintln!("server_realms: channel conn {conn_id}: CG_PLAYER_SELECT index={}", select.index);
 
-    let Some(row) = store.select_player(acc.id, select.index).await? else {
+    let Some(mut row) = store.select_player(acc.id, select.index).await? else {
         // Parity input_login.cpp:266-271 ("player index not found" -> CLOSE).
         eprintln!("server_realms: channel conn {conn_id}: slot vacío/inválido — cierre");
         return Ok(());
@@ -287,7 +287,8 @@ async fn connection_inner(
     // -> Skills (76) -> N×ITEM_SET (21, ItemLoad input_db.cpp:1453-1561) ->
     // M×AFFECT_ADD (126, AffectLoad input_db.cpp:1563-1583).
     // ------------------------------------------------------------------
-    let next_exp = CommonRepo::new(&config.pg_conn).next_exp(row.level).await.unwrap_or(0);
+    // F5.3: next_exp MUTABLE — el level-up del kill lo recalcula por nivel.
+    let mut next_exp = CommonRepo::new(&config.pg_conn).next_exp(row.level).await.unwrap_or(0);
     let items = ItemRepo::new(&config.pg_conn).load_by_owner(row.id).await?;
     let affects = AffectRepo::new(&config.pg_conn).load(row.id).await?;
     for pkt in entry_packets(&row, next_exp, &items, &affects) {
@@ -415,6 +416,9 @@ async fn connection_inner(
                         vnum: mob.vnum,
                         max_hp: mob.max_hp as i32,
                         hp: mob.max_hp as i32,
+                        exp: mob.exp,
+                        gold_min: mob.gold_min,
+                        gold_max: mob.gold_max,
                     },
                 );
                 vid += 1;
@@ -590,9 +594,52 @@ async fn connection_inner(
                                                 .map_err(|e| format!("enviando GC_DEAD: {e}"))?;
                                             conn.send(&del.to_bytes()).await
                                                 .map_err(|e| format!("enviando GC_CHARACTER_DEL: {e}"))?;
+                                            // F5.3: recompensa del kill — exp
+                                            // y gold del mob_proto con los
+                                            // rates del config (realm::combat
+                                            // — parity del C++, testeada).
+                                            let reward = realm::combat::kill_reward(
+                                                npc.exp,
+                                                npc.gold_min,
+                                                npc.gold_max,
+                                                config.exp_rate,
+                                                config.gold_rate,
+                                                &mut |lo, hi| {
+                                                    // roll INCLUSIVE (parity number(min,max)).
+                                                    let span = (hi - lo + 1).max(1) as u32;
+                                                    lo + (rand32() % span) as i32
+                                                },
+                                            );
+                                            let (exp_gain, gold_gain) =
+                                                (reward.exp_gain, reward.gold_gain);
+                                            row.exp = row.exp.saturating_add(exp_gain.min(i32::MAX as i64) as i32);
+                                            row.gold = row.gold.saturating_add(gold_gain.min(i32::MAX as i64) as i32);
+                                            // Level-up (parity char.cpp
+                                            // `GetNextExp` — exp_table por
+                                            // nivel; el next_exp se recarga
+                                            // de la DB al subir).
+                                            let mut leveled = false;
+                                            while next_exp > 0 && i64::from(row.exp) >= next_exp {
+                                                row.exp = (i64::from(row.exp) - next_exp) as i32;
+                                                row.level = row.level.saturating_add(1);
+                                                leveled = true;
+                                                next_exp = CommonRepo::new(&config.pg_conn)
+                                                    .next_exp(row.level)
+                                                    .await
+                                                    .unwrap_or(0);
+                                            }
+                                            // GC_POINTS actualizado (el
+                                            // cliente muestra exp/gold/nivel)
+                                            // + persistencia durable.
+                                            conn.send(&packets::points_packet(&row, next_exp).to_bytes().to_vec())
+                                                .await
+                                                .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
+                                            store.save_character(&row);
                                             eprintln!(
-                                                "server_realms: channel conn {conn_id}: {} mató al mob vnum {} (vid {})",
-                                                row.name, npc.vnum, attack.victim_vid
+                                                "server_realms: channel conn {conn_id}: {} mató al mob vnum {} \
+                                                 (vid {}): exp +{exp_gain}, gold +{gold_gain}{} (nivel {})",
+                                                row.name, npc.vnum, attack.victim_vid,
+                                                if leveled { ", LEVEL UP" } else { "" }, row.level
                                             );
                                             live_npcs.remove(&attack.victim_vid);
                                         } else {
@@ -610,6 +657,40 @@ async fn connection_inner(
                                 );
                             }
                         }
+                        continue;
+                    }
+                    // F5.3: chat — echo GC_CHAT (4) al jugador (parity
+                    // `Chat()` input_main.cpp:641-685 → `ChatPacket` →
+                    // char.cpp — sin interpret_command por ahora, YAGNI).
+                    // CG_CHAT (3): header + length(WORD) + type + msg (el
+                    // framer ya entrega `length` bytes totales — el formato
+                    // de TPacketCGChat Packet.h:534-539).
+                    header::CG_CHAT => {
+                        if pkt.len() < 4 {
+                            return Err(format!("CG_CHAT malformado ({})", pkt.len()));
+                        }
+                        let chat_type = pkt[3];
+                        let msg = &pkt[4..];
+                        // GC_CHAT: header(4) + size(WORD, incluye header 9 B)
+                        // + type + dwVID + bEmpire + msg (Packet.h:1336-1343;
+                        // el cliente hace size - sizeof(TPacketGCChat)).
+                        let size = (9 + msg.len()) as u16;
+                        let mut out = Vec::with_capacity(9 + msg.len());
+                        out.push(header::GC_CHAT);
+                        out.extend_from_slice(&size.to_le_bytes());
+                        out.push(chat_type);
+                        out.extend_from_slice(&(row.id as u32).to_le_bytes());
+                        out.push(empire);
+                        out.extend_from_slice(msg);
+                        conn.send(&out)
+                            .await
+                            .map_err(|e| format!("enviando GC_CHAT: {e}"))?;
+                        eprintln!(
+                            "server_realms: channel conn {conn_id}: chat de {} (type {}): {}",
+                            row.name,
+                            chat_type,
+                            String::from_utf8_lossy(msg)
+                        );
                         continue;
                     }
                     // TODO(F5 npcs): realm::npc::... para los NPCs/mobs
@@ -759,11 +840,15 @@ fn cstr(bytes: &[u8]) -> &str {
 
 /// NPC vivo del mundo del canal (F5.2): el estado del combate + el HP
 /// runtime. `state` es la vista inmutable que `handle_attack` consume.
+/// F5.3: `exp`/`gold_min`/`gold_max` = recompensas del mob (del `mob_proto`).
 struct LiveNpc {
     state: realm::combat::NpcState,
     vnum: i64,
     max_hp: i32,
     hp: i32,
+    exp: i64,
+    gold_min: i32,
+    gold_max: i32,
 }
 
 /// Contador global de VIDs de NPCs del canal: arranca en 10 000 (los PCs son

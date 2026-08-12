@@ -129,6 +129,9 @@ pub mod header {
     /// `HEADER_GC_DAMAGE_INFO` (server `packet.h:245`, cliente `Packet.h:274`
     /// — 10 B): el feedback visible del golpe (número de daño).
     pub const GC_DAMAGE_INFO: u8 = 135;
+    /// `HEADER_GC_CHAT` (cliente `Packet.h:148`; server `packet.h` — 9 B +
+    /// mensaje variable: `TPacketGCChat` header+size+type+dwVID+bEmpire).
+    pub const GC_CHAT: u8 = 4;
     /// LoginSuccess "new slot" = 0x20 (server `HEADER_GC_LOGIN_SUCCESS_NEWSLOT`,
     /// cliente `HEADER_GC_LOGIN_SUCCESS4`).
     pub const GC_LOGIN_SUCCESS_NEWSLOT: u8 = 32;

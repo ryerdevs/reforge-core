@@ -388,9 +388,86 @@ pub fn handle_attack(
     CombatResult { packets, damage }
 }
 
+// ---------------------------------------------------------------------------
+// F5.3: recompensa del kill (función pura — el canal solo la invoca)
+// ---------------------------------------------------------------------------
+
+/// Recompensa del kill de un mob (parity del reward del C++: exp del mob ×
+/// rate; gold = `number(gold_min, gold_max)` × rate — el sorteo del gold usa
+/// el mismo `number(min,max)` inclusive del C++, inyectado como `roll` para
+/// determinismo en tests).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KillReward {
+    pub exp_gain: i64,
+    pub gold_gain: i64,
+}
+
+/// `kill_reward` — recompensa pura del kill. El `roll` es el `number()`
+/// inclusive del C++: el canal pasa `&mut |lo, hi| lo + (rand32() % (hi - lo
+/// + 1))`; los tests uno fijo (determinismo).
+pub fn kill_reward(
+    mob_exp: i64,
+    gold_min: i32,
+    gold_max: i32,
+    exp_rate: u16,
+    gold_rate: u16,
+    roll: &mut dyn FnMut(i32, i32) -> i32,
+) -> KillReward {
+    let exp_gain = mob_exp.saturating_mul(i64::from(exp_rate)) / 100;
+    let span = gold_max.saturating_sub(gold_min).max(0);
+    // number(gold_min, gold_max) inclusive; min==max → el propio min.
+    let gold_roll = if span > 0 { gold_min + roll(0, span) } else { gold_min };
+    let gold_gain = i64::from(gold_roll).saturating_mul(i64::from(gold_rate)) / 100;
+    KillReward { exp_gain, gold_gain }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// kill_reward: rates 100 → exp del mob tal cual; gold = roll(min,max).
+    #[test]
+    fn reward_base_rates() {
+        let mut roll = |lo: i32, _hi: i32| lo; // el mínimo del rango
+        let r = kill_reward(22, 15, 45, 100, 100, &mut roll);
+        assert_eq!(r.exp_gain, 22);
+        assert_eq!(r.gold_gain, 15, "roll = min → gold_min");
+    }
+
+    /// Rates aplicados: exp_rate 150 → 22*1.5 = 33; gold_rate 200 → 30*2 = 60.
+    #[test]
+    fn reward_applies_rates() {
+        let mut roll = |_lo: i32, hi: i32| hi; // el máximo del rango
+        let r = kill_reward(22, 15, 45, 150, 200, &mut roll);
+        assert_eq!(r.exp_gain, 33, "22*150/100");
+        assert_eq!(r.gold_gain, 90, "45*200/100");
+    }
+
+    /// gold_min == gold_max (mob sin rango) → gold fijo sin roll.
+    #[test]
+    fn reward_fixed_gold() {
+        let mut roll = |_lo: i32, _hi: i32| panic!("no debe sortear");
+        let r = kill_reward(10, 40, 40, 100, 100, &mut roll);
+        assert_eq!(r.gold_gain, 40);
+    }
+
+    /// mob sin recompensa (exp 0, gold 0) → todo 0 (parity: el C++ no da
+    /// nada con exp/gold 0 del mob_proto).
+    #[test]
+    fn reward_zero_mob() {
+        let mut roll = |_lo: i32, _hi: i32| 999;
+        let r = kill_reward(0, 0, 0, 100, 100, &mut roll);
+        assert_eq!(r, KillReward { exp_gain: 0, gold_gain: 0 });
+    }
+
+    /// La fórmula EXACTA del wire (channel.rs usa este módulo — el test
+    /// fija el contrato que el canal verifica end-to-end).
+    #[test]
+    fn reward_matches_channel_contract() {
+        let mut roll = |lo: i32, hi: i32| lo + (hi - lo) / 2;
+        let r = kill_reward(22, 15, 45, 100, 100, &mut roll);
+        assert_eq!(r.gold_gain, 30, "mid(15,45) = 30");
+    }
 
     /// Atacante del harness E2E (channel.rs `dummy_row` — ninja: job 1
     /// ASSASSIN, lvl 5, st/dx/ht/iq = 30, sin arma) contra el mob 101 del

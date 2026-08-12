@@ -18,7 +18,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 use network::{read_exact_size, Connection};
-use protocol::locale::{decode_chunks, decode_payload, CgLocaleRequest, HEADER_GC_LOCALE};
+use protocol::locale::{decode_payload, CgLocaleRequest, HEADER_GC_LOCALE};
 use protocol::{phase, TPacketCGHandshake, TPacketGCPhase};
 use tokio::net::TcpStream;
 

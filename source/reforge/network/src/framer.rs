@@ -238,6 +238,25 @@ impl Framer {
             return Ok(None);
         }
         let hdr = self.buf[0];
+        // CG_CHAT (3): paquete de tamaño VARIABLE del C++ — el WORD LE en
+        // [1..3] es el tamaño TOTAL (header 4 B + mensaje; parity
+        // `Packet.h:534-539` TPacketCGChat + `input_main.cpp:641-655` donde
+        // `iExtraLen = pinfo->size - sizeof(TPacketCGChat)`). Fuera de la
+        // tabla fija (`packet_size` -> None) por diseño; se resuelve aquí.
+        if hdr == header::CG_CHAT && self.role == ConnectionRole::Channel {
+            if self.buf.len() < 4 {
+                return Ok(None); // aún no está el header completo
+            }
+            let total = u16::from_le_bytes([self.buf[1], self.buf[2]]) as usize;
+            if total < 4 {
+                // length inválido — parity PHASE_CLOSE del C++ (input_main.cpp:650-655).
+                return Err(FramingError::UnknownHeader { header: hdr });
+            }
+            if self.buf.len() < total {
+                return Ok(None);
+            }
+            return Ok(Some(self.buf.drain(..total).collect()));
+        }
         let Some((min, max)) = packet_range(self.role, hdr) else {
             return Err(FramingError::UnknownHeader { header: hdr });
         };
@@ -424,6 +443,61 @@ mod tests {
         assert!(matches!(
             f.push(&TPacketGCPhase::new(phase::AUTH).to_bytes()),
             Err(FramingError::UnknownHeader { header: 0xfd })
+        ));
+    }
+
+    /// CG_CHAT (3) — paquete de tamaño VARIABLE (F5.3): el WORD LE en [1..3]
+    /// es el tamaño TOTAL (header 4 B + mensaje; `Packet.h:534-539` +
+    /// `input_main.cpp:641-655`). El framer lo entrega completo, fragmentado o
+    /// concatenado; length < 4 -> cierre (parity PHASE_CLOSE).
+    #[test]
+    fn cg_chat_variable_size() {
+        // "hola" + NUL: length = 4 + 5 = 9 (parity `sizeof + iTextLen`).
+        let mut pkt = vec![header::CG_CHAT];
+        pkt.extend_from_slice(&9u16.to_le_bytes());
+        pkt.push(0); // CHAT_TYPE_TALKING
+        pkt.extend_from_slice(b"hola\0");
+        assert_eq!(pkt.len(), 9);
+
+        // completo en un push.
+        let mut f = Framer::new(ConnectionRole::Channel);
+        let out = f.push(&pkt).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0], pkt);
+        assert_eq!(f.buffered(), 0);
+
+        // fragmentado byte a byte -> completo solo al final.
+        let mut f = Framer::new(ConnectionRole::Channel);
+        for (i, b) in pkt.iter().enumerate() {
+            let out = f.push(&[*b]).unwrap();
+            if i + 1 < pkt.len() {
+                assert!(out.is_empty(), "emitido antes en byte {i}");
+            } else {
+                assert_eq!(out, vec![pkt.clone()]);
+            }
+        }
+
+        // dos chats concatenados en un solo read -> 2 paquetes.
+        let mut two = pkt.clone();
+        two.extend_from_slice(&pkt);
+        let mut f = Framer::new(ConnectionRole::Channel);
+        let out = f.push(&two).unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0], pkt);
+        assert_eq!(out[1], pkt);
+
+        // length inválido (< 4) -> cierre (parity PHASE_CLOSE).
+        let mut bad = vec![header::CG_CHAT];
+        bad.extend_from_slice(&2u16.to_le_bytes());
+        bad.push(0);
+        let mut f = Framer::new(ConnectionRole::Channel);
+        assert!(matches!(f.push(&bad), Err(FramingError::UnknownHeader { header: header::CG_CHAT })));
+
+        // el rol Auth NO lo acepta (flujo corto — tabla común).
+        let mut f = Framer::new(ConnectionRole::Auth);
+        assert!(matches!(
+            f.push(&pkt),
+            Err(FramingError::UnknownHeader { header: header::CG_CHAT })
         ));
     }
 
