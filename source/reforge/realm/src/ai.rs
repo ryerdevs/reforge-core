@@ -45,16 +45,29 @@ pub fn rotation_5deg(x: i32, y: i32, tx: i32, ty: i32) -> u8 {
     ((deg / 5.0).round() as u32 % 72) as u8
 }
 
-/// Daño del ATAQUE del mob (parity `number(damage_min, damage_max)` del
-/// C++ — el mob_proto define el rango; el `roll` es el `number()` inclusive
-/// inyectado por el canal, los tests uno fijo). El subset NO resta la DEF
-/// del jugador (pendiente: la fórmula completa del PC como víctima,
-/// `char.cpp:2113-2114`).
-pub fn attack_damage(damage_min: i32, damage_max: i32, roll: &mut dyn FnMut(i32, i32) -> i32) -> i32 {
-    if damage_max <= damage_min {
-        return damage_min;
+/// Daño del ATAQUE del mob contra el jugador (parity `battle_melee_attack` +
+/// `CalcBattleDamage` — battle.cpp:199-206): `iAtk = number(damage_min,
+/// damage_max)` (el daño del mob_proto ES su ataque), `iDef = DEF_GRADE del
+/// PC como víctima` (`char.cpp:2114` — `level + (int)(ht / 1.25)`, subset
+/// SIN armadura — el `iArmor` de items es pendiente),
+/// `iDam = MAX(0, iAtk - iDef)` y `if (iDam < 3) iDam = number(1, 5)` (el
+/// floor del C++ — un golpe bloqueado casi del todo pega 1..5 igual).
+pub fn attack_damage(
+    damage_min: i32,
+    damage_max: i32,
+    victim_def: i32,
+    roll: &mut dyn FnMut(i32, i32) -> i32,
+) -> i32 {
+    let atk = if damage_max <= damage_min {
+        damage_min
+    } else {
+        damage_min + roll(0, damage_max - damage_min)
+    };
+    let mut dam = (atk - victim_def).max(0);
+    if dam < 3 {
+        dam = roll(1, 5); // parity CalcBattleDamage (battle.cpp:199-206)
     }
-    damage_min + roll(0, damage_max - damage_min)
+    dam
 }
 
 /// PASO DE PATRULLAJE del mob idle (parity `UpdateState` IDLE —
@@ -146,18 +159,51 @@ mod tests {
         assert_eq!(rotation_5deg(0, 0, 0, 0), 0, "sin movimiento");
     }
 
-    /// Daño del ataque del mob: `number(damage_min, damage_max)` inclusive.
+    /// Daño del ataque del mob: `number(damage_min, damage_max)` − DEF de la
+    /// víctima, floor 1..5 si < 3 (parity battle.cpp:199-206).
     #[test]
     fn attack_damage_within_range() {
+        // DEF 0: el daño es `number(min,max)` (el sorteo del rango).
         let mut roll = |_lo: i32, _hi: i32| 0; // el mínimo del rango
-        assert_eq!(attack_damage(3, 8, &mut roll), 3);
-        let mut roll = |_lo: i32, hi: i32| hi; // el máximo
-        assert_eq!(attack_damage(3, 8, &mut roll), 8);
+        assert_eq!(attack_damage(3, 8, 0, &mut roll), 3);
+        let mut roll = |lo: i32, hi: i32| match (lo, hi) {
+            (0, 5) => 5,     // sorteo del rango (3..8 → +5 = 8)
+            (1, 5) => 1,     // floor (no aplica aquí)
+            _ => panic!("roll inesperado ({lo},{hi})"),
+        };
+        assert_eq!(attack_damage(3, 8, 0, &mut roll), 8);
         // Rango degenerado (min == max): daño fijo sin sorteo.
         let mut roll = |_lo: i32, _hi: i32| panic!("no debe sortear");
-        assert_eq!(attack_damage(5, 5, &mut roll), 5);
-        // min > max (dato corrupto): defensivo, devuelve el min.
-        assert_eq!(attack_damage(9, 4, &mut roll), 9);
+        assert_eq!(attack_damage(5, 5, 0, &mut roll), 5);
+        // min > max (dato corrupto): defensivo, usa el min.
+        assert_eq!(attack_damage(9, 4, 0, &mut roll), 9);
+    }
+
+    /// La DEF de la víctima se resta (MAX(0, atk − def)) y el floor del C++
+    /// pega 1..5 si el resultado es < 3 (parity CalcBattleDamage).
+    #[test]
+    fn attack_damage_subtracts_def_and_floors() {
+        // atk 3..8 − def 5 → 0..3; con sorteo 8 → 3 (≥ 3, sin floor).
+        let mut roll = |lo: i32, hi: i32| match (lo, hi) {
+            (0, 5) => 5, // sorteo del rango → atk 8
+            (1, 5) => panic!("no floor (dam 3)"),
+            _ => panic!("roll inesperado ({lo},{hi})"),
+        };
+        assert_eq!(attack_damage(3, 8, 5, &mut roll), 3, "8 − 5 = 3");
+        // atk 3 − def 5 → 0 → floor number(1,5) = 2.
+        let mut roll = |lo: i32, hi: i32| match (lo, hi) {
+            (0, 5) => 0, // sorteo → atk 3
+            (1, 5) => 2, // floor
+            _ => panic!("roll inesperado ({lo},{hi})"),
+        };
+        assert_eq!(attack_damage(3, 8, 5, &mut roll), 2, "MAX(0,3−5)=0 → floor 2");
+        // atk 4 − def 5 → 0 → floor 5.
+        let mut roll = |lo: i32, hi: i32| match (lo, hi) {
+            (0, 5) => 1, // sorteo → atk 4
+            (1, 5) => 5, // floor
+            _ => panic!("roll inesperado ({lo},{hi})"),
+        };
+        assert_eq!(attack_damage(3, 8, 5, &mut roll), 5, "floor number(1,5)");
     }
 
     /// Patrullaje: probabilidad 1/7 por tick (parity `!number(0, 6)`).
