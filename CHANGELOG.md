@@ -7,6 +7,19 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-12] (20th part) — F5.3 usar pociones del inventario (CG_ITEM_USE) + fix bug latente del framer
+
+> Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests, unit tests only).
+
+### Added — potion use (Rust, commit `e40c289`)
+
+- **Fix BUG LATENTE del framer**: `CG_ITEM_USE` estaba registrado como 16 B (el tamaño del GC S→C) pero el struct C→S real es `header + TItemPos` = **4 B** (`Packet.h:559-563` + `packet.h:618-622`) — usar un item del inventario habría desincronizado el stream. Corregido a 4 B + test actualizado.
+- **`protocol/src/world.rs`**: `TPacketCGItemUse` (4 B, header 11 — el uso de item C→S) + `TPacketGCItemDelDeprecated` (42 B packed, header 20 — el borrado de item del inventario; el cliente lo registra con `sizeof(TPacketGCItemDelDeprecated)`, PythonNetworkStream.cpp:71) + roundtrip tests; `header::GC_ITEM_DEL = 20` (lib.rs).
+- **`database/src/item.rs`**: `ItemRepo::load_proto_use_values(vnum)` — `player.item_proto.value0..4` (el efecto de uso del item).
+- **`CG_ITEM_USE` handler (channel)**: busca el item en el inventario por `(window INVENTORY, cell)` → carga los values del item_proto → aplica el efecto de la poción (parity `UseItemEx`, char_item.cpp:4172-4204): `value0` = HP flat, `value1` = SP flat, `value3` = HP % del máximo, `value4` = SP % del máximo (clamp a máximos; NO consume si HP/MP están llenos — parity `used`) → `GC_POINTS` (hp/mp) + `GC_ITEM_UPDATE` (38 B) si queda count o `GC_ITEM_DEL` deprecated (42 B) + `ItemRepo::delete` si se agota → upsert/delete + `save_character`.
+- **Verified**: `cargo test --workspace` green (excluding the pre-existing cold-start-flaky `f16_peer_smoke`), clippy no new warnings.
+- **Pending**: `GC_ITEM_USE` S→C (22, la animación de uso — el C++ la manda con `UsePacketEncode` item.cpp:188-198; omitida en el subset), demás subtypes de `ITEM_USE` (ability up, affects), `ITEM_FLAG_STACKABLE` from item_proto.
+
 ## [2026-08-12] (19th part) — F5.3 aggro proactivo + aggressive_sight data-driven
 
 > Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests, unit tests only).
