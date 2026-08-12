@@ -7,6 +7,18 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-12] (16th part) — F5.3 patrullaje de mobs idle (world alive)
+
+> Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests, unit tests only).
+
+### Added — mob idle patrol (Rust, commit `547733d`)
+
+- **`realm::ai::patrol_step`** (pure, parity `UpdateState` IDLE — `char_state.cpp:668-688`): probability 1/7 per tick (`!number(0, 6)`), random direction 0..359°, step 300-700 UNITS, destination CLAMPED to the spawn radius (the C++ doesn't clamp but the IDLE state keeps the mob near its spawn — documented; walkability pending, partial parity) + 4 tests (probability, radius clamp, border no-op, nearby target kept).
+- **`LiveNpc`** + `home_x/home_y` (spawn position) + `nomove` (`ai_flag` contains "NOMOVE" → parity `AIFLAG_NOMOVE`, the mob never patrols).
+- **AI tick patrol branch**: idle mobs (no aggro, no NOMOVE) VISIBLE to the player (≤ 2 500 units — the C++ only updates the player's sectree) walk toward the patrol target with their `move_speed`; max 20 `GC_MOVE` per tick (no flood — the map has 23k spawns).
+- **Verified**: `cargo test --workspace` green (excluding the pre-existing cold-start-flaky `f16_peer_smoke`), clippy no new warnings.
+- **Pending**: walkability (`IsMovablePosition`), `aggressive_sight` data-driven, player-DEF in mob damage (`char.cpp:2113-2114`), multicast.
+
 ## [2026-08-12] (15th part) — F5.3 warp a la ciudad (revive answer 1) + de-aggro por distancia
 
 > Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests, unit tests only).
