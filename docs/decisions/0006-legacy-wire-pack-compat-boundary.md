@@ -3,7 +3,7 @@ Type: Decision
 Status: Accepted
 Audience: Contributors, maintainers
 Date: 2026-08-10
-Last verified: 2026-08-10
+Last verified: 2026-08-12
 Supersedes: —
 Superseded by: —
 ---
@@ -20,7 +20,7 @@ The legacy client (v40999) is frozen as the wire contract during F0–F6 (ROADMA
 
 If these are implemented inline in `protocol`, the new wire core accumulates legacy quirks that the new client (F7) will have to strip out again — a hunt instead of a deletion.
 
-## Decision (proposed)
+## Decision (accepted)
 
 1. All legacy-client compatibility code lives behind a **`protocol::legacy` module/feature boundary**: PanamaPack 151/289B, hybrid-crypt 152/153 and any other legacy-only packets are implemented there, never in the new protocol core.
 2. The boundary is documented in `docs/reference/protocol/legacy-compatibility.md` (packet inventory, headers, deletion list).

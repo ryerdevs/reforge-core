@@ -2,7 +2,7 @@
 Type: Reference
 Status: Current
 Audience: Contributors
-Last verified: 2026-08-10
+Last verified: 2026-08-12
 ---
 
 # Wire Protocol — Login Flow (byte-exact contract of the Rust `protocol` crate)
@@ -24,7 +24,7 @@ Last verified: 2026-08-10
 | `SOCIAL_ID_MAX_LEN` | 18 | `[19]` |
 | `ACCOUNT_STATUS_MAX_LEN` | 8 | `[9]` |
 
-Build flags that change sizes: `ENABLE_ACCE_COSTUME_SYSTEM` (+4B in TSimplePlayer), `ENABLE_QUIVER_SYSTEM` (+dwArrow), `ENABLE_SEQUENCE_SYSTEM` OFF (no sequence byte), `USE_NO_PACKET_ENCRYPTION` ON (plaintext), `__LANGUAGE_SYSTEM__` (LOGIN3 at auth +3 bytes).
+Build flags that change sizes: `ENABLE_ACCE_COSTUME_SYSTEM` (+4B in TSimplePlayer), `ENABLE_QUIVER_SYSTEM` (+dwArrow), `ENABLE_SEQUENCE_SYSTEM` OFF (no sequence byte), `USE_NO_PACKET_ENCRYPTION` ON (plaintext), `__LANGUAGE_SYSTEM__` (LOGIN3 at auth +3 bytes). **F2b (2026-08-11):** the auth LOGIN3 is **88B** (68 + `dwVersion`[4] at 68..72 + `hwid`[16] at 72..88, `static_assert` 88 verified — client `UserInterface/Packet.h:479-493`); the channel LOGIN3 stays **65B** (`SendLoginPacket`/`SendLoginPacketNew` subtract the auth-only fields; verified end-to-end 2026-08-11).
 
 ## 2. Framing rules
 
@@ -32,7 +32,7 @@ Build flags that change sizes: `ENABLE_ACCE_COSTUME_SYSTEM` (+4B in TSimplePlaye
 - Client→server: table `CPacketInfoCG` (`packet_info.cpp:136-236`). Key entries (sequence OFF):
   - `0xff` Handshake = `sizeof(TPacketCGHandshake)` = 13
   - `0xfe` Pong = 1
-  - `1` Login = 49; `109` Login2 = 52; **`111` Login3 = `sizeof(TPacketCGLogin3) + (auth ? 3 : 0)` = 65 at the channel, 68 at auth** (`"es\0"` suffix)
+  - `1` Login = 49; `109` Login2 = 52; **`111` Login3 = `sizeof(TPacketCGLogin3) + (auth ? 3 : 0)` = 65 at the channel, 68 at auth — 88 at auth with F2b (2026-08-11: 68 + `dwVersion`[4] + `hwid`[16])** (`"es\0"` suffix)
   - `6` PlayerSelect = 2; `4` Create = 34; `5` Delete = 10; `0xfc` TimeSync = 13
   - Unknown header → `CPacketInfo::Get` false → connection closed (`input.cpp:77-84`). Variable-size packets return `iExtraLen` from `Analyze` (`input.cpp:96-101`).
 - Server→client: no table; the server sends `desc->Packet(&struct, sizeof(struct))` — raw structs.
@@ -46,7 +46,7 @@ Build flags that change sizes: `ENABLE_ACCE_COSTUME_SYSTEM` (+4B in TSimplePlaye
 | `TPacketCGHandshake` | 13 | `BYTE bHeader; DWORD dwHandshake; DWORD dwTime; long lDelta` |
 | `TPacketCGLogin` | 49 | `BYTE header; char login[31]; char passwd[17]` |
 | `TPacketCGLogin2` | 52 | `BYTE header; char login[31]; DWORD dwLoginKey; DWORD adwClientKey[4]` |
-| `TPacketCGLogin3` | 65/68 | `BYTE header; char login[31]; char passwd[17]; DWORD adwClientKey[4]` + at auth `char szLanguage[3]` |
+| `TPacketCGLogin3` | 65/68/**88** | `BYTE header; char login[31]; char passwd[17]; DWORD adwClientKey[4]` + at auth `char szLanguage[3]` (+ F2b: `DWORD dwVersion` + `char hwid[16]` → 88B, client `Packet.h:479-493`) |
 | `TPacketGCLoginKey` | 5 | `BYTE bHeader; DWORD dwLoginKey` |
 | `TPacketCGPlayerSelect` | 2 | `BYTE header; BYTE index` |
 | `TPacketCGPlayerDelete` | 10 | `BYTE header; BYTE index; char private_code[8]` |
