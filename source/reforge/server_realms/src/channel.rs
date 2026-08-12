@@ -854,6 +854,54 @@ async fn connection_inner(
                         );
                         continue;
                     }
+                    // F5.3: REVIVE del jugador — CG_SCRIPT_ANSWER (29, 2 B:
+                    // header + answer BYTE — Packet.h:679). El diálogo de
+                    // muerte del cliente manda la respuesta; el C++ revive
+                    // con `RestartAtSamePos` (cmd_general.cpp:534 — el mismo
+                    // punto: EncodeRemovePacket + EncodeInsertPacket,
+                    // char.cpp:838-873). El warp a la ciudad (answer 1 →
+                    // WarpSet EMPIRE_START) queda pendiente (documentado).
+                    header::CG_SCRIPT_ANSWER => {
+                        if row.hp <= 0 {
+                            let answer = pkt.get(1).copied().unwrap_or(0);
+                            // Restaurar hp/mp a los máximos del subset
+                            // (parity PointChange(POINT_HP, GetMaxHP()) —
+                            // el revive del C++ restaura antes de mostrar).
+                            let max = packets::compute_max_points(&row).unwrap_or([100, 100, 0]);
+                            row.hp = max[0];
+                            row.mp = max[1];
+                            // RestartAtSamePos: remove + insert del personaje
+                            // (el cliente reinicia la instancia en su sitio).
+                            let vid = row.id as u32;
+                            conn.send(&protocol::world::TPacketGCCharacterDelete::new(vid).to_bytes())
+                                .await
+                                .map_err(|e| format!("enviando GC_CHARACTER_DEL: {e}"))?;
+                            conn.send(&packets::character_add(&row).to_bytes().to_vec())
+                                .await
+                                .map_err(|e| format!("enviando GC_CHARACTER_ADD: {e}"))?;
+                            conn.send(&packets::character_additional_info(&row, empire).to_bytes().to_vec())
+                                .await
+                                .map_err(|e| format!("enviando GC_CHARACTER_ADDITIONAL_INFO: {e}"))?;
+                            // GC_POINTS con hp/mp restaurados + persistencia.
+                            conn.send(&packets::points_packet(&row, next_exp).to_bytes())
+                                .await
+                                .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
+                            store.save_character(&row);
+                            eprintln!(
+                                "server_realms: channel conn {conn_id}: {} REVIVIÓ (answer {answer}, \
+                                 hp {}/{}, mp {}/{})",
+                                row.name, row.hp, max[0], row.mp, max[1]
+                            );
+                        } else {
+                            // Sin muerte: el script answer del diálogo de
+                            // quests es F5.x — se ignora con log.
+                            eprintln!(
+                                "server_realms: channel conn {conn_id}: CG_SCRIPT_ANSWER sin muerte — \
+                                 ignorado (quests F5.x)"
+                            );
+                        }
+                        continue;
+                    }
                     // TODO(F5 npcs): realm::npc::... para los NPCs/mobs
                     other => {
                         eprintln!(
@@ -940,18 +988,32 @@ async fn connection_inner(
                             .await
                             .map_err(|e| format!("enviando GC_DAMAGE_INFO: {e}"))?;
                             // Daño al jugador + GC_POINTS (la barra) + save.
-                            // La MUERTE del PC (hp <= 0 → GC_DEAD + respawn)
-                            // es F5.x pendiente: el subset fija el floor en 1.
-                            row.hp = row.hp.saturating_sub(dmg).max(1);
+                            // La MUERTE del PC (hp <= 0): GC_DEAD + puntos a 0
+                            // (el cliente muestra la pantalla de muerte); el
+                            // revive lo dispara el CG_SCRIPT_ANSWER del
+                            // cliente (handler propio — RestartAtSamePos).
+                            row.hp = row.hp.saturating_sub(dmg);
+                            if row.hp <= 0 {
+                                row.hp = 0;
+                                conn.send(&protocol::world::TPacketGCDead::new(row.id as u32).to_bytes())
+                                    .await
+                                    .map_err(|e| format!("enviando GC_DEAD: {e}"))?;
+                                eprintln!(
+                                    "server_realms: channel conn {conn_id}: {} MURIÓ (mob vnum {} vid {}) — \
+                                     esperando revive (CG_SCRIPT_ANSWER)",
+                                    row.name, npc.vnum, vid
+                                );
+                            } else {
+                                eprintln!(
+                                    "server_realms: channel conn {conn_id}: mob vnum {} (vid {}) \
+                                     atacó a {} por {dmg} (hp {})",
+                                    npc.vnum, vid, row.name, row.hp
+                                );
+                            }
                             conn.send(&packets::points_packet(&row, next_exp).to_bytes())
                                 .await
                                 .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
                             store.save_character(&row);
-                            eprintln!(
-                                "server_realms: channel conn {conn_id}: mob vnum {} (vid {}) \
-                                 atacó a {} por {dmg} (hp {})",
-                                npc.vnum, vid, row.name, row.hp
-                            );
                             continue;
                         }
                         let (nx, ny) = realm::ai::step_toward(
@@ -1214,6 +1276,7 @@ impl Drop for ChannelLoginGuard {
             .remove(&self.login);
     }
 }
+
 
 #[cfg(test)]
 mod tests {
