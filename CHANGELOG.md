@@ -7,6 +7,18 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-12] (15th part) — F5.3 warp a la ciudad (revive answer 1) + de-aggro por distancia
+
+> Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests, unit tests only).
+
+### Added — city warp + de-aggro (Rust, commit `d687f77`)
+
+- **`protocol/src/world.rs`**: `TPacketGCWarp` (15 B, header 65 — `packet.h:1381-1388` + `Packet.h:199`: header + lX + lY + lAddr inet_addr LE + wPort) + roundtrip test; `header::GC_WARP = 65` (lib.rs).
+- **Revive en la ciudad (`CG_SCRIPT_ANSWER` answer == 1)**: hp/mp to subset maxima + save + `GC_WARP` (destino = `exit_x/y` del personaje o el village 969600/278400 del mapa 41; addr/port = el canal via `parse_listen` + `ip_to_inet_addr`). El cliente hace `__DirectEnterMode_Set` + `Connect(addr, port)` (`RecvWarpPacket`, PythonNetworkStreamPhaseGame.cpp:942-954) → reconecta con el flujo DirectEnter completo que el canal Rust ya sirve (F4). Answer 0 sigue `RestartAtSamePos`.
+- **De-aggro por distancia (AI tick)**: un mob hostil abandona la persecución si el jugador se aleja más de 5 000 units (50 m) — parity del C++ (el mob pierde el aggro fuera de su rango); el data-driven con `aggressive_sight` del mob_proto queda pendiente.
+- **Verified**: `cargo test --workspace` green (excluding the pre-existing cold-start-flaky `f16_peer_smoke`), clippy no new warnings.
+- **Pending**: `aggressive_sight` data-driven, player-DEF in mob damage (`char.cpp:2113-2114`), patrol/states (`ai_flag`), multicast.
+
 ## [2026-08-12] (14th part) — F5.3 PC death + revive (GC_DEAD + RestartAtSamePos)
 
 > Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests, unit tests only).
