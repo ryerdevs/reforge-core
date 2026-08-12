@@ -141,6 +141,9 @@ pub mod header {
     /// `HEADER_GC_ITEM_OWNERSHIP` (cliente `Packet.h:175`, server
     /// `packet.h` — 31): el dueño de un item del suelo.
     pub const GC_ITEM_OWNERSHIP: u8 = 31;
+    /// `HEADER_GC_WARP` (cliente `Packet.h:199`, server `packet.h:169` —
+    /// 65): el warp del jugador (revive en la ciudad / teletransporte).
+    pub const GC_WARP: u8 = 65;
     /// LoginSuccess "new slot" = 0x20 (server `HEADER_GC_LOGIN_SUCCESS_NEWSLOT`,
     /// cliente `HEADER_GC_LOGIN_SUCCESS4`).
     pub const GC_LOGIN_SUCCESS_NEWSLOT: u8 = 32;

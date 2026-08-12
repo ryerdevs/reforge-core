@@ -550,6 +550,57 @@ impl TPacketGCChannel {
     }
 }
 
+/// `TPacketGCWarp` (15 B, header 65 — `packet.h:1381-1388` + `Packet.h:199`):
+/// el warp del jugador (revive en la ciudad / teletransporte). El cliente al
+/// recibirlo hace `__DirectEnterMode_Set` + `Connect(lAddr, wPort)`
+/// (`RecvWarpPacket` — PythonNetworkStreamPhaseGame.cpp:942-954): cierra la
+/// conexión del canal y RECONECTA con el flujo DirectEnter completo (el
+/// canal Rust ya lo sirve — F4).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketGCWarp {
+    pub header: u8,
+    /// Destino en UNITS (el village del empire — `EMPIRE_START_*`).
+    pub x: i32,
+    pub y: i32,
+    /// `inet_addr` del canal destino (LE — el mismo formato del 449 B).
+    pub addr: u32,
+    pub port: u16,
+}
+
+impl TPacketGCWarp {
+    /// 1 + 4 + 4 + 4 + 2 = 15 (packed).
+    pub const SIZE: usize = 15;
+    pub const HEADER: u8 = 65;
+
+    pub fn new(x: i32, y: i32, addr: u32, port: u16) -> Self {
+        Self { header: Self::HEADER, x, y, addr, port }
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+        }
+        Ok(Self {
+            header: data[0],
+            x: i32::from_le_bytes([data[1], data[2], data[3], data[4]]),
+            y: i32::from_le_bytes([data[5], data[6], data[7], data[8]]),
+            addr: u32::from_le_bytes([data[9], data[10], data[11], data[12]]),
+            port: u16::from_le_bytes([data[13], data[14]]),
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        b[1..5].copy_from_slice(&self.x.to_le_bytes());
+        b[5..9].copy_from_slice(&self.y.to_le_bytes());
+        b[9..13].copy_from_slice(&self.addr.to_le_bytes());
+        b[13..15].copy_from_slice(&self.port.to_le_bytes());
+        b
+    }
+}
+
 /// `TPacketCGMarkLogin` (9 B, header 100 — `packet.h:1729-1734`): el login de
 /// la conexión del guild mark (el cliente la abre en paralelo al select con la
 /// misma IP/puerto del canal; `GuildMarkDownloader.cpp:213-229` — responde con
@@ -959,6 +1010,25 @@ mod tests {
     fn land_list_empty() {
         let bytes = land_list_bytes(&[]);
         assert_eq!(bytes, [130, 3, 0], "sin lands: header + size 3");
+    }
+
+    /// Warp wire (F5.3): `GC_WARP` (65) = 15 B packed — header + lX + lY +
+    /// lAddr (inet_addr LE) + wPort (`packet.h:1381-1388` + `Packet.h:199`).
+    #[test]
+    fn gc_warp_wire_size_and_parse() {
+        assert_eq!(TPacketGCWarp::SIZE, 15, "1+4+4+4+2 (packed)");
+        let w = TPacketGCWarp::new(969600, 278400, 0xC9A8_8019, 30003);
+        let b = w.to_bytes();
+        assert_eq!(b.len(), 15);
+        assert_eq!(b[0], 65, "header GC_WARP");
+        assert_eq!(&b[1..5], &969600i32.to_le_bytes(), "lX");
+        assert_eq!(&b[5..9], &278400i32.to_le_bytes(), "lY");
+        assert_eq!(&b[9..13], &0xC9A8_8019u32.to_le_bytes(), "lAddr inet_addr LE");
+        assert_eq!(&b[13..15], &30003u16.to_le_bytes(), "wPort");
+        assert_eq!(TPacketGCWarp::from_bytes(&b).unwrap(), w);
+        // Bad lengths → Err.
+        assert!(TPacketGCWarp::from_bytes(&b[..14]).is_err());
+        assert!(TPacketGCWarp::from_bytes(&[65, 0]).is_err());
     }
 
     /// Drop wire (F5.3): `GC_ITEM_GROUND_ADD` (26) = 58 B packed con
