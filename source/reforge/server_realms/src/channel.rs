@@ -51,8 +51,8 @@ use network::framer::{ConnectionRole, Framer};
 use network::handshake::HandshakeError;
 use network::{handshake, Connection};
 use protocol::world::{
-    TPacketGCChannel, TPacketGCItemGroundAdd, TPacketGCItemGroundDel, TPacketGCItemOwnership,
-    TPacketGCItemSet, TPacketGCTime, TItemPos,
+    TPacketCGItemUse, TPacketGCChannel, TPacketGCItemDelDeprecated, TPacketGCItemGroundAdd,
+    TPacketGCItemGroundDel, TPacketGCItemOwnership, TPacketGCItemSet, TPacketGCTime, TItemPos,
 };
 use protocol::{
     header, phase, TPacketCGLogin3, TPacketCGPlayerSelect, TPacketGCEmpire, TPacketGCLoginFailure,
@@ -915,6 +915,129 @@ async fn connection_inner(
                              → slot {slot} del inventario (id {id})",
                             row.name, gi.vnum, vid
                         );
+                        continue;
+                    }
+                    // F5.3: USO de items consumibles (pociones) — CG_ITEM_USE
+                    // (11, 4 B: header + TItemPos — Packet.h:559-563). Parity
+                    // `UseItemEx` → `UseItem` (char_item.cpp:1616+):
+                    // value0 = HP flat, value1 = SP flat, value3 = HP % del
+                    // máximo, value4 = SP % del máximo (del item_proto);
+                    // NO consume si no hay efecto aplicable (HP/MP llenos).
+                    // Al consumir: GC_POINTS (hp/mp) + count-1 → GC_ITEM_UPDATE
+                    // (38 B) si queda, GC_ITEM_DEL deprecated (42 B) si agota.
+                    header::CG_ITEM_USE => {
+                        let item_use = match TPacketCGItemUse::from_bytes(&pkt) {
+                            Ok(u) => u,
+                            Err(e) => {
+                                eprintln!(
+                                    "server_realms: channel conn {conn_id}: CG_ITEM_USE malformado: {e}"
+                                );
+                                continue;
+                            }
+                        };
+                        // Buscar el item en el inventario por (window, cell).
+                        let Some(idx) = inventory.iter().position(|i| {
+                            i.window == "INVENTORY" && i.pos as u16 == item_use.pos.cell
+                        }) else {
+                            eprintln!(
+                                "server_realms: channel conn {conn_id}: uso de celda {} sin item",
+                                item_use.pos.cell
+                            );
+                            continue;
+                        };
+                        let Some(values) = ItemRepo::new(&config.pg_conn)
+                            .load_proto_use_values(inventory[idx].vnum)
+                            .await?
+                        else {
+                            eprintln!(
+                                "server_realms: channel conn {conn_id}: item vnum {} sin fila en \
+                                 item_proto — uso ignorado",
+                                inventory[idx].vnum
+                            );
+                            continue;
+                        };
+                        let max = packets::compute_max_points(&row).unwrap_or([100, 100, 0]);
+                        let mut used = false;
+                        // value0: HP flat (char_item.cpp:4172-4180).
+                        if values[0] != 0 && row.hp < max[0] {
+                            row.hp = (row.hp + values[0]).min(max[0]);
+                            used = true;
+                        }
+                        // value1: SP flat (char_item.cpp:4182-4190).
+                        if values[1] != 0 && row.mp < max[1] {
+                            row.mp = (row.mp + values[1]).min(max[1]);
+                            used = true;
+                        }
+                        // value3: HP % del máximo (char_item.cpp:4192-4200).
+                        if values[3] != 0 && row.hp < max[0] {
+                            row.hp = (row.hp + values[3] * max[0] / 100).min(max[0]);
+                            used = true;
+                        }
+                        // value4: SP % del máximo (char_item.cpp:4202-4210).
+                        if values[4] != 0 && row.mp < max[1] {
+                            row.mp = (row.mp + values[4] * max[1] / 100).min(max[1]);
+                            used = true;
+                        }
+                        if !used {
+                            // Sin efecto aplicable (HP/MP llenos o sin values)
+                            // — no consume (parity: el C++ solo SetCount si
+                            // `used`).
+                            eprintln!(
+                                "server_realms: channel conn {conn_id}: item vnum {} sin efecto \
+                                 (HP/MP llenos)",
+                                inventory[idx].vnum
+                            );
+                            continue;
+                        }
+                        // GC_POINTS (hp/mp actualizados) + persistencia.
+                        conn.send(&packets::points_packet(&row, next_exp).to_bytes())
+                            .await
+                            .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
+                        store.save_character(&row);
+                        // Consumir 1 del stack (parity `item->SetCount(count-1)`).
+                        inventory[idx].count -= 1;
+                        if inventory[idx].count <= 0 {
+                            // Se agotó: GC_ITEM_DEL deprecated (42 B) + delete.
+                            let cell = TItemPos {
+                                window: TItemPos::WINDOW_INVENTORY,
+                                cell: inventory[idx].pos as u16,
+                            };
+                            let vnum = inventory[idx].vnum;
+                            let id = inventory[idx].id;
+                            conn.send(
+                                &TPacketGCItemDelDeprecated::new(cell, vnum as u32, 0).to_bytes(),
+                            )
+                            .await
+                            .map_err(|e| format!("enviando GC_ITEM_DEL: {e}"))?;
+                            ItemRepo::new(&config.pg_conn).delete(id).await?;
+                            inventory.remove(idx);
+                            eprintln!(
+                                "server_realms: channel conn {conn_id}: {} usó item vnum {vnum} \
+                                 (agotado — slot borrado)",
+                                row.name
+                            );
+                        } else {
+                            // GC_ITEM_UPDATE (38 B) con el count nuevo + upsert.
+                            let up = protocol::world::TPacketGCItemUpdate {
+                                header: protocol::world::TPacketGCItemUpdate::HEADER,
+                                cell: TItemPos {
+                                    window: TItemPos::WINDOW_INVENTORY,
+                                    cell: inventory[idx].pos as u16,
+                                },
+                                count: inventory[idx].count as u8,
+                                sockets: inventory[idx].sockets,
+                                attrs: inventory[idx].attrs,
+                            };
+                            conn.send(&up.to_bytes())
+                                .await
+                                .map_err(|e| format!("enviando GC_ITEM_UPDATE: {e}"))?;
+                            ItemRepo::new(&config.pg_conn).upsert(&inventory[idx], row.id).await?;
+                            eprintln!(
+                                "server_realms: channel conn {conn_id}: {} usó item vnum {} \
+                                 (count {})",
+                                row.name, inventory[idx].vnum, inventory[idx].count
+                            );
+                        }
                         continue;
                     }
                     // F5.3: REVIVE del jugador — CG_SCRIPT_ANSWER (29, 2 B:

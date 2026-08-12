@@ -145,6 +145,10 @@ pub mod header {
     /// `packet.h:137` — 25): el UPDATE de un item del inventario (cantidad
     /// al apilar — `AutoStackItem`).
     pub const GC_ITEM_UPDATE: u8 = 25;
+    /// `HEADER_GC_ITEM_DEL` (cliente `Packet.h:165`, server `packet.h:135` —
+    /// 20): el borrado de un item del inventario (el cliente lo registra con
+    /// `sizeof(TPacketGCItemDelDeprecated)` — 42 B, PythonNetworkStream.cpp:71).
+    pub const GC_ITEM_DEL: u8 = 20;
     /// `HEADER_GC_WARP` (cliente `Packet.h:199`, server `packet.h:169` —
     /// 65): el warp del jugador (revive en la ciudad / teletransporte).
     pub const GC_WARP: u8 = 65;
