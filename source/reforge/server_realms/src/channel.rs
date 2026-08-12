@@ -429,6 +429,12 @@ async fn connection_inner(
                         aggro: false,
                         damage_min: mob.damage_min,
                         damage_max: mob.damage_max,
+                        home_x: entry.x,
+                        home_y: entry.y,
+                        nomove: mob
+                            .ai_flag
+                            .as_deref()
+                            .is_some_and(|f| f.contains("NOMOVE")),
                     },
                 );
                 vid += 1;
@@ -1086,6 +1092,75 @@ async fn connection_inner(
                             .await
                             .map_err(|e| format!("enviando GC_MOVE: {e}"))?;
                     }
+                    // F5.3 (PATRULLAJE): los mobs IDLE (no aggro, no NOMOVE)
+                    // caminan cerca de su spawn — probabilidad 1/7 por tick y
+                    // destino aleatorio 300-700 units dentro del radio del
+                    // spawn (`realm::ai::patrol_step`, parity
+                    // char_state.cpp:668-688). Solo los VISIBLES para el
+                    // jugador (el C++ solo actualiza el sectree del PC) y con
+                    // límite de paquetes por tick (no floodear).
+                    const PATROL_RADIUS: i32 = 1_500; // units del spawn
+                    const PATROL_VIEW: i32 = 2_500; // units del jugador
+                    const PATROL_MAX_SENDS: usize = 20;
+                    let mut patrol_sent = 0usize;
+                    let patrol_vids: Vec<u32> = live_npcs
+                        .iter()
+                        .filter(|(_, n)| !n.aggro && !n.nomove)
+                        .filter(|(_, n)| {
+                            realm::combat::distance_approx(n.state.x - px, n.state.y - py)
+                                <= PATROL_VIEW
+                        })
+                        .map(|(vid, _)| *vid)
+                        .collect();
+                    for vid in patrol_vids {
+                        if patrol_sent >= PATROL_MAX_SENDS {
+                            break;
+                        }
+                        let Some(npc) = live_npcs.get_mut(&vid) else { continue };
+                        let mut roll = |lo: i32, hi: i32| {
+                            let span = (hi - lo + 1).max(1) as u32;
+                            lo + (rand32() % span) as i32
+                        };
+                        let Some((tx, ty)) = realm::ai::patrol_step(
+                            npc.state.x,
+                            npc.state.y,
+                            npc.home_x,
+                            npc.home_y,
+                            PATROL_RADIUS,
+                            &mut roll,
+                        ) else {
+                            continue;
+                        };
+                        let (nx, ny) = realm::ai::step_toward(
+                            npc.state.x,
+                            npc.state.y,
+                            tx,
+                            ty,
+                            npc.move_speed,
+                            AI_TICK_MS,
+                        );
+                        if (nx, ny) == (npc.state.x, npc.state.y) {
+                            continue;
+                        }
+                        let rot = realm::ai::rotation_5deg(npc.state.x, npc.state.y, nx, ny);
+                        npc.state.x = nx;
+                        npc.state.y = ny;
+                        let mv = protocol::movement::TPacketGCMove {
+                            header: protocol::movement::TPacketGCMove::HEADER,
+                            b_func: protocol::movement::TPacketGCMove::FUNC_MOVE,
+                            b_arg: 0,
+                            b_rot: rot,
+                            vid,
+                            x: nx,
+                            y: ny,
+                            dw_time: now32(),
+                            dw_duration: AI_TICK_MS as u32,
+                        };
+                        conn.send(&mv.to_bytes())
+                            .await
+                            .map_err(|e| format!("enviando GC_MOVE (patrulla): {e}"))?;
+                        patrol_sent += 1;
+                    }
                 }
             }
         }
@@ -1232,6 +1307,13 @@ struct LiveNpc {
     /// `damage_min`/`damage_max` del mob_proto — el daño del ataque del mob.
     damage_min: i32,
     damage_max: i32,
+    /// Posición del SPAWN (home) — el patrullaje (F5.3) clampa el destino
+    /// al radio del spawn (parity del estado IDLE del C++).
+    home_x: i32,
+    home_y: i32,
+    /// `ai_flag` del mob_proto: "NOMOVE" → el mob NO patrulla (parity
+    /// `AIFLAG_NOMOVE` — char_state.cpp:668).
+    nomove: bool,
 }
 
 /// Item EN EL SUELO del mundo del canal (F5.3): el estado que el pickup
