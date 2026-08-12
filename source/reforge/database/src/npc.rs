@@ -95,6 +95,12 @@ pub struct MobRow {
     pub damage_min: i32,
     /// `damage_max` (smallint) — el daño máximo del ataque del mob.
     pub damage_max: i32,
+    // ---- F5.3 (NPC AI): el aggro proactivo. ----
+    /// `aggressive_sight` (smallint — `wAggressiveSight` del C++) — el rango
+    /// (UNITS) en el que un mob AGRESIVO detecta al jugador y lo ataca por
+    /// iniciativa propia (`FindVictim(wAggressiveSight)`, char_state.cpp:893);
+    /// 0 = nunca ataca proactivamente. También es el rango de de-aggro.
+    pub aggressive_sight: i32,
 }
 
 /// Load del subset por vnum (`SELECT ... FROM player.mob_proto WHERE vnum = $1`).
@@ -102,7 +108,7 @@ pub struct MobRow {
 const LOAD_SQL: &str = "\
 SELECT vnum, name, locale_name, type, battle_type, level, size, ai_flag, folder, \
 ht, def, max_hp, attack_range, exp, gold_min, gold_max, drop_item, move_speed, \
-damage_min, damage_max \
+damage_min, damage_max, aggressive_sight \
 FROM player.mob_proto WHERE vnum = $1";
 
 /// Load por LOTE de vnums (la misma SELECT, `WHERE vnum = ANY($1::int8[])` —
@@ -111,7 +117,7 @@ FROM player.mob_proto WHERE vnum = $1";
 const LOAD_BATCH_SQL: &str = "\
 SELECT vnum, name, locale_name, type, battle_type, level, size, ai_flag, folder, \
 ht, def, max_hp, attack_range, exp, gold_min, gold_max, drop_item, move_speed, \
-damage_min, damage_max \
+damage_min, damage_max, aggressive_sight \
 FROM player.mob_proto WHERE vnum = ANY($1::int8[])";
 
 /// Repositorio del dominio world (mob_proto). Conexion por llamada (ADR-0008).
@@ -189,6 +195,7 @@ fn mob_row_from_row(r: &Row) -> Result<MobRow, String> {
         move_speed: r.try_get(17).map_err(|e| format!("mob_proto.move_speed: {e}"))?,
         damage_min: r.try_get(18).map_err(|e| format!("mob_proto.damage_min: {e}"))?,
         damage_max: r.try_get(19).map_err(|e| format!("mob_proto.damage_max: {e}"))?,
+        aggressive_sight: r.try_get(20).map_err(|e| format!("mob_proto.aggressive_sight: {e}"))?,
     })
 }
 
@@ -207,7 +214,7 @@ mod tests {
     /// `mob_row_from_row` y el orden del wire se desalinean — el test lo fija).
     /// F5.2: el combate añadió las columnas `ht, def, max_hp, attack_range`.
     /// F5.3: las recompensas añadieron `exp, gold_min, gold_max` y `drop_item`;
-    /// el AI añadió `move_speed` y `damage_min/damage_max`.
+    /// el AI añadió `move_speed`, `damage_min/damage_max` y `aggressive_sight`.
     /// La query batch comparte el MISMO orden (mismo mapeo).
     #[test]
     fn load_sql_column_order() {
@@ -215,14 +222,14 @@ mod tests {
             LOAD_SQL,
             "SELECT vnum, name, locale_name, type, battle_type, level, size, ai_flag, folder, \
 ht, def, max_hp, attack_range, exp, gold_min, gold_max, drop_item, move_speed, \
-damage_min, damage_max \
+damage_min, damage_max, aggressive_sight \
 FROM player.mob_proto WHERE vnum = $1"
         );
         assert_eq!(
             LOAD_BATCH_SQL,
             "SELECT vnum, name, locale_name, type, battle_type, level, size, ai_flag, folder, \
 ht, def, max_hp, attack_range, exp, gold_min, gold_max, drop_item, move_speed, \
-damage_min, damage_max \
+damage_min, damage_max, aggressive_sight \
 FROM player.mob_proto WHERE vnum = ANY($1::int8[])"
         );
     }

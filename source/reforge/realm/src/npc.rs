@@ -830,6 +830,8 @@ mod tests {
             // F5.3: daño del ataque del mob 101 (mob_proto.damage_min/max).
             damage_min: 3,
             damage_max: 8,
+            // F5.3: aggro proactivo del mob 101 (mob_proto.aggressive_sight).
+            aggressive_sight: 400,
         }
     }
 

@@ -435,6 +435,8 @@ async fn connection_inner(
                             .ai_flag
                             .as_deref()
                             .is_some_and(|f| f.contains("NOMOVE")),
+                        aggressive_sight: mob.aggressive_sight,
+                        aggressive: realm::ai::is_aggressive(mob.ai_flag.as_deref()),
                     },
                 );
                 vid += 1;
@@ -1033,18 +1035,20 @@ async fn connection_inner(
                             npc.state.x - px,
                             npc.state.y - py,
                         );
-                        // F5.3 (de-aggro por distancia): si el jugador se
-                        // aleja del mob hostil más allá del umbral, el mob
-                        // pierde el aggro y deja de perseguir (parity del
-                        // C++: el mob abandona la persecución fuera de su
-                        // rango — el data-driven con `aggressive_sight` del
-                        // mob_proto queda pendiente; umbral fijo 50 m).
-                        const DE_AGGRO_DISTANCE: i32 = 5_000;
-                        if dist > DE_AGGRO_DISTANCE {
+                        // F5.3 (de-aggro por distancia, DATA-DRIVEN): si el
+                        // jugador se aleja del mob hostil más allá de su
+                        // `aggressive_sight`, el mob pierde el aggro y deja
+                        // de perseguir (parity del C++: el mob abandona la
+                        // persecución fuera de su rango — FindVictim usa el
+                        // `wAggressiveSight`). Floor 2000 units: un mob con
+                        // sight 0 (nunca proactivo) pero GOLPEADO por el
+                        // jugador sigue persiguiendo un mínimo.
+                        let de_aggro = npc.aggressive_sight.max(2_000);
+                        if dist > de_aggro {
                             npc.aggro = false;
                             eprintln!(
                                 "server_realms: channel conn {conn_id}: mob vnum {} (vid {}) — \
-                                 perdió el aggro (dist {dist} > {DE_AGGRO_DISTANCE})",
+                                 perdió el aggro (dist {dist} > {de_aggro})",
                                 npc.vnum, vid
                             );
                             continue;
@@ -1149,6 +1153,30 @@ async fn connection_inner(
                         conn.send(&mv.to_bytes())
                             .await
                             .map_err(|e| format!("enviando GC_MOVE: {e}"))?;
+                    }
+                    // F5.3 (AGGRO PROACTIVO): un mob `AGGR` (parity
+                    // AIFLAG_AGGRESSIVE) detecta al jugador dentro de su
+                    // `aggressive_sight` y empieza a perseguirlo por
+                    // iniciativa propia (parity `FindVictim(wAggressiveSight)`
+                    // — char_state.cpp:893). Sight 0 = nunca proactivo.
+                    let proactive: Vec<u32> = live_npcs
+                        .iter()
+                        .filter(|(_, n)| !n.aggro && n.aggressive && n.aggressive_sight > 0)
+                        .filter(|(_, n)| {
+                            realm::combat::distance_approx(n.state.x - px, n.state.y - py)
+                                <= n.aggressive_sight
+                        })
+                        .map(|(vid, _)| *vid)
+                        .collect();
+                    for vid in proactive {
+                        if let Some(npc) = live_npcs.get_mut(&vid) {
+                            npc.aggro = true;
+                            eprintln!(
+                                "server_realms: channel conn {conn_id}: mob vnum {} (vid {}) — \
+                                 detectó al jugador (aggressive_sight {}) — AGGRO proactivo",
+                                npc.vnum, vid, npc.aggressive_sight
+                            );
+                        }
                     }
                     // F5.3 (PATRULLAJE): los mobs IDLE (no aggro, no NOMOVE)
                     // caminan cerca de su spawn — probabilidad 1/7 por tick y
@@ -1372,6 +1400,13 @@ struct LiveNpc {
     /// `ai_flag` del mob_proto: "NOMOVE" → el mob NO patrulla (parity
     /// `AIFLAG_NOMOVE` — char_state.cpp:668).
     nomove: bool,
+    /// `aggressive_sight` del mob_proto (UNITS) — el rango del aggro
+    /// PROACTIVO (`FindVictim(wAggressiveSight)`, char_state.cpp:893) y del
+    /// de-aggro por distancia.
+    aggressive_sight: i32,
+    /// `ai_flag` "AGGR" → el mob ataca al jugador que entra en su rango
+    /// (parity `AIFLAG_AGGRESSIVE`, char_state.cpp:224-226).
+    aggressive: bool,
 }
 
 /// Item EN EL SUELO del mundo del canal (F5.3): el estado que el pickup
