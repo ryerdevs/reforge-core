@@ -7,6 +7,26 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-12] (11th part) — F3 phase 2: WAL local a disco + replay (ADR-0008)
+
+> Implemented directly by the orchestrator (no delegation — user directive). Follows the 8-point review spec of fix-3 (baseline gate: 25/25 gated PG tests passed 2026-08-11; no gated tests run this session, unit tests only).
+
+### Added — durable-first WAL (`source/reforge/database/src/wal.rs`, commit `13d928e`)
+
+- **`WalSink<S: MutationSink>`** (envelope durable-first): persists the batch to `{wal_dir}/{uuidv7}.wal` (JSONL, one `payload_json` per line, `sync_all`) BEFORE touching PG; deletes the file ONLY post-COMMIT; on error the file STAYS on disk for the next-boot replay. The batcher error path now has a real recovery promise (was "the WAL will re-apply" with no WAL).
+- **`replay_wal(dir, pg_conn)`**: pure function — re-applies each `*.wal` (sorted by uuidv7 = chronological) as ONE batch (one tx + audit via `PgMutationSink`) and deletes the file post-commit. Returns how many files were re-applied. Invocable from tests; wired once per process in production.
+- **`parse_payload_json`**: inverse parser of the closed payload format (no serde — std only): strings with `\"`/`\\` escapes, UTF-8 pass-through, `\xHEX` → `Param::Bytes`, numbers → `Param::Int`, `null` → `Param::Null`; unknown keys are skipped (forward-compatible). `Param::Bytes` Display now emits `\\x` (escaped — valid JSON; was raw `\x` which the parser rejected).
+- **Idempotency audit documented** in the module (fix-3 point 2): the 5 wired paths are idempotent in result (player UPDATE by PK — `last_play=NOW()` re-written, harmless; item/quest/affect `ON CONFLICT`; item_award UPDATE); the 2 plain-INSERT paths (`safebox.set_size` size==1, `messenger.add`) are NOT wired and documented as pending (replay would violate PK).
+- **Concurrency** (fix-3 point 1): `replay_wal` runs ONCE per process via `OnceLock` in `WorldStore` (multiple `WorldStore` per login connection — concurrent replays against live appenders would corrupt).
+- **`realm/src/world.rs`**: `WorldStore::new` + `with_audit_table` rebuild the SAME WAL→Batcher→PG wiring (fix-3 point 4 — the WAL is never silently disabled in tests); wal dir = env `REALM_WAL_DIR` or `./wal` (documented dual-CWD caveat, fix-3 point 6).
+- **Tests (unit, no PG)**: payload round-trip with all param types (Text with quotes/backslash/UTF-8, negative Int, non-ASCII Bytes, Null), empty params, `persist_batch` writes a parseable JSONL file (cleanup always), WalSink keeps the file on error and removes post-commit (two isolated scenarios), bad-uuid rejection. database 48/48, workspace green, clippy no new warnings.
+
+### Pending
+
+- Gated PG test for `replay_wal` against the real PG (pattern `e2e_wal_*` + `DATABASE_TEST_PG` + cleanup always) — written in the spec but NOT run this session (user directive: no gated tests); the existing `wal_pg.rs` gated suite (2 tests) still passes as baseline.
+- Pre-existing clippy in `wal.rs` (`enclosing Ok + ?` / `async fn syntax` in `MutationSink::apply`) — left as-is (improvement, not requirement per fix-3 point 7).
+- `social`/`economy`/`log` repos: stubs remain (fix-3 point 8 — zero usage in login/select/enter; documented as the correct answer).
+
 ## [2026-08-12] (10th part) — F5.3 item drops on kill + pickup (direct implementation)
 
 > Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests were run, unit tests only).
