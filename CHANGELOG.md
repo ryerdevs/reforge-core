@@ -7,6 +7,23 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-12] (21st part) — F5.3 CG_ITEM_MOVE — mover/stack/split de items del inventario
+
+> Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests, unit tests only).
+
+### Added — inventory item move (Rust, commit `c1f5407`)
+
+- **`protocol/src/world.rs`**: `TPacketCGItemMove` (8 B, header 13 — `Packet.h:593-599`: header + TItemPos origen + TItemPos destino + BYTE num) + roundtrip test (incl. num 0 = todo el stack). El framer ya lo conocía como 8 B.
+- **`CG_ITEM_MOVE` handler (channel)**: parity `MoveItem` (`char_item.cpp:5609-5767`):
+  - misma posición / sin item en la celda / `num > count` → ignorado (parity `@fixme196`, `GetItem`, `GetCount < count`).
+  - destino ocupado con MISMO vnum + sockets iguales → **STACK** (límite 200, `GC_ITEM_UPDATE` en ambos; `GC_ITEM_DEL` deprecated + delete PG si el origen se agota).
+  - destino vacío + `0 < num < count` → **SPLIT** (`GC_ITEM_UPDATE` origen + `GC_ITEM_SET` destino con id del rango `ITEM_ID_RANGE` + upsert).
+  - destino vacío → **MOVEr todo** (`GC_ITEM_DEL` deprecated origen + `GC_ITEM_SET` destino + upsert).
+  - fuera del subset (documentado): equipar (`EQUIPMENT`), belt, dragon-soul.
+- **`ITEM_COUNT_LIMIT`** movido a nivel de módulo (lo comparten pickup/move/use).
+- **Verified**: `cargo test --workspace` green (excluding the pre-existing cold-start-flaky `f16_peer_smoke`), clippy no new warnings.
+- **Pending**: equip (`EquipItem` — window EQUIPMENT + parts en el ADDITIONAL_INFO), belt, dragon-soul, walkability.
+
 ## [2026-08-12] (20th part) — F5.3 usar pociones del inventario (CG_ITEM_USE) + fix bug latente del framer
 
 > Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests, unit tests only).
