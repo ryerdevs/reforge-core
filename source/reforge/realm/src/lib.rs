@@ -15,7 +15,10 @@
 //! - `combat` — F5.2: el core del combate (server-authoritative) — la fórmula
 //!   base del C++ (`battle.cpp`/`char.cpp`), cooldown y rango; expuesto como
 //!   `handle_attack(...)` para el dispatch del canal (CG_ATTACK).
+//! - `ai` — F5.3: la AI mínima de los mobs (paso de movimiento hacia el
+//!   jugador + rotación) — funciones puras que el canal usa en su tick.
 
+pub mod ai;
 pub mod movement;
 pub mod packets;
 pub mod world;
