@@ -863,7 +863,7 @@ async fn connection_inner(
                             .filter(|i| i.window == "INVENTORY")
                             .map(|i| i.pos as u16)
                             .collect();
-                        let Some(slot) = (0u16..90).find(|c| !occupied.contains(c)) else {
+                        let Some(slot) = (0u16..INVENTORY_MAX_NUM).find(|c| !occupied.contains(c)) else {
                             eprintln!(
                                 "server_realms: channel conn {conn_id}: inventario lleno — \
                                  el item {vid} queda en el suelo"
@@ -1056,14 +1056,21 @@ async fn connection_inner(
                                 continue;
                             }
                         };
-                        // Subset: solo INVENTORY→INVENTORY (el window wire de
-                        // INVENTORY = 1; equipar/belt/DS pendiente).
-                        if mv.pos.window != TItemPos::WINDOW_INVENTORY
-                            || mv.change_pos.window != TItemPos::WINDOW_INVENTORY
+                        // Subset de windows: INVENTORY→INVENTORY (mover/stack/
+                        // split), INVENTORY→EQUIPMENT (equipar — parity
+                        // `EquipItem` char_item.cpp:6128; wire: el cell del
+                        // EQUIPMENT = INVENTORY_MAX_NUM + wear, length.h:827)
+                        // y EQUIPMENT→INVENTORY (desequipar). Belt/DS fuera.
+                        let equipping = mv.change_pos.window == TItemPos::WINDOW_EQUIPMENT;
+                        let unequipping = mv.pos.window == TItemPos::WINDOW_EQUIPMENT;
+                        let inv_to_inv = mv.pos.window == TItemPos::WINDOW_INVENTORY
+                            && mv.change_pos.window == TItemPos::WINDOW_INVENTORY;
+                        if !(inv_to_inv || (equipping && mv.pos.window == TItemPos::WINDOW_INVENTORY)
+                            || (unequipping && mv.change_pos.window == TItemPos::WINDOW_INVENTORY))
                         {
                             eprintln!(
                                 "server_realms: channel conn {conn_id}: CG_ITEM_MOVE fuera del \
-                                 subset (windows {}→{}) — equipar/belt/DS pendiente",
+                                 subset (windows {}→{}) — belt/DS pendiente",
                                 mv.pos.window, mv.change_pos.window
                             );
                             continue;
@@ -1071,8 +1078,9 @@ async fn connection_inner(
                         if mv.pos.cell == mv.change_pos.cell {
                             continue; // @fixme196 — misma posición
                         }
+                        let src_win = if unequipping { "EQUIPMENT" } else { "INVENTORY" };
                         let src = inventory.iter().position(|i| {
-                            i.window == "INVENTORY" && i.pos as u16 == mv.pos.cell
+                            i.window == src_win && i.pos as u16 == mv.pos.cell
                         });
                         let Some(src) = src else {
                             eprintln!(
@@ -1084,6 +1092,160 @@ async fn connection_inner(
                         let want = i64::from(mv.num);
                         if want > inventory[src].count {
                             continue; // parity: item->GetCount() < count → false
+                        }
+                        // EQUIPAR (INVENTORY→EQUIPMENT): el cell destino =
+                        // INVENTORY_MAX_NUM + wear; slot vacío obligatorio
+                        // (parity `GetItem(DestCell)` → false,
+                        // char_item.cpp:5675-5680); `num` debe ser 0 (todo
+                        // el stack — el split al equipar es pendiente).
+                        if equipping {
+                            let Some(wear) = mv.change_pos.cell.checked_sub(INVENTORY_MAX_NUM)
+                            else {
+                                eprintln!(
+                                    "server_realms: channel conn {conn_id}: equip a cell {} \
+                                     fuera del rango (debe ser INVENTORY_MAX_NUM + wear)",
+                                    mv.change_pos.cell
+                                );
+                                continue;
+                            };
+                            if wear >= WEAR_MAX_NUM {
+                                eprintln!(
+                                    "server_realms: channel conn {conn_id}: equip a wear {} \
+                                     fuera del rango (WEAR_MAX_NUM {})",
+                                    wear, WEAR_MAX_NUM
+                                );
+                                continue;
+                            }
+                            if mv.num != 0 {
+                                eprintln!(
+                                    "server_realms: channel conn {conn_id}: split al equipar — \
+                                     pendiente (num {})",
+                                    mv.num
+                                );
+                                continue;
+                            }
+                            if inventory
+                                .iter()
+                                .any(|i| i.window == "EQUIPMENT" && i.pos as u16 == mv.change_pos.cell)
+                            {
+                                eprintln!(
+                                    "server_realms: channel conn {conn_id}: slot de equip {} \
+                                     ocupado — rechazado (parity EquipItem)",
+                                    mv.change_pos.cell
+                                );
+                                continue;
+                            }
+                            // Mover el item: window INVENTORY → EQUIPMENT.
+                            let vnum = inventory[src].vnum;
+                            let cell = TItemPos {
+                                window: TItemPos::WINDOW_INVENTORY,
+                                cell: mv.pos.cell,
+                            };
+                            conn.send(
+                                &TPacketGCItemDelDeprecated::new(
+                                    cell,
+                                    vnum as u32,
+                                    inventory[src].count as u8,
+                                )
+                                .to_bytes(),
+                            )
+                            .await
+                            .map_err(|e| format!("enviando GC_ITEM_DEL: {e}"))?;
+                            inventory[src].window = "EQUIPMENT".to_string();
+                            inventory[src].pos = mv.change_pos.cell as i32;
+                            let set = TPacketGCItemSet {
+                                header: TPacketGCItemSet::HEADER,
+                                cell: TItemPos {
+                                    window: TItemPos::WINDOW_EQUIPMENT,
+                                    cell: mv.change_pos.cell,
+                                },
+                                vnum: inventory[src].vnum as u32,
+                                count: inventory[src].count as u8,
+                                flags: 0,
+                                anti_flags: 0,
+                                highlight: 0,
+                                sockets: inventory[src].sockets,
+                                attrs: inventory[src].attrs,
+                            };
+                            conn.send(&set.to_bytes())
+                                .await
+                                .map_err(|e| format!("enviando GC_ITEM_SET (equip): {e}"))?;
+                            ItemRepo::new(&config.pg_conn)
+                                .upsert(&inventory[src], row.id)
+                                .await?;
+                            // El ADDITIONAL_INFO (parts) se reenvía — los
+                            // parts de los items equipados son pendiente
+                            // (ComputeParts con items; hoy solo los del row).
+                            conn.send(&packets::character_additional_info(&row, empire).to_bytes().to_vec())
+                                .await
+                                .map_err(|e| format!("enviando GC_CHARACTER_ADDITIONAL_INFO: {e}"))?;
+                            eprintln!(
+                                "server_realms: channel conn {conn_id}: {} EQUIPÓ item vnum {vnum} \
+                                 (wear {wear}, cell {})",
+                                row.name, mv.change_pos.cell
+                            );
+                            continue;
+                        }
+                        // DESEQUIPAR (EQUIPMENT→INVENTORY): el destino
+                        // INVENTORY debe estar vacío.
+                        if unequipping {
+                            if inventory
+                                .iter()
+                                .any(|i| i.window == "INVENTORY" && i.pos as u16 == mv.change_pos.cell)
+                            {
+                                eprintln!(
+                                    "server_realms: channel conn {conn_id}: celda {} ocupada — \
+                                     desequipar rechazado",
+                                    mv.change_pos.cell
+                                );
+                                continue;
+                            }
+                            let vnum = inventory[src].vnum;
+                            let cell = TItemPos {
+                                window: TItemPos::WINDOW_EQUIPMENT,
+                                cell: mv.pos.cell,
+                            };
+                            conn.send(
+                                &TPacketGCItemDelDeprecated::new(
+                                    cell,
+                                    vnum as u32,
+                                    inventory[src].count as u8,
+                                )
+                                .to_bytes(),
+                            )
+                            .await
+                            .map_err(|e| format!("enviando GC_ITEM_DEL: {e}"))?;
+                            inventory[src].window = "INVENTORY".to_string();
+                            inventory[src].pos = mv.change_pos.cell as i32;
+                            let set = TPacketGCItemSet {
+                                header: TPacketGCItemSet::HEADER,
+                                cell: TItemPos {
+                                    window: TItemPos::WINDOW_INVENTORY,
+                                    cell: mv.change_pos.cell,
+                                },
+                                vnum: inventory[src].vnum as u32,
+                                count: inventory[src].count as u8,
+                                flags: 0,
+                                anti_flags: 0,
+                                highlight: 0,
+                                sockets: inventory[src].sockets,
+                                attrs: inventory[src].attrs,
+                            };
+                            conn.send(&set.to_bytes())
+                                .await
+                                .map_err(|e| format!("enviando GC_ITEM_SET (desequip): {e}"))?;
+                            ItemRepo::new(&config.pg_conn)
+                                .upsert(&inventory[src], row.id)
+                                .await?;
+                            conn.send(&packets::character_additional_info(&row, empire).to_bytes().to_vec())
+                                .await
+                                .map_err(|e| format!("enviando GC_CHARACTER_ADDITIONAL_INFO: {e}"))?;
+                            eprintln!(
+                                "server_realms: channel conn {conn_id}: {} DESEQUIPÓ item vnum {vnum} \
+                                 → celda {}",
+                                row.name, mv.change_pos.cell
+                            );
+                            continue;
                         }
                         // Destino ocupado: stack si mismo vnum + sockets
                         // iguales + count < límite (char_item.cpp:5709-5727);
@@ -1788,6 +1950,14 @@ struct LiveGroundItem {
 /// Límite del stack de items (`g_bItemCountLimit` — config.cpp:39): usado
 /// por el pickup (stacking), el move y el uso de items.
 const ITEM_COUNT_LIMIT: i64 = 200;
+
+/// `INVENTORY_MAX_NUM` del runtime (length.h:29 con `ENABLE_EXTEND_INVEN_SYSTEM`
+/// activo — CommonDefines.h:32): 5×9×4 = 180 celdas. El wire del equip usa
+/// `cell = INVENTORY_MAX_NUM + wear` (length.h:827 — `IsEquipPosition`).
+const INVENTORY_MAX_NUM: u16 = 180;
+
+/// `WEAR_MAX_NUM = 32` (length.h:77) — los slots de equipamiento.
+const WEAR_MAX_NUM: u16 = 32;
 
 /// Contador global de VIDs de items del suelo del canal: arranca en
 /// 50 000 (los PCs son ids bajos 1..5 y los NPCs 10 000+ — sin colisión).
