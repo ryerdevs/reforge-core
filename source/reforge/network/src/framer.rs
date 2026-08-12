@@ -83,6 +83,7 @@ pub fn packet_size(role: ConnectionRole, header: u8) -> Option<usize> {
         header::CG_MARK_LOGIN => protocol::world::TPacketCGMarkLogin::SIZE, // 100, 9 (packet_info.cpp:141)
         header::CG_CLIENT_VERSION2 => 67, // 0xf1, TPacketCGClientVersion2 = 1 + 33 + 33 (Packet.h:974-979)
         header::CG_STATE_CHECKER => 1, // 206, sizeof(BYTE) — ping selector de canales (packet_info.cpp:232)
+        header::CG_LOCALE_REQUEST => protocol::locale::CgLocaleRequest::SIZE, // 132, 4 (F1 locale — aditivo, ADR-0009)
         // ---------------------------------------------------------------
         // Fase de juego (la tabla C→S completa de tamaños fijos del
         // `CPacketInfoCG` — packet_info.cpp:158-235; los tamaños son los
@@ -316,6 +317,10 @@ mod tests {
             packet_size(ConnectionRole::Auth, header::CG_LOGIN3),
             Some(TPacketCGLogin3::SIZE_AUTH)
         );
+        // F1 (locale, aditivo): CG_LOCALE_REQUEST (132) = 4 B en ambos roles
+        // (la tabla es común; el canal no lo recibe en el flujo real).
+        assert_eq!(packet_size(ConnectionRole::Auth, header::CG_LOCALE_REQUEST), Some(4));
+        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_LOCALE_REQUEST), Some(4));
         // desconocidos → None → el caller cierra la conexión (input.cpp:77-84)
         assert_eq!(packet_size(ConnectionRole::Channel, 0), None);
         assert_eq!(packet_size(ConnectionRole::Auth, 0), None);

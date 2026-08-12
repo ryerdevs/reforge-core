@@ -28,6 +28,11 @@
 //! 152/153 (legacy-client-only — `protocol::legacy`, ADR-0006) — el auth Rust
 //! no los envía todavía; riesgo del test híbrido documentado en el reporte.
 //!
+//! F5 (2026-08-11): en login exitoso el auth envía además el `GC_CHANNEL_LIST`
+//! (164) — la lista de canales + manifest (rates exp/gold/drop) del config
+//! (`channels`/`exp_rate`/`gold_rate`/`drop_rate`): el cliente conecta al
+//! canal con ESTA lista (adiós al IP bakeado de serverinfo.py, ROADMAP F5).
+//!
 //! Driver de DB: **tokio-postgres** (decisión F2a, ver `lib.rs`).
 
 use std::collections::{HashMap, HashSet};
@@ -38,12 +43,20 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use network::framer::{ConnectionRole, Framer};
 use network::{handshake, Connection};
 use protocol::legacy;
+use protocol::locale::{encode_chunks, encode_payload, CgLocaleRequest};
 use protocol::{header, phase, TPacketCGLogin3, TPacketGCAuthSuccess, TPacketGCLoginFailure, TPacketGCPhase};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::config::Config;
+use crate::config::{ChannelCfg, Config};
 // F3 (ADR-0008): consolidación — el SQL inline vive en el crate database.
 use database::account::{hex16, AccountRepo};
+// F1 (ADR-0009): el locale server-side se lee de PG con fallback EN.
+use database::locale::LocaleRepo;
+
+/// F1 — bytes de chunk por paquete wire del `GC_LOCALE` (spec: cada paquete
+/// con payload ≤ 64.000 B → wire de 64.004 B; el buffer completo son ~1-2 MB
+/// y excede u16, por eso va chunked).
+pub const GC_LOCALE_MAX_CHUNK: usize = 64_000;
 
 /// Datos legacy cargados del runtime (parity del cwd del auth C++): vacíos =
 /// no se envían (el runtime srv1 actual no tiene los archivos).
@@ -65,6 +78,79 @@ impl LegacyData {
             hybrid: legacy::load_hybrid(dir),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// F5 — GC_CHANNEL_LIST (164): lista de canales + manifest (rates) desde el
+// auth (ROADMAP F5 "channel list from the auth — goodbye baked IP").
+//
+// Wire (little-endian, packed, tamaño FIJO 152 B):
+//   BYTE header (164); BYTE count; WORD wExpRate; WORD wGoldRate;
+//   WORD wDropRate; TChannelInfo aChannels[4] (36 B c/u) — slots no usados
+//   (>= count) a cero. TChannelInfo = char szName[16]; char szIP[16];
+//   WORD wPort; WORD wPlayers.
+//
+// Tamaño fijo a propósito (ponytail): el cliente legacy registra el paquete
+// como STATIC_SIZE en `CMainPacketHeaderMap` y `__AnalyzePacket` despacha
+// solo con el tamaño completo en el buffer — un array variable rompería esa
+// garantía (race de paquete parcial → login roto). `count` es semántico: el
+// cliente procesa solo las `count` primeras entradas.
+// ---------------------------------------------------------------------------
+pub const GC_CHANNEL_LIST: u8 = 164;
+/// Slots del wire (fijos). El runtime srv1 tiene 4 canales (30003-30015).
+pub const GC_CHANNEL_LIST_MAX_CHANNELS: usize = 4;
+/// Tamaño total del paquete: header + count + rates(6) + 4×36 = 152 B.
+pub const GC_CHANNEL_LIST_SIZE: usize = 1 + 1 + 6 + GC_CHANNEL_LIST_MAX_CHANNELS * 36;
+
+/// Serializa el `GC_CHANNEL_LIST` (152 B). `channels` se trunca a 4; los
+/// strings a 15 bytes + NUL (parity de los buffers `char[16]` del cliente).
+pub fn encode_channel_list(channels: &[ChannelCfg], exp_rate: u16, gold_rate: u16, drop_rate: u16) -> [u8; GC_CHANNEL_LIST_SIZE] {
+    let mut b = [0u8; GC_CHANNEL_LIST_SIZE];
+    let count = channels.len().min(GC_CHANNEL_LIST_MAX_CHANNELS);
+    b[0] = GC_CHANNEL_LIST;
+    b[1] = count as u8;
+    b[2..4].copy_from_slice(&exp_rate.to_le_bytes());
+    b[4..6].copy_from_slice(&gold_rate.to_le_bytes());
+    b[6..8].copy_from_slice(&drop_rate.to_le_bytes());
+    for (i, ch) in channels.iter().take(count).enumerate() {
+        let base = 8 + i * 36;
+        let name = ch.name.as_bytes();
+        let n = name.len().min(15);
+        b[base..base + n].copy_from_slice(&name[..n]);
+        let ip = ch.ip.as_bytes();
+        let m = ip.len().min(15);
+        b[base + 16..base + 16 + m].copy_from_slice(&ip[..m]);
+        b[base + 32..base + 34].copy_from_slice(&ch.port.to_le_bytes());
+        b[base + 34..base + 36].copy_from_slice(&ch.players.to_le_bytes());
+    }
+    b
+}
+
+/// F5 — envía el `GC_CHANNEL_LIST` (164) con la lista de canales + manifest
+/// del config. Solo en login exitoso; con `channels` vacío no se envía nada
+/// (parity de comportamiento con el auth C++: no manda paquetes nuevos).
+async fn send_channel_list<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
+    conn: &mut Connection<S>,
+    config: &Config,
+) -> Result<(), String> {
+    if config.channels.is_empty() {
+        return Ok(());
+    }
+    eprintln!(
+        "server_realms: auth: F5 GC_CHANNEL_LIST: {} canal(es), rates exp {} gold {} drop {}",
+        config.channels.len(),
+        config.exp_rate,
+        config.gold_rate,
+        config.drop_rate
+    );
+    conn.send(&encode_channel_list(
+        &config.channels,
+        config.exp_rate,
+        config.gold_rate,
+        config.drop_rate,
+    ))
+    .await
+    .map_err(|e| format!("enviando GC_CHANNEL_LIST: {e}"))
 }
 
 /// Servidor auth: listener + tarea por conexión (patrón `network::serve`).
@@ -132,6 +218,8 @@ async fn connection_inner(stream: TcpStream, config: &Config, legacy: &LegacyDat
     eprintln!("server_realms: auth: enviado GC_PHASE(PHASE_AUTH)");
 
     // 2. LOGIN3 (68 B al auth — el framer con rol Auth ya entrega 68).
+    //    F1: el cliente pide el locale AL CONECTAR (antes del LOGIN3) — el
+    //    auth responde GC_LOCALE chunked y sigue esperando el login.
     let login3 = loop {
         let pkt = framer
             .next_packet(&mut conn)
@@ -141,6 +229,10 @@ async fn connection_inner(stream: TcpStream, config: &Config, legacy: &LegacyDat
             header::CG_TIME_SYNC | header::CG_PONG => continue, // keepalives (F1.4)
             header::CG_LOGIN3 => {
                 break TPacketCGLogin3::from_bytes(&pkt).map_err(|e| format!("LOGIN3: {e}"))?
+            }
+            header::CG_LOCALE_REQUEST => {
+                handle_locale_request(&mut conn, config, &pkt).await?;
+                continue;
             }
             other => {
                 return Err(format!(
@@ -226,9 +318,16 @@ async fn connection_inner(stream: TcpStream, config: &Config, legacy: &LegacyDat
     //    credenciales; GC_LOGIN_FAILURE solo para NOID/ALREADY/SHUTDOWN.
     //    En login exitoso, ANTES del GC_AUTH_SUCCESS: PanamaPack 151 +
     //    hybrid-crypt 152/153 (parity input_db.cpp:1710-1716 — el runtime
-    //    actual no tiene los archivos → no se envían, igual que el auth C++).
+    //    actual no tiene los archivos → no se envían, igual que el auth C++)
+    //    y el GC_CHANNEL_LIST (164, F5 — lista de canales + manifest).
+    //    NOTA de orden (F5): el 164 va ANTES del 150 en el byte stream — el
+    //    cliente legacy consume UN paquete por frame en la fase auth y
+    //    desconecta del auth al despachar el 150 (`__AuthState_RecvAuthSuccess`
+    //    → `Disconnect()`); con el 164 después, nunca lo leería. Aditivo y
+    //    solo en login exitoso: el wire del LOGIN3/auth no cambia.
     if ok {
         send_legacy_packets(&mut conn, legacy, panama_key).await?;
+        send_channel_list(&mut conn, config).await?;
         conn.send(&TPacketGCAuthSuccess::new(key, 1).to_bytes())
             .await
             .map_err(|e| format!("enviando GC_AUTH_SUCCESS: {e}"))?;
@@ -272,6 +371,49 @@ async fn send_login_failure(conn: &mut Connection<TcpStream>, status: &str) -> R
     conn.send(&TPacketGCLoginFailure::new(status).to_bytes())
         .await
         .map_err(|e| format!("enviando GC_LOGIN_FAILURE: {e}"))
+}
+
+/// F1 (ADR-0009) — `CG_LOCALE_REQUEST` (132): lee el bundle del idioma de PG
+/// (con fallback EN) y responde `GC_LOCALE` (140) chunked (payload ≤
+/// 64.000 B por paquete wire). Lang inválido (no 2 letras + NUL) → cierre
+/// limpio con log (parity `extract_lang` del LOGIN3 — input_auth.cpp:119-131).
+/// Stateless: el flujo de login sigue intacto (el caller continúa el loop).
+async fn handle_locale_request<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
+    conn: &mut Connection<S>,
+    config: &Config,
+    pkt: &[u8],
+) -> Result<(), String> {
+    let req = CgLocaleRequest::from_bytes(pkt).map_err(|e| format!("CG_LOCALE_REQUEST: {e}"))?;
+    let Some(lang) = extract_lang(&req.lang) else {
+        return Err(format!(
+            "auth: CG_LOCALE_REQUEST con lang inválido {:?} — cierre limpio",
+            req.lang
+        ));
+    };
+    eprintln!("server_realms: auth: CG_LOCALE_REQUEST lang={lang}");
+    let bundle = LocaleRepo::new(&config.pg_conn)
+        .load_for_lang(&lang)
+        .await
+        .map_err(|e| format!("locale {lang}: {e}"))?;
+    let payload = encode_payload(&bundle);
+    let chunks = encode_chunks(&payload, GC_LOCALE_MAX_CHUNK);
+    eprintln!(
+        "server_realms: auth: GC_LOCALE {lang}: mob {} item {} item_desc {} skill {} map {} ui {} ({} B, {} chunks)",
+        bundle.mob.len(),
+        bundle.item.len(),
+        bundle.item_desc.len(),
+        bundle.skill.len(),
+        bundle.map.len(),
+        bundle.ui.len(),
+        payload.len(),
+        chunks.len(),
+    );
+    for chunk in chunks {
+        conn.send(&chunk)
+            .await
+            .map_err(|e| format!("enviando GC_LOCALE: {e}"))?;
+    }
+    Ok(())
 }
 
 /// Validación contra PG vía `AccountRepo` (F3/ADR-0008 — consolidación: el
@@ -567,6 +709,114 @@ mod tests {
         let mut buf = [0u8; 6];
         client.read_exact(&mut buf).await.unwrap();
         assert_eq!(buf, TPacketGCAuthSuccess::new(0, 1).to_bytes());
+        handle.await.unwrap();
+    }
+
+    // -----------------------------------------------------------------------
+    // F5 — GC_CHANNEL_LIST (164)
+    // -----------------------------------------------------------------------
+
+    /// Wire exacto: header 164, count, rates LE, name/ip NUL-padded, port y
+    /// players LE, slots no usados a cero. Vector REAL del runtime (ch1).
+    #[test]
+    fn channel_list_wire_exact() {
+        let channels = vec![ChannelCfg {
+            name: "CH-1".into(),
+            ip: "172.25.104.175".into(),
+            port: 30003,
+            players: 7,
+        }];
+        let b = encode_channel_list(&channels, 100, 200, 300);
+        assert_eq!(b.len(), 152, "tamaño fijo (parity TPacketGCChannelList C++)");
+        assert_eq!(b[0], GC_CHANNEL_LIST, "header 164");
+        assert_eq!(b[1], 1, "count");
+        assert_eq!(u16::from_le_bytes([b[2], b[3]]), 100, "exp_rate");
+        assert_eq!(u16::from_le_bytes([b[4], b[5]]), 200, "gold_rate");
+        assert_eq!(u16::from_le_bytes([b[6], b[7]]), 300, "drop_rate");
+        // Canal 0 en base 8: name[16] + ip[16] + port u16 + players u16.
+        assert_eq!(&b[8..13], b"CH-1\0", "name NUL-padded");
+        assert_eq!(&b[8 + 16..8 + 16 + 15], b"172.25.104.175\0", "ip NUL-padded");
+        assert_eq!(u16::from_le_bytes([b[8 + 32], b[8 + 33]]), 30003, "port LE");
+        assert_eq!(u16::from_le_bytes([b[8 + 34], b[8 + 35]]), 7, "players LE");
+        // Slots 1..4 a cero.
+        assert!(b[8 + 36..].iter().all(|&x| x == 0), "slots no usados a cero");
+    }
+
+    /// Truncamientos: count capado a 4, strings a 15 bytes.
+    #[test]
+    fn channel_list_truncates() {
+        let channels = (0..6)
+            .map(|i| ChannelCfg {
+                name: format!("channel-number-{i}"), // > 15 chars
+                ip: "172.255.255.255".into(),
+                port: 30_000 + i as u16,
+                players: 0,
+            })
+            .collect::<Vec<_>>();
+        let b = encode_channel_list(&channels, 100, 100, 100);
+        assert_eq!(b[1], 4, "count capado a 4");
+        assert_eq!(&b[8..23], b"channel-number-", "name truncado a 15");
+        // Canal 3 (último válido) presente, canal 4 a cero.
+        assert_eq!(&b[8 + 3 * 36..8 + 3 * 36 + 7], b"channel", "canal 3 truncado");
+        assert!(b[8 + 4 * 36..].iter().all(|&x| x == 0), "canal 4+ a cero");
+    }
+
+    /// Lista vacía → count 0 (el envío se omite en `send_channel_list`, pero
+    /// el encoder sigue siendo determinista).
+    #[test]
+    fn channel_list_empty() {
+        let b = encode_channel_list(&[], 100, 100, 100);
+        assert_eq!(b[0], GC_CHANNEL_LIST);
+        assert_eq!(b[1], 0);
+        assert_eq!(u16::from_le_bytes([b[2], b[3]]), 100, "rates presentes");
+        assert!(b[8..].iter().all(|&x| x == 0), "sin canales → zona de canales a cero");
+    }
+
+    /// F5: el 164 se envía ANTES del 150 en login exitoso (el cliente legacy
+    /// consume un paquete por frame y desconecta del auth al despachar el
+    /// 150 — con 164 después nunca lo leería).
+    #[tokio::test]
+    async fn channel_list_sent_before_auth_success() {
+        use tokio::io::AsyncReadExt;
+        let (mut server, mut client) = tokio::io::duplex(1024);
+        let mut cfg = Config::default();
+        cfg.channels = vec![ChannelCfg {
+            name: "CH-1".into(),
+            ip: "172.25.104.175".into(),
+            port: 30003,
+            players: 0,
+        }];
+        cfg.exp_rate = 100;
+        cfg.gold_rate = 100;
+        cfg.drop_rate = 100;
+        let handle = tokio::spawn(async move {
+            let mut conn = Connection::new(&mut server);
+            send_channel_list(&mut conn, &cfg).await.unwrap();
+            conn.send(&TPacketGCAuthSuccess::new(7, 1).to_bytes()).await.unwrap();
+        });
+        let mut buf = [0u8; GC_CHANNEL_LIST_SIZE];
+        client.read_exact(&mut buf).await.unwrap();
+        assert_eq!(buf[0], GC_CHANNEL_LIST, "164 primero");
+        let mut buf = [0u8; 6];
+        client.read_exact(&mut buf).await.unwrap();
+        assert_eq!(buf, TPacketGCAuthSuccess::new(7, 1).to_bytes(), "150 después");
+        handle.await.unwrap();
+    }
+
+    /// F5: con `channels` vacío no se envía nada (parity auth C++).
+    #[tokio::test]
+    async fn channel_list_skipped_when_no_channels() {
+        use tokio::io::AsyncReadExt;
+        let (mut server, mut client) = tokio::io::duplex(64);
+        let cfg = Config::default(); // channels vacío
+        let handle = tokio::spawn(async move {
+            let mut conn = Connection::new(&mut server);
+            send_channel_list(&mut conn, &cfg).await.unwrap();
+            conn.send(&TPacketGCAuthSuccess::new(0, 1).to_bytes()).await.unwrap();
+        });
+        let mut buf = [0u8; 6];
+        client.read_exact(&mut buf).await.unwrap();
+        assert_eq!(buf, TPacketGCAuthSuccess::new(0, 1).to_bytes(), "solo el 150");
         handle.await.unwrap();
     }
 }

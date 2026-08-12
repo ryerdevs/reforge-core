@@ -127,6 +127,10 @@ enum
 	HEADER_CG_SCRIPT_SELECT_ITEM				= 114,
 	HEADER_CG_LOGIN4							= 115,
 
+	// F1 (locale redesign): el cliente pide el bundle de texto al AUTH —
+	// 0x84 + lang[3] ("es\0"); el server responde GC_LOCALE (140).
+	HEADER_CG_LOCALE_REQUEST					= 132,
+
 	HEADER_CG_DRAGON_SOUL_REFINE				= 205,
 	HEADER_CG_STATE_CHECKER						= 206,
 
@@ -279,6 +283,12 @@ enum
 	HEADER_GC_MAIN_CHARACTER4_BGM_VOL			= 138,
 	// END_OF_SUPPORT_BGM
 
+	// F1 (locale redesign): bundle de texto del AUTH (respuesta a
+	// CG_LOCALE_REQUEST 132). Variable: 0x8c + u16 size + u8 chunk_flag +
+	// chunk bytes (ver TPacketGCLocale). 139/140 libres en Packet.h y en
+	// CMainPacketHeaderMap (verificado 2026-08-12).
+	HEADER_GC_LOCALE							= 140,
+
     HEADER_GC_AUTH_SUCCESS                      = 150,
     HEADER_GC_PANAMA_PACK						= 151,
 
@@ -286,6 +296,12 @@ enum
 	HEADER_GC_HYBRIDCRYPT_KEYS					= 152,
 	HEADER_GC_HYBRIDCRYPT_SDB					= 153, // SDB means Supplmentary Data Blocks
 	//HYBRID CRYPT
+
+	// F5: lista de canales + manifest (rates) enviada por el AUTH (Rust) en
+	// login exitoso — el cliente conecta al canal con ESTA lista (adiós al IP
+	// bakeado de serverinfo.py). 164 verificado libre: 154-160/162-207 sin
+	// uso en Packet.h y en CMainPacketHeaderMap (162/163 = canal de datos F3).
+	HEADER_GC_CHANNEL_LIST						= 164,
 
 #ifdef ENABLE_GUILD_TOKEN_AUTH
 	HEADER_GC_GUILD_TOKEN						= 161,
@@ -2392,6 +2408,33 @@ typedef struct packet_channel
     BYTE channel;
 } TPacketGCChannel;
 
+// F5 — GC_CHANNEL_LIST (164): lista de canales + manifest (rates) desde el
+// AUTH tras login OK (parity wire `server_realms/src/auth.rs`). Tamaño FIJO
+// 152 B a propósito: el cliente registra el paquete como STATIC_SIZE en
+// CMainPacketHeaderMap y CAccountConnector::__AnalyzePacket despacha solo con
+// el tamaño completo en el buffer (un array variable rompería esa garantía).
+#define GC_CHANNEL_LIST_MAX_CHANNELS 4
+
+typedef struct packet_channel_list_info
+{
+	char    szName[16];    // NUL-padded ("CH-1")
+	char    szIP[16];      // NUL-padded IPv4 dotted-quad ("172.25.104.175")
+	WORD    wPort;         // TCP port (LE)
+	WORD    wPlayers;      // jugadores actuales (0 = desconocido)
+} TPacketGCChannelListInfo;
+
+typedef struct packet_channel_list
+{
+	BYTE    header;        // 164
+	BYTE    count;         // canales válidos (<= GC_CHANNEL_LIST_MAX_CHANNELS)
+	WORD    wExpRate;      // F5 manifest: rate de exp (%)
+	WORD    wGoldRate;     // rate de oro (%)
+	WORD    wDropRate;     // rate de drop (%)
+	TPacketGCChannelListInfo aChannels[GC_CHANNEL_LIST_MAX_CHANNELS];
+} TPacketGCChannelList;
+
+static_assert(sizeof(TPacketGCChannelList) == 152, "TPacketGCChannelList must be 152 bytes (F5)");
+
 #ifdef ENABLE_GUILD_TOKEN_AUTH
 struct TPacketGCGuildToken {
 	uint8_t header;
@@ -2427,6 +2470,18 @@ typedef struct packet_land_list
     BYTE        header;
     WORD        size;
 } TPacketGCLandList;
+
+// F1 (locale redesign) — GC_LOCALE (140): bundle de texto del AUTH, chunked.
+// Wire por paquete: header + u16 size (TOTAL, parity LAND_LIST/hybrid-crypt:
+// el framing valida `size` bytes completos antes de despachar) + u8
+// chunk_flag (1 = más chunks, 0 = final) + chunk bytes. El reensamblado
+// vive en CPythonLocale::AppendChunk (handler __AuthState_RecvLocale).
+typedef struct packet_locale
+{
+    BYTE        header;      // 140
+    WORD        size;        // tamaño TOTAL del paquete (incl. header)
+    BYTE        chunk_flag;  // 1 = más chunks, 0 = final
+} TPacketGCLocale;
 
 typedef struct SPacketGCTargetCreate
 {

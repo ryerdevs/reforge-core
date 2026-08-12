@@ -218,6 +218,7 @@
     <ClCompile Include="PythonItemModule.cpp" />
     <ClCompile Include="PythonNonPlayer.cpp" />
     <ClCompile Include="PythonNonPlayerModule.cpp" />
+    <ClCompile Include="PythonLocale.cpp" />
     <ClCompile Include="PythonPlayer.cpp" />
     <ClCompile Include="PythonPlayerEventHandler.cpp" />
     <ClCompile Include="PythonPlayerInput.cpp" />
@@ -299,6 +300,7 @@
     <ClInclude Include="PythonEventManager.h" />
     <ClInclude Include="PythonItem.h" />
     <ClInclude Include="PythonNonPlayer.h" />
+    <ClInclude Include="PythonLocale.h" />
     <ClInclude Include="PythonPlayer.h" />
     <ClInclude Include="PythonPlayerEventHandler.h" />
     <ClInclude Include="PythonQuest.h" />

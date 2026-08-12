@@ -24,11 +24,11 @@ Postmortem of the client heap-corruption crash that blocked world entry (2026-08
 
 ## Fix
 
-2-line bounds check `cur + src_len <= base_len` before the `memcmp` (`PythonSkill.cpp:72-90`). Rebuild Release|Win32 → `client\metin2client.exe` 5,115,904 B, hash `C7EAD7CC...`. Evidence: exception `0xC0000005` in `string_replace_word` at RVA 0x95110 with ECX=0x96510FFD (garbage pointer) in `client\logs\metin2client_*.dmp` (EterExceptionFilter).
+2-line bounds check `cur + src_len <= base_len` before the `memcmp` (`PythonSkill.cpp:72-90`). Rebuild Release|Win32 → `C:\projects\metin2-extra\client\metin2client.exe` 5,115,904 B, hash `C7EAD7CC...`. Evidence: exception `0xC0000005` in `string_replace_word` at RVA 0x95110 with ECX=0x96510FFD (garbage pointer) in `C:\projects\metin2-extra\client\logs\metin2client_*.dmp` (EterExceptionFilter).
 
 ## Diagnostic lessons (do not repeat)
 
-- **Rule:** the server syserr will NEVER see client crashes (local memory; the server only sees the socket close). Client close errors are in `client\logs\*.dmp` (binary; parse with dumpbin/cdb or the session's `parse_dump3.py`).
+- **Rule:** the server syserr will NEVER see client crashes (local memory; the server only sees the socket close). Client close errors are in `C:\projects\metin2-extra\client\logs\*.dmp` (binary; parse with dumpbin/cdb or the session's `parse_dump3.py`).
 - **Rule:** App Verifier Heaps changes the detection timing (guard pages detect the over-read at the write) — useful to isolate, not to reproduce the original symptom.
 - **Rule:** the cdb/WER detectors (`granny2.dll`, `igc32.dll`/`igdumdim32.dll`) were **victims**, not causes — different detectors, same corrupted heap. Never chase the detector.
 - **Rule:** character coordinates in the DB are **units**, not cells (see [`data-and-encoding.md`](data-and-encoding.md) §5).

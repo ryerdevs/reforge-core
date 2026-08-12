@@ -16,6 +16,7 @@
 #include "PythonEventManager.h"
 #include "PythonPlayer.h"
 #include "PythonNonPlayer.h"
+#include "PythonLocale.h" // F1: caché de texto del auth (GC_LOCALE)
 #include "PythonMiniMap.h"
 #include "PythonIME.h"
 #include "PythonItem.h"
@@ -327,6 +328,8 @@ class CPythonApplication : public CMSApplication, public CInputKeyboard, public 
 		CPythonPlayer				m_pyPlayer;
 		CPythonIME					m_pyIme;
 		CPythonItem					m_pyItem;
+
+		CPythonLocale				m_pyLocale; // F1: caché de texto del auth
 		CPythonShop					m_pyShop;
 		CPythonExchange				m_pyExchange;
 		CPythonChat					m_pyChat;

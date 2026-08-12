@@ -1,0 +1,602 @@
+//! F5.2: el CORE del combate (server-authoritative) — parity `battle.cpp` /
+//! `char_battle.cpp` / `char.cpp` (el subset base SIN skills/items).
+//!
+//! # Subset base documentado (el "oráculo" con file:line)
+//!
+//! **Daño melee** (PC atacando, sin arma, sin items/skills — `battle.cpp:464-638`
+//! `CalcMeleeDamage` + `:199-206` `CalcBattleDamage` + `:731-755` `battle_hit`):
+//! 1. `ATT_GRADE` del atacante (`char.cpp:2059-2092` ComputeBattlePoints):
+//!    `level*2 + statAtk`; `statAtk` por job (`:2064-2087`): warrior/sura
+//!    `2*st`, assassin `(4*st + 2*dx)/3`, shaman `(4*st + 2*iq)/3` (división
+//!    ENTERA, truncación C++).
+//! 2. `DEF_GRADE` de la víctima mob (`char.cpp:2156-2158`): `level + ht + wDef`
+//!    (el mob de `mob_proto`: bLevel/bCon/wDef — `tables.h:448/463/457`).
+//! 3. `CalcAttackRating` (`battle.cpp:227-251`): `iARSrc = MIN(90, (dx_a*4 +
+//!    lv_a*2)/6)`, `iERSrc = MIN(90, (dx_v*4 + lv_v*2)/6)`,
+//!    `fAR = (iARSrc+210)/300`, `fER = ((iERSrc*2+5)/(iERSrc+95)) * 3/10`
+//!    (la división de fER es ENTERA), `fAR -= fER`.
+//! 4. Sin arma → rango de daño 0..1 (`Item_GetDamage` con item null,
+//!    `battle.cpp:442-462`); `iDam = number(0,1) * 2` (`:533`).
+//! 5. `iAtk = (ATT_GRADE + iDam - lv*2) * fAR + lv*2` (truncación en el
+//!    producto, `:542-544`); + `arma.Value(5)*2` = 0 sin arma (`:546-553`);
+//!    + party bonus = 0 (`:555`); × `(100 + ATT_BONUS + MELEE_MAGIC_ATT_BONUS_PER)
+//!    /100` = ×1 (`:556`); `CalcAttBonus` = identidad en el subset base
+//!    (`:305-440` — todos los términos base valen 0).
+//! 6. `iDef = DEF_GRADE * (100 + DEF_BONUS)/100` = DEF_GRADE (`:564`,
+//!    DEF_BONUS = 0).
+//! 7. `iDam = MAX(0, iAtk - iDef)` (`:573`); `CalcBattleDamage` (`:199-206`):
+//!    `if (iDam < 3) iDam = number(1, 5)` (el CALCULATE_DAMAGE_LVDELTA está
+//!    comentado — el daño pasa igual).
+//! 8. `battle_hit` (`:736-749`): `CalcDamBonus` = identidad (sin arma,
+//!    `:265-303`); `attMul = 1.0` (`char.cpp:411`) → `iDam = 1.0*iDam + 0.5`
+//!    truncado = iDam (sin cambio en el subset).
+//!
+//! **Intervalo / cooldown** (`battle.cpp:757-782` `GET_ATTACK_SPEED` +
+//! `ani.cpp:341-351` + `config.cpp:101`): sin arma → `ani_speed = 1000` ms;
+//! `real_speed = ani_speed*100 / (SPEEDHACK_LIMIT_BONUS(80) + ATT_SPEED(0) +
+//! riding(0))` = **1250 ms** (daga/garra → /2, `:774-779` — fuera del subset).
+//! Enforcement `IS_SPEED_HACK` (`:808-838`): rechazo si `now - last < speed`
+//! atacando al MISMO objetivo; el rechazo IGUAL actualiza el timer (`:833`).
+//! Nota: el C++ solo lo aplica con `gHackCheckEnable` (config, default
+//! `false` — `config.cpp:127`); el core Rust lo aplica SIEMPRE (el server es
+//! la autoridad — decisión documentada).
+//!
+//! **Rango** (`battle.cpp:127-167` battle_melee_attack): `distance =
+//! DISTANCE_APPROX(|dx|,|dy|)` (`utils.h:19-43` = `(246*max + 102*min) >> 8`);
+//! atacante PC: `max = 300` UNITS (3 m), salvo víctima mob MELEE con más
+//! alcance: `max = MAX(300, (int)(wAttackRange * 1.15f))` (`:150-158`).
+//! `distance > max` → BATTLE_NONE (sin golpe).
+//!
+//! **LoS**: sin mapa de colisión por ahora (SDB vacío — parity del runtime
+//! actual): la walkability del mapa decide; no hay obstáculos que ocluyan.
+//!
+//! # Paquetes (ver `protocol::combat` para los layouts)
+//!
+//! Golpe con daño → `[GC_ATTACK (12), GC_DAMAGE_INFO (135)]` (el segundo es
+//! el que el cliente muestra — `AddDamageEffect`); golpe sin daño → solo
+//! `GC_ATTACK`. El C++ manda SOLO el GC_DAMAGE_INFO (`char_battle.cpp:1508-1530`,
+//! a atacante y víctima-PC); el GC_ATTACK se incluye por contrato wire
+//! (observadores futuros — el cliente v24 lo ignora, ver `protocol::combat`).
+
+use protocol::combat::{damage_flag, CgAttack, GcAttack, GcDamageInfo};
+
+// ---------------------------------------------------------------------------
+// Estados (dominio — los construye el canal)
+// ---------------------------------------------------------------------------
+
+/// El estado de combate MUTABLE de un jugador (el canal guarda uno por
+/// conexión, junto al `PlayerMotion` de F5.1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CombatState {
+    /// Reloj del server del último CG_ATTACK (parity `m_kAttackLog.dwTime`,
+    /// `battle.cpp:784-794`). El C++ lo actualiza incluso en rechazos.
+    pub last_attack_time: u64,
+    /// VID del último objetivo atacado (parity `m_kAttackLog.dwVID` — el
+    /// cooldown solo aplica contra el MISMO objetivo).
+    pub last_attack_vid: u32,
+}
+
+impl CombatState {
+    /// Estado inicial (el C++ zero-inicializa el `m_kAttackLog`).
+    pub fn new() -> Self {
+        Self { last_attack_time: 0, last_attack_vid: 0 }
+    }
+}
+
+/// La vista del ATACANTE (jugador) para un ataque. Inmutable por llamada; el
+/// canal la construye del `PlayerRow` + `PlayerMotion` (F5.1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerState {
+    /// VID del jugador (un PC: su player id — `packets.rs:166`).
+    pub vid: u32,
+    pub x: i32,
+    pub y: i32,
+    pub level: i32,
+    /// `JOB_*`: warrior 0, assassin 1, sura 2, shaman 3 (`constants.cpp:18-21`).
+    pub job: u8,
+    pub st: i32,
+    pub ht: i32,
+    pub dx: i32,
+    pub iq: i32,
+    /// Intervalo entre ataques en ms (`GET_ATTACK_SPEED`, battle.cpp:757-782).
+    pub attack_speed_ms: u32,
+}
+
+impl PlayerState {
+    /// Construye el estado desde el row del player + el motion F5.1. El
+    /// `attack_speed_ms` = `default_attack_speed()` (sin arma — 1250 ms); el
+    /// lane de items lo reemplazará con la velocidad del arma equipada.
+    pub fn from_row(
+        row: &database::player::PlayerRow,
+        motion: &crate::movement::PlayerMotion,
+    ) -> Self {
+        Self {
+            vid: row.id as u32,
+            x: motion.x,
+            y: motion.y,
+            level: i32::from(row.level),
+            job: row.job as u8,
+            st: i32::from(row.st),
+            ht: i32::from(row.ht),
+            dx: i32::from(row.dx),
+            iq: i32::from(row.iq),
+            attack_speed_ms: default_attack_speed(),
+        }
+    }
+}
+
+/// La vista del OBJETIVO (mob/NPC). El lane de NPCs (F5) lo construye del
+/// `mob_proto` (`tables.h:440-470` — bLevel/bStr/bDex/bCon/wDef/wAttackRange/
+/// bBattleType).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NpcState {
+    pub vid: u32,
+    pub x: i32,
+    pub y: i32,
+    pub level: i32,
+    pub dx: i32,
+    pub ht: i32,
+    /// `wDef` del mob_proto (DEF base del mob).
+    pub wdef: i32,
+    /// `bBattleType`: MELEE = 0 (extiende el rango del atacante PC — ver
+    /// `melee_max_range`). `battle.h:6`, `constants.cpp:46`.
+    pub battle_type: u8,
+    /// `wAttackRange` del mob_proto (UNITS; p.ej. mob 101 = 175).
+    pub attack_range: u32,
+}
+
+/// Resultado de `handle_attack` — lo que el canal envía al cliente.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CombatResult {
+    /// Paquetes S→C ya encodados (`GcAttack` y/o `GcDamageInfo`) — el canal
+    /// los manda por la conexión del atacante (y a los observadores cuando
+    /// existan). Vacío si el ataque se rechazó (cooldown/rango/sin objetivo).
+    pub packets: Vec<Vec<u8>>,
+    /// Daño aplicado al objetivo (0 si no hubo golpe). El canal lo aplica al
+    /// HP del mundo (NPCs — lane F5) y decide el `GC_DEAD`/`GC_CHARACTER_DEL`.
+    pub damage: i32,
+}
+
+impl CombatResult {
+    fn empty() -> Self {
+        Self { packets: Vec::new(), damage: 0 }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Constantes (parity)
+// ---------------------------------------------------------------------------
+
+/// Jobs (`constants.cpp:18-21` — orden del array `JobInitialPoints`).
+pub mod job {
+    pub const WARRIOR: u8 = 0;
+    pub const ASSASSIN: u8 = 1;
+    pub const SURA: u8 = 2;
+    pub const SHAMAN: u8 = 3;
+}
+
+/// `BATTLE_TYPE_MELEE` = 0 (`battle.h:6`).
+pub const BATTLE_TYPE_MELEE: u8 = 0;
+
+/// Rango base melee del atacante PC: 300 UNITS = 3 m (`battle.cpp:148`).
+pub const MELEE_RANGE_UNITS: i32 = 300;
+
+/// `SPEEDHACK_LIMIT_BONUS` = 80 (`config.cpp:101`).
+const SPEEDHACK_LIMIT_BONUS: u32 = 80;
+
+/// `ani_attack_speed` sin arma = 1000 ms (`ani.cpp:341-351` — item null →
+/// 1000; los defaults del ANI también son 1000, `ani.cpp:121-122`).
+const ANI_SPEED_BARE_HAND_MS: u32 = 1000;
+
+// ---------------------------------------------------------------------------
+// La fórmula (sub-funciones con parity file:line — unit-testables)
+// ---------------------------------------------------------------------------
+
+/// El intervalo entre ataques del C++ (`GET_ATTACK_SPEED`, `battle.cpp:757-782`)
+/// para el subset base: sin arma → `1000*100 / (80 + 0 + 0)` = **1250 ms**.
+/// (Daga/garra → /2 — `:774-779`; arma con animación → data-driven .msa,
+/// fuera del subset.)
+pub fn default_attack_speed() -> u32 {
+    (ANI_SPEED_BARE_HAND_MS * 100) / (SPEEDHACK_LIMIT_BONUS + 0 + 0)
+}
+
+/// `statAtk` por job (`char.cpp:2064-2087`) — la parte de stats del
+/// `POINT_ATT_GRADE`. División ENTERA (truncación C++).
+pub fn job_stat_attack(job: u8, st: i32, dx: i32, iq: i32) -> i32 {
+    match job {
+        job::ASSASSIN => (4 * st + 2 * dx) / 3,
+        job::SHAMAN => (4 * st + 2 * iq) / 3,
+        // WARRIOR/SURA (+ el default del C++ para job inválido).
+        _ => 2 * st,
+    }
+}
+
+/// `POINT_ATT_GRADE` del atacante PC (`char.cpp:2059-2092`), subset base:
+/// `level*2 + statAtk` (sin montura, sin `ATT_GRADE_BONUS`).
+pub fn attack_grade(level: i32, job: u8, st: i32, dx: i32, iq: i32) -> i32 {
+    level * 2 + job_stat_attack(job, st, dx, iq)
+}
+
+/// `POINT_DEF_GRADE` de la víctima MOB (`char.cpp:2156-2158`):
+/// `level + ht + wDef` (el mob de mob_proto; para PCs como víctima la fórmula
+/// difiere — `char.cpp:2113-2114` — fuera del subset).
+pub fn def_grade_npc(level: i32, ht: i32, wdef: i32) -> i32 {
+    level + ht + wdef
+}
+
+/// `CalcAttackRating` (`battle.cpp:227-251`) en f32. OJO: `(iERSrc*2 + 5) /
+/// (iERSrc + 95)` es división ENTERA en el C++ (los dos operandos son int).
+pub fn calc_attack_rating(attacker_dx: i32, attacker_lv: i32, victim_dx: i32, victim_lv: i32) -> f32 {
+    let ar_src = (attacker_dx * 4 + attacker_lv * 2) / 6;
+    let ar_src = ar_src.min(90);
+    let er_src = (victim_dx * 4 + victim_lv * 2) / 6;
+    let er_src = er_src.min(90);
+    let f_ar = (ar_src as f32 + 210.0) / 300.0;
+    let f_er = ((er_src * 2 + 5) / (er_src + 95)) as f32 * 3.0 / 10.0;
+    f_ar - f_er
+}
+
+/// `DISTANCE_APPROX` (`utils.h:19-43`): `(246*max + 102*min) >> 8` con los
+/// shifts EXACTOS del C++ (misma aritmética i32).
+pub fn distance_approx(dx: i32, dy: i32) -> i32 {
+    let dx = dx.abs();
+    let dy = dy.abs();
+    let (min, max) = if dx < dy { (dx, dy) } else { (dy, dx) };
+    ((max << 8) + (max << 3) - (max << 4) - (max << 1)
+        + (min << 7) - (min << 5) + (min << 3) - (min << 1))
+        >> 8
+}
+
+/// El rango máximo del ataque melee (`battle.cpp:144-167`): el PC ataca a
+/// 300 UNITS; si la víctima es un mob MELEE con más alcance, se usa el suyo
+/// (`MAX(300, (int)(wAttackRange * 1.15f))` — `:156-158`).
+pub fn melee_max_range(victim: &NpcState) -> i32 {
+    let mut max = MELEE_RANGE_UNITS;
+    if victim.battle_type == BATTLE_TYPE_MELEE {
+        max = max.max((victim.attack_range as f32 * 1.15) as i32);
+    }
+    max
+}
+
+/// El daño melee del subset base (`CalcMeleeDamage` + `CalcBattleDamage` +
+/// `battle_hit` — ver la cabecera del módulo para el desglose con file:line).
+///
+/// `roll(min, max)` = el `number(min, max)` del C++ (inclusive; `number(0,1)`
+/// del arma y el floor `number(1,5)` de `CalcBattleDamage`). El canal provee
+/// uno con su RNG; los tests uno fijo (determinismo byte-exacto).
+pub fn melee_damage(
+    attacker: &PlayerState,
+    victim: &NpcState,
+    roll: &mut dyn FnMut(i32, i32) -> i32,
+) -> i32 {
+    // Sin arma → 0..1 (Item_GetDamage, battle.cpp:442-462 + 521-526 + :533).
+    let i_dam = roll(0, 1) * 2;
+    let f_ar = calc_attack_rating(attacker.dx, attacker.level, victim.dx, victim.level);
+
+    // iAtk = (ATT_GRADE + iDam - lv*2) * fAR + lv*2 (battle.cpp:542-544).
+    let att_grade = attack_grade(attacker.level, attacker.job, attacker.st, attacker.dx, attacker.iq);
+    let mut i_atk = ((att_grade + i_dam - attacker.level * 2) as f32 * f_ar) as i32;
+    i_atk += attacker.level * 2;
+    // + arma.Value(5)*2 = 0 (sin arma, :546-553); party = 0 (:555);
+    // × (100 + ATT_BONUS + MELEE_MAGIC_ATT_BONUS_PER)/100 = ×1 (:556);
+    // CalcAttBonus = identidad en el subset base (:305-440).
+
+    // iDef = DEF_GRADE * (100 + DEF_BONUS)/100 = DEF_GRADE (battle.cpp:564).
+    let i_def = def_grade_npc(victim.level, victim.ht, victim.wdef);
+
+    let mut i_dam = (i_atk - i_def).max(0);
+    // CalcBattleDamage (battle.cpp:199-206): floor aleatorio 1..5 si < 3
+    // (el CALCULATE_DAMAGE_LVDELTA está comentado — :204).
+    if i_dam < 3 {
+        i_dam = roll(1, 5);
+    }
+    // battle_hit (:736-749): CalcDamBonus identidad (sin arma, :265-303);
+    // attMul = 1.0 (char.cpp:411) → iDam = 1.0*iDam + 0.5 → trunc = iDam.
+    i_dam
+}
+
+// ---------------------------------------------------------------------------
+// El core: handle_attack
+// ---------------------------------------------------------------------------
+
+/// Procesa un `CG_ATTACK` (server-authoritative) — parity del flujo
+/// `CHARACTER::Attack` (`char_battle.cpp:193-284`) + `battle_melee_attack`
+/// (`battle.cpp:127-184`) + `battle_hit` (`:731-755`).
+///
+/// # Firma para el integrador (canal)
+///
+/// El canal (por conexión de jugador) guarda:
+/// ```ignore
+/// let mut combat = realm::combat::CombatState::new();
+/// // al recibir CG_ATTACK (header 2, 8 B):
+/// let atk = protocol::combat::CgAttack::from_bytes(&pkt)?;       // ya parseado
+/// let player = realm::combat::PlayerState::from_row(&row, &motion); // ataque_speed default
+/// let target = <npc lane: lookup por atk.victim_vid>;             // Option<&NpcState>
+/// let result = realm::combat::handle_attack(&mut combat, &atk, &player,
+///                                           target, now_ms(), &mut roll);
+/// for pkt in result.packets { conn.send(&pkt).await?; }
+/// // result.damage → aplicar HP al mundo (lane NPCs, F5).
+/// ```
+/// `now_ms` = reloj del server en ms (el `now_ms()` u64 del canal; el C++
+/// usa `get_dword_time` DWORD con wrap — u64 monotónico no envuelve, el
+/// sáturating_sub del cooldown es equivalente para deltas sanos).
+/// `roll` = el `number()` del C++ (inclusive [min, max]) — el canal pasa
+/// `&mut |lo, hi| lo + (rand32() % (hi - lo + 1)) as i32` o similar.
+///
+/// # Comportamiento (orden del C++)
+///
+/// 1. `bType > 0` (skill) → resultado vacío: `ComputeSkill` es el lane de
+///    skills (F5.x) — el canal NO debe enrutar skills aquí.
+/// 2. `target: None` (no hay NPC en el mundo) → resultado vacío.
+/// 3. Cooldown (`IS_SPEED_HACK`, battle.cpp:808-838): mismo objetivo y
+///    `now - last < attack_speed` → rechazo; el timer se actualiza IGUAL
+///    (parity `:833` — un rechazo también reinicia el intervalo).
+/// 4. Rango (`battle.cpp:144-167`): `distance_approx > melee_max_range` →
+///    sin golpe (BATTLE_NONE). El timer YA se actualizó (parity: el C++ llama
+///    IS_SPEED_HACK antes de battle_melee_attack).
+/// 5. Daño (`melee_damage`): golpe sin daño → solo `GcAttack` (el C++
+///    devuelve BATTLE_DAMAGE sin SendDamagePacket — `battle.cpp:738-739`);
+///    con daño → `[GcAttack, GcDamageInfo(NORMAL)]` (el flag del golpe normal,
+///    `char_battle.cpp:2105-2117`).
+///
+/// LoS: sin obstáculos por ahora (SDB vacío — la walkability del mapa decide;
+/// no hay mapa de colisión en el realm).
+pub fn handle_attack(
+    combat: &mut CombatState,
+    attack: &CgAttack,
+    attacker: &PlayerState,
+    target: Option<&NpcState>,
+    now_ms: u64,
+    roll: &mut dyn FnMut(i32, i32) -> i32,
+) -> CombatResult {
+    // (1) Skills — ComputeSkill (char_battle.cpp:255-269): fuera del subset.
+    if attack.b_type != CgAttack::TYPE_NORMAL {
+        return CombatResult::empty();
+    }
+    // (2) Sin objetivo en el mundo.
+    let Some(target) = target else {
+        return CombatResult::empty();
+    };
+
+    // (3) Cooldown (IS_SPEED_HACK — battle.cpp:808-838). Solo contra el MISMO
+    // objetivo; el rechazo actualiza el timer (parity battle.cpp:833-835).
+    let speed = u64::from(attacker.attack_speed_ms);
+    let delta = now_ms.saturating_sub(combat.last_attack_time);
+    if combat.last_attack_vid == target.vid && delta < speed {
+        combat.last_attack_time = now_ms;
+        return CombatResult::empty();
+    }
+    combat.last_attack_time = now_ms;
+    combat.last_attack_vid = target.vid;
+
+    // (4) Rango (battle.cpp:144-167).
+    let distance = distance_approx(attacker.x - target.x, attacker.y - target.y);
+    if distance > melee_max_range(target) {
+        return CombatResult::empty();
+    }
+
+    // (5) Daño (battle.cpp:731-755).
+    let damage = melee_damage(attacker, target, roll);
+    let mut packets = vec![
+        GcAttack::new(attacker.vid, target.vid, attack.b_type).to_bytes().to_vec(),
+    ];
+    if damage > 0 {
+        packets.push(
+            GcDamageInfo::new(target.vid, damage_flag::NORMAL, damage).to_bytes().to_vec(),
+        );
+    }
+    CombatResult { packets, damage }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Atacante del harness E2E (channel.rs `dummy_row` — ninja: job 1
+    /// ASSASSIN, lvl 5, st/dx/ht/iq = 30, sin arma) contra el mob 101 del
+    /// mob_proto (`tools/proto/mob_proto.txt:2` — lvl 1, dx 6, ht 5, DEF 4,
+    /// MELEE, rango 175).
+    fn ninja() -> PlayerState {
+        PlayerState {
+            vid: 2,
+            x: 969600,
+            y: 278400,
+            level: 5,
+            job: job::ASSASSIN,
+            st: 30,
+            ht: 30,
+            dx: 30,
+            iq: 30,
+            attack_speed_ms: default_attack_speed(),
+        }
+    }
+
+    fn mob101() -> NpcState {
+        NpcState {
+            vid: 101,
+            x: 969600,
+            y: 278400,
+            level: 1,
+            dx: 6,
+            ht: 5,
+            wdef: 4,
+            battle_type: BATTLE_TYPE_MELEE,
+            attack_range: 175,
+        }
+    }
+
+    fn roll_fixed(v: i32) -> impl FnMut(i32, i32) -> i32 {
+        move |_min, _max| v
+    }
+
+    /// La fórmula EXACTA contra un vector calculado a mano del C++ (ver
+    /// reporte del lane — cada paso con su file:line en la cabecera):
+    /// ATT_GRADE = 70, DEF_GRADE(mob) = 10, fAR = 0.77; roll(0,1)=0 →
+    /// iAtk = (int)(60*0.77)+10 = 56 → 56-10 = 46; roll=1 (iDam=2) →
+    /// iAtk = (int)(62*0.77)+10 = 57 → 57-10 = 47.
+    #[test]
+    fn formula_matches_cpp_vector() {
+        let a = ninja();
+        let m = mob101();
+        assert_eq!(attack_grade(a.level, a.job, a.st, a.dx, a.iq), 70, "5*2 + (120+60)/3");
+        assert_eq!(def_grade_npc(m.level, m.ht, m.wdef), 10, "1+5+4");
+        assert_eq!(job_stat_attack(job::ASSASSIN, 30, 30, 30), 60);
+        // roll(0,1) = 0 → iDam = 0 → iAtk = (70+0-10)*0.77+10 = 56 → dam 46.
+        let mut roll = roll_fixed(0);
+        assert_eq!(melee_damage(&a, &m, &mut roll), 46);
+        // roll(0,1) = 1 → iDam = 2 → iAtk = (62)*0.77+10 = 57 → dam 47.
+        let mut roll = roll_fixed(1);
+        assert_eq!(melee_damage(&a, &m, &mut roll), 47);
+    }
+
+    /// La división ENTERA del C++ se respeta: assassin st=1, dx=2 →
+    /// (4+4)/3 = 2 (no 2.66); shaman (4*st + 2*iq)/3; warrior/sura = 2*st.
+    #[test]
+    fn job_stat_attack_int_division() {
+        assert_eq!(job_stat_attack(job::WARRIOR, 10, 0, 0), 20);
+        assert_eq!(job_stat_attack(job::SURA, 10, 0, 0), 20);
+        assert_eq!(job_stat_attack(job::ASSASSIN, 1, 2, 0), 2, "(4+4)/3 truncado");
+        assert_eq!(job_stat_attack(job::ASSASSIN, 30, 30, 0), 60);
+        assert_eq!(job_stat_attack(job::SHAMAN, 1, 0, 2), 2, "(4+4)/3 truncado");
+        assert_eq!(job_stat_attack(job::SHAMAN, 30, 0, 30), 60);
+    }
+
+    /// El floor de CalcBattleDamage (battle.cpp:199-206): daño < 3 →
+    /// `number(1, 5)` (el CALCULATE_DAMAGE_LVDELTA está comentado).
+    /// Caso: lvl 1 warrior st=4 dx=4 → ATT_GRADE = 10, fAR = 0.71 (iAR=3,
+    /// iER=4), iAtk = (int)(8*0.71)+2 = 7 < iDef 10 → 0 → floor roll(1,5).
+    #[test]
+    fn calc_battle_damage_floor() {
+        let a = PlayerState {
+            vid: 9,
+            x: 0,
+            y: 0,
+            level: 1,
+            job: job::WARRIOR,
+            st: 4,
+            ht: 4,
+            dx: 4,
+            iq: 4,
+            attack_speed_ms: default_attack_speed(),
+        };
+        let m = mob101();
+        let mut roll = roll_fixed(3);
+        assert_eq!(melee_damage(&a, &m, &mut roll), 3, "0 < 3 → number(1,5) = 3");
+        // El cálculo previo al floor: 7 - 10 = max(0, -3) = 0.
+        let f_ar = calc_attack_rating(a.dx, a.level, m.dx, m.level);
+        let att = attack_grade(a.level, a.job, a.st, a.dx, a.iq);
+        assert_eq!(((att - a.level * 2) as f32 * f_ar) as i32 + a.level * 2, 7);
+        assert_eq!(f_ar, 0.71, "(3+210)/300 - 0");
+    }
+
+    /// Cooldown (IS_SPEED_HACK parity, battle.cpp:808-838): intervalo base
+    /// 1250 ms; ataque al MISMO objetivo dentro del intervalo → rechazado; el
+    /// rechazo reinicia el timer (un ataque a t=2000 rechazado desplaza la
+    /// ventana); un objetivo distinto NO dispara el cooldown (parity — el
+    /// check es `dwVID == victim->GetVID()`).
+    #[test]
+    fn cooldown_rejects_within_interval() {
+        assert_eq!(default_attack_speed(), 1250, "(1000*100)/(80+0+0)");
+        let a = ninja();
+        let m = mob101();
+        let mut combat = CombatState::new();
+
+        // t=1000: primer ataque → golpe (timer anclado).
+        let mut roll = roll_fixed(0);
+        let r = handle_attack(&mut combat, &atk(m.vid), &a, Some(&m), 1000, &mut roll);
+        assert_eq!(r.damage, 46);
+        assert_eq!(combat.last_attack_time, 1000);
+        assert_eq!(combat.last_attack_vid, m.vid);
+
+        // t=2000: mismo objetivo, delta 1000 < 1250 → rechazo (vacío), pero el
+        // timer se actualiza a 2000 (parity battle.cpp:833).
+        let r = handle_attack(&mut combat, &atk(m.vid), &a, Some(&m), 2000, &mut roll);
+        assert_eq!(r, CombatResult::empty());
+        assert_eq!(combat.last_attack_time, 2000);
+
+        // t=3250: delta 1250 ≥ 1250 → golpe de nuevo.
+        let r = handle_attack(&mut combat, &atk(m.vid), &a, Some(&m), 3250, &mut roll);
+        assert_eq!(r.damage, 46);
+
+        // Objetivo distinto dentro del intervalo → SIN cooldown (parity).
+        let m2 = NpcState { vid: 102, ..m };
+        let mut combat2 = CombatState::new();
+        handle_attack(&mut combat2, &atk(m.vid), &a, Some(&m), 1000, &mut roll);
+        let r = handle_attack(&mut combat2, &atk(m2.vid), &a, Some(&m2), 2000, &mut roll);
+        assert_eq!(r.damage, 46, "target distinto: sin rechazo");
+    }
+
+    /// Rango (battle.cpp:144-167): `distance_approx > 300` → sin golpe;
+    /// el mob MELEE con más alcance extiende el rango (`MAX(300, r*1.15)`).
+    #[test]
+    fn range_rejects_far_targets() {
+        assert_eq!(distance_approx(0, 400), 384, "(246*400)>>8");
+        assert_eq!(distance_approx(200, 200), 271, "(246+102)*200>>8");
+        let a = ninja();
+        let m = mob101();
+        let mut roll = roll_fixed(0);
+        let mut combat = CombatState::new();
+
+        // 400 UNITS (dist 384) > 300 → sin golpe. (vid 101 — timer anclado.)
+        let far = NpcState { vid: 101, x: a.x + 400, y: a.y, ..m };
+        let r = handle_attack(&mut combat, &atk(far.vid), &a, Some(&far), 1000, &mut roll);
+        assert_eq!(r, CombatResult::empty());
+
+        // 200,200 (dist 271) ≤ 300 → golpe. (vid distinto — el cooldown solo
+        // aplica contra el MISMO objetivo, battle.cpp:812.)
+        let near = NpcState { vid: 102, x: a.x + 200, y: a.y + 200, ..m };
+        let r = handle_attack(&mut combat, &atk(near.vid), &a, Some(&near), 2000, &mut roll);
+        assert_eq!(r.damage, 46);
+
+        // Mob MELEE grande (rango 1000 → max = MAX(300, 1150)): 500 OK, 1200 no.
+        let big = NpcState { vid: 103, x: a.x + 500, y: a.y, battle_type: BATTLE_TYPE_MELEE, attack_range: 1000, ..m };
+        assert_eq!(melee_max_range(&big), 1150, "(int)(1000*1.15f)");
+        let r = handle_attack(&mut combat, &atk(big.vid), &a, Some(&big), 3000, &mut roll);
+        assert_eq!(r.damage, 46, "500 ≤ 1150");
+        let far_big = NpcState { vid: 104, x: a.x + 1200, y: a.y, ..big };
+        let r = handle_attack(&mut combat, &atk(far_big.vid), &a, Some(&far_big), 4000, &mut roll);
+        assert_eq!(r, CombatResult::empty(), "1200 > 1150");
+    }
+
+    /// Sin objetivo (`None` — el mundo aún vacío) → resultado vacío; bType > 0
+    /// (skill) → resultado vacío (el lane de skills lo procesa).
+    #[test]
+    fn no_target_and_skills_are_empty() {
+        let a = ninja();
+        let mut combat = CombatState::new();
+        let mut roll = roll_fixed(0);
+        assert_eq!(handle_attack(&mut combat, &atk(101), &a, None, 1000, &mut roll), CombatResult::empty());
+        assert_eq!(combat.last_attack_time, 0, "sin objetivo: ni timer");
+        let m = mob101();
+        let mut atk_skill = atk(m.vid);
+        atk_skill.b_type = 42;
+        assert_eq!(handle_attack(&mut combat, &atk_skill, &a, Some(&m), 1000, &mut roll), CombatResult::empty());
+    }
+
+    /// Los paquetes del resultado: `[GcAttack(12), GcDamageInfo(135)]` con los
+    /// campos exactos (VID atacante = player id, VID víctima, flag NORMAL).
+    #[test]
+    fn result_packets_bytes() {
+        let a = ninja();
+        let m = mob101();
+        let mut combat = CombatState::new();
+        let mut roll = roll_fixed(0);
+        let r = handle_attack(&mut combat, &atk(m.vid), &a, Some(&m), 1000, &mut roll);
+        assert_eq!(r.damage, 46);
+        assert_eq!(r.packets.len(), 2);
+        // GC_ATTACK: header 12, dwVID=2 (player id), dwVictimVID=101, bType=0.
+        assert_eq!(r.packets[0], [12, 2, 0, 0, 0, 101, 0, 0, 0, 0]);
+        // GC_DAMAGE_INFO: header 135, dwVID=101, flag=NORMAL(1), damage=46.
+        assert_eq!(r.packets[1], [135, 101, 0, 0, 0, 1, 46, 0, 0, 0]);
+    }
+
+    fn atk(victim_vid: u32) -> CgAttack {
+        CgAttack {
+            header: protocol::header::CG_ATTACK,
+            b_type: 0,
+            victim_vid,
+            crc_proc: 0,
+            crc_file: 0,
+        }
+    }
+}

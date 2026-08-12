@@ -32,13 +32,20 @@
 /// 152/153 — el auth C++ los envía en login exitoso antes de `GC_AUTH_SUCCESS`
 /// (`input_db.cpp:1710-1716`). Boundary aislado y borrable en bloque en F7.
 pub mod legacy;
+pub mod movement;
 pub mod world;
+pub mod combat;
 
 /// Canal de datos aditivo pull-based (F3 §5.6): `CG_QUERY` (162) /
 /// `GC_RESPONSE` (163) — manifest versionado + delta (server = única fuente
 /// de datos). Aditivo: el cliente legacy registra los headers como no-op en
 /// PhaseLogin; el wire del sobre se fija aquí (payload crudo, ver módulo).
 pub mod datachannel;
+
+/// F1 — locale server-side (ADR-0009): `CG_LOCALE_REQUEST` (132) /
+/// `GC_LOCALE` (140) — el bundle de texto del cliente por idioma, chunked.
+/// Aditivo (patrón datachannel); spec `docs/plans/locale-redesign.md` §Wire.
+pub mod locale;
 
 pub mod header {
     //! Headers de paquete (verificados contra `game/src/packet.h`).
@@ -96,6 +103,9 @@ pub mod header {
     pub const CG_CLIENT_VERSION2: u8 = 0xf1;
     pub const CG_LOGIN2: u8 = 109;
     pub const CG_LOGIN3: u8 = 111;
+    /// F1 (locale, aditivo — ADR-0009): el cliente pide el bundle de texto
+    /// al conectar al auth, ANTES del LOGIN3 (`CG_LOCALE_REQUEST`, 4 B).
+    pub const CG_LOCALE_REQUEST: u8 = 132;
 
     // S→C
     pub const GC_CHARACTER_ADD: u8 = 1;
@@ -111,9 +121,20 @@ pub mod header {
     pub const GC_CHAR_ADDITIONAL_INFO: u8 = 136;
     pub const GC_PING: u8 = 44;
     pub const GC_AUTH_SUCCESS: u8 = 150;
+    /// `HEADER_GC_ATTACK` (server `packet.h:123`, struct del cliente
+    /// `Packet.h:1936-1942` — 10 B). OJO: el cliente v24 no lo despacha ni el
+    /// C++ del server lo manda (ver `protocol::combat` — la animación es
+    /// predicción local); se implementa por contrato wire.
+    pub const GC_ATTACK: u8 = 12;
+    /// `HEADER_GC_DAMAGE_INFO` (server `packet.h:245`, cliente `Packet.h:274`
+    /// — 10 B): el feedback visible del golpe (número de daño).
+    pub const GC_DAMAGE_INFO: u8 = 135;
     /// LoginSuccess "new slot" = 0x20 (server `HEADER_GC_LOGIN_SUCCESS_NEWSLOT`,
     /// cliente `HEADER_GC_LOGIN_SUCCESS4`).
     pub const GC_LOGIN_SUCCESS_NEWSLOT: u8 = 32;
+    /// F1 (locale, aditivo — ADR-0009): `GC_LOCALE` chunked variable-length
+    /// (el bundle reensamblado son ~1-2 MB — excede u16, por eso va chunked).
+    pub const GC_LOCALE: u8 = 140;
 }
 
 /// `LOGIN_MAX_LEN` = 30 → buffers `[31]`.

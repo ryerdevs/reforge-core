@@ -10,6 +10,14 @@
 //!   (TSimplePlayer 71 B, TPacketGCLoginSuccess 449 B, TPacketGCCharacterAdd
 //!   37 B, TPacketGCCharacterAdditionalInfo 70 B). Los structs wire viven en
 //!   `protocol` (F0) — aqui SOLO las transformaciones de dominio.
+//! - `movement` — F5.1: el estado de movimiento del jugador y la validación
+//!   anti-speedhack del CG_MOVE (parity input_main.cpp).
+//! - `combat` — F5.2: el core del combate (server-authoritative) — la fórmula
+//!   base del C++ (`battle.cpp`/`char.cpp`), cooldown y rango; expuesto como
+//!   `handle_attack(...)` para el dispatch del canal (CG_ATTACK).
 
+pub mod movement;
 pub mod packets;
 pub mod world;
+pub mod npc;
+pub mod combat;

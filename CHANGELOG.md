@@ -7,6 +7,45 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-12] (8th part) — F0 closed + F1 importer (locale + maps/spawns in PG)
+
+### Fixed
+
+- **channel_pg test bug** (`server_realms/tests/channel_pg.rs:887`): the "dead vid no damage" check had inverted logic — the 2 s timeout (the CORRECT behavior) was treated as an error via `?`. Now the timeout is the success case. Root cause of the repeated red test, not a server bug.
+- **F5 perf fix VERIFIED end-to-end** (the contract that was cancelled twice): from WSL, `cargo test -p server_realms --test channel_pg -- --ignored` → **6/6 pass**; `entry + 23033 spawns leídos en 12.2 s` (previous stall: 3–4 min via 10,026 sequential PG connections; now batch/cache). Also `cargo test -p protocol -p realm`: 100/100 unit tests pass.
+
+### Changed
+
+- **F0 cleanup (user-approved)**: `DROP SCHEMA world CASCADE` in PG (aborted-redo debris: `world.map` 1 row + `world.map_spawn` 10,026 rows, 0 code references) + deleted `scripts/gpg/migrate_spawns.py`. The proper spawns-in-PG work is F1 (below), not the redo.
+- **ADR-0009 written** (`docs/decisions/0009-server-side-locale.md`, Proposed): server-owned locale — one table per text domain (`common.*`), `GC_LOCALE` request/response, EN fallback, refined items derived from base, DX11/Slint client parked.
+- **Design closed** in `docs/plans/locale-redesign.md`: 8 locale tables + `world.maps`/`world.spawns`, hot reload via per-entry read + NOTIFY later, map names = image + text overlay, language selector (default EN).
+
+### Added — F1 importer (`source/reforge/locale_import/`, new workspace member)
+
+- CLI binary, one subcommand per domain, idempotent (per-lang DELETE / TRUNCATE), `--pg`/`--proto-dir`/`--pack-locale`/`--locale-strings`/`--map-path` flags with WSL UNC defaults. Reuses the verified `realm::npc::load_map_spawns` parser for spawns (no reimplementation); reuses DumpProto artifacts (`source/tools/proto/<lang>/{mob,item}_names.txt`) — no MMPT0/MIPX binary parsing needed.
+- Schema applied to PG via `scripts/gpg/f1-locale-world-schema.sql` (idempotent): `common.{mob_names,item_names,item_descriptions,skill_names,map_names,ui_texts,message_texts,item_icons}` + `world.{maps,spawns}` (+ spawns index).
+- **Live data (verified by orchestrator with psql)**: mob_names **8,628** (es/en/de × 2,876), item_names **34,281**, item_descriptions **22,674**, skill_names **402**, ui_texts **3,903**, message_texts **12,489** (16 langs), `world.maps` **65**, `world.spawns` **145,876** (Σ count 279,603; map 41 = 10,026 entries, Σ 23,033 — matches `map41_spawns.rs` parity, incl. the design row `(41, 101, 957600, 247300, 3, mob)` and `5004 Anywhere@(969600,278400)`).
+- Tests: `locale_import` 17 passed + 2 gated (live PG: mobs es = 2,876, map-41 Σ = 23,033); `cargo test --workspace` all green, clippy clean.
+- **Gaps documented**: `common.map_names` empty (map names are TGA images, no text source yet); `common.item_icons` empty (import-icons skipped — needs EPK extraction + TGA→PNG, parked for the panel slice); `\"` kept as backslash+quote (exact C++ parity); Korean CP949 leftovers byte-faithful (client renders identically).
+
+### Pending
+
+- F1 wire slice: `CG_LOCALE_REQUEST`/`GC_LOCALE` + client cache (CPythonLocale) + loading screen — next.
+- `common.item_icons` / `common.map_names` sources.
+- F5 quest engine (quest DSL designed, not started).
+
+## [2026-08-11] (7th part) — Repo cleanup: heavy assets moved outside the repo
+
+### Changed
+
+- **`client\` (2.2 GB installed client) and `archive\` (1.6 GB backups) MOVED OUT of the repo** → `C:\projects\metin2-extra\` (user decision). `archive` needed `robocopy /MOVE` (a directory-handle lock blocked `Move-Item`; 6 files, 1.643 GB, 0 errors). `client-om2\` was already deleted; stray `tsize.obj` removed.
+- **Rust build artifacts cleaned**: `cargo clean` freed 9.1 GiB (31,572 files). A temporary CARGO_TARGET_DIR redirect to `C:\projects\metin2-extra\target` was reverted the same session (user decision — the target stays in the workspace at `source\reforge\target`).
+- **Docs updated**: AGENTS.md (layout table, runbook, recompile/repack instructions, crash-dump paths), ROADMAP.md (GitHub preparation section), `docs/guardrails/world-entry-crash.md` (dump paths).
+
+### Pending (pre-existing, NOT caused by this change)
+
+- **F5 WIP (uncommitted, external session)**: mid-session `cargo check -p protocol` failed (E0425: `GC_ATTACK`/`GC_DAMAGE_INFO` missing from `crate::header`); after edits to `protocol/src/lib.rs` a later check **finished clean** (`Finished dev profile in 6.51s`). Full workspace not re-checked (realm/server_realms unverified).
+
 ## [2026-08-11] (6th part) — F4 MILESTONE MET: the real client enters the world against the Rust core and stays
 
 ### Fixed (the world-entry saga — 7 server-side iterations, all matching the CLIENT contract)

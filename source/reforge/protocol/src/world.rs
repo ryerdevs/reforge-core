@@ -274,6 +274,58 @@ impl TPacketGCAffectAdd {
     }
 }
 
+/// `TPacketGCDead` (5 B, header 14 — `Packet.h:1349-1353`): la muerte de un
+/// personaje/mob (la animación de morir; el cliente lo remueve tras la
+/// animación con el `GC_CHARACTER_DEL`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketGCDead {
+    pub header: u8,
+    pub vid: u32,
+}
+
+impl TPacketGCDead {
+    pub const SIZE: usize = 5;
+    pub const HEADER: u8 = 14;
+
+    pub fn new(vid: u32) -> Self {
+        Self { header: Self::HEADER, vid }
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        b[1..5].copy_from_slice(&self.vid.to_le_bytes());
+        b
+    }
+}
+
+/// `TPacketGCCharacterDelete` (5 B, header 2 — `Packet.h:1296-1300`): la
+/// remoción de un personaje/mob del mundo (el cliente lo remueve; en el C++
+/// es el `EncodeRemovePacket` del dead mob).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketGCCharacterDelete {
+    pub header: u8,
+    pub vid: u32,
+}
+
+impl TPacketGCCharacterDelete {
+    pub const SIZE: usize = 5;
+    pub const HEADER: u8 = 2;
+
+    pub fn new(vid: u32) -> Self {
+        Self { header: Self::HEADER, vid }
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        b[1..5].copy_from_slice(&self.vid.to_le_bytes());
+        b
+    }
+}
+
 /// `TPacketGCTime` (5 B, header 106 — `packet.h:1872-1876`): el reloj del
 /// server (time_t x86 = DWORD unix seconds; `input_login.cpp:648-651` —
 /// `p.time = get_global_time()`).
@@ -571,6 +623,8 @@ mod tests {
         assert_eq!(TPacketGCTime::SIZE, 5, "header + time_t(4)");
         assert_eq!(TPacketGCChannel::SIZE, 2, "header + channel");
         assert_eq!(TPacketGCMainCharacter::SIZE, 47, "layout del CLIENTE (sin empire — Packet.h:1349-1357)");
+        assert_eq!(TPacketGCDead::SIZE, 5, "header + vid");
+        assert_eq!(TPacketGCCharacterDelete::SIZE, 5, "header + vid");
         assert_eq!(TPacketGCPoints::SIZE, 1 + 255 * 4);
         assert_eq!(TPacketGCSkillLevel::SIZE, 1 + 255 * 6);
         assert_eq!(TLandPacketElement::SIZE, 24);

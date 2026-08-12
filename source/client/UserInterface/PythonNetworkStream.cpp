@@ -149,6 +149,18 @@ class CMainPacketHeaderMap : public CNetworkPacketHeaderMap
 
 			Set(HEADER_GC_AUTH_SUCCESS, CNetworkPacketHeaderMap::TPacketType(sizeof(TPacketGCAuthSuccess), STATIC_SIZE_PACKET));
 			Set(HEADER_GC_CHANNEL, CNetworkPacketHeaderMap::TPacketType(sizeof(TPacketGCChannel), STATIC_SIZE_PACKET));
+
+			// F5: lista de canales + manifest (rates) del auth (164) — el
+			// paquete se recibe en la fase AUTH (CAccountConnector, sin
+			// CheckPacket); el registro aquí es el contrato del guardrail
+			// (CheckPacket mata el cliente con headers no registrados).
+			Set(HEADER_GC_CHANNEL_LIST, CNetworkPacketHeaderMap::TPacketType(sizeof(TPacketGCChannelList), STATIC_SIZE_PACKET));
+
+			// F1: bundle de texto del auth (140, var-size — header + u16 size
+			// total + payload, parity LAND_LIST). Se recibe en la fase AUTH
+			// (CAccountConnector); el registro aquí es defensivo (si llegara
+			// por el stream del canal, CheckPacket conoce su tamaño).
+			Set(HEADER_GC_LOCALE, CNetworkPacketHeaderMap::TPacketType(sizeof(TPacketGCLocale), DYNAMIC_SIZE_PACKET));
 #ifdef ENABLE_GUILD_TOKEN_AUTH
 			Set(HEADER_GC_GUILD_TOKEN, CNetworkPacketHeaderMap::TPacketType(sizeof(TPacketGCGuildToken), STATIC_SIZE_PACKET));
 #endif

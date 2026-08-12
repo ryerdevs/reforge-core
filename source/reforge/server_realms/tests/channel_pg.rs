@@ -1,4 +1,4 @@
-//! Integration F4 slice 3 (HITO del slice): fake client legacy contra el
+﻿//! Integration F4 slice 3 (HITO del slice): fake client legacy contra el
 //! channel REAL con PostgreSQL de verdad — el flujo login→select→**entrada al
 //! mundo** end-to-end (el cliente queda DENTRO del mapa, mundo vacío).
 //! Gated con `#[ignore]` (requiere la PG de WSL).
@@ -79,7 +79,7 @@ fn spawn_channel(config_path: &std::path::Path) -> (Child, String) {
     (child, addr)
 }
 
-async fn client_handshake_channel(conn: &mut Connection<TcpStream>) {
+async fn client_handshake_channel(conn: &mut Connection<TcpStream>) -> u32 {
     let phase_pkt = read_exact_size(conn, TPacketGCPhase::SIZE).await.expect("GC_PHASE");
     assert_eq!(TPacketGCPhase::from_bytes(&phase_pkt).unwrap().phase, phase::HANDSHAKE);
     let hs_pkt = read_exact_size(conn, 13).await.expect("GC_HANDSHAKE");
@@ -92,6 +92,7 @@ async fn client_handshake_channel(conn: &mut Connection<TcpStream>) {
         .await
         .expect("GC_PHASE(LOGIN)");
     assert_eq!(TPacketGCPhase::from_bytes(&login_phase).unwrap().phase, phase::LOGIN);
+    dw_time
 }
 
 /// La conexión del GUILD MARK del cliente real: el cliente la abre en paralelo
@@ -123,11 +124,10 @@ async fn mark_login_handshake(addr: &str, handle: u32, random_key: u32) {
 /// Login del canal + el 449 B (handshake → LOGIN3 → GC_EMPIRE → SELECT →
 /// 449 B con los asserts de slots). Reutilizado por el flujo completo y el
 /// test del idle timeout.
-async fn connect_login_449(addr: &str) -> Result<Connection<TcpStream>, String> {
+async fn connect_login_449(addr: &str) -> Result<(Connection<TcpStream>, u32), String> {
     let stream = TcpStream::connect(addr).await.map_err(|e| format!("connect: {e}"))?;
     let mut conn = Connection::new(stream);
-    client_handshake_channel(&mut conn).await;
-
+    let server_time = client_handshake_channel(&mut conn).await;
     // LOGIN3 del canal (65 B) — test/1234 (cuenta viva del E2E).
     conn.send(&TPacketCGLogin3::new_channel("test", "1234", [0; 4]).to_bytes_channel())
         .await
@@ -170,7 +170,90 @@ async fn connect_login_449(addr: &str) -> Result<Connection<TcpStream>, String> 
     // select continúa en la conexión principal.
     mark_login_handshake(addr, success.handle, success.random_key).await;
 
-    Ok(conn)
+    Ok((conn, server_time))
+}
+
+/// Select + PLAYER LOAD + ENTERGAME (tamaños fijos — el personaje tiene
+/// 0 items/0 affects) + lee los NPCs del spawn del mapa (add 37 B [+
+/// addInfo 70 B si NPC]) hasta que el header deje de ser 1/136. Devuelve
+/// la lista (vid, x, y, wrace) de los adds — para que el fake elija el mob.
+///
+/// TIMING (F5 perf): la resolución de spawns usa la caché compartida + una
+/// query batch (realm::npc::MobCache) — el entry + los spawns fluyen en
+/// SEGUNDOS. El assert de <15 s fija el contrato (la resolución previa,
+/// 10k × load_by_vnum con conexión por llamada, stallaba ~3-4 min).
+async fn enter_and_read_spawns(conn: &mut Connection<TcpStream>) -> Result<Vec<(u32, i32, i32, u32)>, String> {
+    let t0 = std::time::Instant::now();
+    // CG_PLAYER_SELECT slot 0.
+    conn.send(&TPacketCGPlayerSelect::new(0).to_bytes())
+        .await
+        .map_err(|e| format!("select: {e}"))?;
+    let _ = read_exact_size(conn, 2).await.map_err(|e| format!("loading: {e}"))?; // GC_PHASE(LOADING)
+    let _ = read_exact_size(conn, 47).await.map_err(|e| format!("113: {e}"))?; // MAIN_CHARACTER
+    for _ in 0..36 {
+        let _ = read_exact_size(conn, 4).await.map_err(|e| format!("QS: {e}"))?;
+    }
+    let _ = read_exact_size(conn, 1021).await.map_err(|e| format!("16: {e}"))?; // POINTS
+    let _ = read_exact_size(conn, 1531).await.map_err(|e| format!("76: {e}"))?; // SKILLS
+    // VERSION (0xf1) + CG_ENTERGAME.
+    let mut version = vec![0xf1u8];
+    version.resize(67, 0);
+    conn.send(&version).await.map_err(|e| format!("VERSION: {e}"))?;
+    conn.send(&[10u8]).await.map_err(|e| format!("ENTERGAME: {e}"))?;
+    // Cola del ENTERGAME (tamaños fijos).
+    let _ = read_exact_size(conn, 37).await.map_err(|e| format!("ADD: {e}"))?;
+    let _ = read_exact_size(conn, 70).await.map_err(|e| format!("INFO: {e}"))?;
+    let _ = read_exact_size(conn, 2).await.map_err(|e| format!("GAME: {e}"))?;
+    let land_hdr = read_exact_size(conn, 3).await.map_err(|e| format!("land: {e}"))?;
+    let size = u16::from_le_bytes([land_hdr[1], land_hdr[2]]);
+    let _ = read_exact_size(conn, (size - 3) as usize).await.map_err(|e| format!("lands: {e}"))?;
+    let _ = read_exact_size(conn, 5).await.map_err(|e| format!("TIME: {e}"))?;
+    let _ = read_exact_size(conn, 2).await.map_err(|e| format!("CHANNEL: {e}"))?;
+
+    // Los NPCs del spawn del mapa (F5.2): add (1, 37 B) [+ addInfo (136,
+    // 70 B) si type NPC] contiguos por mob. El add lleva vid@1, x@9, y@13,
+    // wRaceNum (el vnum del mob)@22.
+    let mut spawns: Vec<(u32, i32, i32, u32)> = Vec::new();
+    loop {
+        let hdr = read_exact_size(conn, 1).await.map_err(|e| format!("spawn hdr: {e}"))?;
+        match hdr[0] {
+            1 => {
+                let body = read_exact_size(conn, 36).await.map_err(|e| format!("spawn add: {e}"))?;
+                let mut pkt = hdr.clone();
+                pkt.extend_from_slice(&body);
+                let vid = u32::from_le_bytes([pkt[1], pkt[2], pkt[3], pkt[4]]);
+                let x = i32::from_le_bytes([pkt[9], pkt[10], pkt[11], pkt[12]]);
+                let y = i32::from_le_bytes([pkt[13], pkt[14], pkt[15], pkt[16]]);
+                let wrace = u32::from_le_bytes([pkt[22], pkt[23], pkt[24], pkt[25]]);
+                spawns.push((vid, x, y, wrace));
+            }
+            136 => {
+                let _ = read_exact_size(conn, 69).await.map_err(|e| format!("spawn info: {e}"))?;
+            }
+            other => {
+                // Fin de los spawns — el byte leído es el siguiente paquete
+                // (ping/heartbeat del canal). No se devuelve al buffer; el
+                // caller sigue con su fase.
+                eprintln!("fin de spawns ({} adds); siguiente header 0x{other:02x}", spawns.len());
+                break;
+            }
+        }
+    }
+    assert!(!spawns.is_empty(), "el mapa 41 tiene spawns (realm::npc)");
+    // F5 perf: la resolución con caché no debe stallar la entrada (el
+    // contrato previo sin batch: ~3-4 min por entrada — regresión acá).
+    let elapsed = t0.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(15),
+        "entry + spawns en {:.1} s — la resolución debe ser batch/caché",
+        elapsed.as_secs_f64()
+    );
+    eprintln!(
+        "entry + {} spawns leídos en {:.1} s (resolución batch/caché)",
+        spawns.len(),
+        elapsed.as_secs_f64()
+    );
+    Ok(spawns)
 }
 
 /// El flujo completo del cliente REAL: handshake → LOGIN3 → GC_EMPIRE →
@@ -179,7 +262,7 @@ async fn connect_login_449(addr: &str) -> Result<Connection<TcpStream>, String> 
 /// LAND_LIST). Reutilizado por el gated con subproceso y por el test contra
 /// el canal DESPLEGADO (30003).
 async fn full_login_select_entry_flow(addr: &str) -> Result<(), String> {
-    let mut conn = connect_login_449(addr).await?;
+    let (mut conn, _server_time) = connect_login_449(addr).await?;
 
         // CG_PLAYER_SELECT slot 0 (2 B).
         conn.send(&TPacketCGPlayerSelect::new(0).to_bytes())
@@ -523,32 +606,33 @@ async fn channel_idle_timeout_reset_by_traffic() {
     };
 
     let result = async {
-        let mut conn = connect_login_449(&addr).await?;
-        // Select + entry (tamaños fijos — el personaje tiene 0 items/0 affects).
-        conn.send(&TPacketCGPlayerSelect::new(0).to_bytes())
-            .await
-            .map_err(|e| format!("select: {e}"))?;
-        let _ = read_exact_size(&mut conn, 2).await.map_err(|e| format!("loading: {e}"))?; // GC_PHASE(LOADING)
-        let _ = read_exact_size(&mut conn, 47).await.map_err(|e| format!("113: {e}"))?; // MAIN_CHARACTER
-        for _ in 0..36 {
-            let _ = read_exact_size(&mut conn, 4).await.map_err(|e| format!("QS: {e}"))?;
-        }
-        let _ = read_exact_size(&mut conn, 1021).await.map_err(|e| format!("16: {e}"))?; // POINTS
-        let _ = read_exact_size(&mut conn, 1531).await.map_err(|e| format!("76: {e}"))?; // SKILLS
-        // VERSION (0xf1) + CG_ENTERGAME.
-        let mut version = vec![0xf1u8];
-        version.resize(67, 0);
-        conn.send(&version).await.map_err(|e| format!("VERSION: {e}"))?;
-        conn.send(&[10u8]).await.map_err(|e| format!("ENTERGAME: {e}"))?;
-        // Cola del ENTERGAME (tamaños fijos).
-        let _ = read_exact_size(&mut conn, 37).await.map_err(|e| format!("ADD: {e}"))?;
-        let _ = read_exact_size(&mut conn, 70).await.map_err(|e| format!("INFO: {e}"))?;
-        let _ = read_exact_size(&mut conn, 2).await.map_err(|e| format!("GAME: {e}"))?;
-        let land_hdr = read_exact_size(&mut conn, 3).await.map_err(|e| format!("land: {e}"))?;
-        let size = u16::from_le_bytes([land_hdr[1], land_hdr[2]]);
-        let _ = read_exact_size(&mut conn, (size - 3) as usize).await.map_err(|e| format!("lands: {e}"))?;
-        let _ = read_exact_size(&mut conn, 5).await.map_err(|e| format!("TIME: {e}"))?;
-        let _ = read_exact_size(&mut conn, 2).await.map_err(|e| format!("CHANNEL: {e}"))?;
+        let (mut conn, _server_time) = connect_login_449(&addr).await?;
+        // Select + entry + los NPCs del spawn (F5.2 — el helper consume los
+        // adds del mapa antes de la fase de juego).
+        let _spawns = enter_and_read_spawns(&mut conn).await?;
+        // CG_ENTERGAME (10, 1 B) — el canal entra en la fase de juego (pings).
+        conn.send(&[10u8]).await.map_err(|e| format!("CG_ENTERGAME: {e}"))?;
+        // Consume el ENTERGAME del canal (ADD + INFO + GAME + lands) hasta la
+        // fase de pings (el helper del combat hace lo mismo — el primer ping).
+        tokio::time::timeout(Duration::from_millis(2000), async {
+            loop {
+                let hdr = read_exact_size(&mut conn, 1).await.map_err(|e| format!("entergame: {e}"))?;
+                if hdr[0] == 44 {
+                    conn.send(&[0xfeu8]).await.map_err(|e| format!("CG_PONG: {e}"))?;
+                    break;
+                }
+                // ADD (1): 26 B + INFO (136): 134 B — salta el tamaño del header.
+                let size = match hdr[0] {
+                    1 => 26,
+                    136 => 134,
+                    _ => return Err(format!("header inesperado en el ENTERGAME: 0x{:02x}", hdr[0])),
+                };
+                let _ = read_exact_size(&mut conn, size).await.map_err(|e| format!("entergame body: {e}"))?;
+            }
+            Ok::<(), String>(())
+        })
+        .await
+        .map_err(|_| "el canal no entró en la fase de juego (pings) en 2 s")??;
 
         // Fase de juego EN REPOSO (el escenario real del cliente): el cliente
         // no manda nada — el canal envía GC_PING (44, 1 B) cada 100 ms
@@ -610,5 +694,222 @@ async fn channel_idle_timeout_reset_by_traffic() {
     if let Err(e) = result {
         eprintln!("--- log del canal idle ---\n{log}\n--- fin ---");
         panic!("idle timeout reseteado por tráfico contra PG real: {e}");
+    }
+}
+
+/// F5.2 — el combate end-to-end contra un NPC del spawn del mapa 41: el fake
+/// ataca al primer mob (cooldown 1250 ms entre golpes al mismo objetivo —
+/// battle.cpp:808-838) hasta el GC_DEAD + GC_CHARACTER_DEL (la muerte), y
+/// verifica que el NPC removido ya no recibe daño.
+#[tokio::test]
+#[ignore = "requiere PG real (WSL): cargo test --package server_realms -- --ignored"]
+async fn channel_combat_kills_npc() {
+    let config_path = write_temp_config("combat");
+    // Spawn propio con stderr PIPED (spawn_channel lo tira a null — para el
+    // diagnóstico del canal en este test).
+    let mut child = Command::new(env!("CARGO_BIN_EXE_server_realms"))
+        .args(["--role", "channel", "--config"])
+        .arg(&config_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("ejecutar server_realms");
+    let log_path = std::env::temp_dir().join("f4_combat_channel.log");
+    let stderr = std::fs::File::create(&log_path).expect("log combat");
+    let stderr_pipe = child.stderr.take().expect("stderr piped");
+    std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader, Write};
+        let mut file = stderr;
+        let mut reader = BufReader::new(stderr_pipe);
+        let mut line = String::new();
+        while let Ok(n) = reader.read_line(&mut line) {
+            if n == 0 {
+                break;
+            }
+            let _ = file.write_all(line.as_bytes());
+            line.clear();
+        }
+    });
+    // Espera el anuncio del listener.
+    let mut stdout_reader = BufReader::new(child.stdout.take().expect("stdout piped"));
+    let mut line = String::new();
+    let addr = loop {
+        line.clear();
+        if stdout_reader.read_line(&mut line).unwrap_or(0) == 0 {
+            panic!("el canal no anunció el listener");
+        }
+        if let Some(a) = line.trim().strip_prefix("server_realms: channel escuchando en ") {
+            break a.to_string();
+        }
+    };
+
+    let result = async {
+        let (mut conn, server_time) = connect_login_449(&addr).await?;
+        // Entry + spawns: el fake elige un mob de BAJO HP atacable — el
+        // 20001 (NPC lvl 1, 120 HP — spawnea del npc.txt) o el 101 (126 HP —
+        // del regen del runtime, que el lane npc NO emite: kind `r` — GAP
+        // reportado al orquestador); si ninguno, el más cercano a la aldea.
+        let spawns = enter_and_read_spawns(&mut conn).await?;
+        let target = spawns
+            .iter()
+            .find(|(_, _, _, wrace)| *wrace == 20001)
+            .or_else(|| spawns.iter().find(|(_, _, _, wrace)| *wrace == 101))
+            .or_else(|| {
+                spawns.iter().min_by_key(|(_, x, y, _)| {
+                    let dx = i64::from(*x - 969600);
+                    let dy = i64::from(*y - 278400);
+                    dx * dx + dy * dy
+                })
+            })
+            .copied()
+            .expect("al menos un spawn");
+        let (first_vid, npc_x, npc_y, _wrace) = target;
+        eprintln!("objetivo: mob {_wrace} vid {first_vid} en ({npc_x},{npc_y})");
+
+        // El fake se MUEVE cerca del NPC (rango melee 300 units — battle.cpp:144-167):
+        // MOVE en pasos <= 2000 units (envelope F5.1), dwTime anclado al reloj
+        // del server (el handshake lo dio). Loop hasta el rango (tope 200
+        // pasos — el mapa 41 es grande; si no llega, fail — no colgar).
+        let t0 = std::time::Instant::now();
+        let mut px = 969600i32;
+        let mut py = 278400i32;
+        let mut reached = false;
+        for _ in 0..200 {
+            let dx = npc_x - px;
+            let dy = npc_y - py;
+            let dist_sq = i64::from(dx) * i64::from(dx) + i64::from(dy) * i64::from(dy);
+            if dist_sq <= (300i64 * 300) {
+                reached = true;
+                break;
+            }
+            let step = (2000f64 / (dist_sq as f64).sqrt()).min(1.0);
+            let nx = px + (f64::from(dx) * step) as i32;
+            let ny = py + (f64::from(dy) * step) as i32;
+            let mut mv = vec![0x07u8, 1, 0, 0]; // header + FUNC_MOVE
+            mv.extend_from_slice(&nx.to_le_bytes());
+            mv.extend_from_slice(&ny.to_le_bytes());
+            mv.extend_from_slice(&(server_time + t0.elapsed().as_millis() as u32).to_le_bytes());
+            conn.send(&mv).await.map_err(|e| format!("MOVE: {e}"))?;
+            px = nx;
+            py = ny;
+        }
+        assert!(reached, "el fake llegó al rango del NPC ({npc_x},{npc_y}) desde ({px},{py})");
+        eprintln!("fake en ({px},{py}) — NPC en ({npc_x},{npc_y})");
+
+        // CG_ATTACK (8 B): header 2 + bType 0 (normal) + victim_vid + 2 CRC.
+        let attack = |vid: u32| -> Vec<u8> {
+            let mut pkt = vec![0x02u8, 0];
+            pkt.extend_from_slice(&vid.to_le_bytes());
+            pkt.extend_from_slice(&[0u8, 0]);
+            pkt
+        };
+
+        // Golpes con el cooldown del combate (1250 ms — battle.cpp:808-838):
+        // el fake ataca hasta ver el GC_DEAD. El tope se dimensiona al HP del
+        // objetivo conocido (20001/101: 120-126 HP, daño lvl-1 ~3-9 → 60
+        // golpes = 78 s); el fallback (mob desconocido, p.ej. el 5001 de
+        // 30000 HP) solo verifica el FLUJO del daño (≥ 5 golpes con daño).
+        let hits_until_dead = match _wrace {
+            20001 | 101 => 60,
+            _ => 25,
+        };
+        let mut hits = 0;
+        let mut died = false;
+        while hits < hits_until_dead && !died {
+            conn.send(&attack(first_vid)).await.map_err(|e| format!("CG_ATTACK: {e}"))?;
+            // Lee la respuesta del golpe: GC_ATTACK (0x0C, 10 B) + [GC_DAMAGE_INFO (0x87, 10 B)] + [muerte].
+            // En el golpe FINAL el canal manda GC_DEAD (0x0e) directo (sin GC_ATTACK).
+            let hdr = read_exact_size(&mut conn, 1).await.map_err(|e| format!("rsp hdr: {e}"))?;
+            match hdr[0] {
+                0x0e => {
+                    let _ = read_exact_size(&mut conn, 4).await.map_err(|e| format!("dead: {e}"))?;
+                    let del = read_exact_size(&mut conn, 1).await.map_err(|e| format!("del hdr: {e}"))?;
+                    assert_eq!(del[0], 2, "GC_CHARACTER_DEL tras GC_DEAD");
+                    let _ = read_exact_size(&mut conn, 4).await.map_err(|e| format!("del: {e}"))?;
+                    died = true;
+                }
+                0x0c => {
+                    let _ = read_exact_size(&mut conn, 9).await.map_err(|e| format!("GcAttack: {e}"))?;
+                    // El siguiente paquete: damage info o muerte.
+                    let hdr2 = read_exact_size(&mut conn, 1).await.map_err(|e| format!("rsp2 hdr: {e}"))?;
+                    match hdr2[0] {
+                        0x87 => {
+                            let _ = read_exact_size(&mut conn, 9).await.map_err(|e| format!("dmg: {e}"))?;
+                            hits += 1;
+                        }
+                        14 => {
+                            let _ = read_exact_size(&mut conn, 4).await.map_err(|e| format!("dead: {e}"))?;
+                            // GC_CHARACTER_DEL (2, 5 B) tras el GC_DEAD.
+                            let del = read_exact_size(&mut conn, 1).await.map_err(|e| format!("del hdr: {e}"))?;
+                            assert_eq!(del[0], 2, "GC_CHARACTER_DEL tras GC_DEAD");
+                            let _ = read_exact_size(&mut conn, 4).await.map_err(|e| format!("del: {e}"))?;
+                            died = true;
+                        }
+                        other => return Err(format!("respuesta inesperada tras GcAttack: 0x{other:02x}")),
+                    }
+                }
+                other => {
+                    // Paquete del canal intercalado (ping 44/heartbeat) — leer y reintentar.
+                    if other == 44 {
+                        conn.send(&[0xfeu8]).await.map_err(|e| format!("pong: {e}"))?;
+                        continue;
+                    }
+                    return Err(format!("header inesperado en el combate: 0x{other:02x}"));
+                }
+            }
+            // Cooldown entre golpes (1250 ms del combate — battle.cpp:808).
+            if !died {
+                tokio::time::sleep(Duration::from_millis(1300)).await;
+            }
+        }
+        if hits_until_dead > 25 {
+            assert!(died, "el mob {_wrace} (vid {first_vid}) murió tras {hits} golpes (tope {hits_until_dead})");
+        } else {
+            assert!(hits >= 5, "el flujo del daño funciona (≥5 golpes con GC_DAMAGE_INFO, hubo {hits})");
+            eprintln!("flujo de daño OK: {hits} golpes sin muerte (mob {_wrace} — HP desconocido/alto)");
+        }
+        if died {
+            eprintln!("combate OK: mob {_wrace} vid {first_vid} muerto tras {hits} golpes");
+        }
+
+        // El NPC removido: atacar al mismo vid ya no produce daño (no existe
+        // en la lista de NPCs vivos del canal) — solo si el mob murió.
+        // El canal sigue vivo (pings 44/heartbeat): el assert es "no llega
+        // daño" (0x87/0x0c) en 2 s, no el EOF (la conexión del jugador vive).
+        if died {
+            conn.send(&attack(first_vid)).await.map_err(|e| format!("CG_ATTACK 2: {e}"))?;
+            let mut b = [0u8; 1];
+            let n = tokio::time::timeout(
+                Duration::from_millis(2000),
+                conn.recv(&mut b),
+            )
+            .await;
+            match n {
+                // El comportamiento correcto: el vid muerto ya no está en la
+                // lista de NPCs vivos del canal → NO llega daño en 2 s (la
+                // conexión sigue viva, solo no daña). El timeout es el ÉXITO.
+                Err(_) => {
+                    eprintln!("vid muerto sin respuesta en 2 s: OK (no daña)");
+                }
+                Ok(n) => {
+                    let n = n.map_err(|e| format!("recv tras ataque a vid muerto: {e}"))?;
+                    assert_ne!(b[0], 0x87, "el canal NO daña al vid muerto");
+                    assert_ne!(b[0], 0x0c, "el canal NO daña al vid muerto (GC_ATTACK)");
+                    assert!(n > 0, "EOF: el canal cerró la conexión (vivo, no daña)");
+                }
+            }
+        }
+        Ok::<(), String>(())
+    }
+    .await;
+
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_file(&config_path);
+    let log = std::fs::read_to_string(&log_path).unwrap_or_default();
+    let _ = std::fs::remove_file(&log_path);
+    if let Err(e) = result {
+        eprintln!("--- log del canal combate ---\n{log}\n--- fin ---");
+        panic!("combate contra un NPC del spawn: {e}");
     }
 }

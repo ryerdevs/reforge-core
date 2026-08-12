@@ -721,6 +721,7 @@ const char * GetRecvHeaderName(BYTE header)
 		stringList[134] = "HEADER_GC_DIG_MOTION";
 		stringList[135] = "HEADER_GC_DAMAGE_INFO";
 		stringList[136] = "HEADER_GC_CHAR_ADDITIONAL_INFO";
+		stringList[140] = "HEADER_GC_LOCALE";
 		stringList[150] = "HEADER_GC_AUTH_SUCCESS";
 #ifdef _IMPROVED_PACKET_ENCRYPTION_
 		stringList[0xfa] = "HEADER_GC_KEY_AGREEMENT_COMPLETED";
