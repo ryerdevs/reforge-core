@@ -7,6 +7,47 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-12] (9th part) — F5.3 kill rewards + chat + client locale cache (implemented directly by the orchestrator, no delegation)
+
+> **Workflow note:** the three fixer lanes dispatched earlier that session returned review reports instead of implementations (and the gameplay lane errored). The user asked to stop waiting on stalled delegated tests and solve it directly — this entry is the direct implementation, verified with pure unit tests (no gated PG tests were run).
+
+### Added — F5.3 kill rewards (Rust, `source/reforge`)
+
+- **`database/src/npc.rs`**: `MobRow` + `exp` (bigint), `gold_min`/`gold_max` (integer) from `player.mob_proto` (types per `legacy-schema.md` §4.6); both SQLs (single/batch) + mapper + column-order test updated.
+- **`realm/src/combat.rs`**: `kill_reward(mob_exp, gold_min, gold_max, exp_rate, gold_rate, roll)` — pure function (parity: exp del mob × rate; gold = `number(min,max)` × rate); 5 unit tests (rates, fixed gold, zero mob, channel contract).
+- **`server_realms/src/channel.rs`**: on mob death (hp ≤ 0): reward → `row.exp/gold` (saturating) → level-up loop (`next_exp` recargado por nivel vía `CommonRepo`, parity `exp_table`) → re-send `GC_POINTS` updated → `store.save_character` (Batcher durable). `row` and `next_exp` now mutable.
+
+### Added — chat (CG_CHAT/GC_CHAT, Rust)
+
+- **`network/src/framer.rs`**: `CG_CHAT` (3) variable-size packet (WORD LE `length` at [1..3] = total size incl. 4 B header, `Packet.h:534-539` + `input_main.cpp:641-655`); `length < 4` → close (parity PHASE_CLOSE); only in Channel role; test: full/fragmented/concatenated/invalid/auth-rejects.
+- **`protocol/src/lib.rs`**: `header::GC_CHAT = 4`.
+- **`server_realms/src/channel.rs`**: game-loop handler — echoes `GC_CHAT` (header + size incl. 9 B + type + dwVID + bEmpire + msg) to the player (single-player world; multicast later).
+
+### Added — client locale cache integration (C++, `source/client` — the 4 patches from fix-2's audit)
+
+- **`GameLib/ItemData.h/.cpp`**: `TLocaleNameProvider` typedef + `SetLocaleNameProvider` + static `ms_pfnLocaleName`; `GetName()` → provider first, pack (`szLocaleName`) fallback. Gamelib does NOT include PythonLocale.h (dependency direction preserved).
+- **`UserInterface/PythonLocale.cpp`**: ctor registers the item-name provider; `Utf8ToDisplay()` (UTF-8 → `GetDefaultCodePage()` via `MultiByteToWideChar(CP_UTF8)`/`WideCharToMultiByte`, fallback raw — fixes the guaranteed mojibake "JabalÃ"); applied in `ParseKeyValue` (all domains, at store time); `ParseBundle`: empty bundle (`iSize < 1`) → `Clear() + true` (was `false` → login disconnect on the defensive branch).
+- **`UserInterface/PythonNonPlayer.cpp`**: `GetName()` → `CPythonLocale::GetMobName` first, pack fallback; `#include "PythonLocale.h"`.
+- **Rebuilt + deployed**: MSBuild Release|Win32 0 errors → `metin2client.exe` **5,128,192 B**, SHA256 `26DC9FDD...` → `C:\projects\metin2-extra\client\metin2client.exe` (previous `.bak` kept).
+
+### Fixed
+
+- `server_realms/tests/auth_locale.rs`: removed unused `decode_chunks` import (clippy).
+- `realm/src/npc.rs` test fixture: `MobRow` constructor updated with the new reward fields.
+
+### Verification (all real output, no gated PG tests)
+
+- `cargo test --workspace` — all green (realm 42/42 incl. 5 new kill_reward; network 26/26 incl. CG_CHAT variable test; others unchanged).
+- `cargo clippy -p protocol -p network -p database -p realm -p server_realms --all-targets` — no new warnings (remaining protocol warnings are pre-existing F1 WIP; mysql_proxy warnings pre-existing, untouched).
+- MSBuild Release|Win32: 0 errors.
+
+### Pending
+
+- Gated PG tests (`channel_pg`/`auth_locale`/`mob_pg` etc.) NOT run this session (user directive — they stall in this environment; PG was down; the fix-3 gated baseline 25/25 passed 2026-08-11).
+- F5.3 next: drops/items on kill, NPC AI (aggro/movement), movement broadcast (`GC_CHARACTER_MOVE` to observers), exp stat/skill points on level-up (currently only level+exp+gold via GC_POINTS).
+- F1 client still pending: UI/map/skill rendering integration + language selector; `common.item_icons`/`map_names` sources.
+- WAL local-to-disk + replay (fix-3's 8-point review) still unimplemented — next data-layer slice.
+
 ## [2026-08-12] (8th part) — F0 closed + F1 importer (locale + maps/spawns in PG)
 
 ### Fixed

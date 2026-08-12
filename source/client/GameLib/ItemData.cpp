@@ -4,6 +4,12 @@
 #include "ItemData.h"
 
 CDynamicPool<CItemData>		CItemData::ms_kPool;
+CItemData::TLocaleNameProvider CItemData::ms_pfnLocaleName = nullptr;
+
+void CItemData::SetLocaleNameProvider(TLocaleNameProvider pfnProvider)
+{
+	ms_pfnLocaleName = pfnProvider;
+}
 
 extern DWORD GetDefaultCodePage();
 
@@ -180,6 +186,15 @@ DWORD CItemData::GetIndex() const
 
 const char * CItemData::GetName() const
 {
+	// F1 (locale redesign): el cache del servidor manda; el pack es el
+	// fallback (un item sin entrada en el bundle se muestra como antes).
+	if (ms_pfnLocaleName)
+	{
+		const char * szLocale = ms_pfnLocaleName(m_ItemTable.dwVnum);
+		if (szLocale && szLocale[0] != '\0')
+			return szLocale;
+	}
+
 	return m_ItemTable.szLocaleName;
 }
 

@@ -3,6 +3,7 @@
 #include "pythonnonplayer.h"
 #include "InstanceBase.h"
 #include "PythonCharacterManager.h"
+#include "PythonLocale.h"
 
 bool CPythonNonPlayer::LoadNonPlayerData(const char * c_szFileName)
 {
@@ -82,6 +83,16 @@ bool CPythonNonPlayer::LoadNonPlayerData(const char * c_szFileName)
 
 bool CPythonNonPlayer::GetName(DWORD dwVnum, const char ** c_pszName)
 {
+	// F1 (locale redesign): el cache del servidor (CPythonLocale) manda —
+	// nombres UTF-8 del bundle; el pack es el fallback (un mob sin entrada
+	// en el bundle se muestra como antes).
+	const std::string* pLocaleName = CPythonLocale::Instance().GetMobName(dwVnum);
+	if (pLocaleName && !pLocaleName->empty())
+	{
+		*c_pszName = pLocaleName->c_str();
+		return true;
+	}
+
 	const TMobTable * p = GetTable(dwVnum);
 
 	if (!p)
