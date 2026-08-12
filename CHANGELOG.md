@@ -7,7 +7,23 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
-## [2026-08-12] (29th part) — bevy_ecs adopted NOW + client F7 = bevy + Slint; ADR-0010/0011/0009 Accepted
+## [2026-08-12] (30th part) — Agent config: Oracle → v4-pro + skill/MCP adjustments
+
+> Config: `~/.config/opencode/oh-my-opencode-slim.json` (preset `opencode-go` + `agents.coder`) + `.opencode/agents/*.md` (local, gitignored). Docs: `docs/explanation/agent-organization.md`. All changes require an opencode restart (guardrail rule 7 — verified empirically with a fresh-oracle probe: the new model does NOT load hot).
+
+### Changed — agent team config
+
+- **Oracle → `opencode-go/deepseek-v4-pro`** (user decision: architecture reviews/designs pass through the stronger model). Applied in BOTH places — the local `oracle.md` and the preset in the global config (the preset still said v4-flash and would have won).
+- **Fixer + 2 skills** (now 13): `rust-async-patterns` (will attack the slice-18 tokio↔bevy mpsc bridge) + `improve-codebase-architecture` (structural anti-patterns / bad-code detection — user request).
+- **Librarian + graphify MCP** (now context7 + gh_grep + graphify) — docs work needs the code graphs (rule 13).
+- **Coder + graphify MCP** (was missing the `mcps` property entirely) — the writer must see the graphs before touching code (rule 13).
+- **Docs**: `agent-organization.md` roster (oracle v4-pro), specialization line (fixer skills + MCPs), model note rewritten (oracle v4-pro, observer mimo-v2.5, rest v4-flash).
+- **Verified**: config JSON parses; probe confirmed model changes load only after restart.
+
+### Pending
+
+- **Restart opencode** to load: oracle v4-pro + fixer/librarian/coder skill-MCP changes.
+- After restart: **slice 18 spec review with the oracle on v4-pro** (fresh session) before Coder starts the bevy_ecs adoption (World compartido por canal, 5 pasos — spec de ora-1 aprobada).
 
 > User decision after the strategic review: "Metin2 es un juego de farmeo — el lag con muchos mobs es el problema core; con ECS mejoraría muchísimo el rendimiento. Y para el cliente futuro, bevy (no wgpu desde cero)." Documented in ADR-0010 §2 (amended) + ADR-0007 (amended) + plan/ROADMAP.
 
