@@ -34,7 +34,7 @@ The rewrite touches three worlds at once: the legacy C++ server/client (the orac
 |---|---|---|---|
 | **Orchestrator** | v4-flash max | Planning, delegation, verification, docs, **the only one who commits** | always (this role) |
 | **Oracle** | v4-pro max | **Team lead** — meta-review of the whole change (code + docs + plan + gates); architecture decisions (ADRs before code); roadmap priorities | at every gate (phase, commit) and when priorities/architecture are at stake |
-| **Coder** (replaces the old `build`; built-in `build` is disabled) | v4-flash max | **The expert writer**: implementation of bounded features with best practices (clean-code, rust-*, ponytail, verification-before-completion); owns the skills implementation | direct implementation work |
+| **Coder** (replaces the old `build`; built-in `build` is disabled) | v4-flash max | **The Reforger** (personality 2026-08-12): the expert writer — implementation of bounded features with best practices (clean-code, rust-*, ponytail, verification-before-completion); owns the skills implementation. Routing defined (`description` + `orchestratorPrompt` in config) | direct implementation work |
 | **Fixer** | v4-flash max | **The quality guardian**: Coder's adversary (finds bugs, structural problems, bad practices) AND the owner of the test suite, debugging (root cause) and scalability/maintainability — it WRITES tests and quality-scoped refactors | after Coder delivers, per task |
 | **Librarian** | v4-flash max | **Documentation maintainer** — audits AND edits docs (applies its own audit fixes); external research | doc upkeep, research, doc audits |
 | **Explorer** | v4-flash max | Fast codebase recon returning compressed context | discovery before planning |

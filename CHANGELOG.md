@@ -7,7 +7,23 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
-## [2026-08-12] (33rd part) — Agent personalities/skills development: MCPs for ALL agents + lane-focused skills
+## [2026-08-12] (34th part) — Coder personality: "The Reforger" + routing + corrupt inline prompt removed
+
+> User: "solo crea la del coder que todavía no tiene personalidad — ¿omo-slim trae un .md prompt ya enriquecido del cual podamos usar?" Answer: NO — coder does not exist in the harness pantheon (it is our custom agent replacing `build`); the harness ships agent prompts as `.ts` template strings (functional Role/Behavior/Constraints, no narrative — "The Last Builder" etc. is README marketing only, verified in `fixer.ts`); the `.md` mechanism is for USER overrides, not pre-made prompts. So the personality was created modeled on the harness style + our project rules.
+
+### Changed — coder personality and config (local/gitignored, requires restart)
+
+- **`.opencode/agents/coder.md` rewritten**: identity **"Coder — The Reforger"** (the legacy C++ is the broken blade; you forge it anew in Rust — clean, sharp, minimal) + mission, lane, method (senior not typist), never/always, team relationships, and **"The Reforger's creed"** (the legacy is the oracle of behavior, never of design; parity is a contract at the wire, a suggestion inside the formula; less code is a feature; evidence beats claims).
+- **Empirical probe (cod-1)**: the active subagent prompt is the `.md` file content (quoted verbatim), NOT the config inline prompt — and it loads at startup (restart needed for the new personality). Also proves `.md` wins over inline prompt for custom agents.
+- **Config `agents.coder` cleaned**: the inline `prompt` was CORRUPT mojibake (`coder ǟ�'...`) from an earlier BOM-corrupted write — removed (dead weight; the `.md` wins). Added `description` ("The Reforger — the project's expert writer...") + `orchestratorPrompt` (routing block for the orchestrator: DELEGATE bounded implementation with scope/acceptance/evidence/verification; REUSE sessions on same context; DO NOT delegate architecture/review/docs/recon/UI). JSON verified, no BOM.
+- **Docs**: `agent-organization.md` roster row for coder (The Reforger + routing defined).
+
+### Pending
+
+- **Restart opencode** to load: coder personality (The Reforger), coder routing, MCPs for all agents, explorer/fixer skills, oracle v4-pro.
+- After restart: slice 18 spec review with the oracle on v4-pro, then the bevy_ecs adoption.
+
+
 
 > User direction: "las skills que ya tienen están perfecto — lo que quiero es que cada agente tenga habilidades enfocadas en su laburo: los MCPs que tenemos para todos, explorer con skills para explorar código a gran escala, librarian con skills de documentación, fixer con skills de debug/arreglar, coder con clean code". Deep analysis of the harness done first (lib-2: README completo + 7 docs + schema + los 8 prompts fuente de src/agents/*.ts).
 
