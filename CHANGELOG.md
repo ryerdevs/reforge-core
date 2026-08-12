@@ -7,6 +7,19 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-12] (25th part) — F5.3 FindEquipCell: validación de tipo al equipar
+
+> Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests, unit tests only).
+
+### Added — equip type validation (Rust, commit `75ea629`)
+
+- **`database/src/item.rs`**: `ProtoItem` + `wear_flag` (la columna `item_proto.wearflag` — los bits `WEARABLE_*`, item_length.h:379-392) añadida al SQL del proto.
+- **`realm::packets`**: `mod wearable` (los bits) + `find_equip_cell(proto) -> Option<u16>` — el slot del equip según el orden EXACTO de los `else-if` del C++ (`item.cpp:568-592`): BODY=0, HEAD=1, FOOTS=2, WRIST=3, WEAPON=4, SHIELD=10, NECK=5, EAR=6, ARROW=9, UNIQUE=7, ABILITY=11 (length.h:99-119); `None` = no equipable (wearflag 0 — item.cpp:511-519 — o solo HAIR/PENDANT/GLOVE, GAP documentado).
+- **`CG_ITEM_MOVE` equipar (channel)**: carga el proto del item y valida que el slot candidato == `find_equip_cell` (parity `EquipItem` → `FindEquipCell(item, iCandidateCell)`, char_item.cpp:6139) — rechaza items no equipables y slots equivocados.
+- **Tests**: `find_equip_cell` (bits individuales → slot, varios bits → gana el primero del orden C++, wearflag 0 / solo-HAIR → None).
+- **Verified**: `cargo test --workspace` green (excluding the pre-existing cold-start-flaky `f16_peer_smoke`), clippy no new warnings.
+- **Pending**: UNIQUE/ABILITY con múltiples slots (el C++ busca el primero libre — el subset usa el slot 1), `attack_speed` del arma, `dw_arrow` (quiver), skills, walkability.
+
 ## [2026-08-12] (24th part) — F5.3 ComputeParts: el personaje muestra el arma/armadura equipada
 
 > Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests, unit tests only).
