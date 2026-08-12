@@ -70,6 +70,14 @@ pub fn attack_damage(
     dam
 }
 
+/// `IsAggressive()` parity (`char_state.cpp:224-226` — `AIFLAG_AGGRESSIVE`):
+/// el mob ataca PROACTIVAMENTE a quien entra en su `aggressive_sight`. El
+/// `ai_flag` del PG es el SET legacy migrado a TEXTO (p.ej. "AGGR,COWARD" —
+/// legacy-schema.md §4.6): contiene "AGGR".
+pub fn is_aggressive(ai_flag: Option<&str>) -> bool {
+    ai_flag.is_some_and(|f| f.split(',').any(|t| t.trim() == "AGGR"))
+}
+
 /// PASO DE PATRULLAJE del mob idle (parity `UpdateState` IDLE —
 /// `char_state.cpp:668-688`): con probabilidad `1/7` por tick, el mob elige
 /// una dirección aleatoria (0..359°) y un paso de 300-700 UNITS hacia un
@@ -204,6 +212,19 @@ mod tests {
             _ => panic!("roll inesperado ({lo},{hi})"),
         };
         assert_eq!(attack_damage(3, 8, 5, &mut roll), 5, "floor number(1,5)");
+    }
+
+    /// `is_aggressive`: parity AIFLAG_AGGRESSIVE — el SET legacy del PG
+    /// como texto; "AGGR" en cualquier posición del SET.
+    #[test]
+    fn is_aggressive_matches_cpp_flag() {
+        assert!(is_aggressive(Some("AGGR")));
+        assert!(is_aggressive(Some("AGGR,COWARD")));
+        assert!(is_aggressive(Some("COWARD,AGGR")));
+        assert!(!is_aggressive(Some("COWARD")));
+        assert!(!is_aggressive(Some("NOMOVE")));
+        assert!(!is_aggressive(None));
+        assert!(!is_aggressive(Some("")));
     }
 
     /// Patrullaje: probabilidad 1/7 por tick (parity `!number(0, 6)`).
