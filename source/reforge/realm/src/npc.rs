@@ -825,6 +825,8 @@ mod tests {
             gold_max: 45,
             // F5.3: drop primario del mob 101 (mob_proto.drop_item).
             drop_item: 101,
+            // F5.3: velocidad del mob (mob_proto.move_speed — UNITS/seg).
+            move_speed: 100,
         }
     }
 

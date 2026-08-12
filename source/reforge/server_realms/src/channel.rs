@@ -425,6 +425,8 @@ async fn connection_inner(
                         gold_min: mob.gold_min,
                         gold_max: mob.gold_max,
                         drop_item: mob.drop_item,
+                        move_speed: mob.move_speed,
+                        aggro: false,
                     },
                 );
                 vid += 1;
@@ -459,6 +461,14 @@ async fn connection_inner(
     let mut ping_timer = tokio::time::interval_at(
         tokio::time::Instant::now() + Duration::from_millis(config.ping_interval_ms),
         Duration::from_millis(config.ping_interval_ms),
+    );
+    // F5.3 (NPC AI): tick del mundo — mueve los mobs AGGRO hacia el jugador y
+    // difunde su GC_MOVE. Intervalo fijo (500 ms — el paso usa el move_speed
+    // del mob en UNITS/seg, realm::ai::step_toward).
+    const AI_TICK_MS: u64 = 500;
+    let mut ai_timer = tokio::time::interval_at(
+        tokio::time::Instant::now() + Duration::from_millis(AI_TICK_MS),
+        Duration::from_millis(AI_TICK_MS),
     );
     // Deadline de inactividad PERSISTENTE (basado en el último paquete
     // recibido): el select! cancela los brazos al ganar uno, así que el timer
@@ -593,6 +603,11 @@ async fn connection_inner(
                                 if result.damage > 0 {
                                     if let Some(npc) = live_npcs.get_mut(&attack.victim_vid) {
                                         npc.hp -= result.damage;
+                                        // F5.3 (AI): el mob se vuelve HOSTIL
+                                        // al recibir daño — el tick de AI lo
+                                        // perseguirá (parity: el C++ marca el
+                                        // aggro en `OnDamage`/`Update`).
+                                        npc.aggro = true;
                                         if npc.hp <= 0 {
                                             // Muerte del mob: GC_DEAD (14) +
                                             // GC_CHARACTER_DEL (2) — el
@@ -859,6 +874,55 @@ async fn connection_inner(
                 conn.send(&[header::GC_PING]).await
                     .map_err(|e| format!("enviando GC_PING: {e}"))?;
             }
+            _ = ai_timer.tick() => {
+                // F5.3 (NPC AI): los mobs AGGRO persiguen al jugador. Por
+                // cada uno: paso hacia la posición del jugador (move_speed
+                // del mob × tick, realm::ai::step_toward — función pura
+                // testeada), actualización del estado del mundo y GC_MOVE
+                // (FUNC_MOVE, destino + dwTime/dwDuration — el cliente
+                // interpola). El ataque del mob en rango es F5.x (pendiente,
+                // documentado en realm::ai).
+                if !live_npcs.is_empty() {
+                    let px = motion.x;
+                    let py = motion.y;
+                    let vids: Vec<u32> = live_npcs
+                        .iter()
+                        .filter(|(_, n)| n.aggro)
+                        .map(|(vid, _)| *vid)
+                        .collect();
+                    for vid in vids {
+                        let Some(npc) = live_npcs.get_mut(&vid) else { continue };
+                        let (nx, ny) = realm::ai::step_toward(
+                            npc.state.x,
+                            npc.state.y,
+                            px,
+                            py,
+                            npc.move_speed,
+                            AI_TICK_MS,
+                        );
+                        if (nx, ny) == (npc.state.x, npc.state.y) {
+                            continue; // ya en el jugador (o speed 0)
+                        }
+                        let rot = realm::ai::rotation_5deg(npc.state.x, npc.state.y, nx, ny);
+                        npc.state.x = nx;
+                        npc.state.y = ny;
+                        let mv = protocol::movement::TPacketGCMove {
+                            header: protocol::movement::TPacketGCMove::HEADER,
+                            b_func: protocol::movement::TPacketGCMove::FUNC_MOVE,
+                            b_arg: 0,
+                            b_rot: rot,
+                            vid,
+                            x: nx,
+                            y: ny,
+                            dw_time: now32(),
+                            dw_duration: AI_TICK_MS as u32,
+                        };
+                        conn.send(&mv.to_bytes())
+                            .await
+                            .map_err(|e| format!("enviando GC_MOVE: {e}"))?;
+                    }
+                }
+            }
         }
     }
 }
@@ -985,7 +1049,8 @@ fn cstr(bytes: &[u8]) -> &str {
 /// NPC vivo del mundo del canal (F5.2): el estado del combate + el HP
 /// runtime. `state` es la vista inmutable que `handle_attack` consume.
 /// F5.3: `exp`/`gold_min`/`gold_max`/`drop_item` = recompensas del mob
-/// (del `mob_proto`).
+/// (del `mob_proto`); `move_speed` + `aggro` = la AI mínima (F5.3): el mob
+/// se vuelve hostil al recibir daño y persigue al jugador.
 struct LiveNpc {
     state: realm::combat::NpcState,
     vnum: i64,
@@ -995,6 +1060,10 @@ struct LiveNpc {
     gold_min: i32,
     gold_max: i32,
     drop_item: i64,
+    /// `move_speed` del mob_proto (UNITS/seg) — el paso del AI por tick.
+    move_speed: i32,
+    /// Hostil: true tras recibir daño del jugador (el AI lo persigue).
+    aggro: bool,
 }
 
 /// Item EN EL SUELO del mundo del canal (F5.3): el estado que el pickup
