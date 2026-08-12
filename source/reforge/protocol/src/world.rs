@@ -203,6 +203,70 @@ impl TPacketGCItemSet {
     }
 }
 
+/// `TPacketGCItemUpdate` (38 B packed, header 25 — `packet.h:1078-1085` +
+/// `Packet.h:1715-1722`): el UPDATE de un item del inventario (cantidad /
+/// sockets / attrs) — el C++ lo manda en `SetCount` (item.cpp:215-217) al
+/// apilar (`AutoStackItem`) o al cambiar sockets/attrs. Layout: header +
+/// `TItemPos` + count BYTE + sockets (3×long) + attrs (7×3 B).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketGCItemUpdate {
+    pub header: u8,
+    pub cell: TItemPos,
+    pub count: u8,
+    pub sockets: [i64; 3],
+    pub attrs: [(i16, i16); 7],
+}
+
+impl TPacketGCItemUpdate {
+    /// 1 + 3 + 1 + 12 + 21 = 38 (packed).
+    pub const SIZE: usize = 38;
+    pub const HEADER: u8 = 25;
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+        }
+        let mut sockets = [0i64; 3];
+        for (i, s) in sockets.iter_mut().enumerate() {
+            *s = i64::from(i32::from_le_bytes([
+                data[5 + i * 4],
+                data[6 + i * 4],
+                data[7 + i * 4],
+                data[8 + i * 4],
+            ]));
+        }
+        let mut attrs = [(0i16, 0i16); 7];
+        for (i, a) in attrs.iter_mut().enumerate() {
+            a.0 = i16::from(data[17 + i * 3]);
+            a.1 = i16::from_le_bytes([data[18 + i * 3], data[19 + i * 3]]);
+        }
+        Ok(Self {
+            header: data[0],
+            cell: TItemPos { window: data[1], cell: u16::from_le_bytes([data[2], data[3]]) },
+            count: data[4],
+            sockets,
+            attrs,
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        b[1] = self.cell.window;
+        b[2..4].copy_from_slice(&self.cell.cell.to_le_bytes());
+        b[4] = self.count;
+        for (i, s) in self.sockets.iter().enumerate() {
+            b[5 + i * 4..9 + i * 4].copy_from_slice(&(*s as i32).to_le_bytes());
+        }
+        for (i, a) in self.attrs.iter().enumerate() {
+            b[17 + i * 3] = a.0 as u8;
+            b[18 + i * 3..20 + i * 3].copy_from_slice(&a.1.to_le_bytes());
+        }
+        b
+    }
+}
+
 /// `TPacketAffectElement` (21 B — `tables.h:808-816`): el elemento de affect
 /// del wire (sin dwPID — el del F3 es la fila de la tabla).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1029,6 +1093,31 @@ mod tests {
         // Bad lengths → Err.
         assert!(TPacketGCWarp::from_bytes(&b[..14]).is_err());
         assert!(TPacketGCWarp::from_bytes(&[65, 0]).is_err());
+    }
+
+    /// Item update wire (F5.3): `GC_ITEM_UPDATE` (25) = 38 B packed —
+    /// header + TItemPos + count + sockets (3×long) + attrs (7×3 B)
+    /// (`packet.h:1078-1085` + `Packet.h:1715-1722`).
+    #[test]
+    fn gc_item_update_wire_size_and_parse() {
+        assert_eq!(TPacketGCItemUpdate::SIZE, 38, "1+3+1+12+21 (packed)");
+        let u = TPacketGCItemUpdate {
+            header: TPacketGCItemUpdate::HEADER,
+            cell: TItemPos { window: TItemPos::WINDOW_INVENTORY, cell: 7 },
+            count: 200,
+            sockets: [0x1234, 0, 0],
+            attrs: [(1, 100), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0)],
+        };
+        let b = u.to_bytes();
+        assert_eq!(b.len(), 38);
+        assert_eq!(b[0], 25, "header GC_ITEM_UPDATE");
+        assert_eq!(&b[1..4], &[1, 7, 0], "TItemPos: window=1(INVENTORY), cell=7");
+        assert_eq!(b[4], 200, "count");
+        assert_eq!(&b[5..9], &0x1234i32.to_le_bytes(), "socket0 (long 4 B)");
+        assert_eq!(b[17], 1, "attr0 type");
+        assert_eq!(&b[18..20], &100i16.to_le_bytes(), "attr0 value");
+        assert_eq!(TPacketGCItemUpdate::from_bytes(&b).unwrap(), u);
+        assert!(TPacketGCItemUpdate::from_bytes(&b[..37]).is_err(), "BadLength");
     }
 
     /// Drop wire (F5.3): `GC_ITEM_GROUND_ADD` (26) = 58 B packed con

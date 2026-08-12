@@ -141,6 +141,10 @@ pub mod header {
     /// `HEADER_GC_ITEM_OWNERSHIP` (cliente `Packet.h:175`, server
     /// `packet.h` — 31): el dueño de un item del suelo.
     pub const GC_ITEM_OWNERSHIP: u8 = 31;
+    /// `HEADER_GC_ITEM_UPDATE` (cliente `Packet.h:169`, server
+    /// `packet.h:137` — 25): el UPDATE de un item del inventario (cantidad
+    /// al apilar — `AutoStackItem`).
+    pub const GC_ITEM_UPDATE: u8 = 25;
     /// `HEADER_GC_WARP` (cliente `Packet.h:199`, server `packet.h:169` —
     /// 65): el warp del jugador (revive en la ciudad / teletransporte).
     pub const GC_WARP: u8 = 65;

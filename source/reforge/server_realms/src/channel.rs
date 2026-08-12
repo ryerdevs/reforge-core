@@ -800,6 +800,61 @@ async fn connection_inner(
                             );
                             continue;
                         }
+                        // F5.3 (STACKING — parity `AutoStackItemProto`,
+                        // char_item.cpp:6722-6755): si ya existe un item del
+                        // MISMO vnum en el inventario con count < 200
+                        // (`g_bItemCountLimit`, config.cpp:39) y sockets
+                        // vacíos (`FN_check_item_socket`), se suma el count
+                        // al stack y se manda `GC_ITEM_UPDATE` (38 B) en vez
+                        // de crear un slot nuevo. El flag `ITEM_FLAG_STACKABLE`
+                        // del item_proto no se consulta (subset documentado).
+                        const ITEM_COUNT_LIMIT: i64 = 200;
+                        let mut remaining = gi.count as i64;
+                        loop {
+                            let Some(idx) = inventory.iter().position(|i| {
+                                i.window == "INVENTORY"
+                                    && i.vnum == gi.vnum as i64
+                                    && i.sockets == [0; 3]
+                                    && i.count < ITEM_COUNT_LIMIT
+                            }) else {
+                                break; // sin stack con espacio → slot nuevo
+                            };
+                            let add = (ITEM_COUNT_LIMIT - inventory[idx].count).min(remaining);
+                            inventory[idx].count += add;
+                            remaining -= add;
+                            // GC_ITEM_UPDATE: el count del stack actualizado.
+                            let up = protocol::world::TPacketGCItemUpdate {
+                                header: protocol::world::TPacketGCItemUpdate::HEADER,
+                                cell: TItemPos {
+                                    window: TItemPos::WINDOW_INVENTORY,
+                                    cell: inventory[idx].pos as u16,
+                                },
+                                count: inventory[idx].count as u8,
+                                sockets: inventory[idx].sockets,
+                                attrs: inventory[idx].attrs,
+                            };
+                            conn.send(&up.to_bytes())
+                                .await
+                                .map_err(|e| format!("enviando GC_ITEM_UPDATE: {e}"))?;
+                            // Persistencia del stack actualizado.
+                            ItemRepo::new(&config.pg_conn).upsert(&inventory[idx], row.id).await?;
+                            eprintln!(
+                                "server_realms: channel conn {conn_id}: {} apiló item vnum {} \
+                                 (vid {}) → slot {} (count {})",
+                                row.name, gi.vnum, vid, inventory[idx].pos, inventory[idx].count
+                            );
+                            if remaining <= 0 {
+                                break;
+                            }
+                        }
+                        if remaining <= 0 {
+                            // TODO apilado: el item del suelo desaparece.
+                            conn.send(&TPacketGCItemGroundDel::new(vid).to_bytes())
+                                .await
+                                .map_err(|e| format!("enviando GC_ITEM_GROUND_DEL: {e}"))?;
+                            live_items.remove(&vid);
+                            continue;
+                        }
                         // Primer cell libre del inventario (parity
                         // `GetEmptyInventory`, char_item.cpp:709-711).
                         let occupied: std::collections::HashSet<u16> = inventory
@@ -826,7 +881,7 @@ async fn connection_inner(
                             id,
                             window: "INVENTORY".to_string(),
                             pos: slot as i32,
-                            count: gi.count as i64,
+                            count: remaining,
                             vnum: gi.vnum as i64,
                             sockets: [0; 3],
                             attrs: [(0, 0); 7],
@@ -836,7 +891,7 @@ async fn connection_inner(
                             header: TPacketGCItemSet::HEADER,
                             cell: TItemPos { window: TItemPos::WINDOW_INVENTORY, cell: slot },
                             vnum: gi.vnum,
-                            count: gi.count as u8,
+                            count: remaining as u8,
                             flags: 0,
                             anti_flags: 0,
                             highlight: 0,
