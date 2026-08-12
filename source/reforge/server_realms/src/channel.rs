@@ -591,11 +591,10 @@ async fn connection_inner(
                                 );
                             }
                             Ok(attack) => {
-                                let player = realm::combat::PlayerState::from_row(&row, &motion);
-                                let target = live_npcs.get(&attack.victim_vid).map(|n| &n.state);
                                 // F5.3 (items): el ARMA equipada (WEAR_WEAPON =
                                 // 4 → cell = INVENTORY_MAX_NUM + 4 = 184) — su
-                                // ProtoItem (value3/4 daño, value5 bonus).
+                                // ProtoItem (value3/4 daño, value5 bonus) y el
+                                // attack_speed del arma (GET_ATTACK_SPEED).
                                 let weapon = if let Some(w) = inventory.iter().find(|i| {
                                     i.window == "EQUIPMENT"
                                         && i.pos as u16 == INVENTORY_MAX_NUM + 4
@@ -606,6 +605,11 @@ async fn connection_inner(
                                 } else {
                                     None
                                 };
+                                let mut player =
+                                    realm::combat::PlayerState::from_row(&row, &motion);
+                                player.attack_speed_ms =
+                                    realm::combat::attack_speed_for_weapon(weapon.as_ref());
+                                let target = live_npcs.get(&attack.victim_vid).map(|n| &n.state);
                                 let result = realm::combat::handle_attack(
                                     &mut combat,
                                     &attack,

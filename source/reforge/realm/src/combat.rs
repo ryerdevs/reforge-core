@@ -194,10 +194,35 @@ const ANI_SPEED_BARE_HAND_MS: u32 = 1000;
 
 /// El intervalo entre ataques del C++ (`GET_ATTACK_SPEED`, `battle.cpp:757-782`)
 /// para el subset base: sin arma → `1000*100 / (80 + 0 + 0)` = **1250 ms**.
-/// (Daga/garra → /2 — `:774-779`; arma con animación → data-driven .msa,
+/// (Daga/garra → /2, `:774-779`; arma con animación → data-driven .msa,
 /// fuera del subset.)
 pub fn default_attack_speed() -> u32 {
     (ANI_SPEED_BARE_HAND_MS * 100) / (SPEEDHACK_LIMIT_BONUS + 0 + 0)
+}
+
+/// Subtipos de arma (`WEAPON_*` — ani.cpp:37-49: SWORD=0, DAGGER=1, BOW=2,
+/// TWO_HANDED=3, BELL=4, FAN=5, ARROW=6, MOUNT_SPEAR=7, CLAW=8, QUIVER=9).
+pub mod weapon_subtype {
+    pub const DAGGER: i16 = 1;
+    pub const CLAW: i16 = 8;
+}
+
+/// `GET_ATTACK_SPEED` con el arma EQUIPADA (battle.cpp:757-782): el
+/// `ani_speed` base del ANI es 1000 ms (ani.cpp:121 — el constructor; la
+/// tabla real `.msa` del pack por raza/arma es GAP documentado) →
+/// `real_speed = 1000*100/(80 + 0 + 0)` = 1250 ms; DAGGER y CLAW → /2
+/// (battle.cpp:774-779). `weapon = None` → 1250 (manos desnudas).
+pub fn attack_speed_for_weapon(weapon: Option<&database::item::ProtoItem>) -> u32 {
+    const ANI_SPEED_MS: u32 = 1000; // default del constructor ANI (ani.cpp:121)
+    let mut real = (ANI_SPEED_MS * 100) / (SPEEDHACK_LIMIT_BONUS + 0 + 0);
+    if let Some(w) = weapon {
+        if w.b_type == 1 /* ITEM_WEAPON (ItemData.h:72) */
+            && (w.b_sub_type == weapon_subtype::DAGGER || w.b_sub_type == weapon_subtype::CLAW)
+        {
+            real /= 2;
+        }
+    }
+    real
 }
 
 /// `statAtk` por job (`char.cpp:2064-2087`) — la parte de stats del
@@ -643,6 +668,36 @@ mod tests {
         handle_attack(&mut combat2, &atk(m.vid), &a, Some(&m), None, 1000, &mut roll);
         let r = handle_attack(&mut combat2, &atk(m2.vid), &a, Some(&m2), None, 2000, &mut roll);
         assert_eq!(r.damage, 46, "target distinto: sin rechazo");
+    }
+
+    /// `attack_speed_for_weapon` (F5.3, battle.cpp:757-782 + ani.cpp:121):
+    /// sin arma → 1250 ms (`(1000*100)/(80+0+0)`); arma normal → 1250 (el
+    /// ANI default es 1000; la tabla .msa real del pack es GAP); DAGGER y
+    /// CLAW → /2 = 625 (battle.cpp:774-779).
+    #[test]
+    fn attack_speed_for_weapon_matches_cpp() {
+        use database::item::ProtoItem;
+        assert_eq!(attack_speed_for_weapon(None), 1250, "manos desnudas");
+        let sword = ProtoItem {
+            b_type: 1, // ITEM_WEAPON
+            b_sub_type: 0, // WEAPON_SWORD
+            values: [0; 6],
+            wear_flag: 1 << 4, // WEARABLE_WEAPON
+        };
+        assert_eq!(attack_speed_for_weapon(Some(&sword)), 1250, "espada: ANI default 1000");
+        let dagger = ProtoItem { b_sub_type: weapon_subtype::DAGGER, ..sword };
+        assert_eq!(attack_speed_for_weapon(Some(&dagger)), 625, "daga: /2 (battle.cpp:774-779)");
+        let claw = ProtoItem { b_sub_type: weapon_subtype::CLAW, ..sword };
+        assert_eq!(attack_speed_for_weapon(Some(&claw)), 625, "garra: /2");
+        // Un item NO-weapon (p.ej. ARMOR) equipado en el slot del arma no
+        // aplica el /2 (el C++ comprueba GetSubType del arma real).
+        let armor = ProtoItem {
+            b_type: 2, // ITEM_ARMOR
+            b_sub_type: 0,
+            values: [0; 6],
+            wear_flag: 1 << 0,
+        };
+        assert_eq!(attack_speed_for_weapon(Some(&armor)), 1250, "no-weapon: sin /2");
     }
 
     /// Rango (battle.cpp:144-167): `distance_approx > 300` → sin golpe;
