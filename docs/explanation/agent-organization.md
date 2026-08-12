@@ -57,7 +57,7 @@ The rewrite touches three worlds at once: the legacy C++ server/client (the orac
 Each agent is defined by a dedicated file in `.opencode/agents/<role>.md` (local, gitignored): **mission prompt + permissions + model**. The mission is strict — what it does AND what it never does; permissions enforce it (**read-only: oracle, explorer, observer** — `edit: deny`; **writers: coder, fixer (tests/quality), librarian (docs only), designer**).
 
 - Specialization comes from **scope restriction, not context volume**: each agent receives only its lane (files, acceptance criterion, evidence sources), never the whole project.
-- Global skills exist for everyone (opencode mechanics), but each agent's mission limits it to its lane's skills (fixer → adversarial + rust-* + diagnose + improve-codebase-architecture; coder → rust-* + clean-code; librarian → documentation-*; explorer → graphify/codemap). MCPs: orchestrator/coder/librarian → graphify; librarian also context7 + gh_grep.
+- Global skills exist for everyone (opencode mechanics), but each agent's mission limits it to its lane's skills (fixer → adversarial + rust-* + diagnose + improve-codebase-architecture; coder → rust-* + clean-code; librarian → documentation-*; explorer → graphify/codemap; designer → impeccable + brainstorming). MCP: **graphify** (code knowledge graph, rule 13) for orchestrator/coder/librarian — the only registered MCP; `context7`/`gh_grep` were declared on librarian but never registered (removed 2026-08-12, ponytail). GitHub stays on the `gh` CLI (repo not on GitHub yet — no GitHub MCP until F6/F7 PR workflow exists).
 - More context does not make an agent smarter — it dilutes focus. A specialist gets **less, targeted** context.
 
 ## Value contract (what each agent uniquely contributes)

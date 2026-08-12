@@ -7,7 +7,28 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
-## [2026-08-12] (30th part) — Agent config: Oracle → v4-pro + skill/MCP adjustments
+## [2026-08-12] (31st part) — MCP audit + skills: only graphify is real; designer reinforced; dead refs removed
+
+> User questions: "¿para qué sirven los MCPs? ¿no es mejor un GitHub MCP que el CLI? ¿no deberíamos añadir skills a los agentes sin skills?" — answered with verified facts, applied the fixes.
+
+### Answered (verified)
+
+- **MCPs**: only **graphify** is actually registered (`opencode.jsonc`, `python -m graphify.serve --graph graphify-out/graph.json` — the merged code graph, rule 13). `context7` and `gh_grep` were declared in the librarian's `mcps` in `oh-my-opencode-slim.json` but **never registered** → dead references.
+- **GitHub CLI vs MCP**: keep the `gh` CLI (ponytail). The repo is not even on GitHub yet (F0 debt "repo GitHub sin montar") — a GitHub MCP server would be infrastructure for a workflow that doesn't exist. Revisit only when the repo is hosted and PR workflow starts (F6/F7).
+- **Skills audit**: fixer 13 / oracle 12 / coder 9 / orchestrator 8 / librarian 4 / explorer 2 (correct for recon) — only **designer (1)** and **observer (0)** were thin. Observer's "skill" is its model itself (mimo-v2.5 = native vision; no visual-analysis skills exist in the pool).
+
+### Changed — config (local/gitignored, requires restart)
+
+- **Designer + `brainstorming` skill** (now 2: impeccable + brainstorming — the latter brings the visual companion, right for UI design).
+- **Librarian `mcps` cleaned**: `context7`, `gh_grep` removed (dead refs) → only `graphify`.
+- **Docs**: `agent-organization.md` specialization line updated (designer skills, only-graphify MCP, gh CLI note).
+
+### Pending
+
+- **Restart opencode** to load all config changes (oracle v4-pro, fixer 13 skills, coder/librarian graphify MCP, designer brainstorming, MCP cleanup).
+- After restart: **slice 18 spec review with the oracle on v4-pro** before Coder starts the bevy_ecs adoption.
+
+
 
 > Config: `~/.config/opencode/oh-my-opencode-slim.json` (preset `opencode-go` + `agents.coder`) + `.opencode/agents/*.md` (local, gitignored). Docs: `docs/explanation/agent-organization.md`. All changes require an opencode restart (guardrail rule 7 — verified empirically with a fresh-oracle probe: the new model does NOT load hot).
 
