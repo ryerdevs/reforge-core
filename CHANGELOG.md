@@ -7,6 +7,19 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-12] (27th part) — Agent team reorganization: Coder + quality-guardian Fixer + team-lead Oracle
+
+> Team model change (user-directed, defined before implementation). Config: `~/.config/opencode/oh-my-opencode-slim.json` + `.opencode/agents/*.md` (local, gitignored). Docs: this repo.
+
+### Changed — the agent team
+
+- **`build` → `coder`**: the expert writer (implementation of bounded features, owns the skills implementation). Built-in `build` disabled in the global config; new `coder` agent registered with its prompt/skills (clean-code, rust-*, ponytail, verification-before-completion).
+- **`fixer` redefined as the quality guardian**: NOT read-only anymore — besides being Coder's adversary (bugs, structure, bad practices), it now **writes/expands the test suite, debugs to root cause, and guards scalability/maintainability** (quality-scoped refactors allowed; `edit: allow`). Never implements new features.
+- **`oracle` redefined as the team lead**: supervision (unchanged) + **architecture decisions (ADRs before code)** + **ROADMAP priorities**. `edit: deny` (unchanged).
+- **Docs updated**: `docs/explanation/agent-organization.md` (hierarchy, roster, standard flow, value contract, gates — new team), `docs/guardrails/agent-operations.md` (rules 1/3 updated for the new fixer role and coder name), `AGENTS.md` (roster note + work rule 10).
+- **Operational nuance recorded**: the fresh-session rule for reviewers applies to the fixer's ADVERSARIAL reviews; its own quality WRITING (tests/refactors) may resume like coder when the context matches.
+- **Action required**: restart opencode so the config changes apply (guardrail rule 7).
+
 ## [2026-08-12] (26th part) — F5.3 attack_speed del arma (GET_ATTACK_SPEED parity)
 
 > Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests, unit tests only).

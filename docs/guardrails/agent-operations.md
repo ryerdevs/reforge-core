@@ -9,11 +9,12 @@ Last verified: 2026-08-10
 
 Operational lessons about running the agent team. Each rule follows the standard guardrail structure. The team model is described in `explanation/agent-organization.md`.
 
-## Rule 1 — Use a fresh session for every reviewer (oracle, fixer)
+## Rule 1 — Use a fresh session for every reviewer (oracle, fixer-as-adversary)
 
 - **Why:** resumed reviewer sessions repeatedly returned empty results (observed 3+ times on 2026-08-10: the contract review, the net-crate review and the structure design all came back empty when resumed; fresh sessions delivered full reports).
 - **Evidence:** board history of `ses_0160574aeffe...` (empty on resume, full report on fresh spawn); `ora-20`/`ora-6` errored. Under the current model the fixer is a reviewer too — same rule applies.
   - **2026-08-11 (writer lanes):** resumed `fix-2` (gate re-run) and `fix-4` (live fixes) returned EMPTY results. fix-2's work was done but unreported (verified in the environment); fix-4's was NOT done (3 tasks unapplied — verified DB/files/logs, redone directly by the orchestrator). **Rule for writers: an empty terminal result means UNVERIFIED — never trust the "completed" board state; verify the actual artifacts (DB tables, files, logs, processes) before reconciling or re-dispatching.**
+  - **2026-08-12 (team reorg):** fixer is now the quality guardian (writes/expands tests, quality-scoped refactors) — the fresh-session rule applies to its ADVERSARIAL reviews; its own quality WRITING (tests/refactors) may resume when the context matches (same rule as coder).
 - **Consequence:** resuming a reviewer wastes a round trip; retry with a fresh session.
 - **Status:** Active.
 
@@ -24,10 +25,10 @@ Operational lessons about running the agent team. Each rule follows the standard
 - **Consequence:** prompts without it risk a completed-but-empty review.
 - **Status:** Active.
 
-## Rule 3 — Reuse build (implementer) sessions when the context matches
+## Rule 3 — Reuse coder (implementer) sessions when the context matches
 
 - **Why:** implementers keep the file context they read; resuming them avoids re-reading and re-deciding.
-- **Evidence:** the implementer session chain (fix-1: net crate → hardening → retoques → flat layout → server_realms rename) resumed successfully multiple times with full reports. Under the current model the implementer role is `build`.
+- **Evidence:** the implementer session chain (fix-1: net crate → hardening → retoques → flat layout → server_realms rename) resumed successfully multiple times with full reports. Under the current model the implementer role is `coder` (formerly `build`).
 - **Consequence:** reusing an implementer across unrelated scopes bloats context; keep reuse within the same crate/folder.
 - **Status:** Active.
 
