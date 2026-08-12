@@ -11,6 +11,7 @@
 
 use std::error::Error;
 use std::fmt;
+use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -142,7 +143,13 @@ impl fmt::Display for Param {
                 s.replace('\\', "\\\\").replace('"', "\\\"")
             ),
             Param::Int(i) => write!(f, "{i}"),
-            Param::Bytes(b) => write!(f, "\"\\x{}\"", b.iter().map(|x| format!("{x:02x}")).collect::<String>()),
+            Param::Bytes(b) => write!(
+                f,
+                // `\\x` ESCAPADO (json válido): el parser inverso desescapa
+                // `\\` -> `\` y reconoce el prefijo `\x` + hex como Bytes.
+                "\"\\\\x{}\"",
+                b.iter().map(|x| format!("{x:02x}")).collect::<String>()
+            ),
             Param::Null => write!(f, "null"),
         }
     }
@@ -337,7 +344,7 @@ impl Batcher {
                     }
                 }
                 if let Err(e) = sink.apply(batch).await {
-                    eprintln!("database: wal: batch falló: {e} — el WAL local (F3 phase 2 completo) lo re-aplicará");
+                    eprintln!("database: wal: batch falló: {e} — el WAL local lo re-aplicará al arrancar");
                 }
             }
         });
@@ -348,6 +355,296 @@ impl Batcher {
     pub fn push(&self, m: Mutation) {
         let _ = self.tx.send(m);
     }
+}
+
+// ---------------------------------------------------------------------------
+// WAL local a disco (F3 phase 2 — ADR-0008): durable-first por batch
+// ---------------------------------------------------------------------------
+
+/// Envelope durable-first: persiste el batch en disco ANTES de aplicarlo a PG
+/// y borra el archivo SOLO tras el COMMIT. Si el proceso muere a mitad de
+/// batch, el archivo queda en disco y el replay del siguiente arranque lo
+/// re-aplica (idempotente — ver la auditoría abajo).
+///
+/// # Auditoría de idempotencia (qué se re-aplica sin duplicar estado)
+///
+/// Todas las rutas cableadas al Batcher hoy son idempotentes en resultado
+/// (re-aplicar no duplica estado):
+/// - `PlayerRepo::save_mutated` (`PLAYER_SAVE_SQL`): UPDATE por PK — el
+///   resultado es idéntico; `last_play = NOW()` se re-escribe (inofensivo,
+///   documentado — "idempotente salvo columnas NOW()").
+/// - `ItemRepo::upsert`: `ON CONFLICT (id) DO UPDATE` — idempotente.
+/// - `QuestRepo::save`: `ON CONFLICT (dwPID, szName, szState)` + DELETE —
+///   idempotente.
+/// - `AffectRepo::save/remove`: `ON CONFLICT (dwPID, bType, bApplyOn,
+///   lApplyValue)` + DELETE — idempotente.
+/// - `ItemRepo::take_award`: UPDATE con `taken_time = NOW()` — idempotente
+///   salvo la columna NOW().
+///
+/// NO cableadas (INSERT plano — el replay violaría la PK; convertirlas antes
+/// de cablearlas, documentado como pendiente): `SafeboxRepo::set_size` (rama
+/// `size == 1`), `MessengerRepo::add`.
+pub struct WalSink<S: MutationSink> {
+    inner: S,
+    wal_dir: String,
+}
+
+impl<S: MutationSink> WalSink<S> {
+    pub fn new(inner: S, wal_dir: impl Into<String>) -> Self {
+        Self { inner, wal_dir: wal_dir.into() }
+    }
+}
+
+impl<S: MutationSink> MutationSink for WalSink<S> {
+    fn apply(&mut self, batch: Vec<Mutation>) -> impl std::future::Future<Output = Result<(), String>> + Send {
+        async move {
+            // 1. Durable-first: persiste el batch completo ANTES de tocar PG.
+            let file = persist_batch(&self.wal_dir, &batch)
+                .map_err(|e| format!("persistiendo WAL en {}: {e}", self.wal_dir))?;
+            // 2. Aplica (UNA tx + audit — el sink interno).
+            match self.inner.apply(batch).await {
+                Ok(()) => {
+                    // 3. Truncate SOLO post-COMMIT: el archivo ya está en PG.
+                    if let Err(e) = std::fs::remove_file(&file) {
+                        eprintln!("database: wal: no pude borrar {file:?} tras el commit: {e}");
+                    }
+                    Ok(())
+                }
+                Err(e) => {
+                    // El archivo QUEDA en disco: el replay del siguiente
+                    // arranque lo re-aplica (idempotente).
+                    eprintln!("database: wal: batch con error — {file:?} queda para el replay: {e}");
+                    Err(e)
+                }
+            }
+        }
+    }
+}
+
+/// Persiste un batch en un archivo nuevo `{wal_dir}/{uuidv7}.wal` (JSONL —
+/// una `payload_json` por línea) + `sync_all` (garantía durable real: sin
+/// fsync el OS puede perder el archivo en un crash).
+fn persist_batch(wal_dir: &str, batch: &[Mutation]) -> std::io::Result<std::path::PathBuf> {
+    std::fs::create_dir_all(wal_dir)?;
+    let name = format!("{}.wal", uuidv7_string(&uuidv7()));
+    let path = std::path::Path::new(wal_dir).join(name);
+    let mut f = std::fs::File::create(&path)?;
+    for m in batch {
+        writeln!(f, "{}", m.payload_json())?;
+    }
+    f.sync_all()?;
+    Ok(path)
+}
+
+/// Replay del WAL local: re-aplica cada archivo `*.wal` del directorio (en
+/// orden cronológico — el uuidv7 del nombre ordena) como UN batch (una tx +
+/// audit), y borra el archivo SOLO tras el commit. Devuelve cuántos archivos
+/// se re-aplicaron. Función pura: los tests la invocan contra un dir temporal;
+/// en producción la invoca `WorldStore::new` UNA vez por proceso (OnceLock).
+pub async fn replay_wal(wal_dir: &str, pg_conn: &str) -> Result<usize, String> {
+    let dir = std::path::Path::new(wal_dir);
+    if !dir.is_dir() {
+        return Ok(0); // sin WAL previo — nada que re-aplicar
+    }
+    let mut files: Vec<_> = std::fs::read_dir(dir)
+        .map_err(|e| format!("leyendo {wal_dir}: {e}"))?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().map(|x| x == "wal").unwrap_or(false))
+        .collect();
+    files.sort(); // uuidv7 cronológico
+    let mut sink = PgMutationSink::new(pg_conn);
+    let mut replayed = 0usize;
+    for path in files {
+        let content = std::fs::read_to_string(&path)
+            .map_err(|e| format!("leyendo {path:?}: {e}"))?;
+        let mut batch = Vec::new();
+        for line in content.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            batch.push(
+                parse_payload_json(line)
+                    .map_err(|e| format!("parseando {path:?}: {e}"))?,
+            );
+        }
+        sink.apply(batch).await.map_err(|e| format!("replay de {path:?}: {e}"))?;
+        std::fs::remove_file(&path).map_err(|e| format!("borrando {path:?}: {e}"))?;
+        replayed += 1;
+    }
+    Ok(replayed)
+}
+
+/// Parse inverso de una línea `payload_json` -> `Mutation` (el formato es
+/// cerrado y propio — ver `Mutation::payload_json`; sin serde, std only).
+fn parse_payload_json(line: &str) -> Result<Mutation, String> {
+    // {"mutation_id":"...","sql":"...","params":[...]}
+    let mut rest = line.trim();
+    rest = rest.strip_prefix('{').ok_or("sin {")?.trim_start();
+    let mut id: Option<[u8; 16]> = None;
+    let mut sql: Option<String> = None;
+    let mut params: Option<Vec<Param>> = None;
+    while !rest.is_empty() {
+        let key = parse_json_string(rest).map_err(|e| format!("key: {e}"))?;
+        rest = rest[key.1..].trim_start();
+        rest = rest.strip_prefix(':').ok_or("sin : tras key")?.trim_start();
+        match key.0.as_str() {
+            "mutation_id" => {
+                let (v, n) = parse_json_string(rest).map_err(|e| format!("mutation_id: {e}"))?;
+                id = Some(parse_uuid(&v)?);
+                rest = rest[n..].trim_start();
+            }
+            "sql" => {
+                let (v, n) = parse_json_string(rest).map_err(|e| format!("sql: {e}"))?;
+                sql = Some(v);
+                rest = rest[n..].trim_start();
+            }
+            "params" => {
+                let (v, n) = parse_json_array(rest).map_err(|e| format!("params: {e}"))?;
+                params = Some(v);
+                rest = rest[n..].trim_start();
+            }
+            _ => {
+                // Clave desconocida (formato futuro): saltar el valor.
+                let (_, n) = parse_json_value(rest).map_err(|e| format!("valor: {e}"))?;
+                rest = rest[n..].trim_start();
+            }
+        }
+        rest = rest.strip_prefix(',').map(|r| r.trim_start()).unwrap_or(rest);
+        if rest.starts_with('}') {
+            break;
+        }
+    }
+    let id = id.ok_or("sin mutation_id")?;
+    let sql = sql.ok_or("sin sql")?;
+    let params = params.unwrap_or_default();
+    Ok(Mutation { id, sql, params })
+}
+
+/// `"..."` con escapes `\"` y `\\` -> (valor sin desescapar, bytes consumidos).
+fn parse_json_string(s: &str) -> Result<(String, usize), String> {
+    let b = s.as_bytes();
+    if b.first() != Some(&b'"') {
+        return Err(format!("esperaba string, vi {:?}", s.chars().next()));
+    }
+    let mut out = String::new();
+    let mut i = 1;
+    while i < b.len() {
+        match b[i] {
+            b'"' => return Ok((out, i + 1)),
+            b'\\' => {
+                let nxt = *b.get(i + 1).ok_or("string sin cerrar")?;
+                match nxt {
+                    b'"' => out.push('"'),
+                    b'\\' => out.push('\\'),
+                    other => return Err(format!("escape desconocido \\{other}")),
+                }
+                i += 2;
+            }
+            c => {
+                // El resto del archivo es UTF-8 (los sql/params/keys del
+                // payload); copiamos bytes crudos (los no-ASCII pasan tal cual).
+                let ch_len = utf8_len(c);
+                let end = (i + ch_len).min(b.len());
+                out.push_str(&s[i..end]);
+                i = end;
+            }
+        }
+    }
+    Err("string sin cerrar".into())
+}
+
+fn utf8_len(first: u8) -> usize {
+    match first {
+        0x00..=0x7F => 1,
+        0xC0..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        _ => 4,
+    }
+}
+
+/// `[...]` de params — cada elemento es el Display de `Param`:
+/// string json, número, `"\x.."` (Bytes) o `null`.
+fn parse_json_array(s: &str) -> Result<(Vec<Param>, usize), String> {
+    let mut rest = s.trim_start();
+    rest = rest.strip_prefix('[').ok_or("sin [")?.trim_start();
+    let mut out = Vec::new();
+    if rest.starts_with(']') {
+        return Ok((out, s.len() - rest.len() + 1));
+    }
+    loop {
+        let (p, n) = parse_json_param(rest)?;
+        out.push(p);
+        rest = rest[n..].trim_start();
+        if rest.starts_with(']') {
+            return Ok((out, s.len() - rest.len() + 1));
+        }
+        rest = rest.strip_prefix(',').ok_or("sin , en array")?.trim_start();
+    }
+}
+
+fn parse_json_param(s: &str) -> Result<(Param, usize), String> {
+    let trimmed = s.trim_start();
+    let off = s.len() - trimmed.len();
+    if trimmed.starts_with("null") {
+        return Ok((Param::Null, off + 4));
+    }
+    if trimmed.starts_with('"') {
+        let (v, n) = parse_json_string(trimmed)?;
+        // Bytes: el Display produce "\xHEX" — distinguir del Text escapado.
+        if let Some(hex) = v.strip_prefix("\\x") {
+            if hex.len() % 2 == 0 && !hex.is_empty() && hex.bytes().all(|c| c.is_ascii_hexdigit()) {
+                let bytes = (0..hex.len())
+                    .step_by(2)
+                    .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("hex valido"))
+                    .collect();
+                return Ok((Param::Bytes(bytes), off + n));
+            }
+        }
+        return Ok((Param::Text(v), off + n));
+    }
+    // Número (Display de Int: i64 con signo).
+    let end = trimmed
+        .find(|c: char| !(c.is_ascii_digit() || c == '-'))
+        .unwrap_or(trimmed.len());
+    let num = trimmed[..end]
+        .parse::<i64>()
+        .map_err(|e| format!("param numérico inválido: {e}"))?;
+    Ok((Param::Int(num), off + end))
+}
+
+/// Valor json cualquiera (para saltar claves desconocidas del formato).
+fn parse_json_value(s: &str) -> Result<(String, usize), String> {
+    let trimmed = s.trim_start();
+    let off = s.len() - trimmed.len();
+    if trimmed.starts_with('"') {
+        let (v, n) = parse_json_string(trimmed)?;
+        Ok((v, off + n))
+    } else if trimmed.starts_with('[') {
+        let (_, n) = parse_json_array(trimmed)?;
+        Ok((String::new(), off + n))
+    } else if trimmed.starts_with("null") {
+        Ok((String::new(), off + 4))
+    } else {
+        // número u otro token simple: hasta la coma o llave.
+        let end = trimmed
+            .find(|c: char| c == ',' || c == '}')
+            .unwrap_or(trimmed.len());
+        Ok((trimmed[..end].to_string(), off + end))
+    }
+}
+
+/// `8-4-4-4-12` (lowercase) -> bytes del uuid.
+fn parse_uuid(s: &str) -> Result<[u8; 16], String> {
+    let hex: String = s.chars().filter(|c| *c != '-').collect();
+    if hex.len() != 32 || !hex.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!("uuid inválido: {s}"));
+    }
+    let mut out = [0u8; 16];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).map_err(|_| format!("uuid: {s}"))?;
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -538,5 +835,123 @@ mod tests {
         let batches = sink.0.lock().unwrap();
         assert_eq!(batches.len(), 3, "5 -> 2+2+1");
         assert_eq!(batches.iter().map(|b| b.len()).sum::<usize>(), 5);
+    }
+
+    // ------------------------------------------------------------------ WAL local (F3 phase 2)
+
+    /// Round-trip completo del JSONL: `payload_json` -> `parse_payload_json`
+    /// devuelve la MISMA mutation (id, sql y params) — cubre Text con
+    /// comillas/backslash/UTF-8, Bytes no-ASCII, Int negativo y Null.
+    #[test]
+    fn payload_json_roundtrip_all_param_types() {
+        let m = Mutation::with_id(
+            uuidv7_from(1234, 0xDEADBEEF),
+            "INSERT INTO t (a, b, c, d) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+            vec![
+                Param::Text("comilla \" y backslash \\ y ñ€".into()),
+                Param::Int(-42),
+                Param::Bytes(vec![0x00, 0xFF, 0x10]),
+                Param::Null,
+            ],
+        );
+        let p = m.payload_json();
+        let parsed = parse_payload_json(&p).expect("parse payload");
+        assert_eq!(parsed, m, "round-trip exacto");
+    }
+
+    /// El json parseado también es un json VÁLIDO (shape del audit) — el
+    /// parser inverso no es un json parser completo, pero el payload propio
+    /// siempre round-trip (formato cerrado).
+    #[test]
+    fn payload_json_roundtrip_empty_params() {
+        let m = Mutation::with_id(uuidv7_from(9, 1), "SELECT 1", vec![]);
+        let parsed = parse_payload_json(&m.payload_json()).expect("parse");
+        assert_eq!(parsed, m);
+    }
+
+    /// `persist_batch` escribe un archivo `{uuid}.wal` en el dir (creándolo)
+    /// con una línea por mutation; `replay`-parseable y con sync_all (el
+    /// archivo está completo al volver). El dir temporal se limpia SIEMPRE.
+    #[test]
+    fn persist_batch_writes_jsonl_file() {
+        let dir = std::env::temp_dir().join(format!("e2e_wal_unit_{}", rand64()));
+        let m1 = Mutation::with_id(
+            uuidv7_from(111, 7),
+            "INSERT INTO t (id) VALUES ($1) ON CONFLICT DO NOTHING",
+            vec![Param::Int(7)],
+        );
+        let m2 = Mutation::with_id(
+            uuidv7_from(222, 8),
+            "INSERT INTO t (id) VALUES ($1) ON CONFLICT DO NOTHING",
+            vec![Param::Null],
+        );
+        let path = persist_batch(dir.to_str().expect("utf8"), &[m1.clone(), m2.clone()])
+            .expect("persistir");
+        assert!(path.extension().map(|e| e == "wal").unwrap_or(false), "extensión .wal");
+        let content = std::fs::read_to_string(&path).expect("leer archivo");
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 2, "una línea por mutation");
+        assert_eq!(parse_payload_json(lines[0]).expect("l1"), m1);
+        assert_eq!(parse_payload_json(lines[1]).expect("l2"), m2);
+        // Cleanup SIEMPRE (patrón e2e_wal_*).
+        std::fs::remove_file(&path).expect("borrar archivo");
+        std::fs::remove_dir_all(&dir).expect("borrar dir");
+    }
+
+    /// WalSink durable-first:
+    /// - sink que SIEMPRE falla -> el archivo QUEDA en disco (el replay del
+    ///   arranque lo re-aplicará — idempotente);
+    /// - sink OK -> el archivo se BORRA post-commit (WAL vacío).
+    #[tokio::test]
+    async fn walsink_removes_on_success_keeps_on_error() {
+        fn count_files(dir: &std::path::Path) -> usize {
+            std::fs::read_dir(dir)
+                .expect("read dir")
+                .filter_map(|e| e.ok())
+                .count()
+        }
+
+        // Escenario 1: sink que siempre falla (PG caída persistente).
+        #[derive(Clone)]
+        struct AlwaysFailSink;
+        impl MutationSink for AlwaysFailSink {
+            fn apply(&mut self, _batch: Vec<Mutation>) -> impl std::future::Future<Output = Result<(), String>> + Send {
+                async move { Err("PG caída (simulado)".into()) }
+            }
+        }
+        let dir1 = std::env::temp_dir().join(format!("e2e_wal_fail_{}", rand64()));
+        std::fs::create_dir_all(&dir1).expect("mkdir");
+        let m = Mutation::with_id(uuidv7_from(333, 9), "SELECT 1", vec![]);
+        let mut sink1 = WalSink::new(AlwaysFailSink, dir1.to_str().expect("utf8"));
+        assert!(sink1.apply(vec![m.clone()]).await.is_err(), "falla");
+        assert_eq!(count_files(&dir1), 1, "el batch con error queda en el WAL");
+        assert!(sink1.apply(vec![m]).await.is_err(), "falla otra vez");
+        assert_eq!(count_files(&dir1), 2, "cada batch fallido acumula su archivo");
+        std::fs::remove_dir_all(&dir1).expect("cleanup dir1");
+
+        // Escenario 2: sink OK -> archivo borrado tras el commit.
+        #[derive(Clone, Default)]
+        struct OkSink;
+        impl MutationSink for OkSink {
+            fn apply(&mut self, _batch: Vec<Mutation>) -> impl std::future::Future<Output = Result<(), String>> + Send {
+                async move { Ok(()) }
+            }
+        }
+        let dir2 = std::env::temp_dir().join(format!("e2e_wal_ok_{}", rand64()));
+        std::fs::create_dir_all(&dir2).expect("mkdir");
+        let m = Mutation::with_id(uuidv7_from(334, 10), "SELECT 2", vec![]);
+        let mut sink2 = WalSink::new(OkSink, dir2.to_str().expect("utf8"));
+        assert!(sink2.apply(vec![m]).await.is_ok(), "commit OK");
+        assert_eq!(count_files(&dir2), 0, "post-commit el WAL está vacío");
+        std::fs::remove_dir_all(&dir2).expect("cleanup dir2");
+    }
+
+    /// uuid malformado en el json -> Err descriptivo (defensivo).
+    #[test]
+    fn parse_payload_json_rejects_bad_uuid() {
+        let bad = r#"{"mutation_id":"zz","sql":"SELECT 1","params":[]}"#;
+        assert!(parse_payload_json(bad).is_err(), "uuid inválido");
+        let no_close = r#"{"mutation_id":"8-4-4-4-12","sql":"SELECT 1","params":[]"#;
+        assert!(parse_payload_json(no_close).is_err(), "json sin cerrar");
     }
 }
