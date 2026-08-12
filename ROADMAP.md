@@ -155,7 +155,7 @@ Goal: character select + spawn with parity + UTF-8 name overrides.
 - [x] `CG_PLAYER_SELECT` (header 6) → `GC_LOGIN_SUCCESS3` — **MET 2026-08-11** (world entry milestone, line below)
 - [x] Character spawn, map (`Venter_the_east.mp3`), stats — **MET 2026-08-11** (world entry milestone, line below)
 - [ ] **Client: in-memory overrides** (new override API to be added around `CPythonNonPlayer`/`CItemData` after `LoadLocaleData` — no `SetLocaleName`/`SetItemLocaleName` exist in the legacy client; they must be written first) — the server sends UTF-8 names from the DB; goodbye mojibake and the CP949 trap
-- [ ] ~~Entities: minimal Entity core + ECS systems (bevy_ecs standalone) — NEVER port char.cpp as a single class~~ — **SUPERSEDED by ADR-0010 (Proposed 2026-08-12):** the accepted architecture is pure-function domain modules + per-connection session state + `WorldStore` (no Entity struct, no ECS in the workspace); ECS only if the F5 benchmark fails the 1,000+ players/instance target (ADR-0010 §2). Line kept as history.
+- [ ] ~~Entities: minimal Entity core + ECS systems (bevy_ecs standalone) — NEVER port char.cpp as a single class~~ — **SUPERSEDED by ADR-0010 (Accepted 2026-08-12):** the accepted architecture is pure-function domain modules + **bevy_ecs World** (adopted 2026-08-12 — user decision, mob-farming density is the core requirement) + per-connection session state + `WorldStore`; ECS entry decided, F5 benchmark validates. Line kept as history.
 
 **F4 milestone:** the real client enters the world against the Rust core with correct names. — **MET 2026-08-11** (world entry + sustained session through the Rust channel: select → DirectEnter → loading → map 41 with the character, 50+ s; world empty — NPCs are F5; names from the client's pack).
 
@@ -210,9 +210,9 @@ Goal: playable core by domains, side-by-side, scale benchmark, and the rest of t
 
 ### Phase 7 — Client (after the server)
 
-> Open decisions are resolved by their own ADRs. The UI is designed in Slint (standalone app from F5, integrated as texture into the new client). The client is rebuilt with wgpu; the existing Slint UI is reused (the `.slint` files survive). Per ADR-0007, nothing Rust is embedded in the legacy client during F0–F6 — the new client is standalone.
+> Open decisions are resolved by their own ADRs. The UI is designed in Slint (standalone app from F5, integrated as texture into the new client). The client is rebuilt with **bevy** (engine + ECS — same ecosystem as the server; decided 2026-08-12, replaces the wgpu-from-scratch plan); the existing Slint UI is reused (the `.slint` files survive). Per ADR-0007, nothing Rust is embedded in the legacy client during F0–F6 — the new client is standalone.
 
-- [ ] Rust client (wgpu), new protocol, real encryption
+- [ ] Rust client (bevy — decided 2026-08-12; same ecosystem as the server), new protocol, real encryption
 - [ ] Integrated Slint UI (login → select → HUD — the F5 standalone work is kept)
 - [ ] Legacy client limits (24 chars, 5 characters, stack 200) revisable with the new client
 - [ ] Pack formats: only the tools are preserved (PackMakerLite, TEA/LZO, DumpProto) if reused
@@ -224,14 +224,14 @@ Ponytail rule: dependencies enter only when the phase requires them.
 
 - `clap` + `config-rs` → **F2** (binary args/config; `server_realms` main is std-only today)
 - `sqlx`/PgPool → **G-PG / F3** (`database` crate)
-- `bevy_ecs` → **F4** (`realm`)
+- `bevy_ecs` → **ADOPTED 2026-08-12** (`realm`, ADR-0010 §2 — user decision; standalone, `default-features = false`; F5 benchmark validates)
 - No `mlua` ever — quests use the own DSL (decided)
 - `protocol` module split → **F2**, with PanamaPack/hybrid-crypt under `protocol::legacy` (ADR-0004 consequence, ADR-0006)
 
 ## Open decisions (for ADRs and reviewers)
 
 1. **Quest DSL** (spec §11): native `between`; `if` 1 level + else; `select` with `as` capture; `@key` vs literal keys; `.quest`/`.qdsl`/`.mq` naming; explicit `timer` trigger.
-2. **F7 client**: engine (wgpu), new protocol, encryption — no detail until F6.
+2. **F7 client**: engine (bevy + Slint — decided 2026-08-12), new protocol, encryption — no detail until F6.
 3. **Cross-server regions**: physical location of special-region processes (next to the central DB proposed).
 4. **Unified trade**: bid closing with the DB clock (principle decided; auction details in F5).
 5. **License**: MPL-2.0 proposed (AGPL repels pserver operators) — confirm with the community.

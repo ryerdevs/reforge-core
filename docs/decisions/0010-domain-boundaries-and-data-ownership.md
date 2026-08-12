@@ -1,6 +1,6 @@
 ---
 Type: Decision
-Status: Proposed (2026-08-12)
+Status: Accepted (2026-08-12)
 Audience: Contributors, maintainers
 Date: 2026-08-12
 Last verified: 2026-08-12
@@ -12,10 +12,12 @@ Superseded by: —
 
 ## Status
 
-Proposed (2026-08-12). Ratifies the architecture that F4–F5.3 already implements
+Accepted (2026-08-12). Ratifies the architecture that F4–F5.3 already implements
 (verified 2026-08-12) and codifies the governing translator-vs-core principle
 confirmed by the user on 2026-08-12: *contract parity lives inside the legacy
 translator; everything we develop is new, studied, scalable, maintainable code.*
+ECS entry re-decided the same day by the user: **bevy_ecs standalone is adopted
+now** (see §2) — not benchmark-gated as originally proposed.
 
 ## Context
 
@@ -40,31 +42,44 @@ translator; everything we develop is new, studied, scalable, maintainable code.*
 
 ### 1. Realm architecture (accepted)
 
-Three layers, no entity graph:
+Four layers — pure logic, ECS world state, tokio per-connection, durable store:
 
 - **Pure domain modules** — `realm::combat` (combat.rs), `realm::ai` (ai.rs),
   `realm::movement` (movement.rs), `realm::packets` (packets.rs),
   `realm::npc` (npc.rs): explicit inputs/outputs, no hidden state, unit-testable
-  (371 workspace tests, verified 2026-08-12).
+  (371 workspace tests, verified 2026-08-12). Called from systems; the formulas
+  stay pure so the parity tests keep passing unchanged.
+- **ECS world state** — `bevy_ecs` standalone `World` (components: Position,
+  Hp, Aggro, Mob, Item…): replaces `Arc<Mutex<MobCache>>` (channel.rs:81);
+  systems scheduled on a tick (AI 500 ms, movement, combat, drops) with
+  parallel query iteration (SoA storage). `default-features = false` (no
+  bevy_reflect).
 - **Per-connection orchestration** — `server_realms::channel::handle_connection`
   (channel.rs:89-93): one tokio task per connection owning its session state;
-  world data shared via `Arc<Mutex<MobCache>>` (channel.rs:81).
+  player intents flow to the `World` via mpsc (Veloren pattern), GC packets
+  flow back through the connection's outbound queue.
 - **Persistence** — `WorldStore` (world.rs): Batcher ≤100 ms + WalSink
   (uuidv7, durable-first, replay once per process via `OnceLock`, idempotent,
   audit in the same tx) + fail-fast on PG connection (world.rs:39).
 
-This is the accepted architecture. The plan's ECS line (ROADMAP.md:158) is
-superseded by this ADR.
+### 2. ECS adoption — bevy_ecs standalone, decided NOW (user decision 2026-08-12)
 
-### 2. ECS entry criterion (measurable — no ECS before data)
+The original benchmark gate is superseded. The user decided adoption today:
 
-Adopt bevy_ecs (or any ECS) **if and only if** the F5 scale benchmark (N bots ×
-N regions, server-rewrite.md:416) shows the current model failing a defined
-target: sustaining **1,000+ concurrent players per instance with ≥2–5× the C++
-per-tick CPU headroom** (audit estimate, server-rewrite.md:125) and **AI-tick
-latency under the 500 ms budget** (channel.rs AI tick). The decision is
-revisited at the end of F5 with benchmark data, not before (ponytail: no
-dependency without measurement).
+- **Domain fact:** Metin2 is a mob-farming game — dense mob simulation is the
+  core requirement (real data: 145,876 spawns, map 41 = 10,026). The legacy P1
+  "global tick with allocs, O(all entities)" (char_manager.cpp:641) and the
+  single `Arc<Mutex<MobCache>>` are exactly the contended shapes ECS solves
+  (SoA + parallel queries + no per-entity allocs).
+- **Solo-dev maintenance:** the ecosystem maintains archetypes/queries/change
+  detection; a hand-rolled store would grow into a mini-ECS maintained by one
+  person. bevy_ecs standalone is proven for game servers (Veloren).
+- **One paradigm:** the F7 client is bevy + Slint (user decision 2026-08-12,
+  replacing the wgpu-from-scratch plan) — the same ecosystem on both sides.
+
+The F5 benchmark (N bots × N regions) remains the **validation** of the choice
+— it must sustain 1,000+ players/instance with ≥2–5× the C++ per-tick CPU
+headroom and AI-tick under 500 ms — but it is no longer the gate for entry.
 
 ### 3. Data ownership
 
@@ -109,14 +124,17 @@ Mapped at the boundary, absent from the domain model, deleted wholesale at F7
 
 ## Alternatives considered
 
-- **ECS now (bevy_ecs standalone):** rejected today — no scale data; archetype/
-  query complexity without a measured problem; per-connection state is simpler
-  at current load (single-player sessions, map 41 = 10,026 spawns). The §2
-  criterion gives it an evidence-based re-entry at F5's end.
+- **Pure modules + per-connection state + WorldStore without ECS** (the F4–F5.3
+  shape): rejected as the FINAL design — it works today (single-player
+  sessions, map 41), but the single `Arc<Mutex<MobCache>>` serializes the AI
+  tick and every world read, and the domain is mob-farming (dense mob
+  simulation is the core requirement — 145,876 spawns imported). ECS (SoA +
+  parallel queries) is adopted instead (§2).
 - **Actor model (regions as message-passing actors):** rejected — the legacy
   single-writer property is preserved and elevated ("single-writer per region",
-  server-rewrite.md:106); tokio tasks + shared MobCache already provide
-  isolation; actors add a messaging layer with no measured benefit.
+  server-rewrite.md:106); tokio tasks + the bevy World (single-writer access
+  from the region task) already provide isolation; actors add a messaging layer
+  with no measured benefit.
 - **Ported god-object (char.cpp as one class):** rejected — explicit plan
   prohibition (ROADMAP.md:158); the god object is the anti-pattern the rewrite
   removes.
@@ -124,11 +142,15 @@ Mapped at the boundary, absent from the domain model, deleted wholesale at F7
 ## Consequences
 
 - Skills, multicast and party (next F5 slices) build on this ADR: world state
-  lives in pure modules + per-connection sessions + WorldStore; no hidden
-  entity graph is introduced.
+  lives in the bevy World (systems over the pure domain modules) +
+  per-connection sessions + WorldStore; the god-object pattern is not
+  introduced at any point.
+- The next implementation slice is the ECS adoption: `MobCache` → World
+  components/systems (Position, Hp, Aggro, Mob, Item), player intents via mpsc
+  (Veloren pattern), the 371 existing tests stay green.
 - ADR-0008 §5 is amended (volatile = event-driven save via Batcher+WAL).
 - ROADMAP.md:158 and the reforge README ("realm ... ECS (F4+)") must be
-  updated in the staleness sweep.
+  updated in the staleness sweep (done 2026-08-12).
 - The D1–D6 inventory is the F7 deletion checklist (extend
   legacy-compatibility.md).
 - Compatibility constants get an expiry note; the balance redesign is an F6

@@ -71,7 +71,7 @@ The following items were recommended in the 2026-08-10 review of the migration o
 | 6 | **Legacy packets 151/152/153** (PanamaPack, hybrid-crypt) live in `protocol::legacy` and are **deletable** at the new client (F7) | **Accepted + IMPLEMENTED** (ADR-0006; `protocol::legacy` 151–153 runtime-file conditional, F2a 2026-08-10) | ADR-0006, `../reference/protocol/legacy-compatibility.md` |
 | 7 | **No Rust embedded inside the legacy client** during F0–F6; Slint standalone login/select later (F5), integrated into the new client (F7) | **Accepted** (for the already-agreed boundary) | ADR-0007 |
 | 8 | **Minimal dependency policy** — YAGNI; stdlib before dependencies | **Approved** (project principle) | AGENTS.md, §4, §7 |
-| 9 | **Defer until justified**: local WAL + `mutation_id` replay, RLS, Patroni failover, bevy_ecs, REST API (**Docker removed from the plan 2026-08-11 — user decision**) | **Proposed** (target design kept in §5.5/§7, gated) | this plan |
+| 9 | **Defer until justified**: RLS, Patroni failover, REST API (**Docker removed from the plan 2026-08-11 — user decision**). Local WAL + `mutation_id` replay **DONE 2026-08-12** (ADR-0008 phase 2); bevy_ecs **ADOPTED 2026-08-12** (ADR-0010 §2, user decision) | **Proposed** (target design kept in §5.5/§7, gated) | this plan, ADR-0008, ADR-0010 |
 
 Note on item 1/3 wording: G-PG means **one canonical PostgreSQL** — the C++ baseline operates on the **same PostgreSQL** through a temporary compatibility adapter (its `libsql` layer speaks MySQL wire/SQL; the adapter bridges that), and MariaDB is used **only as the migration/export source** (initial data extraction), never as a second operational database. This direction was fixed by the user on 2026-08-10 and is recorded in ADR-0005 (**Accepted**, 2026-08-10); the G-PG gate closes when the implementation backlog B1–B8 is green (§8.2.1). **Gate closed 2026-08-10 (B1–B8 executed).**
 
@@ -179,7 +179,7 @@ Note: each entity (with its inventory/gold) belongs to ONE region at any moment 
 - Inter-region communication via `mpsc` events (global chat, guilds, migrations). Broadcast with a saturation policy (drop-to-newest for position, queue for events).
 - Timers with a binary heap (legacy `event_queue` pattern).
 - **Scaling**: more players/mobs → finer region or more regions, without multiplying processes. Future multi-process (region groups) is not built until the benchmark demands it (gate F5: N bots × N regions).
-- **ECS (bevy_ecs standalone) is the target design but deferred until justified [Proposed, §2.9]**: F4 starts with a plain per-region task over minimal entities; the ECS is introduced only if profiling shows the query-parallelism win.
+- **ECS (bevy_ecs standalone) — ADOPTED 2026-08-12 (ADR-0010 §2, user decision)**: realm world state = bevy World (systems over the pure domain modules); `MobCache` → components (Position, Hp, Aggro, Mob, Item); player intents via mpsc (Veloren pattern). Mob-farming density is the core requirement; the F5 benchmark (N bots × N regions, 1,000+ players/instance, ≥2–5× CPU headroom, AI-tick < 500 ms) validates the choice.
 
 ### 5.3 Domain decomposition
 
@@ -259,8 +259,8 @@ PostgreSQL central (transactional batch ≤100ms, uuidv7, CHECK gold>=0)
 ```
 
 - Baseline (not deferred): transactional writes to PG in batches ≤100ms; uuidv7 IDs; `CHECK gold>=0` constraints; append-only audit log in the same transaction; partitioned audit by date + retention + `pg_stat_statements` from day one.
-- **Deferred until justified [Proposed]:** local WAL per region with `mutation_id` (uuid) + idempotent replay (`ON CONFLICT DO NOTHING`), RLS (`current_setting('app.pid')`), Patroni hot-standby failover (~2 min promotion). The deferred items are the safety net for the "no dupe window" and "crash = max ~100ms in-flight loss" guarantees; the baseline contract keeps those guarantees as targets, with the exact mechanism gated on measurement.
-- **Contract fixed in an ADR (pending):** durable = transactional batch ≤100ms; volatile = save every 30s + logout; failover ≤2 min (target).
+- **DONE 2026-08-12:** local WAL per region with `mutation_id` (uuid) + idempotent replay (`ON CONFLICT DO NOTHING`) — ADR-0008 phase 2 (Batcher + WalSink + replay). **Deferred until justified [Proposed]:** RLS (`current_setting('app.pid')`), Patroni hot-standby failover (~2 min promotion). The deferred items are the safety net for the "no dupe window" and "crash = max ~100ms in-flight loss" guarantees; the baseline contract keeps those guarantees as targets, with the exact mechanism gated on measurement.
+- **Contract fixed in ADR-0008 (Accepted 2026-08-11, amended 2026-08-12):** durable = transactional batch ≤100ms + WAL replay; volatile = event-driven save via Batcher+WAL (save-by-event, F5.3 slices 4/11/13); failover ≤2 min (target).
 
 **Why PostgreSQL and not redb/SQLite/SurrealDB/etc.:** redb is an **embedded** library (local file of ONE process) — it cannot serve N regions sharing the same DB; it breaks the regional channels. SQLite likewise (single-writer). SurrealDB is document-oriented (the character/items/guilds model is pure relational), immature, and without an ops ecosystem. CockroachDB: proprietary license + multi-node that does not exist here. TiDB/ScyllaDB: same + Scylla is not even relational. libSQL/Turso: on pause. **PG is the only one that fulfills the full contract: multi-row ACID, constraints, RLS, LISTEN/NOTIFY, failover, 25 years of battle-testing.**
 
@@ -382,7 +382,7 @@ Rule: **touch the client only if (a) ≤1 week of work and (b) it unlocks someth
 |---|---|---|
 | Language | **Rust** (edition 2024) | Memory safety, zero-cost abstractions |
 | Async runtime | **tokio 1.x** | Standard; tasks, mpsc, timers |
-| Entities | Plain per-region task first; **bevy_ecs standalone** deferred until justified [Proposed] | Parallelizable queries without the graphics engine; only if profiling demands it |
+| Entities | **bevy_ecs standalone — ADOPTED 2026-08-12 (ADR-0010 §2)** | SoA storage + parallel query iteration without the graphics engine; Veloren-proven |
 | Database | **PostgreSQL 18** | ACID, uuidv7, OLD/NEW in RETURNING, LISTEN/NOTIFY, advisory locks, RLS, incremental backups, failover |
 | DB access | **tokio-postgres 0.7** (ADR-0008 Accepted 2026-08-11 — supersedes the sqlx candidate; pool later via deadpool-postgres) | Transactions, LISTEN/NOTIFY, prepared statements; proven end-to-end (Rust auth + proxy) |
 | Quests | **Own declarative DSL** (§12) | Zero scripting runtime |
@@ -390,7 +390,7 @@ Rule: **touch the client only if (a) ≤1 week of work and (b) it unlocks someth
 | Observability | tracing + metrics (Prometheus/Grafana) | — |
 | Tests | cargo test + proptest + golden tests + parity harness | — |
 
-**Deferred until justified [Proposed]:** bevy_ecs (§5.2), local WAL + `mutation_id`, RLS, Patroni failover (§5.5), REST API (§8.3, F5+; **Docker removed from the plan 2026-08-11 — user decision**). The stack table above lists them as target design; each becomes a build dependency only with evidence.
+**Adopted 2026-08-12:** bevy_ecs (ADR-0010 §2 — user decision, mob-farming density is the core requirement). **DONE 2026-08-12:** local WAL + `mutation_id` (ADR-0008 phase 2). **Deferred until justified [Proposed]:** RLS, Patroni failover (§5.5), REST API (§8.3, F5+; **Docker removed from the plan 2026-08-11 — user decision**). The stack table above lists them as target design; each becomes a build dependency only with evidence.
 
 **Rejected with justification:** CockroachDB (proprietary license), TiDB/ScyllaDB (unnecessary multi-node; Scylla not relational), SurrealDB (document-oriented + immature), libSQL/Turso (on pause), SQLite/redb (embedded, break the shared DB between regions), TimescaleDB (ADR-0001: only if logs prove it).
 
@@ -415,7 +415,7 @@ Vertical slices (client→auth→db→client) with the client frozen. The legacy
 | **F4** World entry + names | CG_PLAYER_SELECT, spawn, map, stats; UTF-8 name overrides | The real client enters the world against the Rust core with correct names | **Milestone MET 2026-08-11** (real client world entry, 50+ s sustained); domain-boundary ADR = ADR-0010 (Proposed 2026-08-12, ratifies the implemented architecture) |
 | **F5** Gameplay | Movement, combat, drops, items, NPCs, quests, chat, shops, trade, GM — by domains, side-by-side; channel list from auth; config via manifest; **Slint standalone** (Accepted, ADR-0007); scale benchmark (N bots × N regions); REST deferred until justified [Proposed] (**Docker removed 2026-08-11 — user decision**) | Full session without divergences + benchmark passed | **IN PROGRESS (2026-08-12)** — F5.3 slices 1–17 (combat/items/NPC AI); pending: walkability, skills, quests (DSL), shops, benchmark, Slint |
 | **F6** Full parity | Automated side-by-side (same input → diff), instance-by-instance cutover; legacy compatibility adapter removed (ADR-0005); final data migration verified (backup/restore) | The Rust server replaces the C++ one without client changes | Planned |
-| **F7** Client (after) | Rust client (wgpu), Slint UI (the `.slint` from F5 integrate), new protocol, real encryption; **delete `protocol::legacy`** (151/152/153) [Proposed, ADR-0006] | — | Future |
+| **F7** Client (after) | Rust client (**bevy + Slint — decided 2026-08-12**; the `.slint` from F5 integrate), new protocol, real encryption; **delete `protocol::legacy`** (151/152/153) [Accepted, ADR-0006] | — | Future |
 
 ### Phase G-PG — PostgreSQL cutover
 
@@ -506,9 +506,9 @@ Data parity: `scripts/gpg/parity_check.py` — per table, row count + md5 over t
 | 0006 | Legacy wire/pack compatibility boundary (`protocol::legacy`, deletion at F7) | **Accepted** (implemented in F2a 2026-08-10) |
 | 0007 | No partial Rust embedded in the legacy client (F0–F6) | Accepted |
 | 0008 | Data layer (F3): domain repositories, tokio-postgres 0.7, durable/volatile contract (save-by-event + WAL) | Accepted |
-| 0009 | Server-side locale (server-owned text per language) | Proposed |
-| 0010 | Domain boundaries and data ownership (pure modules + per-connection state + WorldStore; ECS gated on the F5 benchmark) | Proposed |
-| 0011 | Anti-hack model (always-on controls; signed clock wrap decided) | Proposed |
+| 0009 | Server-side locale (server-owned text per language) | Accepted (2026-08-12) |
+| 0010 | Domain boundaries and data ownership (pure modules + bevy_ecs World adopted + per-connection state + WorldStore; translator-vs-core boundary; wire debt D1–D6) | Accepted (2026-08-12) |
+| 0011 | Anti-hack model (always-on controls; signed clock wrap decided) | Accepted (2026-08-12) |
 
 **Design decisions (from this plan, previously agreed):**
 
