@@ -7,6 +7,19 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-12] (22nd part) — F5.3 equipar/desequipar items (CG_ITEM_MOVE + EQUIPMENT window)
+
+> Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests, unit tests only).
+
+### Added — item equip/unequip (Rust, commit `b4cad81`)
+
+- **`INVENTORY_MAX_NUM = 180`** (length.h:29 con `ENABLE_EXTEND_INVEN_SYSTEM` — CommonDefines.h:32; 5×9×4) + `WEAR_MAX_NUM = 32` (length.h:77). **Fix**: el pickup buscaba slot libre en 0..90 — corregido a 180 (el runtime real tiene 4 páginas).
+- **`CG_ITEM_MOVE` EQUIPAR** (INVENTORY→EQUIPMENT, parity `EquipItem` char_item.cpp:6128): el cell del window EQUIPMENT = `INVENTORY_MAX_NUM + wear` (length.h:827 `IsEquipPosition`); slot vacío obligatorio (parity `GetItem(DestCell)` → false, char_item.cpp:5675-5680); `num` debe ser 0 (el split al equipar es pendiente); wire: `GC_ITEM_DEL` deprecated (origen) + `GC_ITEM_SET` (destino EQUIPMENT) + `GC_CHARACTER_ADDITIONAL_INFO` (parts del row — los parts de items equipados son pendiente: ComputeParts con items) + upsert.
+- **DESEQUIPAR** (EQUIPMENT→INVENTORY): destino INVENTORY vacío obligatorio; mismo wire inverso.
+- **Belt/DS siguen fuera** (documentado).
+- **Verified**: `cargo test --workspace` green (excluding the pre-existing cold-start-flaky `f16_peer_smoke`), clippy no new warnings.
+- **Pending**: parts visuales de items equipados (ComputeParts), validación de tipo del item al equipar (`IsEquipable`/`CanEquipNow`), split al equipar, ATT/DEF de items equipados en combate.
+
 ## [2026-08-12] (21st part) — F5.3 CG_ITEM_MOVE — mover/stack/split de items del inventario
 
 > Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests, unit tests only).
