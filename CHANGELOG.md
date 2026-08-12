@@ -7,6 +7,18 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-12] (26th part) — F5.3 attack_speed del arma (GET_ATTACK_SPEED parity)
+
+> Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests, unit tests only).
+
+### Added — weapon attack speed (Rust, commit `0c3f995`)
+
+- **`realm::combat::attack_speed_for_weapon(weapon) -> u32`** (pure, parity `GET_ATTACK_SPEED` battle.cpp:757-782): `real_speed = 1000*100/(80+0+0)` = **1250 ms** (el `ani_speed` default del constructor ANI, ani.cpp:121; la tabla `.msa` real del pack por raza/arma es GAP documentado); `DAGGER`/`CLAW` (subtipos 1/8 — ani.cpp:37-49) → `/2` = 625 ms (battle.cpp:774-779); `None`/no-weapon → 1250.
+- **Channel `CG_ATTACK`**: resuelve el arma equipada ANTES de construir el `PlayerState` y ajusta `player.attack_speed_ms` — el cooldown del combate usa el intervalo del arma (antes siempre 1250).
+- **Tests**: manos desnudas 1250, espada 1250 (ANI default), daga 625, garra 625, item no-weapon sin `/2`.
+- **Verified**: `cargo test --workspace` green (excluding the pre-existing cold-start-flaky `f16_peer_smoke`), clippy no new warnings.
+- **Pending**: tabla `.msa` real (data-driven del pack), `dw_arrow` (quiver), skills, walkability (`IsMovablePosition`), NPCs interactivos/tiendas.
+
 ## [2026-08-12] (25th part) — F5.3 FindEquipCell: validación de tipo al equipar
 
 > Implemented directly by the orchestrator (no delegation — user directive; no gated PG tests, unit tests only).
