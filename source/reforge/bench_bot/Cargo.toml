@@ -1,0 +1,15 @@
+[package]
+name = "bench_bot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "N-bot wire-level simulator (F5 benchmark harness) — provisional slice"
+
+[lints]
+workspace = true
+
+[dependencies]
+tokio.workspace = true
+tokio-postgres.workspace = true
+protocol = { path = "../protocol" }
+database = { path = "../database" }

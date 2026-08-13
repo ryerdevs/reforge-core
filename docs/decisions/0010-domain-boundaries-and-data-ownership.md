@@ -3,7 +3,7 @@ Type: Decision
 Status: Accepted (2026-08-12)
 Audience: Contributors, maintainers
 Date: 2026-08-12
-Last verified: 2026-08-12
+Last verified: 2026-08-13
 Supersedes: ROADMAP.md:158 (the ECS commitment of Phase 4)
 Superseded by: —
 ---
@@ -44,9 +44,9 @@ now** (see §2) — not benchmark-gated as originally proposed.
 
 Four layers — pure logic, ECS world state, tokio per-connection, durable store:
 
-- **Pure domain modules** — `realm::combat` (combat.rs), `realm::ai` (ai.rs),
-  `realm::movement` (movement.rs), `realm::packets` (packets.rs),
-  `realm::npc` (npc.rs): explicit inputs/outputs, no hidden state, unit-testable
+- **Pure domain modules** — `game_core::combat` (combat.rs), `game_core::ai` (ai.rs),
+  `game_core::movement` (movement.rs), `game_core::packets` (packets.rs),
+  `game_core::npc` (npc.rs): explicit inputs/outputs, no hidden state, unit-testable
   (371 workspace tests, verified 2026-08-12). Called from systems; the formulas
   stay pure so the parity tests keep passing unchanged.
 - **ECS world state** — `bevy_ecs` standalone `World` (components: Position,
@@ -95,7 +95,7 @@ headroom and AI-tick under 500 ms — but it is no longer the gate for entry.
   codecs (the wire contract), `protocol::legacy` (ADR-0006: PanamaPack
   151/289B, hybrid-crypt 152/153), `mysql_proxy` (MySQL wire v10 + SQL dialect
   translation: `CAST(x AS unsigned)`→bigint, bytea fix — translate.rs:30,215),
-  and the wire-facing data mapping in `realm::packets` (cell↔slot).
+  and the wire-facing data mapping in `game_core::packets` (cell↔slot).
 - **The core is new design:** clean arithmetic, config-driven constants, no
   inherited truncation quirks. Where observable output parity with the C++ is
   still required during the strangler window (damage numbers, ranges), parity
@@ -145,9 +145,23 @@ Mapped at the boundary, absent from the domain model, deleted wholesale at F7
   lives in the bevy World (systems over the pure domain modules) +
   per-connection sessions + WorldStore; the god-object pattern is not
   introduced at any point.
-- The next implementation slice is the ECS adoption: `MobCache` → World
+- ~~The next implementation slice is the ECS adoption: `MobCache` → World
   components/systems (Position, Hp, Aggro, Mob, Item), player intents via mpsc
-  (Veloren pattern), the 371 existing tests stay green.
+  (Veloren pattern), the 371 existing tests stay green.~~ — **DONE (2026-08-13,
+  39th part):** `MobCache` → bevy World landed in `game_core/src/ecs.rs` (986
+  lines): components Vid/Position/Hp/Aggro/Mob/Item/Player; resources Tick,
+  Rand, NpcOutbox, SpawnCache; systems `chase_attack`/`aggro_detect`/`patrol`
+  (chained, parity order); `WorldSim` wrapper (resolve_spawns/spawn_npcs/
+  damage_npc/spawn_item/update); channel.rs refactored (AI tick →
+  `world.update`; player intents sync state into the World). Workspace **359
+  passed / 0 failed**, clippy clean, release green, deployed. **Accepted
+  deviations** (implementer-documented, accepted): `multi_threaded` not enabled
+  yet (one-line toggle at the F5 benchmark); SpawnCache stays
+  `Arc<Mutex<>>` as a World resource (cross-connection PG-row cache, not world
+  state); the World is per-connection for now (channel-level shared World = the
+  spawn-dinámico slice, IN PROGRESS); armor computed at entry/equip/unequip
+  instead of per-tick (same values, zero per-tick PG round-trips); the mpsc
+  player-intent channel is deferred with the spawn-dinámico slice (ecs.rs:34).
 - ADR-0008 §5 is amended (volatile = event-driven save via Batcher+WAL).
 - ROADMAP.md:158 and the reforge README ("realm ... ECS (F4+)") must be
   updated in the staleness sweep (done 2026-08-12).

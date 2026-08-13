@@ -32,6 +32,13 @@ pub struct PlayerMotion {
     pub last_server_time: u32,
     /// Montura (afecta la tolerancia de distancia: 25 m vs 60 m).
     pub riding: bool,
+    /// Velocidad efectiva del movimiento en UNITS/segundo (F5.4 — el
+    /// envelope por entidad). Base del jugador: 300 u/s — el fallback del C++
+    /// cuando el motion no existe (`char.cpp:2747`) con POINT_MOV_SPEED=100
+    /// (factor 1.0 — `CalculateDuration`, `utils.cpp:201-213`). Cuando haya
+    /// buffs/monturas con velocidad (F5): `300 * 10000 /
+    /// CalculateDuration(POINT_MOV_SPEED, 10000)`.
+    pub speed: u32,
 }
 
 /// Resultado de un MOVE procesado.
@@ -52,6 +59,12 @@ pub enum MoveError {
     /// `fDist > 2500` (25 m — el umbral del `ENABLE_TP_SPEED_CHECK`,
     /// input_main.cpp:1466) — salto/teleport.
     TooFar,
+    /// F5.4 (ADR-0011): la distancia excede el ENVELOPE por entidad —
+    /// `speed × Δt` de server desde el último MOVE aceptado (+20% + 100 ms de
+    /// tolerancia de lag, plan §5.7). Cierra el hueco del slow-accumulate:
+    /// pasos cortos con relojes de cliente plausibles que superan la
+    /// velocidad real de media.
+    ExceedsEnvelope,
     /// `bFunc` inválido (`>= FUNC_MAX_NUM && !(bFunc & 0x80)`,
     /// input_main.cpp:1444).
     InvalidFunc,
@@ -67,6 +80,15 @@ const MAX_DIST_NO_RIDING: i64 = 2500;
 const MAX_DIST_RIDING: i64 = 6000;
 /// `iDelta >= 30000` → slow timer (input_main.cpp:1505).
 const SLOW_TIMER_MS: i64 = 30_000;
+
+/// Velocidad base del jugador en units/s (F5.4): el fallback del C++ cuando
+/// el motion no existe (`char.cpp:2747`); POINT_MOV_SPEED=100 → factor 1.0
+/// (`CalculateDuration`, utils.cpp:201-213).
+pub const DEFAULT_MOVE_SPEED: u32 = 300;
+/// Tolerancia de lag del envelope: +20% (plan §5.7).
+const ENVELOPE_TOLERANCE: f64 = 1.20;
+/// Tolerancia de lag del envelope: +100 ms de tiempo de server (plan §5.7).
+const ENVELOPE_LAG_MS: f64 = 100.0;
 
 /// Procesa un `CG_MOVE` con la validación del C++ (timer + distancia).
 /// `now_ms` = el reloj del server en ms (get_dword_time).
@@ -113,6 +135,22 @@ pub fn process_move(
         return Err(MoveError::TooFar);
     }
 
+    // F5.4 (ADR-0011): envelope por entidad — la distancia NO puede exceder
+    // `speed × Δt` de server desde el último MOVE aceptado (tolerancia de lag
+    // +20%/+100 ms — plan §5.7: "server owns the position; correction not
+    // ban"). Sin ancla (`last_server_time == 0` — primer MOVE tras load/warp)
+    // el envelope está inerte: el cap absoluto (2500/6000) sigue validando.
+    // Cierra el hueco del slow-accumulate: el timer del cliente pasa con
+    // relojes plausibles y el cap con pasos cortos — pero la distancia media
+    // no puede superar la velocidad real del personaje.
+    if state.last_server_time != 0 {
+        let dt_ms = i64::from(now_ms.wrapping_sub(state.last_server_time) as i32).max(0) as f64;
+        let allowed = f64::from(state.speed) * (dt_ms + ENVELOPE_LAG_MS) / 1000.0 * ENVELOPE_TOLERANCE;
+        if (dist_sq as f64).sqrt() > allowed {
+            return Err(MoveError::ExceedsEnvelope);
+        }
+    }
+
     // Aceptado (parity `Goto(lX, lY)` — input_main.cpp:1532).
     state.x = packet.x;
     state.y = packet.y;
@@ -130,6 +168,7 @@ pub fn initial(x: i32, y: i32) -> PlayerMotion {
         last_client_time: 0,
         last_server_time: 0,
         riding: false,
+        speed: DEFAULT_MOVE_SPEED,
     }
 }
 
@@ -155,7 +194,8 @@ mod tests {
     #[test]
     fn envelope_accepts_within_limit_and_rejects_teleport() {
         let mut st = initial(0, 0);
-        // 2000 units (< 2500) → OK.
+        // 2000 units (< 2500) → OK (sin ancla aún — el envelope está inerte,
+        // el cap absoluto valida; F5.4).
         let r = process_move(&mut st, &move_to(2000, 0, 1000), 1100).expect("dentro del límite");
         assert_eq!(r, MoveResult { x: 2000, y: 0 });
         assert_eq!((st.x, st.y), (2000, 0), "posición actualizada");
@@ -166,10 +206,13 @@ mod tests {
         // Diagonal 2000,2000 → sqrt(8M) ≈ 2828 > 2500 → rechazo.
         let err = process_move(&mut st, &move_to(4000, 2000, 3000), 3100).expect_err("diagonal");
         assert_eq!(err, MoveError::TooFar);
-        // Con montura: 5000 units (< 6000) → OK.
+        // Con montura: 1000 units (< 6000 y dentro del envelope — dt = 3000 ms
+        // → allowed = 300*3.1*1.2 ≈ 1116) → OK. El salto de 5000 units del
+        // diseño original ahora lo rechaza el envelope (ExceedsEnvelope): es
+        // el caso slow-accumulate que F5.4 cierra — 5000 u en 3 s ≠ 300 u/s.
         st.riding = true;
-        let r = process_move(&mut st, &move_to(7000, 0, 4000), 4100).expect("montura");
-        assert_eq!(r.x, 7000);
+        let r = process_move(&mut st, &move_to(3000, 0, 4000), 4100).expect("montura");
+        assert_eq!(r.x, 3000);
     }
 
     /// El timer speedhack (la validación ACTIVA — input_main.cpp:1505-1515):
@@ -211,5 +254,64 @@ mod tests {
         p.b_func = TPacketCGMove::FUNC_ATTACK;
         assert_eq!(process_move(&mut st, &p, 1100), Err(MoveError::NotMove));
         assert_eq!((st.x, st.y), (0, 0), "nada se aplicó");
+    }
+
+    /// Estado con ancla para los tests del envelope (parity del arranque:
+    /// el primer MOVE real ancla el reloj — `last_server_time != 0`).
+    fn anchored(x: i32, y: i32, now: u32) -> PlayerMotion {
+        let mut st = initial(x, y);
+        st.last_server_time = now;
+        st.last_client_time = now;
+        st
+    }
+
+    /// F5.4: el slow-accumulate se rechaza — pasos de 30 u cada 100 ms pasan
+    /// (300 u/s reales + tolerancia), pero un paso de 300 u en 100 ms excede
+    /// el envelope (`allowed = 300*0.2*1.2 = 72 u`) aunque el reloj del
+    /// cliente sea plausible y la distancia esté MUY por debajo del cap de
+    /// 2500. La posición NO cambia (corrección, no ban — plan §5.7).
+    #[test]
+    fn envelope_rejects_slow_accumulate() {
+        let mut st = anchored(0, 0, 10_000);
+        // Pasos normales: 30 u cada 100 ms → Ok (dentro de 72 u de allowed).
+        for i in 0..5 {
+            let now = 10_100u32 + i as u32 * 100;
+            let r = process_move(&mut st, &move_to((i + 1) * 30, 0, now), now).expect("paso normal");
+            assert_eq!(r.x, (i + 1) * 30);
+        }
+        // Paso de 300 u en 100 ms (10× la velocidad real) → envelope.
+        let err = process_move(&mut st, &move_to(450, 0, 10_700), 10_700).expect_err("aceleración");
+        assert_eq!(err, MoveError::ExceedsEnvelope);
+        assert_eq!((st.x, st.y), (150, 0), "el MOVE rechazado no actualiza");
+    }
+
+    /// F5.4: tolerancia de lag — un cliente con 2 s de lag manda la posición
+    /// acumulada: 600 u en 2000 ms → allowed = 300*2.1*1.2 = 756 → Ok; el
+    /// límite duro (757 u) se rechaza.
+    #[test]
+    fn envelope_lag_tolerance_passes() {
+        let mut st = anchored(0, 0, 10_000);
+        let r = process_move(&mut st, &move_to(600, 0, 8_000), 12_000).expect("lag 2 s: 600 u");
+        assert_eq!(r.x, 600);
+        let err = process_move(&mut st, &move_to(1_357, 0, 8_000), 12_000).expect_err("fuera de la tolerancia");
+        assert_eq!(err, MoveError::ExceedsEnvelope);
+        // El reloj del cliente atrasado (dw_time 2 s antes) sigue pasando el
+        // timer speedhack (iDelta = 4000 < 30000, no-fast) — el envelope es
+        // quien acota la distancia.
+        assert_eq!((st.x, st.y), (600, 0));
+    }
+
+    /// F5.4: sin ancla (`last_server_time == 0` — primer MOVE tras load o
+    /// warp) el envelope está inerte; el cap absoluto (2500) sigue validando
+    /// el primer salto. El caller re-ancla con `initial()` tras un warp.
+    #[test]
+    fn envelope_inert_without_anchor() {
+        let mut st = initial(0, 0);
+        let r = process_move(&mut st, &move_to(2_000, 0, 1_000), 1_100).expect("primer MOVE");
+        assert_eq!(r.x, 2_000);
+        // Con ancla ya puesta (last_server_time = 1100), el mismo salto de
+        // 2000 u en 100 ms se rechaza.
+        let err = process_move(&mut st, &move_to(4_000, 0, 1_200), 1_200).expect_err("anclado");
+        assert_eq!(err, MoveError::ExceedsEnvelope);
     }
 }

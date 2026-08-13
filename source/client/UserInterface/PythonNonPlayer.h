@@ -2,6 +2,9 @@
 // #define ENABLE_NEW_MOB_PROTO_STRUCT_20141125	// bleeding resistance 2014/11/25
 // #define ENABLE_NEW_MOB_PROTO_STRUCT_20151020	// claw resistance 2015/10/20
 
+#include <map>
+#include <string>
+
 class CPythonNonPlayer : public CSingleton<CPythonNonPlayer>
 {
 	public:
@@ -612,6 +615,14 @@ class CPythonNonPlayer : public CSingleton<CPythonNonPlayer>
 		DWORD				GetMonsterColor(DWORD dwVnum);
 		const char*			GetMonsterName(DWORD dwVnum);
 
+		// F4 tail (override API): nombre del SERVER (UTF-8 convertido) en
+		// memoria, encima del pack. Orden de GetName: override -> bundle del
+		// auth (CPythonLocale) -> pack (szLocaleName). `szName` debe estar en
+		// codepage local de render (display-ready) — el caller (capa de red /
+		// net.SetLocaleName) convierte UTF-8 con CPythonLocale::Utf8ToDisplay.
+		// Un nombre vacío ELIMINA el override (vuelve al pack/bundle).
+		void				SetLocaleName(DWORD dwVnum, const char* szName);
+
 		DWORD				GetMonsterType(DWORD dwVnum);
 		DWORD				GetMonsterRank(DWORD dwVnum);
 
@@ -625,5 +636,7 @@ class CPythonNonPlayer : public CSingleton<CPythonNonPlayer>
 
 	protected:
 		TNonPlayerDataMap	m_NonPlayerDataMap;
+		// F4 tail: overrides de nombre del server (vnum -> nombre display).
+		std::map<DWORD, std::string>	m_LocaleNameOverrideMap;
 };
 

@@ -2,7 +2,7 @@
 Type: Guardrail
 Status: Current
 Audience: Operators, contributors, agents
-Last verified: 2026-08-10
+Last verified: 2026-08-12
 ---
 
 # Guardrail: operations (WSL runtime)
@@ -33,9 +33,9 @@ Rules for running the legacy test stack on the WSL Debian-M2 environment. Source
 - **Consequence:** undetected stale binaries; "works in source, fails in runtime" mysteries.
 - **Status:** Active.
 
-## 4. Check the WSL IP after every restart
+## 4. Check the WSL IP after every restart (parity sessions)
 
-- **Rule:** `serverinfo.py` bakes host `172.25.104.175` (WSL eth0 IP) — **check after every WSL restart**; the IP can change.
+- **Rule:** for WSL parity sessions the client reaches the frozen C++ stack at `172.25.104.175` (WSL eth0 IP — repacked `serverinfo.py`) — **check after every WSL restart**; the IP can change. (Primary runtime since ADR-0012: `serverinfo.py` = `127.0.0.1`, all-Windows.)
 - **Why:** the client connects by IP from `root/serverinfo.py` in the pack; a changed IP silently breaks login.
 - **Evidence:** AGENTS.md protocol facts + runbook; CHANGELOG 2026-08-08/09 sessions.
 - **Consequence:** client cannot reach auth/channel; "login broken" with a network cause.
@@ -87,6 +87,30 @@ Rules for running the legacy test stack on the WSL Debian-M2 environment. Source
 - **Why:** 2026-08-11 F4 world-entry saga (7 server-side iterations): the MainCharacter 48 B (server) vs 47 B (client, no `empire`) desynced the whole stream — the client closed cleanly on an invalid header AFTER the loading bar completed (no exception, no dump; the instrumented client proved it). The DirectEnter reconnect uses `lAddr`/`wPort` from the 449 B (0/0 → silent `OnConnectFailure` → login). The client sends `0xf1` (version, 67 B) at the end of the loading and the C→S game table (24 packets, CG_MOVE = 16 B) at spawn — all must be in the framer.
 - **Evidence:** channel log of the saga (`chan/ch1/core1/stdout` — the deploy logs there, NOT /tmp/gpg/channel.log); the client instrumentation (`python_error.log` empty throughout — the failures were server-side); 227/0/31 workspace.
 - **Consequence:** silent close-to-login loops, wasted iterations; the client layout check is the FIRST step for any new game-phase packet.
+- **Status:** Active.
+
+## 11. NEVER block the chat with long-running commands — background or end the turn
+
+- **Rule:** any command that takes >15 s (builds, server starts/restarts, deployments, dumps, restores) MUST be launched **detached/background** (`Start-Process ... -RedirectStandardOutput <log>` or a background task), and the orchestrator **ends the turn immediately** after launching — the user must be able to keep writing while it runs. Verification happens on the NEXT turn with quick read-only checks (<10 s each: log tails, `netstat`, `Get-Process`). NEVER chain "build → copy → restart → verify" in one synchronous call (30 s–3 min of blocked chat). A single quick command (<15 s) is fine.
+- **Why:** the user cannot send messages while a tool call runs. This happened repeatedly on 2026-08-12 (WSL migration + login fixes): each `cargo build`/restart blocked the chat for 30 s–2 min; the user asked 4+ times ("no puedo seguir escribiendo", "volviste a hacer lo mismo"). The earlier WSL flow felt fine because its start commands returned quickly.
+- **Evidence:** CHANGELOG 2026-08-12 (37th part session: repeated blocking build/restart commands during the Windows-native migration; user complaints verbatim in the session).
+- **Consequence:** frustrated user, broken dialogue flow, rushed verification; the fix is a one-line habit change: background + end turn.
+- **Status:** Active. (Also codified as AGENTS.md work rule 15.)
+
+## 12. Never `cp` over a running Windows binary
+
+- **Rule:** copying over a running Windows exe fails with "file is being used by another process" (equivalent of the Linux `Text file busy`, guardrail §7). Sequence: `Stop-Process` the target → wait for it to be gone → `Copy-Item` → relaunch → verify with `netstat`.
+- **Why:** 2026-08-12 the deploy of the fixed `server_realms.exe` failed twice: the old process still held the file, and the script relaunched the OLD buggy binary — the user kept hitting the fixed bug.
+- **Evidence:** `Copy-Item` IOException on `deploy\win\server_realms.exe` (2026-08-12 session); the `start_win.ps1` script now stops processes before copying.
+- **Consequence:** stale binary deployed while the source says otherwise; "I fixed it but it still fails" loops.
+- **Status:** Active.
+
+## 13. Launch scripts are LAUNCH-ONLY: print OK and exit (no verification inside)
+
+- **Rule:** `scripts/start_win.ps1` (and any server-launch command) does ONLY the launch: start services/processes detached (Start-Process with timestamped output files), print a single `OK:` line, and exit. NO port verification, NO log reading, NO sleeps >2 s inside the launch command. Verification is a SEPARATE quick command (`netstat -ano | findstr :30001 :30003` or a log tail) run on the NEXT turn. The orchestrator NEVER chains stop→copy→start→verify in one call (AGENTS.md rule 16).
+- **Why:** 2026-08-13 the stop+copy+start+verify one-liner hung 4+ times and blocked the chat every time — the tool waits for the command's output to finish, so any launch command that also reads processes/logs/ports keeps the chat blocked until the timeout. The user asked explicitly: "modifica el script para que te de el OK y ya".
+- **Evidence:** repeated hangs of chained deploy commands (2026-08-12/13 sessions); `start_win.ps1` rewritten launch-only with timestamped logs (2026-08-13).
+- **Consequence:** blocked chat, frustrated user, truncated output mid-command, servers running but never confirmed.
 - **Status:** Active.
 
 Related: [`rust-rewrite.md`](rust-rewrite.md) (two source copies), [`data-and-encoding.md`](data-and-encoding.md).

@@ -100,6 +100,9 @@ pub struct PlayerState {
     pub iq: i32,
     /// Intervalo entre ataques en ms (`GET_ATTACK_SPEED`, battle.cpp:757-782).
     pub attack_speed_ms: u32,
+    /// Bonus de ATT_GRADE de los buffs (parity `POINT_ATT_GRADE_BONUS` —
+    /// char.h:95; el total ATT_GRADE del legacy = base + bonus). 0 sin buffs.
+    pub att_grade_bonus: i32,
 }
 
 impl PlayerState {
@@ -121,6 +124,7 @@ impl PlayerState {
             dx: i32::from(row.dx),
             iq: i32::from(row.iq),
             attack_speed_ms: default_attack_speed(),
+            att_grade_bonus: 0,
         }
     }
 }
@@ -292,6 +296,38 @@ pub fn melee_max_range(victim: &NpcState) -> i32 {
     max
 }
 
+/// El `iAtk` del melee — la parte de ATAQUE de `melee_damage` SIN la DEF
+/// del objetivo (parity `CalcMeleeDamage` con `bIgnoreDefense=true`,
+/// battle.cpp:74-183 — el `atk` que las fórmulas de skill consumen; incluye
+/// el `att_grade_bonus` de los buffs, parity `POINT_ATT_GRADE` total).
+pub fn attack_power(
+    attacker: &PlayerState,
+    victim_dx: i32,
+    victim_level: i32,
+    weapon: Option<&database::item::ProtoItem>,
+    roll: &mut dyn FnMut(i32, i32) -> i32,
+) -> i32 {
+    // Sin arma → 0..1 (Item_GetDamage con item null, battle.cpp:442-462 +
+    // 521-526 + :533). Con arma → value3/value4 (battle.cpp:460-461).
+    let i_dam = match weapon {
+        Some(w) => roll(w.values[3], w.values[4]) * 2,
+        None => roll(0, 1) * 2,
+    };
+    let f_ar = calc_attack_rating(attacker.dx, attacker.level, victim_dx, victim_level);
+
+    // iAtk = (ATT_GRADE + iDam - lv*2) * fAR + lv*2 (battle.cpp:542-544) —
+    // el ATT_GRADE total incluye el bonus de los buffs.
+    let att_grade = attack_grade(attacker.level, attacker.job, attacker.st, attacker.dx, attacker.iq)
+        + attacker.att_grade_bonus;
+    let mut i_atk = ((att_grade + i_dam - attacker.level * 2) as f32 * f_ar) as i32;
+    i_atk += attacker.level * 2;
+    // Con arma: + arma.Value(5)*2 (battle.cpp:546-553).
+    if let Some(w) = weapon {
+        i_atk += w.values[5] * 2;
+    }
+    i_atk
+}
+
 /// El daño melee del subset base (`CalcMeleeDamage` + `CalcBattleDamage` +
 /// `battle_hit` — ver la cabecera del módulo para el desglose con file:line).
 ///
@@ -310,24 +346,7 @@ pub fn melee_damage(
     weapon: Option<&database::item::ProtoItem>,
     roll: &mut dyn FnMut(i32, i32) -> i32,
 ) -> i32 {
-    // Sin arma → 0..1 (Item_GetDamage con item null, battle.cpp:442-462 +
-    // 521-526 + :533). Con arma → value3/value4 (battle.cpp:460-461).
-    let i_dam = match weapon {
-        Some(w) => roll(w.values[3], w.values[4]) * 2,
-        None => roll(0, 1) * 2,
-    };
-    let f_ar = calc_attack_rating(attacker.dx, attacker.level, victim.dx, victim.level);
-
-    // iAtk = (ATT_GRADE + iDam - lv*2) * fAR + lv*2 (battle.cpp:542-544).
-    let att_grade = attack_grade(attacker.level, attacker.job, attacker.st, attacker.dx, attacker.iq);
-    let mut i_atk = ((att_grade + i_dam - attacker.level * 2) as f32 * f_ar) as i32;
-    i_atk += attacker.level * 2;
-    // Con arma: + arma.Value(5)*2 (battle.cpp:546-553).
-    if let Some(w) = weapon {
-        i_atk += w.values[5] * 2;
-    }
-    // party = 0 (:555); × (100 + ATT_BONUS + MELEE_MAGIC_ATT_BONUS_PER)/100
-    // = ×1 (:556); CalcAttBonus = identidad en el subset base (:305-440).
+    let i_atk = attack_power(attacker, victim.dx, victim.level, weapon, roll);
 
     // iDef = DEF_GRADE * (100 + DEF_BONUS)/100 = DEF_GRADE (battle.cpp:564).
     let i_def = def_grade_npc(victim.level, victim.ht, victim.wdef);
@@ -355,13 +374,13 @@ pub fn melee_damage(
 ///
 /// El canal (por conexión de jugador) guarda:
 /// ```ignore
-/// let mut combat = realm::combat::CombatState::new();
+/// let mut combat = game_core::combat::CombatState::new();
 /// // al recibir CG_ATTACK (header 2, 8 B):
 /// let atk = protocol::combat::CgAttack::from_bytes(&pkt)?;       // ya parseado
-/// let player = realm::combat::PlayerState::from_row(&row, &motion); // ataque_speed default
+/// let player = game_core::combat::PlayerState::from_row(&row, &motion); // ataque_speed default
 /// let target = <npc lane: lookup por atk.victim_vid>;             // Option<&NpcState>
 /// let weapon = <arma equipada: Option<&ProtoItem>>;               // F5.3 items
-/// let result = realm::combat::handle_attack(&mut combat, &atk, &player,
+/// let result = game_core::combat::handle_attack(&mut combat, &atk, &player,
 ///                                           target, weapon, now_ms(), &mut roll);
 /// for pkt in result.packets { conn.send(&pkt).await?; }
 /// // result.damage → aplicar HP al mundo (lane NPCs, F5).
@@ -552,6 +571,7 @@ mod tests {
             dx: 30,
             iq: 30,
             attack_speed_ms: default_attack_speed(),
+            att_grade_bonus: 0,
         }
     }
 
@@ -622,6 +642,7 @@ mod tests {
             dx: 4,
             iq: 4,
             attack_speed_ms: default_attack_speed(),
+            att_grade_bonus: 0,
         };
         let m = mob101();
         let mut roll = roll_fixed(3);

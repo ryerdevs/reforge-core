@@ -1,7 +1,9 @@
 //! F4 slice 3: paquetes del WORLD ENTRY (fase Loading/Game) — verificados
-//! contra `source/server/game/src/packet.h` y `char.cpp`:
-//! - `TPacketGCMainCharacter` (48 B, header 113) — `packet.h:952-961`
-//!   + `char.cpp:1539-1549` (MainCharacterPacket, sin BGM).
+//! contra `source/client/UserInterface/Packet.h` (el contrato congelado) y
+//! `source/server/game/src/char.cpp` (el oracle):
+//! - `TPacketGCMainCharacter` (47 B, header 15 — el CLIENTE mapea 15 = sin
+//!   BGM; el C++ server emite 113 SOLO con su struct de 48 B incl. empire,
+//!   `packet.h:952-961` + `char.cpp:1539-1549` — ver doc de la struct).
 //! - `TPacketGCPoints` (1021 B, header 16) — `packet.h:1000-1004`
 //!   + `char.cpp:1553-1581` (PointsPacket; `POINT_MAX_NUM = 255`,
 //!   `length.h:70`).
@@ -856,17 +858,21 @@ impl TPacketCGMarkLogin {
     }
 }
 
-/// `TPacketGCMainCharacter` (47 B, header 113 — **layout del CLIENTE**,
-/// `Packet.h:1349-1357`): header, dwVID, wRaceNum, szName[25], lx, ly, lz,
-/// skill_group.
+/// `TPacketGCMainCharacter` (47 B, header **15** — layout del CLIENTE,
+/// `Packet.h:1347-1350/1365-1373`): header, dwVID, wRaceNum, szName[25], lx,
+/// ly, lz, skill_group.
 ///
-/// ⚠️ **DISCREPANCIA VERIFICADA (F4 slice 3.4)**: el struct del SERVIDOR
-/// (`packet.h:952-961`) tiene además `BYTE empire` (48 B) — el cliente 40999
-/// NO: parsea 47 B con `skill_group` en el offset 46. Emitir 48 B desalinea
-/// TODO el stream del cliente (el byte sobrante corrompe los paquetes
-/// siguientes → cierre limpio). **El cliente es el contrato congelado** — el
-/// canal emite 47 B (el empire del 113 no existe en el cliente; el cliente
-/// pone `m_dwMainActorEmpire = 0`, `PythonNetworkStreamPhaseLoading.cpp:200`).
+/// ⚠️ **HEADER VERIFICADO (fix 2026-08-12)**: el cliente mapea **15** =
+/// `HEADER_GC_MAIN_CHARACTER` (47 B, `RecvMainCharacter` →
+/// `PythonNetworkStreamPhaseLoading.cpp:100-103`) y **113** =
+/// `HEADER_GC_MAIN_CHARACTER2_EMPIRE` (**48 B** con `byEmpire` —
+/// `Packet.h:1376-1385`). Emitir 113 con 47 B desalinea el stream 1 byte: el
+/// cliente lee 48 B (el último = el header del quickslot 0), pierde el slot 0
+/// y corrompe `bySkillGroup`; solo se auto-cura porque el quickslot 0 está
+/// vacío (bytes 0 → el skip de cabeceras 0 los absorbe). Con el quickslot 0
+/// lleno el desync cascada (ADD basura → header inválido → `PostQuitMessage`).
+/// El header correcto para el struct sin empire ES **15** (el C++ server manda
+/// 113 SOLO con su struct de 48 B incl. empire — que este cliente NO tiene).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(C)]
 pub struct TPacketGCMainCharacter {
@@ -883,7 +889,9 @@ pub struct TPacketGCMainCharacter {
 impl TPacketGCMainCharacter {
     /// 1 + 4 + 4 + 25 + 12 + 1 = 47 (layout del cliente — sin empire).
     pub const SIZE: usize = 47;
-    pub const HEADER: u8 = 113;
+    /// Header del CLIENTE sin BGM (`Packet.h:160`): 15. NO 113 — el 113 del
+    /// cliente es la variante 48 B con empire (Packet.h:251).
+    pub const HEADER: u8 = 15;
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
@@ -923,7 +931,7 @@ impl TPacketGCMainCharacter {
 /// `TPacketGCPoints` (1021 B, header 16 — `packet.h:1000-1004`): header +
 /// `INT points[255]` (`POINT_MAX_NUM = 255`, `length.h:70`). Los índices del
 /// enum `EPointTypes` (`char.h:133+`) — los del entry se documentan en
-/// `realm::packets::points_packet`.
+/// `game_core::packets::points_packet`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(C)]
 pub struct TPacketGCPoints {
@@ -1152,7 +1160,7 @@ mod tests {
         };
         let b = p.to_bytes();
         assert_eq!(b.len(), 47, "layout del CLIENTE (sin empire)");
-        assert_eq!(b[0], 113);
+        assert_eq!(b[0], TPacketGCMainCharacter::HEADER, "header 15 = MAIN_CHARACTER sin BGM (Packet.h:160)");
         assert_eq!(b[46], 3, "skill_group@46 (el offset del empire del server NO existe en el cliente)");
         let p2 = TPacketGCMainCharacter::from_bytes(&b).unwrap();
         assert_eq!(p, p2);

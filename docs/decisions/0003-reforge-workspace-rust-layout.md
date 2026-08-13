@@ -5,7 +5,7 @@ Audience: Contributors, maintainers
 Date: 2026-08-10
 Last verified: 2026-08-10
 Supersedes: —
-Superseded by: ADR-0004 (flat layout, no `crates/`; `network`/`database`/`realm`; `server_realms` binary with roles). Kept: the `source/reforge` folder, the property boundary over the C++ baseline, the verification policies.
+Superseded by: ADR-0004 (flat layout, no `crates/`; `network`/`database`/`game_core` (renamed from `realm` 2026-08-13); `server_realms` binary with roles). Kept: the `source/reforge` folder, the property boundary over the C++ baseline, the verification policies.
 ---
 
 # ADR-0003: Rust workspace in `source/reforge` — layout and policy of the new server
@@ -31,7 +31,7 @@ The F0 plan requires: "Cargo workspace with crates: `protocol`, `net`, `db`, `ga
 4. **Verification policy:** every crate compiles with `cargo build` and passes `cargo test` from the first commit; the `protocol` crate includes byte-exact golden tests built from the spec (and later from real tcpdump captures — F0 harness).
 5. **Property boundary:** `source/reforge/**` is owned exclusively by the Rust workspace. Nobody edits `source/server`, `source/client` or `source/deploy` in this lane.
 
-> Note (2026-08-10): the crate names and layout of point 2 are superseded by ADR-0004 (`net`→`network`, `db`→`database`, `game`→`realm`, `auth` crate→`network::auth` module, binary `server_realms`). The decisions that stay: the `source/reforge` location, the property boundary and the verification policies.
+> Note (2026-08-10): the crate names and layout of point 2 are superseded by ADR-0004 (`net`→`network`, `db`→`database`, `game`→`realm`, `auth` crate→`network::auth` module, binary `server_realms`). The decisions that stay: the `source/reforge` location, the property boundary and the verification policies. (Lineage: `realm` was further renamed `game_core` on 2026-08-13, 42nd part.)
 
 ## Alternatives considered
 

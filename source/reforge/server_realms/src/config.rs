@@ -48,7 +48,7 @@ pub struct Config {
     /// resetea el timeout de inactividad). Default 10 s < 15 s.
     pub ping_interval_ms: u64,
     /// Directorio de los spawns del mapa (F5): el canal carga los NPCs del
-    /// mapa del jugador desde aquí (`realm::npc::load_map_spawns` — el
+    /// mapa del jugador desde aquí (`game_core::npc::load_map_spawns` — el
     /// `index`/`npc.txt`/`regen.txt`/... del runtime). Default: el path real
     /// del runtime srv1.
     pub map_path: String,

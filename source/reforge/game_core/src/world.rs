@@ -17,7 +17,6 @@
 //! - `save_character` = write durable: `PlayerRepo::save_mutated` -> Batcher
 //!   (batch transaccional <=100 ms + WAL local + audit, ADR-0008).
 
-use std::sync::OnceLock;
 use std::time::Duration;
 
 use database::player::{PlayerRepo, PlayerRow, PlayerSummary};
@@ -34,15 +33,17 @@ pub fn wal_dir() -> String {
 /// Replay UNA vez por proceso (varios `WorldStore` por conexión de login —
 /// `channel.rs` crea uno por jugador; el replay concurrente contra appenders
 /// vivos corrompería el estado). El primer `new` del proceso hace el replay.
-fn replay_once(pg_conn: &str, dir: &str) -> Result<(), String> {
-    static REPLAYED: OnceLock<Result<(), String>> = OnceLock::new();
-    let res = REPLAYED.get_or_init(|| {
-        let rt = tokio::runtime::Runtime::new().expect("runtime del replay");
-        match rt.block_on(replay_wal(dir, pg_conn)) {
-            Ok(_n) => Ok(()), // _n = archivos re-aplicados (log del módulo wal)
-            Err(e) => Err(e),
-        }
-    });
+///
+/// ASYNC de propósito: `WorldStore::new` se llama desde el handler async del
+/// canal (dentro de un worker de tokio) — un `Runtime::new().block_on(...)`
+/// anidado PANICKEA ("Cannot start a runtime from within a runtime", visto en
+/// el E2E real 2026-08-12). `tokio::sync::OnceCell` da la misma garantía
+/// (inicialización única, callers concurrentes esperan) sin runtime anidado.
+async fn replay_once(pg_conn: &str, dir: &str) -> Result<(), String> {
+    static REPLAYED: tokio::sync::OnceCell<Result<(), String>> = tokio::sync::OnceCell::const_new();
+    let res = REPLAYED
+        .get_or_init(|| async { replay_wal(dir, pg_conn).await.map(|_n| ()) })
+        .await;
     res.clone()
 }
 
@@ -75,7 +76,7 @@ impl WorldStore {
 
         // Replay del WAL local (idempotente) — una vez por proceso.
         let dir = wal_dir();
-        replay_once(&conn, &dir)?;
+        replay_once(&conn, &dir).await?;
 
         let player = PlayerRepo::new(&conn);
         let sink = WalSink::new(PgMutationSink::new(&conn), dir);

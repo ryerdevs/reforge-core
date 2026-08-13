@@ -69,7 +69,7 @@ Evidence for the driver decision (both measured in this repo):
    > re-applied idempotently at next boot (`replay_wal`, once per process via `OnceLock`).
    > The "volatile = saved every 30 s + logout" clause is **superseded** for durable state
    > (position/HP remain local/volatile). Implementation: `database/src/wal.rs` +
-   > `realm::WorldStore` wiring (2026-08-12, CHANGELOG 11th part; gated `replay_wal` PG
+   > `game_core::WorldStore` wiring (2026-08-12, CHANGELOG 11th part; gated `replay_wal` PG
    > test still pending by user directive).
 6. **Schema and permissions**: one PG schema per domain (account/player/common/log already
    migrated by G-PG); permissions per schema (log cannot write to economy). **RLS

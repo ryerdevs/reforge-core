@@ -17,7 +17,7 @@
 //!   nombre es la col 1, truncada al segundo tab — parity
 //!   `AsStringByIndex(1)`).
 //! - index/Setting/Town — parity del filtro de `load_map_spawns`
-//!   (realm::npc.rs:139-179).
+//!   (game_core::npc.rs:139-179).
 //!
 //! Codificación (verificada contra los bytes reales, 2026-08-12):
 //! - El pack se exporta en windows-1252 (`alsoExportToCharset`) salvo ae
@@ -308,7 +308,7 @@ pub fn parse_interface(bytes: &[u8], lang: &str) -> Vec<(String, String)> {
 }
 
 /// index del runtime de mapas (`id nombre` por línea — parity del filtro de
-/// `load_map_spawns`, realm::npc.rs:139-151: líneas vacías y comentarios
+/// `load_map_spawns`, game_core::npc.rs:139-151: líneas vacías y comentarios
 /// `#`/`/` ignorados; el nombre es el segundo token whitespace).
 pub fn parse_map_index(bytes: &[u8]) -> Vec<(i32, String)> {
     let mut out = Vec::new();
@@ -329,7 +329,7 @@ pub fn parse_map_index(bytes: &[u8]) -> Vec<(i32, String)> {
 }
 
 /// BasePosition del Setting.txt (parity `load_map_spawns`,
-/// realm::npc.rs:154-167): la línea cuyo primer token (sin distinguir
+/// game_core::npc.rs:154-167): la línea cuyo primer token (sin distinguir
 /// mayúsculas) es `BasePosition`; los dos siguientes son x/y en UNITS.
 pub fn parse_setting_base(bytes: &[u8]) -> Option<(i32, i32)> {
     for line in split_lines(bytes) {
@@ -345,7 +345,7 @@ pub fn parse_setting_base(bytes: &[u8]) -> Option<(i32, i32)> {
 }
 
 /// Town.txt: los DOS primeros enteros whitespace (parity `LoadMapRegion` /
-/// `load_map_spawns`, realm::npc.rs:171-179) — el posSpawn del mapa en UNITS
+/// `load_map_spawns`, game_core::npc.rs:171-179) — el posSpawn del mapa en UNITS
 /// = base + (x*100, y*100). Archivo ausente, vacío o con no-enteros → el
 /// propio base (parity del `unwrap_or(base)` del npc.rs).
 pub fn parse_town_spawn(town_bytes: Option<&[u8]>, base: (i32, i32)) -> (i32, i32) {

@@ -23,7 +23,7 @@ else:
 
 SRV1 = {
 	"name":TextColor("ServerName", "ffd500"), #GOLD
-	"host":"172.25.104.175",
+	"host":"127.0.0.1",
 	"srv1-auth1":30001,
 	"ch1":30003,
 	"ch2":30007,

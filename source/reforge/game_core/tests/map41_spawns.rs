@@ -14,12 +14,12 @@
 //!
 //! ```text
 //! cd C:\projects\Metin2\source\reforge
-//! cargo test --package realm -- --ignored map41
+//! cargo test --package game_core -- --ignored map41
 //! ```
 //!
 //! SOLO lectura del runtime (regla del lane F5 — WSL read-only).
 
-use realm::npc::{load_map_spawns, SpawnKind};
+use game_core::npc::{load_map_spawns, SpawnKind};
 use std::collections::HashMap;
 
 /// La ruta del runtime: se prueba la vista UNC de Windows primero y la
@@ -32,7 +32,7 @@ fn runtime_map_paths() -> Vec<String> {
     ]
 }
 
-fn load_map41() -> (String, Vec<realm::npc::SpawnEntry>) {
+fn load_map41() -> (String, Vec<game_core::npc::SpawnEntry>) {
     let mut last_err = String::new();
     for path in runtime_map_paths() {
         match load_map_spawns(41, &path) {

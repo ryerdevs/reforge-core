@@ -19,7 +19,7 @@
 //! durable usa schemas `e2e_wal_*` temporales (nunca `log.mutation_audit`).
 
 use database::affect::{AffectRepo, AffectRow};
-use database::item::{ItemRepo, ItemRow};
+use database::item::{ItemExchange, ItemRepo, ItemRow};
 use database::messenger::MessengerRepo;
 use database::player::{PlayerCreate, PlayerRepo};
 use database::quest::{QuestRepo, QuestRow};
@@ -219,6 +219,11 @@ async fn safebox_set_size_roundtrip_throwaway() {
         let sb = repo.load(THROWAWAY_ID).await.expect("load").expect("existe");
         assert_eq!(sb.size, 4, "UPDATE aplicado");
         assert_eq!(sb.account_id, THROWAWAY_ID);
+        // size==1 con la fila YA existente -> no-op idempotente (0 filas; el
+        // INSERT plano del C++ daria 23505 en legacy) — el replay del WAL no
+        // duplica la fila ni resetea el tamaño.
+        assert_eq!(repo.set_size(THROWAWAY_ID, 1).await.expect("set_size 1 no-op"), 0);
+        assert_eq!(repo.size(THROWAWAY_ID).await.expect("size"), Some(4), "el valor previo se conserva");
         // set_gold (QUERY_SAFEBOX_SAVE).
         assert_eq!(repo.set_gold(THROWAWAY_ID, 12345).await.expect("set_gold"), 1);
         Ok::<(), String>(())
@@ -403,14 +408,12 @@ async fn messenger_add_list_remove_throwaway() {
         assert_eq!(list.len(), 1, "1 amigo");
         assert_eq!(list[0].account, account);
         assert_eq!(list[0].companion, companion);
-        // PK (account, companion): el INSERT plano del C++ da 23505 (el game
-        // comprueba antes) — el repo lo reporta como Err con SQLSTATE.
-        let dup = repo.add(&account, &companion).await;
-        assert!(dup.is_err(), "duplicado -> Err 23505 (parity INSERT plano)");
-        assert!(
-            dup.unwrap_err().contains("23505"),
-            "sqlstate unique_violation"
-        );
+        // Idempotente (ON CONFLICT (account, companion) DO NOTHING): un par ya
+        // existente es un no-op — 0 filas y 1 sola fila en la tabla (el replay
+        // del WAL no duplica). El game comprueba duplicados antes (parity C++),
+        // asi que el caso legitimo nunca llega aqui.
+        assert_eq!(repo.add(&account, &companion).await.expect("add dup"), 0, "no-op idempotente");
+        assert_eq!(repo.list(&account).await.expect("list").len(), 1, "sigue 1 fila (no duplicado)");
         assert_eq!(repo.remove(&account, &companion).await.expect("remove"), 1);
         assert!(repo.list(&account).await.expect("list").is_empty(), "borrado");
         Ok::<(), String>(())
@@ -579,4 +582,119 @@ async fn player_two_saves_same_batch_same_tx() {
         .await
         .expect("cleanup schema");
     result.expect("2 saves en 1 batch contra PG real");
+}
+
+// ---------------------------------------------------------------------------
+// Unidad ACID (ADR-0011): materiales → resultado → oro en UNA tx (F5 skeleton)
+// ---------------------------------------------------------------------------
+
+/// End-to-end de la unidad ACID contra PG real: crea un player throwaway +
+/// 2 items material + aplica `exchange_mutated` (Batcher + PgMutationSink con
+/// audit e2e) — la unidad entera commit en UNA transaccion: counts de los
+/// materiales decrementados, resultado creado, oro actualizado, audit con
+/// TODAS las mutations (mismo applied_at = misma tx). Cleanup SIEMPRE.
+#[tokio::test]
+#[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
+async fn item_exchange_atomic_unit_against_real_pg() {
+    let conn = pg_conn();
+    let client = raw_client(&conn).await;
+    // Schema e2e propio (patron pipeline_setup).
+    let schema = "e2e_wal_xchg";
+    let audit = format!("{schema}.mutation_audit");
+    client
+        .batch_execute(&format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE; CREATE SCHEMA {schema}; {}",
+            audit_ddl(&audit)
+        ))
+        .await
+        .expect("setup schema de test");
+
+    // Ids THROWAWAY dentro del rango ITEM_ID_RANGE (100M-200M, E2E Q8).
+    const MAT_A: i64 = 100_000_101;
+    const MAT_B: i64 = 100_000_102;
+    const RESULT_ID: i64 = 100_000_103;
+
+    let result = async {
+        // Player throwaway (sin FK a account; el id lo da la identity).
+        let repo = PlayerRepo::new(&conn);
+        let pid = repo
+            .create(&PlayerCreate {
+                account_id: THROWAWAY_ID,
+                name: format!("xchg_{}", ts()),
+                level: 1,
+                st: 30, ht: 30, dx: 30, iq: 30,
+                job: 0, voice: 0, dir: 0,
+                x: 969600, y: 278400, z: 0,
+                hp: 100, mp: 100, random_hp: 0, random_sp: 0,
+                stat_point: 0, stamina: 100,
+                part_base: 0, part_main: 0, part_hair: 0,
+                gold: 1_000, playtime: 0,
+                skill_level: vec![0x01], quickslot: vec![0x01],
+            })
+            .await
+            .expect("create player throwaway");
+
+        // Items material (INVENTORY, stacks de 5 y 3).
+        let items = ItemRepo::new(&conn);
+        let mk = |id: i64, pos: i32, vnum: i64, count: i64| ItemRow {
+            id,
+            window: "INVENTORY".into(),
+            pos,
+            count,
+            vnum,
+            sockets: [0, 0, 0],
+            attrs: [(0, 0); 7],
+        };
+        assert_eq!(items.upsert(&mk(MAT_A, 0, 10, 5), pid).await.expect("mat A"), MAT_A);
+        assert_eq!(items.upsert(&mk(MAT_B, 1, 11, 3), pid).await.expect("mat B"), MAT_B);
+
+        // Unidad: consume 3 de A (5→2), TODO B (3→0 DELETE), crea resultado
+        // (id del rango) y sube el oro 1_000→1_200.
+        let ex = ItemExchange {
+            owner_id: pid,
+            materials: vec![(MAT_A, 5, 2), (MAT_B, 3, 0)],
+            result: Some((mk(RESULT_ID, 2, 30001, 1), pid)),
+            gold: Some((1_000, 1_200)),
+        };
+        let sink = PgMutationSink::new(&conn).with_audit_table(audit.clone());
+        let batcher = Batcher::spawn(Duration::from_millis(100), 64, sink);
+        items.exchange_mutated(&batcher, &ex).await.expect("unidad ACID commit");
+
+        // Estado post-unidad: 4 mutations aplicadas (2 materiales + resultado + oro).
+        let loaded = items.load_by_owner(pid).await.expect("load post-unidad");
+        let get = |id: i64| loaded.iter().find(|r| r.id == id).expect("item presente");
+        assert_eq!(get(MAT_A).count, 2, "A consumido 5→2");
+        assert!(
+            loaded.iter().all(|r| r.id != MAT_B),
+            "B consumido por completo (3→0) -> DELETE"
+        );
+        assert_eq!(get(RESULT_ID).count, 1, "resultado creado");
+        assert_eq!(get(RESULT_ID).vnum, 30001);
+        let player = PlayerRepo::new(&conn).load(pid).await.expect("load").expect("player");
+        assert_eq!(player.gold, 1_200, "oro 1_000→1_200 en la misma tx");
+
+        // Audit: 4 filas con el MISMO applied_at (misma transaccion).
+        let rows = client
+            .query(&format!("SELECT applied_at FROM {audit} ORDER BY mutation_id"), &[])
+            .await
+            .expect("audit rows");
+        assert_eq!(rows.len(), 4, "4 mutations auditadas (la unidad entera)");
+        let t0: std::time::SystemTime = rows[0].get(0);
+        for r in &rows {
+            let t: std::time::SystemTime = r.get(0);
+            assert_eq!(t, t0, "mismo applied_at -> misma tx -> unidad ACID");
+        }
+        Ok::<(), String>(())
+    }
+    .await;
+
+    // Cleanup SIEMPRE: items throwaway -> player -> schema.
+    let _ = client
+        .batch_execute(&format!(
+            "DELETE FROM player.item WHERE id IN ({MAT_A}, {MAT_B}, {RESULT_ID}); \
+             DELETE FROM player.player WHERE name LIKE 'xchg_%'; \
+             DROP SCHEMA IF EXISTS {schema} CASCADE"
+        ))
+        .await;
+    result.expect("unidad ACID contra PG real");
 }

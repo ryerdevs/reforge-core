@@ -74,7 +74,7 @@ Same architecture as the locale tables: the runtime map files become import-only
 | `world.maps` | `map_id int PK`, `name text`, `base_x int`, `base_y int`, `spawn_x int`, `spawn_y int` | `(41, 'metin2_map_c1', 921600, 204800, 969600, 278400)` — from index + Setting.txt (BasePosition) + Town.txt |
 | `world.spawns` | `map_id int`, `vnum bigint`, `x int`, `y int`, `count int`, `kind text` | `(41, 101, 957600, 247300, 3, 'mob')` — expanded spawns from regen/npc/boss/stone.txt (groups already resolved), in UNITS |
 
-- The importer reuses the verified parity parser (`realm::npc::load_map_spawns`) — no reimplementation; output `SpawnEntry` list is byte-identical, so the 6 channel tests keep passing plus a new parity test (PG vs files for map 41).
+- The importer reuses the verified parity parser (`game_core::npc::load_map_spawns`) — no reimplementation; output `SpawnEntry` list is byte-identical, so the 6 channel tests keep passing plus a new parity test (PG vs files for map 41).
 - The channel loads per map **at each world entry** (`SELECT * FROM world.spawns WHERE map_id=$1`): edits are visible on the next entry without restart (hot reload for new entries). Live refresh for players already in the map arrives with the respawn runtime (NOTIFY-based, like the locale hot reload).
 - Files stay as import-only source (like the pack for locale); runtime reads never touch them.
 

@@ -6,6 +6,9 @@
 #include "../eterGrnLib/Thing.h"
 #include "GameLibDefines.h"
 
+#include <map>
+#include <string>
+
 class CItemData
 {
 	public:
@@ -884,6 +887,16 @@ class CItemData
 		typedef const char* (*TLocaleNameProvider)(DWORD);
 		static void SetLocaleNameProvider(TLocaleNameProvider pfnProvider);
 		static TLocaleNameProvider ms_pfnLocaleName;
+
+		// F4 tail (override API): nombre del SERVER en memoria, encima del
+		// pack. Orden de GetName: override -> provider (bundle del auth) ->
+		// pack (szLocaleName). `szName` display-ready (codepage local) — el
+		// caller (capa de red / net.SetItemLocaleName) convierte UTF-8 con
+		// CPythonLocale::Utf8ToDisplay. Map estático por vnum: funciona
+		// aunque el CItemData del vnum aún no esté cargado (el server puede
+		// mandar overrides antes del LoadItemData). Nombre vacío = eliminar.
+		static void SetLocaleName(DWORD dwVnum, const char* szName);
+		static std::map<DWORD, std::string> ms_mapLocaleNameOverride;
 
 #ifdef ENABLE_ACCE_COSTUME_SYSTEM
 	protected:

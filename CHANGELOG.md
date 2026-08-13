@@ -7,6 +7,220 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-13] (42nd part) — Structural refactor: `realm` → `game_core` rename + channel/ecs splits + PG migrations + quest similarity engine
+
+> Wave 6 (rename lane). User decision: the crate `realm` is renamed `game_core`. Workspace 512 passed / 0 failed, clippy no new, release green. **Deploy note: the servers still run the pre-refactor binary (3,935,232 B from 07:23, auth8/chan8) — redeploy pending the orchestrator.**
+
+### `realm` → `game_core` crate rename (user decision)
+
+- Directory `source/reforge/realm/` → `source/reforge/game_core/`; **78 code refs updated** (Cargo.toml members, imports, `-p realm` invocations, docs paths). `server_realms`, `quest_dsl`, `bench_bot`, `mysql_proxy`, `locale_import` crate names unchanged.
+- Workspace **512 passed / 0 failed** (attribute scan 2026-08-13: protocol 81, network 28, database 95, game_core 115, server_realms 50, mysql_proxy 67, locale_import 19, bench_bot 34, quest_dsl 66 = **555 attributes**); clippy no new; release green.
+- **N1 trap guard (oracle)** landed with the rename: `game_core/src/ecs/systems/{social,quest}.rs` + `server_realms/src/channel/{social,quest}.rs` — empty-sub-enum delegates, so the first social/quest lane gets compiler-enforced wiring (no silent no-ops).
+
+### Channel + ecs structural splits
+
+- **channel.rs split** → `server_realms/src/channel/` (13 files incl. `mod.rs`: chat, combat, entry, events, game, items, movement, quest, script, session, skills, social) with `Session` struct + `Outcome` + dispatch one-liners; the rename lane reported the split as 2,565 → 11 files.
+- **ecs.rs split** → `game_core/src/ecs/` (components.rs, events.rs, resources.rs, world.rs, test_util.rs + `systems/` 8 files, incl. the N1 guards) with `Intent`/`NpcEvent` wrapper sub-enums; reported 2,694 → 12 files.
+- **LoginGuard lifetime bug found during extraction** (fixed in the split — the guard was held across an await).
+
+### PG migrations (scripts/gpg/)
+
+- **`alter_gold_check.sql`**: `CHECK (gold >= 0)` added on the 3 wallet tables — `money_log` deliberately excluded (append-only, negative deltas legit).
+- **`migrate_guild_tables.sql`**: `player.guild_member`/`grade`/`comment` migrated to PG (schema-only) — closes the documented F3-tail gap (41st part).
+
+### Quest similarity engine (spec §9.3)
+
+- `QuestSimilarity` + group detection in `quest_dsl` (family proposals automated beyond the 6 manual ones); **quest_dsl 66 tests** (was 44).
+
+### Evidence
+
+- Workspace **512 passed / 0 failed** (orchestrator run); my attribute scan: 555 attributes (counts per crate above).
+- File:line: `source/reforge/game_core/` (realm dir gone — verified), `game_core/src/ecs/systems/{social,quest}.rs`, `server_realms/src/channel/{social,quest}.rs`, `scripts/gpg/{alter_gold_check,migrate_guild_tables}.sql`.
+
+### Pending
+
+- **Redeploy** the refactored binary (servers still on the 07:23 build).
+- Ongoing lanes: spawn-concurrency fix, family parameter extraction, benchmark ladder; skill GAPs (SPLASH/PARTY/HORSE, `skill_power.txt`, buff numeric application).
+
+## [2026-08-13] (41st part) — Skills + server-timed buffs live · qc→DSL converter 194/194 · benchmark FIRST LOAD SIGNAL
+
+> Wave 3 of 2026-08-13 (three lanes active: channel.rs/skills-fix, quest_dsl, bench_bot). All verified by the orchestrator with real outputs; skills binary deployed and live.
+
+### Skills + server-timed buffs DONE (40th-part wave, completed 41st)
+
+- **NEW `realm/src/skill.rs` (732 lines)**: `SkillRepo` reading `player.skill_proto` from PG, poly evaluator, `skill_damage` full chain — **15 tests**.
+- **ecs.rs**: components `Mp` (:190), `SkillLevels` (:198), `SkillCooldowns` (:203), `Affects` (:209) + `SkillTable` resource (:377) + `process_skill` + `affects_system` (:870) — **19 tests**.
+- **channel.rs**: `CG_USE_SKILL` handler (52, 9 B — client `Packet.h:854`; channel.rs:800-810); **`GC_AFFECT_ADD` (126)** emitted (channel.rs:1958-1963), **`GC_AFFECT_REMOVE` (127)** (channel.rs:2002).
+- **Verified**: workspace **481 passed / 0 failed** (realm 106 per run); clippy no new; **deployed 07:23 (binary 3,935,232 B — verified on disk), live (auth8/chan8 logs 07:26)**.
+- **GAPs documented** (pending, not hidden): SPLASH/PARTY/HORSE skill families; `skill_power.txt` table (k = level×max/100 subset); quest-granted/passive skills; MOV_SPEED/ATT_SPEED/CRITICAL buffs stored+shown but **numeric application pending**; test chars have all-zero `skill_level` blobs (skills reject until granted — DB-side note: `UPDATE player.player SET skill_level = overlay(skill_level placing '\x01' from 8 for 1) WHERE id = 2` grants skill 1 lvl 1).
+
+### qc→DSL converter DONE — corpus 194/194 (40th-part wave, completed 41st)
+
+- **`quest_dsl/src/convert/`** (qc.rs, map.rs, mod.rs): `qc.rs` = real-grammar parser (Lua 5.0 dialect with begin/end, multi-line when heads, inline ifs, while/repeat first-class AST nodes); `map.rs` = equivalence tables (**22 actions, 10 triggers, 10 conditions mapped**); `mod.rs` + `convert_corpus` CLI.
+- **44 tests / 0 failed** (was 13), clippy 0.
+- **Corpus: 194/194 files convert, 0 failed (~2 s)**; **5,513 unmapped items** (journal `q.*` ~944, UI setskin/makequestbutton ~625, target.pos, say_pc_name, pc.give_exp2/change_money — Rust-module territory per spec §8); **6 family proposals** (collect_quest 11, main_quest 32, subquest 44, collect_herb 6, new_quest 12, main_quest_flame 7 = 112/194 files).
+- Next slice IN PROGRESS: family parameter extraction + Value-as-Expr (unblocks ~160 `pc.setqf` + affect calls).
+
+### Benchmark — FIRST LOAD SIGNAL (report `logs/bench-run-2026-08-13.md`, bench lane; run against the 06:11 binary on auth7/chan7)
+
+- **Smoke 1 bot**: world_ms **1524**, 12 mobs, no kick. **5 bots × 30 s**: 5/5 OK, 0 failures (world_ms median **2254**). **20 bots × 60 s**: **20/20 OK, 0 failures, 0 panics** (world_ms median **7829**, p95 8214, ~13 % spread); `--cleanup-accounts` → 0 rows (psql-verified).
+- **FINDING — spawn concurrency**: dynamic materialization reaches only FIRST-COMERS under concurrency (**19/20 bots got 0 entries**; the 3 "2 entries" players counted 12 ADDs) — interpretation + **fix IN PROGRESS by the channel lane**.
+- **Latency**: world_ms 1.5 s → 7.8 s (1 → 20 bots) — per-connection entry bottleneck candidate (login_ms 0.9 → 4.9 s), bounded and stable, no cascades.
+- **Envelope interaction**: the harness walk (300 u/s) is rejected by the envelope after the first move (NOT kicked, session healthy) — harness fix in progress (walk ≤ ~250 u/s or config knob).
+- Full ladder pending: WorldSim::metrics wiring, spawn-visibility interpretation, harness walk, sharded-region case, then 100/250/500/1000 bots.
+
+### Deploy state
+
+- Binary **3,935,232 B (07:23)** live (auth8/chan8 07:26) — the skills binary on the native-Windows stack; client unchanged (5,130,752 B).
+
+### Evidence
+
+- My attribute scan 2026-08-13: protocol 81, network 28, database 95, realm **113**, server_realms 50, mysql_proxy 67, locale_import 19, bench_bot 27, quest_dsl **44** → **524 attributes**; orchestrator-verified run: **481 passed / 0 failed** (realm 106 per run; quest_dsl 44/44).
+- File:line: skill.rs (732 lines, 15 tests), ecs.rs:190-209/377/870, channel.rs:800-810/1958-1963/2002, `quest_dsl/src/convert/{qc,map,mod}.rs`, `logs/bench-run-2026-08-13.md` (120 lines).
+
+### Pending
+
+- **Spawn-concurrency fix** (channel lane, IN PROGRESS — first-comer visibility interpretation).
+- **Family parameter extraction + Value-as-Expr** (converter lane, IN PROGRESS); harness walk fix.
+- Benchmark full ladder (WorldSim::metrics, sharded-region case, 100→1000 bots).
+- Skill GAPs: SPLASH/PARTY/HORSE families, `skill_power.txt`, buff numeric application (MOV_SPEED/ATT_SPEED/CRITICAL), quest-granted/passive skills.
+
+## [2026-08-13] (40th part) — spawn dinámico live + walkability/speed envelope + quest DSL core + F3 tail ACID
+
+> Wave 2 of 2026-08-13 (three code lanes active: channel.rs/skills, quest converter, benchmark run). All items verified by the orchestrator with real outputs; deployed binary live.
+
+### Spawn dinámico DONE + deployed
+
+- **Channel-level shared bevy World**: `spawn_despawn_system` in `realm/src/ecs.rs` — SPAWN_VIEW 2500 materialize, **DESPAWN_RADIUS 4000** (ecs.rs:449, hysteresis margin), combat mobs never despawn; the static SPAWN_VIEW filter in channel.rs is gone.
+- **Entry via `Intent::Join` mpsc** (ecs.rs:337-340 — Veloren pattern, ADR-0010 §1); connections send intents over the mpsc and receive `NpcEvent`s back.
+- **bench_capture wired — all 4 call sites** (open_conn / capture_conn in+out / close_conn): raw byte captures now land for the golden fixtures.
+
+### Walkability + speed envelope DONE (fix-2 lane)
+
+- **NEW `realm/src/map.rs` (553 lines)**: `server_attr` LZO1X parsing — **real map 41 file decoded: 16×20 tiles, 2,176,848 blocked + 1,076,378 water cells**; exact C++ cell arithmetic (`SECTREE_SIZE 6400`, `CELL_SIZE 50` — units→cell = `(x % 6400) / 50`); `MapStore` lazy + cached failures.
+- **`realm/src/movement.rs` (296 lines)**: `PlayerMotion.speed` (default **300 u/s**), `MoveError::ExceedsEnvelope` (movement.rs:53-67), envelope = `speed × (dt + 100 ms) / 1000 × 1.20`, inert without an anchor.
+- **channel.rs CG_MOVE validates walkability BEFORE `process_move`** — reject → position stands, no ban.
+- **Verified**: workspace **418 passed / 0 failed**, clippy no new warnings, release built; **deployed 06:11 (binary 3,818,496 B — verified on disk)**; live stack runs it (auth7/chan7 logs 06:33).
+- Follow-ups documented by the implementer: N-violations auto-ban (config knobs), path-line sampling (diagonal corner-cut), buffs/mounts recompute speed, warp re-anchor.
+
+### Quest DSL core DONE (orchestrator direct — after 3 failed agent attempts)
+
+- **NEW crate `quest_dsl/`**: modules `ast`/`parser`/`family`/`render`; typed catalog (triggers/conditions/actions per spec §3–§5); families expand; **13 tests green, clippy clean**; workspace member (Cargo.toml members list verified).
+- **§11 decisions resolved**: `between` native, `if` 1-level + else, `select` as-capture, `@key`, `.quest` extension, `timer` alias.
+- Next: **qc→DSL converter IN PROGRESS** (separate lane).
+
+### F3 tail DONE (fix-2 lane, previous wave)
+
+- **ItemRepo QID parity audit**; **`Batcher::flush()`** (ACID unit support — wal.rs:398); **`ItemExchange::exchange_mutated()`** (materials→result→gold in ONE tx — proven against real PG: 4 audit rows with the same `applied_at`; item.rs:233,600-603).
+- **SocialRepo** (`GuildRepo` load/ranking — social.rs:58; note: `player.guild_member`/`grade`/`comment` NOT migrated to PG — documented gap).
+- **EconomyRepo** (money_log append-only + `checked_gold_mutation` — economy.rs:97,154-163; note: `CHECK (gold >= 0)` does NOT exist in PG — the Rust guard is the enforcement; a G-PG ALTER is a follow-up).
+- database **95 test attributes**.
+
+### Deploy state
+
+- Binary **3,818,496 B** (08-13 06:11) deployed and running (native Windows; auth7/chan7 logs 06:33); client remains 5,130,752 B (39th part).
+- **Full benchmark run IN PROGRESS** against the live stack — no `logs/bench-run-2026-08-13.md` report yet (checked 2026-08-13).
+
+### Evidence
+
+- My attribute scan 2026-08-13: protocol 81, network 28, database **95**, realm **94**, server_realms 50, mysql_proxy 67, locale_import 19, bench_bot 27, quest_dsl **13** → **474 attributes**; orchestrator-verified run: **418 passed / 0 failed** (realm 87, server_realms 37 per run; quest_dsl 13/13).
+- File:line: ecs.rs:337-340 (`Intent::Join`), ecs.rs:449 (`DESPAWN_RADIUS`), movement.rs:53-67 (`MoveError::ExceedsEnvelope`), wal.rs:398 (`Batcher::flush`), item.rs:233 (`exchange_mutated`), economy.rs:97 (`checked_gold_mutation`), social.rs:58 (`GuildRepo`).
+
+### Pending
+
+- **Skills IN PROGRESS** (channel.rs lane — server-timed buffs after), **qc→DSL converter IN PROGRESS**, **full benchmark run IN PROGRESS**.
+- After: shops/safebox/trade wiring (exchange_mutated/ACID units ready), N-violations auto-ban (config knobs), path-line sampling, warp re-anchor, guild_member/grade/comment migration + `CHECK gold>=0` ALTER (G-PG).
+
+## [2026-08-13] (39th part) — 5-front parallel wave: ECS migration (ADR-0010) + WAL idempotency + dwLoginKey real flow + client UTF-8 overrides + benchmark harness
+
+> Parallel wave (coder ×3 + fixer ×3 + librarian) executed and verified by the orchestrator with real outputs. All deployed and running on the native-Windows stack.
+
+### ECS migration DONE (cod-2) — bevy_ecs World replaces `MobCache`
+
+- **bevy_ecs 0.19** in workspace deps (`default-features=false, features=["std"]`).
+- **`realm/src/ecs.rs` NEW (986 lines)**: components Vid/Position/Hp/Aggro/Mob/Item/Player; resources Tick (ecs.rs:171), Rand (:179), NpcOutbox (:205), SpawnCache (`Arc<Mutex<MobCache>>`, :212); systems `chase_attack_system` (:271) / `aggro_detect_system` (:338) / `patrol_system` (:362) — chained in parity order; `WorldSim` wrapper (:463) — `resolve_spawns`/`spawn_npcs`/`damage_npc`/`spawn_item`/`update`.
+- **channel.rs refactored**: `live_npcs`/`live_items` → World; AI tick → `world.update`; `CG_ATTACK`/`CG_MOVE`/potions/equip sync player state into the World.
+- **Verified**: workspace **359 passed / 0 failed**; clippy no new warnings; release build green; deployed + running (native Windows, ports 30001/30003).
+- **Accepted deviations** (documented by the implementer, accepted by the orchestrator): `multi_threaded` NOT enabled yet (one-line toggle at the F5 benchmark); SpawnCache stays `Arc<Mutex<>>` as a World resource (cross-connection PG-row cache, not world state); World is **per-connection** for now (channel-level shared World = the spawn-dinámico slice, IN PROGRESS); armor computed at entry/equip/unequip instead of per-tick (same values, zero per-tick PG round-trips). mpsc player-intent channel explicitly deferred to the spawn-dinámico slice (ecs.rs:34).
+
+### WAL idempotency DONE (fix-2) — the 2 non-idempotent paths closed
+
+- `database/src/safebox.rs` + `messenger.rs`: both INSERT paths now **`ON CONFLICT DO NOTHING`** on natural PKs (safebox.rs:10,88,122,128,166-180,197; messenger.rs:9,35,40,84,146,153) — legacy quirks preserved (`safebox size==1 → INSERT` parity, wire debt D4).
+- New `SafeboxRepo::set_size_mutated` / `MessengerRepo::add_mutated` Batcher-wired.
+- **`replay_wal` PG test UN-GATED and green against live PG (2/2 passed, 2.34 s)** — the anti-dupe crash path is now covered BEFORE trade/safebox.
+- database **79 test attributes**; clippy 0 new.
+
+### dwLoginKey real flow DONE (cod-3) — F2a debt closed at the auth
+
+- `auth.rs` +325/−46: real **`LoginKeyStore`** (per-process `Mutex<HashMap>`, keys die with the process — C++ parity `ClientManagerLogin.cpp:81-178`, `input_auth.cpp:133-152`).
+- **LOGIN_BY_KEY validated via the existing LOGIN3 `passwd[17]` field — no wire change** (68/88 B intact); wrong key → rejection; password path byte-for-byte unchanged.
+- **18 auth unit tests** (auth.rs test attributes, verified 2026-08-13). Channel-side LOGIN2 consumption stays for the channel lane.
+
+### Client UTF-8 overrides DONE (fix-1) — override API, inert until the data channel
+
+- `CPythonNonPlayer::SetLocaleName(vnum, name)` (PythonNonPlayer.cpp:116), `CItemData::SetLocaleName` static map (ItemData.cpp:10-15), `CPythonLocale::Utf8ToDisplay` public; Python hooks `netSetLocaleName`/`netSetItemLocaleName` + registration (PythonNetworkStreamModule.cpp:1668-1708).
+- MSBuild 0 errors; **exe 5,130,752 B** (verified: `metin2-extra\client\metin2client.exe`, 08-13 01:43) deployed.
+- Lookup order: **override → bundle cache → pack**. The server does NOT send overrides yet (data channel future) — API inert until then.
+
+### Benchmark harness DONE (fix-3)
+
+- **NEW crate `source/reforge/bench_bot/`** (accounts.rs, bot.rs, main.rs, report.rs, splitter.rs; **27 test attributes** = 26 tests + 1 ignored; live-PG green). Smoke verified: 1 bot login→world **1321 ms**, 11 mobs, 5 moves with **no speedhack kick**; 2/2 concurrent bots; `--cleanup-accounts` leaves 0 rows.
+- `server_realms/src/bench_capture.rs` (**201 lines**): raw byte capture module + **`--bench-capture <dir>`** flag (main.rs:34-35,59-61,85-89); 4 call sites for the channel lane to wire: open_conn / capture_conn in+out / close_conn. server_realms 50 test attributes.
+
+### Ops + deploy state
+
+- **`scripts/start_win.ps1` rewritten LAUNCH-ONLY**: prints OK, timestamped per-launch logs, no port verification inside (AGENTS.md rule 16 + operations.md §13).
+- Deploy state: binaries live and running (native Windows — auth :30001, channel :30003, PG service `postgresql-metin2`); client 5,130,752 B.
+
+### Evidence
+
+- My own attribute scan 2026-08-13: protocol 81, network 28, database 79, realm 78, server_realms 50, mysql_proxy 67, locale_import 19, bench_bot 27 → **429 attributes**; orchestrator-verified run: workspace **359 passed / 0 failed**, `replay_wal` PG **2/2 (2.34 s)**.
+- File:line evidence listed per item above (ecs.rs, auth.rs, safebox.rs, messenger.rs, PythonNetworkStreamModule.cpp, PythonNonPlayer.cpp, ItemData.cpp, bench_capture.rs, main.rs).
+
+### Pending
+
+- **Spawn dinámico IN PROGRESS** (channel-level shared World — the next slice; mpsc intents land with it, ecs.rs:34).
+- Full N-bot benchmark run (F5 milestone) + `multi_threaded` toggle validation; `--bench-capture` channel hooks wiring (4 call sites).
+- Walkability (`IsMovablePosition`) + speed envelope queued (last P0 anti-hack hole, ADR-0011); then `dw_arrow`, skills, shops, quests (DSL), safebox, trade, GM.
+
+## [2026-08-12] (38th part) — WSL retirement executed (ADR-0012) + world-entry fixes verified on the all-Windows stack + backup script
+
+> Executes the 37th part's plan (ADR-0012, logged in ROADMAP): the runtime is now NATIVE WINDOWS and the real client reaches the world with movement on the all-Windows stack.
+
+### WSL retirement — Phase 1 EXECUTED (ADR-0012)
+
+- **PostgreSQL 18.4 native on Windows** — Windows service `postgresql-metin2` (NETWORK SERVICE account), binaries `C:\projects\metin2-extra\pg18\pgsql\bin`, data `C:\projects\metin2-extra\pg18\data`, db `metin2`, role `mt2`/`mt2`, `LC_COLLATE='C'`, pgcrypto in schema `account` — `mysql_hash_password` works with `search_path account,public`. Restore from the WSL dump verified with matching counts: spawns 145,876, mob_names 8,628, item_names 34,281.
+- **MariaDB archived + stopped**: `C:\projects\metin2-extra\archive\mariadb_full_2026-08-12.sql` (5.7 MB); no Windows MariaDB ever needed.
+- **Migration dump kept**: `C:\projects\metin2-extra\backups\metin2_pg_2026-08-12.dump` (restore verified — counts above).
+- **Rust auth + channel run native** from `source\deploy\win\` (`auth.toml`/`channel.toml`: listen `127.0.0.1:30001`/`30003`, PG `127.0.0.1:5432`, `timeout_ms 120000`, `map_path = source\deploy\main\srv1\share\locale\spain\map`).
+- **Client**: `serverinfo.py` host → `127.0.0.1` + repack (verified in `source\tools\pack\root\serverinfo.py`); the client and the servers now share the Windows host.
+- **Scripts**: `scripts/start_win.ps1` / `stop_win.ps1` (PG service → Rust auth → Rust channel; prints OK/FALTA per port 5432/30001/30003).
+- **WSL = on-demand oracle box only** (frozen C++ binaries + `mysql_proxy`, cap 1 GB, off when unused; `/home/m2/source` archived later; full delete at F6). The proxy stays in WSL so the frozen C++ `conf.txt` is never touched.
+
+### World-entry fixes — real-client verified (login → select → world → movement WORKS)
+
+- (a) `replay_once` async via `tokio::sync::OnceCell` (`realm/src/world.rs:40-79`) — fixed the nested-runtime panic that killed the channel.
+- (b) `SPAWN_VIEW` 2500-entry filter (`server_realms/src/channel.rs:390-393`) — fixed the 23,032-mob spawn flood that froze the client (11 visible now).
+- (c) character ADD `b_moving_speed`/`b_attack_speed` 100/100 (`realm/src/packets.rs:265`, parity `char.cpp:2245-2246`; were 0 → client `SetMoveSpeed(0)` → player frozen + buried under terrain = invisible). Root cause found by the fixer with client-side evidence (`InstanceBase.cpp:824`, `ActorInstance.cpp:191-219`).
+- (d) mob spawn ADDs now carry `move_speed` (`realm/src/npc.rs:760`, parity `char.cpp:2257`).
+- (e) `TPacketGCMainCharacter` HEADER 113→15 (`protocol/src/world.rs:861-875`) — the client maps 15 = 47 B plain, 113 = 48 B EMPIRE variant; 113/47 B desynced the stream by 1 byte (latent).
+- **"0 items" observation is NOT a bug** — verified: `player.item` holds 22 rows, all `owner_id 2` (other characters); the test chars have none. The item query contract is correct.
+
+### Backup cadence + repo
+
+- **`scripts/backup_win.ps1` (new)**: nightly backup of the native PG — `pg_dump.exe -h 127.0.0.1 -U mt2 -d metin2 -Fc` → `C:\projects\metin2-extra\backups\metin2_<yyyy-MM-dd>.dump`, retention = last 7 dumps, credentials via PGUSER/PGPASSWORD env, `ErrorAction Stop` + exit-code check, `-WhatIf` dry-run mode. Syntax-checked (`[scriptblock]::Create` parse OK). Scheduled by the orchestrator, not executed in this session.
+- **53-commit backlog PUSHED**: `origin/main = 294edb1` = local HEAD (0 ahead / 0 behind, verified 2026-08-12).
+
+### Evidence
+
+- Real-client E2E on the Windows-native stack: login → select → world → movement; mobs spawn (11 visible after the SPAWN_VIEW filter); PG service `postgresql-metin2` Running; psql `player.item` count = 22 (owner_id 2).
+- Code refs: `realm/src/world.rs:40-79`, `server_realms/src/channel.rs:390-393`, `realm/src/packets.rs:265` (+test :796), `realm/src/npc.rs:760`, `protocol/src/world.rs:861-875`; parity `char.cpp:2245-2246/2257`, client `InstanceBase.cpp:824`, `ActorInstance.cpp:191-219`.
+
+### Pending
+
+- WSL disk cleanup: `/home/m2/source` archive + PG/MariaDB data + toolchains out of WSL (deferred; full delete at F6).
+- Next work slice: **ECS migration** (`MobCache` → bevy World, ADR-0010) + provisional N-bot benchmark; then walkability + speed envelope, spawn dinámico.
+
 ## [2026-08-12] (36th part) — Consolidated master plan + oracle review applied (H.1–H.5)
 
 > User asked to join the current documentation and plan into ONE big plan and pass it through the oracle for improvement proposals. Done and applied.

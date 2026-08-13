@@ -141,7 +141,7 @@ impl MobRepo {
     }
 
     /// Load del subset de spawn por vnum. `None` = el vnum no existe en
-    /// `mob_proto` (o es un vnum de grupo — ver el TRAP en `realm::npc`).
+    /// `mob_proto` (o es un vnum de grupo — ver el TRAP en `game_core::npc`).
     pub async fn load_by_vnum(&self, vnum: i64) -> Result<Option<MobRow>, String> {
         let client = self.connect().await?;
         let rows = client
