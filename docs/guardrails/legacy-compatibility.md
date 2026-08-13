@@ -23,15 +23,15 @@ Rules about the legacy client contract, the legacy wire constructs, and the data
 - **Why:** if implemented inline, the new wire core accumulates legacy quirks that F7 must strip out again — a hunt instead of a deletion.
 - **Evidence:** [ADR-0006](../decisions/0006-legacy-wire-pack-compat-boundary.md); [`../reference/protocol/legacy-compatibility.md`](../reference/protocol/legacy-compatibility.md).
 - **Consequence:** F7 deletion debt; new-client protocol polluted with legacy behavior.
-- **Status:** Active (boundary Proposed until ADR-0006 acceptance; direction fixed 2026-08-10).
+- **Status:** Active (ADR-0006 Accepted — boundary implemented in `protocol::legacy`, F2a 2026-08-10; direction fixed 2026-08-10).
 
 ## 3. Single canonical PostgreSQL — no dual DB
 
 - **Rule:** one canonical PostgreSQL 18 is the only operational database. The C++ baseline operates on the **same PostgreSQL** through a temporary compatibility adapter (its MySQL `libsql` layer is bridged). MariaDB is used **only as the migration/export source** — never as a second operational DB, and there is no `direct-sql (MariaDB)` backend in the Rust `database` crate.
 - **Why:** the user decision 2026-08-10: two operational databases double the surface and concentrate migration risk at the end.
-- **Evidence:** [ADR-0005](../decisions/0005-postgresql-cutover-and-legacy-adapter.md) (Proposed; G-PG gate); `../plans/server-rewrite.md` §5.5; `../../ROADMAP.md` phase G-PG.
-- **Consequence:** dual-store claims in code/docs are rejected; F2 stays blocked until ADR-0005 acceptance.
-- **Status:** Active (direction fixed; ADR-0005 pending acceptance).
+- **Evidence:** [ADR-0005](../decisions/0005-postgresql-cutover-and-legacy-adapter.md) (Accepted 2026-08-10 — G-PG gate closed, B1–B8 executed); `../plans/server-rewrite.md` §5.5; `../../ROADMAP.md` phase G-PG.
+- **Consequence:** dual-store claims in code/docs are rejected; G-PG is COMPLETE (2026-08-10) — the adapter is temporary by contract and removed at F6.
+- **Status:** Active (ADR-0005 Accepted 2026-08-10 — implemented).
 
 ## 4. Legacy client contract: frozen, pull-based, no pushes
 
