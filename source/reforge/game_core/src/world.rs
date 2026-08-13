@@ -140,6 +140,20 @@ impl WorldStore {
     pub fn save_character(&self, row: &PlayerRow) {
         self.player.save_mutated(&self.batcher, row);
     }
+
+    /// UNIDAD ACID durable (F6 social — ADR-0011 "items as ACID units"):
+    /// `ItemExchange::exchange_mutated` (materiales→resultado→oro en UNA
+    /// transacción + audit) con el Batcher del store — el acceso al Batcher
+    /// que el lane social necesita (el commit del trade y el buy/sell del
+    /// shop NUNCA hacen commits por item).
+    ///
+    /// `Ok` = el batch commiteó; `Err` = el sink falló (el WAL local
+    /// conserva el archivo para el replay del próximo arranque).
+    pub async fn exchange(&self, ex: &database::item::ItemExchange) -> Result<(), String> {
+        database::item::ItemRepo::new(&self.pg_conn)
+            .exchange_mutated(&self.batcher, ex)
+            .await
+    }
 }
 
 #[cfg(test)]

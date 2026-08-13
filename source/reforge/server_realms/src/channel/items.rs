@@ -370,11 +370,15 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
         // los items equipados (ComputeParts F5.3 — el personaje muestra el
         // arma/armadura; el part = vnum del item).
         let parts = packets::equipped_parts(session.row(), &session.inventory);
+        let arrows = super::equipped_arrow_index(&session.inventory)
+            .map(|i| session.inventory[i].count as u32)
+            .unwrap_or(0);
         session
             .send(&packets::character_additional_info_with_parts(
                 session.row(),
                 session.empire,
                 &parts,
+                arrows,
             )
             .to_bytes())
             .await
@@ -448,11 +452,15 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
         // ADDITIONAL_INFO con los parts COMPUTADOS (el arma/armadura ya no
         // está — el part se quita).
         let parts = packets::equipped_parts(session.row(), &session.inventory);
+        let arrows = super::equipped_arrow_index(&session.inventory)
+            .map(|i| session.inventory[i].count as u32)
+            .unwrap_or(0);
         session
             .send(&packets::character_additional_info_with_parts(
                 session.row(),
                 session.empire,
                 &parts,
+                arrows,
             )
             .to_bytes())
             .await

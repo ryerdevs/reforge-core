@@ -17,7 +17,7 @@
 use protocol::header;
 
 use crate::channel::session::Session;
-use crate::channel::{chat, combat, events, items, movement, script, skills};
+use crate::channel::{chat, combat, events, items, movement, script, shop, skills, trade};
 
 /// Loop de juego de la conexión: corre SOLO con la sesión llena (las fases
 /// 1-7 las hizo `entry::run`). `Err` = cierre con razón (fatal o protocolario
@@ -91,6 +91,16 @@ pub async fn run(session: &mut Session) -> Result<(), String> {
                     header::CG_SCRIPT_ANSWER => {
                         script::handle(session, &pkt).await?.into_result()?;
                     }
+                    // F6 social: click en NPC (26, 5 B: header + vid — el
+                    // mundo resuelve el shop del NPC) + CG_SHOP (50) +
+                    // CG_EXCHANGE (27). El header CG_SHOP no existe en el
+                    // protocol crate (GAP del lane protocol — literal con
+                    // parity Packet.h:62).
+                    header::CG_ON_CLICK => shop::click(session, &pkt).await?.into_result()?,
+                    50 /* CG_SHOP — Packet.h:62 */ => {
+                        shop::handle(session, &pkt).await?.into_result()?;
+                    }
+                    header::CG_EXCHANGE => trade::handle(session, &pkt).await?.into_result()?,
                     // TODO(F5 npcs): game_core::npc::... para los NPCs/mobs
                     other => {
                         eprintln!(

@@ -153,9 +153,14 @@ Mapped at the boundary, absent from the domain model, deleted wholesale at F7
   Rand, NpcOutbox, SpawnCache; systems `chase_attack`/`aggro_detect`/`patrol`
   (chained, parity order); `WorldSim` wrapper (resolve_spawns/spawn_npcs/
   damage_npc/spawn_item/update); channel.rs refactored (AI tick →
-  `world.update`; player intents sync state into the World). Workspace **359
-  passed / 0 failed**, clippy clean, release green, deployed. **Accepted
-  deviations** (implementer-documented, accepted): `multi_threaded` not enabled
+  `world.update`; player intents sync state into the World). **Structure since
+  the 42nd part:** `ecs.rs` split into `game_core/src/ecs/`
+  (components/events/resources/world/test_util + `systems/`, incl. the N1 trap
+  guards `systems/{social,quest}.rs`) with `Intent`/`NpcEvent` wrapper
+  sub-enums; channel.rs split into `server_realms/src/channel/` (13 files,
+  `Session` + `Outcome`). Workspace **512+ passed / 0 failed**, clippy clean,
+  release green, deployed. **Accepted deviations**
+  (implementer-documented, accepted): `multi_threaded` not enabled
   yet (one-line toggle at the F5 benchmark); SpawnCache stays
   `Arc<Mutex<>>` as a World resource (cross-connection PG-row cache, not world
   state); the World is per-connection for now (channel-level shared World = the

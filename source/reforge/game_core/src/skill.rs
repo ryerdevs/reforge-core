@@ -513,29 +513,55 @@ impl SkillRepo {
             .map_err(|e| format!("skill_proto: {e}"))?;
         let mut out = Vec::with_capacity(rows.len());
         for r in &rows {
-            let point_on = point_from_text(r.get::<_, Option<String>>(4).as_deref().unwrap_or(""));
-            let Some(point_on) = point_on else {
-                continue; // szpointon desconocido — fila ignorada (documentado)
-            };
-            out.push(SkillProto {
-                vnum: r.get::<_, i32>(0) as u32,
-                b_type: r.get::<_, i16>(1) as u8,
-                level_step: r.get::<_, i16>(2) as u8,
-                max_level: r.get::<_, i16>(3) as u8,
-                point_on,
-                point_poly: r.get::<_, Option<String>>(5).unwrap_or_default(),
-                sp_cost_poly: r.get::<_, Option<String>>(6).unwrap_or_default(),
-                duration_poly: r.get::<_, Option<String>>(7).unwrap_or_default(),
-                cooldown_poly: r.get::<_, Option<String>>(8).unwrap_or_default(),
-                flag: skill_flags_from_text(r.get::<_, Option<String>>(9).as_deref().unwrap_or("")),
-                affect_flag: affect_flag_from_text(r.get::<_, Option<String>>(10).as_deref().unwrap_or("")),
-                attr_type: attr_type_from_text(r.get::<_, Option<String>>(11).as_deref().unwrap_or("")),
-                max_hit: r.get::<_, i16>(12) as u16,
-                target_range: r.get::<_, i32>(13) as u32,
-            });
+            if let Some(p) = skill_proto_from_row(r) {
+                out.push(p);
+            }
         }
         Ok(out)
     }
+
+    /// Carga UNA skill por vnum (el gate de flechas del canal — dw_arrow:
+    /// las skills con flag USE_ARROW_DAMAGE exigen flechas equipadas antes
+    /// del intent; mismas reglas de mapeo que `load_all`). `None` = no existe
+    /// o `szpointon` desconocido.
+    pub async fn load(&self, vnum: u32) -> Result<Option<SkillProto>, String> {
+        let client = self.connect().await?;
+        let rows = client
+            .query(
+                "SELECT dwvnum, btype, blevelstep, bmaxlevel, szpointon, szpointpoly, \
+                 szspcostpoly, szdurationpoly, szcooldownpoly, setflag, setaffectflag, \
+                 eskilltype, imaxhit, dwtargetrange \
+                 FROM player.skill_proto WHERE dwvnum = $1",
+                &[&(vnum as i32)],
+            )
+            .await
+            .map_err(|e| format!("skill_proto: {e}"))?;
+        Ok(rows.first().and_then(skill_proto_from_row))
+    }
+}
+
+/// Mapeo de una fila del `skill_proto` → `SkillProto` (compartido por
+/// `load_all` y `load`). `None` si el `szpointon` es desconocido (parity: el
+/// legacy abortaría el boot — el subset ignora la fila).
+fn skill_proto_from_row(r: &tokio_postgres::Row) -> Option<SkillProto> {
+    let point_on = point_from_text(r.get::<_, Option<String>>(4).as_deref().unwrap_or(""));
+    let point_on = point_on?; // szpointon desconocido — fila ignorada (documentado)
+    Some(SkillProto {
+        vnum: r.get::<_, i32>(0) as u32,
+        b_type: r.get::<_, i16>(1) as u8,
+        level_step: r.get::<_, i16>(2) as u8,
+        max_level: r.get::<_, i16>(3) as u8,
+        point_on,
+        point_poly: r.get::<_, Option<String>>(5).unwrap_or_default(),
+        sp_cost_poly: r.get::<_, Option<String>>(6).unwrap_or_default(),
+        duration_poly: r.get::<_, Option<String>>(7).unwrap_or_default(),
+        cooldown_poly: r.get::<_, Option<String>>(8).unwrap_or_default(),
+        flag: skill_flags_from_text(r.get::<_, Option<String>>(9).as_deref().unwrap_or("")),
+        affect_flag: affect_flag_from_text(r.get::<_, Option<String>>(10).as_deref().unwrap_or("")),
+        attr_type: attr_type_from_text(r.get::<_, Option<String>>(11).as_deref().unwrap_or("")),
+        max_hit: r.get::<_, i16>(12) as u16,
+        target_range: r.get::<_, i32>(13) as u32,
+    })
 }
 
 #[cfg(test)]

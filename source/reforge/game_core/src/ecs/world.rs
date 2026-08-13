@@ -38,10 +38,20 @@ use database::npc::{MobRepo, MobRow};
 /// NOTA (C5): `world` es `pub(crate)` — los tests de los submodulos
 /// (`ecs/systems/*`) inyectan recursos directamente (p.ej. la `SkillTable`
 /// de los tests de skills).
+///
+/// F6 (social): `open_shops` (player_vid → shop abierto) y `trades`
+/// (player_vid → par de trade) viven aquí — el estado del lane social que
+/// `systems/social.rs` muta.
 pub struct WorldSim {
     pub(crate) world: World,
     schedule: Schedule,
     pub(crate) players: HashMap<u32, Entity>,
+    /// Tienda abierta por jugador (F6 — `systems/social.rs`).
+    pub(crate) open_shops: HashMap<u32, crate::ecs::systems::social::ShopOpen>,
+    /// Trade activo por jugador — AMBOS vids del par apuntan al MISMO
+    /// `Arc<Mutex<TradePair>>` (la mutación desde cualquiera de los dos
+    /// lados ve el estado del otro — el clone los habría divergido).
+    pub(crate) trades: HashMap<u32, std::sync::Arc<std::sync::Mutex<crate::ecs::systems::social::TradePair>>>,
 }
 
 impl WorldSim {
@@ -69,6 +79,7 @@ impl WorldSim {
         world.insert_resource(ItemIndex::default());
         world.insert_resource(WorldMetrics::default());
         world.insert_resource(SkillTable::default());
+        world.insert_resource(crate::ecs::systems::social::ShopTable::default());
         let mut schedule = Schedule::default();
         // Cadena: parity del ORDEN del tick del canal (spawn → chase → detect
         // → patrol → affects) y sin ambigüedad entre sistemas (comparten
@@ -80,7 +91,7 @@ impl WorldSim {
             patrol_system,
             affects_system,
         ).chain());
-        Self { world, schedule, players: HashMap::new() }
+        Self { world, schedule, players: HashMap::new(), open_shops: HashMap::new(), trades: HashMap::new() }
     }
 
     /// Carga (una vez por mapa) la tabla COMPLETA de spawns: `load_map_spawns`
@@ -153,8 +164,17 @@ impl WorldSim {
 
     /// Saca al jugador del mundo (disconnect — el RAII de la conexión manda
     /// `Intent::Leave`). Los mobs intactos de su mapa se limpian en el
-    /// siguiente tick (el despawn sin jugadores).
+    /// siguiente tick (el despawn sin jugadores). F6: el trade del jugador
+    /// se CANCELA para ambos (parity `CHARACTER::Disconnect` → `Cancel`);
+    /// su shop se cierra.
     pub fn leave_player(&mut self, player_vid: u32) {
+        self.open_shops.remove(&player_vid);
+        if let Some(pair) = self.trades.remove(&player_vid) {
+            // El compañero pierde el par (sin evento — su ventana cierra con
+            // el GC_EXCHANGE END del próximo intent suyo o su propio leave).
+            let other = pair.lock().expect("trade pair lock").other(player_vid);
+            self.trades.remove(&other);
+        }
         if let Some(e) = self.players.remove(&player_vid)
             && self.world.get_entity(e).is_ok()
         {

@@ -1,15 +1,19 @@
 //! `channel/script.rs` — el handler del CG_SCRIPT_ANSWER (R-s3): el REVIVE
 //! del jugador (parity `cmd_general.cpp:534-554` — RestartAtSamePos o el
-//! warp a la ciudad).
+//! warp a la ciudad) y — desde el lane quest — la RESPUESTA del diálogo de
+//! quest (el [NEXT]/[QUESTION] del GC_SCRIPT 45 → reanuda la quest
+//! suspendida en el mundo).
 //!
 //! CG_SCRIPT_ANSWER (29, 2 B: header + answer BYTE — Packet.h:679). El
 //! diálogo de muerte del cliente manda la respuesta; el C++ revive con
 //! `RestartAtSamePos` (el mismo punto) o warpea a la ciudad
-//! (`WarpSet EMPIRE_START`).
+//! (`WarpSet EMPIRE_START`). El diálogo de quest (mismo paquete) solo puede
+//! estar abierto VIVO — la distinción es el hp (parity del C++: el quest
+//! manager reanuda la quest antes que el flujo de muerte).
 //!
 //! C6a (firma uniforme): sin muerte / answer no-muerto → log + Continue.
 
-use game_core::ecs::{CombatIntent, Intent};
+use game_core::ecs::{CombatIntent, Intent, QuestIntent};
 use game_core::packets;
 
 use crate::channel::session::{Outcome, Session};
@@ -79,11 +83,15 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
             // ADDITIONAL_INFO con los parts computados del equipo (el revive
             // reinserta la instancia).
             let parts = packets::equipped_parts(session.row(), &session.inventory);
+            let arrows = super::equipped_arrow_index(&session.inventory)
+                .map(|i| session.inventory[i].count as u32)
+                .unwrap_or(0);
             session
                 .send(&packets::character_additional_info_with_parts(
                     session.row(),
                     session.empire,
                     &parts,
+                    arrows,
                 )
                 .to_bytes())
                 .await
@@ -105,11 +113,17 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
             );
         }
     } else {
-        // Sin muerte: el script answer del diálogo de quests es F5.x — se
-        // ignora con log.
+        // Diálogo de quest suspendido (CG_SCRIPT_ANSWER del GC_SCRIPT 45 —
+        // el [NEXT]/[QUESTION] del quest dialog): la reanudación la resuelve
+        // el mundo (`QuestIntent::Answer` — no-op si no hay quest suspendida;
+        // el answer del select (1..n) se ata al capture `as name`).
+        let answer = pkt.get(1).copied().unwrap_or(0);
+        session.intent(Intent::Quest(QuestIntent::Answer {
+            player_vid: session.player_vid(),
+            answer,
+        }))?;
         eprintln!(
-            "server_realms: channel conn {}: CG_SCRIPT_ANSWER sin muerte — \
-             ignorado (quests F5.x)",
+            "server_realms: channel conn {}: respuesta de quest {answer} → mundo",
             session.conn_id
         );
     }

@@ -536,6 +536,7 @@ dependencies = [
  "database",
  "lzo",
  "protocol",
+ "quest_dsl",
  "tokio",
  "tokio-postgres",
  "uuid",

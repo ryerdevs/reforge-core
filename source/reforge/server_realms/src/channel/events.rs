@@ -358,6 +358,16 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
             buff,
             ..
         }) => {
+            // dw_arrow: el disparo de un skill de ARCO se RESOLVIÓ — la
+            // flecha se consume (parity UseArrow, char_battle.cpp:2770-2789:
+            // 1 flecha por uso; el item se queda con count 0 y el gate del
+            // próximo disparo rechaza). El flag lo puso el gate de skills.rs
+            // (reseteado en cada dispatch — el skill rechazado por el mundo
+            // no llega aquí y no consume).
+            if session.pending_arrow_shot {
+                session.pending_arrow_shot = false;
+                super::consume_arrow(session).await?;
+            }
             // Los paquetes del daño del skill (GcDamageInfo — el flag del
             // attr) los construyó el mundo.
             for pkt in packets {
@@ -428,12 +438,13 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                 .await
                 .map_err(|e| format!("enviando GC_AFFECT_REMOVE: {e}"))?;
         }
-        // Lanes futuros (C3 + N1): los emisores viven en sus archivos
-        // (`channel/social.rs` / `quest.rs`) con `match s {}` — la primera
-        // variante social/quest es un ERROR DE COMPILACIÓN en su archivo,
-        // no un evento silenciosamente descartado aquí.
-        NpcEvent::Social(s) => super::social::emit(session, s),
-        NpcEvent::Quest(q) => super::quest::emit(session, q),
+        // Lanes futuros (C3 + N1): los emisores viven en sus archivos —
+        // `social::emit` y `quest::emit` son async (envían GC + aplican la
+        // DB del lane).
+        NpcEvent::Social(s) => {
+            super::social::emit(session, s).await?;
+        }
+        NpcEvent::Quest(q) => super::quest::emit(session, q).await?,
     }
     Ok(())
 }
