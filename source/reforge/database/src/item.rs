@@ -1,17 +1,16 @@
 //! F3 (ADR-0008): dominio world — `ItemRepo` (schema `player`).
 //!
-//! Contrato portado de los QIDs de item legacy:
-//! - `load_by_owner` = QID_ITEM (`ClientManagerPlayer.cpp:385-387`): las 23
-//!   columnas del `TPlayerItem` con `"window"` citado (en PG `window` es
-//!   palabra reservada; el `window+0` del C++/proxy no aplica aqui — la
-//!   columna PG es TEXT con el NOMBRE del window, no el indice ENUM).
-//! - `upsert` = `QUERY_ITEM_SAVE` (`ClientManager.cpp:1425-1452`): el
-//!   `INSERT ... ON DUPLICATE KEY UPDATE` de MySQL -> `ON CONFLICT (id) DO
-//!   UPDATE` (insert y update son la MISMA operacion en el legacy). `id == 0`
-//!   -> `DEFAULT` (identity BY DEFAULT, regla B5 del proxy).
-//! - `delete` = `QUERY_ITEM_DESTROY` (`ClientManager.cpp:1702`).
-//! - `item_award` = `RequestLoad`/`Taken` (`ItemAwardManager.cpp:59-69` y
-//!   `:166-168`; E2E Q6 `scripts/gpg/e2e_db.sh:148`).
+//! # Tabla de paridad QID (legacy → Rust)
+//!
+//! | QID / query legacy | file:line | Metodo Rust | SQL / semantica |
+//! |---|---|---|---|
+//! | QID_ITEM (1) | `ClientManagerPlayer.cpp:326-332` y `:385-388` | `load_by_owner` | 22 columnas (`id, "window", pos, count, vnum, socket0..2, attrtype0..attrvalue6`), `WHERE owner_id = $1 AND window IN ('INVENTORY','EQUIPMENT','DRAGON_SOUL_INVENTORY','BELT_INVENTORY')`. El `window+0` del C++ (indice ENUM) no aplica: la columna PG es TEXT con el NOMBRE (el proxy los mapea). |
+//! | QID_ITEM_SAVE (10) | `ClientManager.cpp:1400-1466` (`QUERY_ITEM_SAVE`) + `Cache.cpp:82` (flush del cache) | `upsert` / `upsert_mutation` | `INSERT ... ON DUPLICATE KEY UPDATE` de MySQL → `ON CONFLICT (id) DO UPDATE` (insert y update son la MISMA operacion). `id == 0` → `DEFAULT` (identity BY DEFAULT, regla B5). NOTA de arquitectura: el legacy cachea INVENTORY/EQUIPMENT/DS/BELT en memoria (`PutItemCache`, `ClientManager.cpp:1461`) y escribe SAFEBOX/MALL al momento; `QUERY_ITEM_FLUSH` (`:1387`) vacia el cache. El Rust NO cachea: el `Batcher` (≤100ms, una tx, WAL + replay idempotente) es el equivalente moderno del flush. |
+//! | QID_ITEM_DESTROY (11) | `ClientManager.cpp:1692-1717` (`QUERY_ITEM_DESTROY`) | `delete` | `DELETE FROM player.item WHERE id = $1` (el cache del C++ decide borrar o escribir; aqui el DELETE es directo). |
+//! | QID_ITEM_AWARD_LOAD (18) / TAKEN (19) | `ItemAwardManager.cpp:59-69` / `:166-168` | `load_pending_awards` / `take_award` | 23 columnas (`id, login, vnum, count, socket0..2, attrtype0..attrvalue6, mall, why`), `WHERE taken_time IS NULL AND id > $1`; taken = `UPDATE ... SET taken_time = NOW() WHERE id = $1 AND taken_time IS NULL` (idempotente). E2E Q6 `scripts/gpg/e2e_db.sh:148`. |
+//! | ITEM_ID_RANGE | `ItemIDRangeManager.cpp:93` (BuildRange) y `:121` | `max_id_in_range` | `SELECT MAX(id) FROM player.item WHERE id >= $1 AND id <= $2` — el rango 100M-200M lo sondea el E2E Q8; `cs_dwMinimumRemainCount` (`:110`) es decision del game. |
+//! | item_proto (uso+combate) | `TItemTable` (`type`/`sub_type`/`alValues`/`wearflag`) | `load_proto_use_values` | Subset del `player.item_proto` por vnum (9 columnas) — el equivalente moderno de `PROTO_FROM_DB` (ver lib.rs). |
+//! | Unidad ACID (materiales → resultado → oro, una tx) | ROADMAP.md:172, ADR-0011 (dupe completion F5) | `exchange_mutated` / `exchange_mutations` | Skeleton: valores ABSOLUTOS (parity del save legacy) + guard de estado previo (`= $pre`) que hace el replay del WAL un no-op exacto (0 filas) y da anti doble-gasto. |
 //!
 //! Tipos PG reales (verificados en el esquema): id bigint identity BY DEFAULT,
 //! owner_id bigint, window text (check de los 7 windows), pos integer,
@@ -20,6 +19,7 @@
 use tokio_postgres::{Client, NoTls};
 
 use crate::account::pg_err;
+use crate::wal::{Batcher, Mutation, Param};
 
 /// Item del inventario (23 columnas del load QID_ITEM; los atributos son
 /// pares (tipo, valor) — parity `TPlayerItem`).
@@ -217,6 +217,26 @@ impl ItemRepo {
         row.try_get(0).map_err(|e| format!("ITEM_ID_RANGE: {e}"))
     }
 
+    // ------------------------------------------------------------- unidad ACID (F5)
+
+    /// Unidad ACID durable (ADR-0011 "items as ACID units", ROADMAP.md:172):
+    /// pushea TODAS las mutations de la unidad y fuerza el `flush()` — el
+    /// batch entero aplica en UNA transaccion (+ audit en la misma tx) y esta
+    /// llamada devuelve el resultado del commit. A diferencia de `save_mutated`
+    /// (fire-and-forget), el slice de trade/refine SABE cuando la unidad
+    /// commitio (Ok) o cuando el sink fallo (Err — el WAL local conserva el
+    /// archivo para el replay del proximo arranque; ver la semantica del
+    /// guard en `ItemExchange`: 0 filas del guard NO es un Err).
+    ///
+    /// Precondicion documentada: la unidad debe caber en un batch (max_batch)
+    /// y los pushes + `flush()` deben ir sin pausas > `flush_interval`.
+    pub async fn exchange_mutated(&self, batcher: &Batcher, ex: &ItemExchange) -> Result<(), String> {
+        for m in exchange_mutations(ex) {
+            batcher.push(m);
+        }
+        batcher.flush().await
+    }
+
     // ------------------------------------------------------------------ item_award
 
     /// Award pendiente (23 columnas de `RequestLoad`, `ItemAwardManager.cpp:59-69`).
@@ -335,6 +355,106 @@ fn item_params_without_id<'a>(
     ]
 }
 
+/// Params de la mutation del upsert (Param tipado, no `&dyn ToSql`) — orden
+/// $1..$23/$1..$22 de `UPSERT_SQL`/`UPSERT_DEFAULT_ID_SQL`.
+fn item_params_mutation(row: &ItemRow, owner_id: i64) -> Vec<Param> {
+    let p = |v: i64| Param::Int(v);
+    let mut params = Vec::with_capacity(23);
+    if row.id != 0 {
+        params.push(p(row.id));
+    }
+    params.push(Param::Int(owner_id));
+    params.push(Param::Text(row.window.clone()));
+    params.push(p(i64::from(row.pos)));
+    params.push(p(row.count));
+    params.push(p(row.vnum));
+    for s in &row.sockets {
+        params.push(p(*s));
+    }
+    for (t, v) in &row.attrs {
+        params.push(Param::Int(i64::from(*t)));
+        params.push(Param::Int(i64::from(*v)));
+    }
+    params
+}
+
+/// Mutation durable del upsert: uuidv7 + el MISMO sql que el camino directo
+/// (una fuente de verdad) + params. Compartida por `upsert_mutated` futuro y
+/// por la unidad ACID (`exchange_mutations`).
+pub(crate) fn upsert_mutation(row: &ItemRow, owner_id: i64) -> Mutation {
+    let sql = if row.id == 0 { UPSERT_DEFAULT_ID_SQL } else { UPSERT_SQL };
+    Mutation::new(sql, item_params_mutation(row, owner_id))
+}
+
+/// Unidad ACID (skeleton para los slices de trade/refine — ROADMAP.md:172):
+/// materiales → resultado → oro en UNA transaccion.
+///
+/// Todos los valores son ABSOLUTOS (parity del save legacy: el cache flush
+/// escribe la fila completa — `Cache.cpp:82`), con guard de estado previo:
+/// - materiales: `UPDATE ... SET count = $post WHERE id = $1 AND count = $pre`
+///   (o `DELETE ... WHERE id = $1 AND count = $pre` si `post == 0`).
+/// - resultado: `upsert_mutation` (ON CONFLICT (id) — idempotente por
+///   naturaleza; si el resultado stackea sobre un item existente, el caller
+///   lo pasa con su id y el count_post sumado).
+/// - oro: `UPDATE player.player SET gold = $post WHERE id = $1 AND gold = $pre`
+///   (mismo patron de guard; `player.gold` es integer).
+///
+/// # Semantica del guard (importante)
+///
+/// El guard `= $pre` hace el replay del WAL un no-op EXACTO: tras el primer
+/// commit count/gold == post != pre → 0 filas → no se vuelve a consumir ni a
+/// duplicar. ESO es lo que exige ADR-0008/0011 (idempotencia del replay).
+/// NO es un mecanismo de rechazo por concurrencia: 0 filas del guard NO hace
+/// fallar la tx (el sink aplica las mutations sin comprobar filas afectadas;
+/// el batch commit igual). Bajo single-writer-per-region (ADR-0011 — un solo
+/// canal escribe los items de un player) no existe writer concurrente, asi
+/// que el guard solo puede dispararse en replay — donde el no-op es correcto.
+/// La validacion de negocio ("tienes suficientes materiales") es del slice:
+/// parity C++ — el game comprueba `count >= need` EN MEMORIA antes de
+/// construir la unidad. Si un futuro topologia multi-writer necesita rechazo
+/// estricto, el slice debe usar una transaccion sincrona con chequeo de
+/// filas afectadas (client.transaction) en vez del Batcher.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ItemExchange {
+    /// Owner de los materiales y del resultado (player.item.owner_id).
+    pub owner_id: i64,
+    /// Materiales a consumir: `(item_id, count_pre, count_post)`.
+    /// `count_post == 0` -> DELETE (stack vacio), si no UPDATE absoluto.
+    pub materials: Vec<(i64, i64, i64)>,
+    /// Resultado: item a upsertar (id == 0 -> identity DEFAULT) + su owner.
+    pub result: Option<(ItemRow, i64)>,
+    /// Oro del personaje: `(gold_pre, gold_post)` absolutos.
+    pub gold: Option<(i64, i64)>,
+}
+
+/// Construye las mutations de la unidad (funcion pura — testeable sin PG).
+pub(crate) fn exchange_mutations(ex: &ItemExchange) -> Vec<Mutation> {
+    let mut out = Vec::with_capacity(ex.materials.len() + 2);
+    for (id, pre, post) in &ex.materials {
+        if *post == 0 {
+            out.push(Mutation::new(
+                "DELETE FROM player.item WHERE id = $1 AND count = $2",
+                vec![Param::Int(*id), Param::Int(*pre)],
+            ));
+        } else {
+            out.push(Mutation::new(
+                "UPDATE player.item SET count = $2 WHERE id = $1 AND count = $3",
+                vec![Param::Int(*id), Param::Int(*post), Param::Int(*pre)],
+            ));
+        }
+    }
+    if let Some((row, owner)) = &ex.result {
+        out.push(upsert_mutation(row, *owner));
+    }
+    if let Some((pre, post)) = &ex.gold {
+        out.push(Mutation::new(
+            "UPDATE player.player SET gold = $2 WHERE id = $1 AND gold = $3",
+            vec![Param::Int(ex.owner_id), Param::Int(*post), Param::Int(*pre)],
+        ));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -393,6 +513,128 @@ mod tests {
         let oid = 7i64;
         assert_eq!(item_params_with_id(&row, &oid).len(), 23);
         assert_eq!(item_params_without_id(&row, &oid).len(), 22);
+    }
+
+    /// La mutation del upsert usa el MISMO sql que el camino directo (una
+    /// fuente de verdad) + params tipados en el orden de los $N — para las
+    /// dos variantes (id explicito / DEFAULT).
+    #[test]
+    fn upsert_mutation_uses_shared_sql_and_params() {
+        let row = dummy_item();
+        let m = upsert_mutation(&row, 7);
+        assert_eq!(m.sql, UPSERT_SQL, "mismo SQL (una fuente de verdad)");
+        assert_eq!(m.params.len(), 23);
+        assert_eq!(m.params[0], Param::Int(row.id), "$1 = id explicito");
+        assert_eq!(m.params[1], Param::Int(7), "$2 = owner");
+        assert_eq!(m.params[2], Param::Text("INVENTORY".into()), "$3 = window");
+        assert_eq!(m.params[3], Param::Int(0), "$4 = pos");
+        assert_eq!(m.id[6] >> 4, 7, "version 7 del uuidv7");
+
+        let mut default_row = dummy_item();
+        default_row.id = 0;
+        let m = upsert_mutation(&default_row, 7);
+        assert_eq!(m.sql, UPSERT_DEFAULT_ID_SQL, "id==0 -> DEFAULT");
+        assert_eq!(m.params.len(), 22, "sin id");
+        assert_eq!(m.params[0], Param::Int(7), "$1 = owner");
+    }
+
+    /// Unidad ACID — materiales: UPDATE absoluto con guard `count = $pre`
+    /// (replay no-op) o DELETE con el mismo guard cuando el stack se vacia.
+    #[test]
+    fn exchange_mutations_consume_materials_with_guards() {
+        let ex = ItemExchange {
+            owner_id: 7,
+            materials: vec![(100, 5, 2), (200, 3, 0)],
+            result: None,
+            gold: None,
+        };
+        let ms = exchange_mutations(&ex);
+        assert_eq!(ms.len(), 2, "2 materiales");
+        // (100, 5, 2): UPDATE absoluto con guard pre.
+        assert_eq!(
+            ms[0].sql,
+            "UPDATE player.item SET count = $2 WHERE id = $1 AND count = $3"
+        );
+        assert_eq!(ms[0].params, vec![Param::Int(100), Param::Int(2), Param::Int(5)]);
+        // (200, 3, 0): DELETE con guard pre (el replay no borra un stack que ya no existe).
+        assert_eq!(ms[1].sql, "DELETE FROM player.item WHERE id = $1 AND count = $2");
+        assert_eq!(ms[1].params, vec![Param::Int(200), Param::Int(3)]);
+    }
+
+    /// Unidad ACID — resultado (upsert compartido) + oro (guard pre).
+    #[test]
+    fn exchange_mutations_include_result_upsert_and_gold() {
+        let result = ItemRow {
+            id: 0,
+            window: "INVENTORY".into(),
+            pos: 3,
+            count: 1,
+            vnum: 30001,
+            sockets: [0, 0, 0],
+            attrs: [(0, 0); 7],
+        };
+        let ex = ItemExchange {
+            owner_id: 7,
+            materials: vec![(100, 5, 2)],
+            result: Some((result.clone(), 7)),
+            gold: Some((1_000, 1_200)),
+        };
+        let ms = exchange_mutations(&ex);
+        assert_eq!(ms.len(), 3, "material + resultado + oro");
+        assert_eq!(ms[1].sql, UPSERT_DEFAULT_ID_SQL, "resultado id==0 -> DEFAULT");
+        assert_eq!(ms[1].params[0], Param::Int(7), "owner del resultado");
+        assert_eq!(
+            ms[2].sql,
+            "UPDATE player.player SET gold = $2 WHERE id = $1 AND gold = $3"
+        );
+        assert_eq!(ms[2].params, vec![Param::Int(7), Param::Int(1_200), Param::Int(1_000)]);
+    }
+
+    /// Unidad vacia -> sin mutations (flush no-op con Ok).
+    #[test]
+    fn exchange_mutations_empty_unit_is_empty() {
+        let ex = ItemExchange { owner_id: 7, materials: vec![], result: None, gold: None };
+        assert!(exchange_mutations(&ex).is_empty(), "sin materiales/resultado/oro");
+    }
+
+    /// Wiring del Batcher: `exchange_mutated` pushea TODAS las mutations y
+    /// fuerza el flush — el sink recibe la unidad entera en UN batch (una tx).
+    #[tokio::test(start_paused = true)]
+    async fn exchange_mutated_wires_unit_to_single_batch() {
+        use crate::wal::MutationSink;
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone, Default)]
+        struct CountingSink(Arc<Mutex<Vec<Vec<Mutation>>>>);
+        impl MutationSink for CountingSink {
+            fn apply(&mut self, batch: Vec<Mutation>) -> impl std::future::Future<Output = Result<(), String>> + Send {
+                async move {
+                    self.0.lock().unwrap().push(batch);
+                    Ok(())
+                }
+            }
+        }
+
+        let sink = CountingSink::default();
+        let batcher = Batcher::spawn(std::time::Duration::from_millis(1000), 64, sink.clone());
+        let repo = ItemRepo::new("host=noop");
+        let ex = ItemExchange {
+            owner_id: 7,
+            materials: vec![(100, 5, 2), (200, 3, 0)],
+            result: Some((dummy_item(), 7)),
+            gold: Some((1_000, 1_200)),
+        };
+        repo.exchange_mutated(&batcher, &ex).await.expect("flush ok");
+        let batches = sink.0.lock().unwrap();
+        assert_eq!(batches.len(), 1, "la unidad entera en UN batch");
+        assert_eq!(batches[0].len(), 4, "2 materiales + resultado + oro");
+        // El id es uuidv7 propio de cada push — comparamos sql+params.
+        let expected = exchange_mutations(&ex);
+        for (got, want) in batches[0].iter().zip(&expected) {
+            assert_eq!(got.sql, want.sql, "sql de la mutation");
+            assert_eq!(got.params, want.params, "params de la mutation");
+            assert_eq!(got.id[6] >> 4, 7, "version 7 del uuidv7");
+        }
     }
 
     /// item_award load: 23 columnas en el orden de `RequestLoad`

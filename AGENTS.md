@@ -8,7 +8,41 @@
 - **Strategy: incremental module-by-module replacement.** The legacy C++ server is replaced piece by piece with verifiable Rust modules. Each module must preserve observable behavior and pass verification before moving on.
 - The rewrite is a structural redesign, not a line-by-line translation. Architecture decisions (domain boundaries, data ownership, protocols, concurrency, failures, migration) are recorded as ADRs before implementation.
 
-## Current phase (August 2026) — LOGIN WORKING
+## Current phase (2026-08-13) — NATIVE WINDOWS RUNTIME (ADR-0012), world entry + ECS World working
+
+**The runtime moved to NATIVE WINDOWS (ADR-0012, executed + verified 2026-08-12):** PostgreSQL 18.4 native at 127.0.0.1:5432 (service `postgresql-metin2`, NETWORK SERVICE account, binaries `C:\projects\metin2-extra\pg18\pgsql\bin`, data `C:\projects\metin2-extra\pg18\data`, db `metin2`, role mt2/mt2, `LC_COLLATE='C'`, pgcrypto in schema `account` — `mysql_hash_password` works with `search_path account,public`). Rust auth + channel run native from `source\deploy\win\` (`auth.toml`/`channel.toml`: listen `127.0.0.1:30001`/`30003`, PG `127.0.0.1:5432`, `timeout_ms 120000`, `map_path = source\deploy\main\srv1\share\locale\spain\map`). The client connects to `127.0.0.1` (serverinfo.py repacked). Start/stop: `powershell -ExecutionPolicy Bypass -File scripts\start_win.ps1` / `stop_win.ps1`. MariaDB archived (`C:\projects\metin2-extra\archive\mariadb_full_2026-08-12.sql`, 5.7 MB) + stopped in WSL. WSL (Debian-M2) is now an **on-demand oracle box only**: frozen C++ binaries + `mysql_proxy`, cap 1 GB, off when unused; `/home/m2/source` archived later; full delete at F6.
+
+**World entry WORKS on the all-Windows stack (real-client verified 2026-08-12: login → select → world → movement):**
+- (a) `replay_once` async via `tokio::sync::OnceCell` (`game_core/src/world.rs:40-79`) — fixed the nested-runtime panic that killed the channel.
+- (b) `SPAWN_VIEW` 2500-entry filter (`server_realms/src/channel.rs:390-393`) — fixed the 23,032-mob spawn flood that froze the client (11 visible now).
+- (c) character ADD `b_moving_speed`/`b_attack_speed` 100/100 (`game_core/src/packets.rs:265`, parity `char.cpp:2245-2246`; were 0 → client `SetMoveSpeed(0)` → player frozen + buried under terrain = invisible; root cause found by the fixer with client-side evidence `InstanceBase.cpp:824`, `ActorInstance.cpp:191-219`).
+- (d) mob spawn ADDs now carry `move_speed` (`game_core/src/npc.rs:760`, parity `char.cpp:2257`).
+- (e) `TPacketGCMainCharacter` HEADER 113→15 (`protocol/src/world.rs:861-875`; the client maps 15 = 47 B plain, 113 = 48 B EMPIRE variant — 113/47 B desynced the stream by 1 byte, latent).
+- The "0 items" inventory observation is NOT a bug: the item query contract is correct — `player.item` holds 22 rows, all `owner_id 2` (other characters); the test chars have none.
+
+**Parallel wave (2026-08-13, 39th part):**
+- **(1) ECS migration DONE** — bevy_ecs 0.19 World replaces `MobCache`: `game_core/src/ecs.rs` (986 lines) — components Vid/Position/Hp/Aggro/Mob/Item/Player, resources Tick/Rand/NpcOutbox/SpawnCache, systems `chase_attack`/`aggro_detect`/`patrol` (parity order), `WorldSim` wrapper; channel.rs refactored (AI tick → `world.update`). Workspace **359 passed / 0 failed**, clippy clean, release green, deployed + running (30001/30003). Accepted deviations: `multi_threaded` off until the F5 benchmark (one-line toggle); SpawnCache stays `Arc<Mutex<>>` as a resource (PG-row cache, not world state); World per-connection (shared-World = **spawn dinámico IN PROGRESS**); armor at entry/equip/unequip (no per-tick PG); mpsc intents deferred with spawn dinámico (ecs.rs:34).
+- **(2) WAL idempotency DONE** — `safebox.rs`/`messenger.rs` INSERTs now `ON CONFLICT DO NOTHING` (legacy quirks preserved); `replay_wal` PG test UN-GATED, 2/2 green (2.34 s); database 79 test attributes.
+- **(3) dwLoginKey real flow DONE** — real `LoginKeyStore` in auth.rs (per-process Mutex\<HashMap\>, keys die with the process — C++ parity `ClientManagerLogin.cpp:81-178`); LOGIN_BY_KEY via the existing LOGIN3 `passwd[17]` (no wire change, 68/88 B intact); wrong key → rejection; password path byte-for-byte unchanged; 18 auth unit tests. F2a debt closed at the auth (channel LOGIN2 consumption stays for the channel lane).
+- **(4) Client UTF-8 overrides DONE** — `net.SetLocaleName`/`net.SetItemLocaleName` hooks (PythonNetworkStreamModule.cpp:1668-1708); exe 5,130,752 B deployed; lookup override → bundle cache → pack; server does not send overrides yet (data channel future) — API inert.
+- **(5) Benchmark harness DONE** — new `bench_bot` crate (27 attrs; smoke: 1 bot login→world 1321 ms, 11 mobs, no speedhack kick; 2/2 concurrent; `--cleanup-accounts` 0 rows) + `bench_capture.rs`/`--bench-capture <dir>` (4 channel call sites to wire). `start_win.ps1` is LAUNCH-ONLY (rule 16).
+
+**Wave 2 (2026-08-13, 40th part):**
+- **(1) Spawn dinámico DONE + deployed** — channel-level shared bevy World; `spawn_despawn_system` in `game_core/src/ecs.rs` (SPAWN_VIEW 2500 materialize, DESPAWN_RADIUS 4000 — ecs.rs:449 — combat mobs never despawn); entry via `Intent::Join` mpsc (ecs.rs:337-340); no static SPAWN_VIEW filter in channel.rs; bench_capture wired (all 4 call sites).
+- **(2) Walkability + speed envelope DONE** — NEW `game_core/src/map.rs` (553 lines: server_attr LZO1X parsing — real map 41 decoded: 2,176,848 blocked + 1,076,378 water cells; C++ cell arithmetic SECTREE_SIZE 6400 / CELL_SIZE 50; `MapStore` lazy + cached failures) + `game_core/src/movement.rs` (`PlayerMotion.speed` 300 u/s default; `MoveError::ExceedsEnvelope` movement.rs:53-67; envelope = speed×(dt+100ms)/1000×1.20, inert without anchor); CG_MOVE validates walkability BEFORE `process_move` (reject → stands, no ban). Workspace **418 passed / 0 failed**; clippy clean; release built; deployed 06:11 (binary 3,818,496 B) — live stack runs it (auth7/chan7 logs 06:33). Follow-ups: N-violations auto-ban (config), path-line sampling, buffs/mounts recompute speed, warp re-anchor.
+- **(3) Quest DSL core DONE** (orchestrator direct — after 3 failed agent attempts that returned empty reports) — NEW crate `quest_dsl/` (ast/parser/family/render; typed catalog per spec §3-§5; families expand; §11 decisions resolved — between native, if 1-level+else, select as-capture, @key, .quest, timer alias); **13 tests green, clippy clean**; workspace member. qc→DSL converter IN PROGRESS (lane).
+- **(4) F3 tail ACID DONE** (fix-2) — `Batcher::flush()` (wal.rs:398), `ItemExchange::exchange_mutated()` (materials→result→gold one tx — proven vs real PG: 4 audit rows same applied_at; item.rs:233), SocialRepo (`GuildRepo` load/ranking — social.rs:58; `player.guild_member/grade/comment` NOT migrated to PG, documented gap), EconomyRepo (money_log append-only + `checked_gold_mutation` — economy.rs:97; `CHECK gold>=0` NOT in PG, Rust guard is enforcement; G-PG ALTER follow-up); database 95 test attributes.
+
+**Wave 3 (2026-08-13, 41st part):**
+- **(1) Skills + server-timed buffs DONE** — NEW `game_core/src/skill.rs` (732 lines: SkillRepo from `player.skill_proto`, poly evaluator, `skill_damage`; 15 tests); ecs.rs `Mp`/`SkillLevels`/`SkillCooldowns`/`Affects` (:190-209) + `SkillTable` (:377) + `process_skill` + `affects_system` (:870, 19 tests); channel `CG_USE_SKILL` (52, 9 B — Packet.h:854; channel.rs:800-810) + `GC_AFFECT_ADD` (126)/`GC_AFFECT_REMOVE` (127) (channel.rs:1958-2002). Workspace **481 passed / 0 failed** (game_core 106 per run); clippy no new; deployed 07:23 (binary 3,935,232 B; auth8/chan8 07:26). GAPs: SPLASH/PARTY/HORSE families, `skill_power.txt`, MOV_SPEED/ATT_SPEED/CRITICAL buffs stored+shown but numeric application pending, quest-granted/passive skills; test chars have all-zero skill_level blobs — DB grant note: `UPDATE player.player SET skill_level = overlay(skill_level placing '\x01' from 8 for 1) WHERE id = 2`.
+- **(2) qc→DSL converter DONE** — `quest_dsl/src/convert/` (qc.rs real-grammar parser — Lua 5.0 dialect with begin/end, multi-line when heads, inline ifs, while/repeat AST; map.rs — 22 actions/10 triggers/10 conditions; `convert_corpus` CLI); **44 tests / 0 failed**; **corpus 194/194 files, 0 failed (~2 s)**; 5,513 unmapped items (journal `q.*` ~944, UI setskin/makequestbutton ~625, target.pos, say_pc_name, pc.give_exp2/change_money — Rust-module territory per spec §8); **6 family proposals = 112/194 files** (collect_quest 11, main_quest 32, subquest 44, collect_herb 6, new_quest 12, main_quest_flame 7). Family parameter extraction + Value-as-Expr IN PROGRESS (~160 pc.setqf unblocked).
+- **(3) Benchmark FIRST LOAD SIGNAL** — `source\deploy\win\logs\bench-run-2026-08-13.md` (raw JSONs beside it; run vs the 06:11 binary on auth7/chan7): smoke 1 bot world_ms 1524; 5×30 s 5/5 OK (median 2254); **20×60 s 20/20 OK, 0 failures, 0 panics** (median 7829, p95 8214, ~13 % spread); cleanup 0 rows. **FINDING: spawn-dinámico materialization reaches only FIRST-COMERS under concurrency (19/20 bots got 0 entries) — fix IN PROGRESS (channel lane).** Envelope rejects the harness walk (300 u/s) — harness fix in progress. Latency 1.5 s → 7.8 s world_ms (1 → 20 bots) — per-connection entry bottleneck candidate. Full ladder pending (WorldSim::metrics, sharded-region, 100→1000 bots).
+
+**Wave 6 (2026-08-13, 42nd part):** the crate **`realm` → `game_core`** (user decision — `source/reforge/game_core/`; 78 code refs; workspace **512 passed / 0 failed**; `server_realms`/`quest_dsl`/`bench_bot`/`mysql_proxy` unchanged). channel.rs split → `server_realms/src/channel/` (13 files; `Session` + `Outcome`), ecs.rs split → `game_core/src/ecs/` (components/events/resources/systems; `Intent`/`NpcEvent` wrapper sub-enums); **N1 trap guard**: `game_core/src/ecs/systems/{social,quest}.rs` + `channel/{social,quest}.rs` (empty-sub-enum delegates). PG migrations: `scripts/gpg/alter_gold_check.sql` (CHECK gold>=0, 3 wallet tables; money_log excluded) + `migrate_guild_tables.sql` (guild_member/grade/comment). Quest similarity engine (spec §9.3; quest_dsl 66 tests). **Deploy note: servers still run the pre-refactor binary (3,935,232 B) — redeploy pending.**
+
+**Backup cadence (oracle H.2) live:** nightly `scripts\backup_win.ps1` (native `pg_dump -Fc` of `metin2` → `C:\projects\metin2-extra\backups\metin2_<yyyy-MM-dd>.dump`, retention 7). The 53-commit backlog is PUSHED: `origin/main = 294edb1` (0 ahead / 0 behind, verified 2026-08-12).
+
+## Historical — login fix chain (2026-08-08, verified facts; still authoritative for protocol/data rules)
 
 **The full login (auth + channel + character select) is FIXED and verified on 2026-08-08.** Test account: `test` / `1234`.
 
@@ -58,32 +92,35 @@ Chain of fixes applied in that session (each verified empirically):
 | `C:\projects\metin2-extra\client` | Installed client (metin2client.exe v1.0.40999.1 — RECOMPILED 2026-08-08 with the fix; pack\*.epk, config, mark) — **MOVED OUTSIDE THE REPO 2026-08-11** (cleanup; testing only) |
 | `client-om2\` | Reference client source ("Old Metin2 Project", corresponds to tmp4-server) — **DELETED** (cleanup 2026-08-11) |
 | `source\client\` | CLIENT SOURCE (S3llMetin2 v24 / MartySama). Build: MSBuild `Metin2Client.sln` (in `source\client\`) Release\|Win32 (VS Build Tools 18). Build deps in `source\client\Extern\` (gitignored) |
-| `source\server\` | SERVER SOURCE (MartySama 5.9). `{common,db,game,libgame,liblua,libpoly,libsql,libthecore}`, Makefile ported to Debian/gcc |
-| `source\reforge\` | **RUST REWRITE (new, 2026-08-10, flat layout — ADR-0004)** — Cargo workspace: `protocol` (F0: byte-exact wire, 30/30), `network` (F1: tokio+framer+handshake, 23/23; includes `auth` module for F2), `database` (F3), `realm` (F4+), `server_realms` (single binary, roles `auth\|channel` by config — provisional user name). ADR-0003/0004. **Do not touch the C++ baseline from here; the baseline is the oracle** |
-| `source\deploy\` | Deployed runtime: `main\srv1\{db,auth1,chan\chX\coreY}` instances (gitignored) |
+| `source\server\` | SERVER SOURCE (MartySama 5.9) — **FROZEN ORACLE (user decision 2026-08-12, ADR-0012): NEVER rebuilt**. `{common,db,game,libgame,liblua,libpoly,libsql,libthecore}`, Makefile ported to Debian/gcc — the Linux ELF binaries run only in the on-demand WSL box |
+| `source\reforge\` | **RUST REWRITE (new, 2026-08-10, flat layout — ADR-0004)** — Cargo workspace: `protocol` (F0: byte-exact wire, 30/30), `network` (F1: tokio+framer+handshake, 23/23; includes `auth` module for F2), `database` (F3), `game_core` (F4+ — renamed from `realm` 2026-08-13, 42nd part), `server_realms` (single binary, roles `auth\|channel` by config — provisional user name). ADR-0003/0004. **Do not touch the C++ baseline from here; the baseline is the oracle** |
+| `source\deploy\` | Deployed runtime (gitignored): `win\` = **native Windows Rust runtime** (`server_realms.exe`, `auth.toml`/`channel.toml`, `logs\` — ADR-0012); `main\srv1\{db,auth1,chan\chX\coreY}` = frozen C++ WSL instances (parity oracle, never rebuilt) |
 | `source\tools\pack\` | Client pack source (`root\serverinfo.py` = server list; `PackMakerLite.exe` + `.json` = repack tool) |
 | `source\tools\` | Tools: `DBManager` (PHP/bash txt↔mysql import/export), `DumpProto`, `Mysql2Proto` (MySQL→proto export), `switch_compiler.py` |
 | `source\tools\proto\` | Protocol metadata |
-| `C:\projects\metin2-extra\archive` | Backups (client + source) — **MOVED OUTSIDE THE REPO 2026-08-11** (cleanup) |
+| `C:\projects\metin2-extra\pg18` | Native PostgreSQL 18.4 (ADR-0012): binaries `pg18\pgsql\bin`, data `pg18\data`, Windows service `postgresql-metin2` (NETWORK SERVICE) |
+| `C:\projects\metin2-extra\backups` | PG dumps — `metin2_pg_2026-08-12.dump` (migration, restore verified) + nightly `metin2_<yyyy-MM-dd>.dump` from `scripts\backup_win.ps1` (retention 7) |
+| `C:\projects\metin2-extra\archive` | Backups (client + source + `mariadb_full_2026-08-12.sql` 5.7 MB) — **MOVED OUTSIDE THE REPO 2026-08-11** (cleanup) |
 | `.commandcode\` | Skills |
 | `C:\projects\metin2-extra\` | OUTSIDE THE REPO (cleanup 2026-08-11): installed `client\` (2.2 GB), `archive\` backups (1.6 GB) |
 | `docs\` | Documentation hub: `README.md` (index), `CURRENT.md` (current status), `DOCUMENTATION.md` (rules/workflow); `plans/` (active plans), `decisions/` (ADRs), `reference/` (protocol, quests, legacy compat), `guardrails/` (lessons/rules not to repeat), `history/` (superseded docs, read-only). Diátaxis modes (`tutorials/`, `how-to/`, `explanation/`) are created on demand — no empty dirs. Old `docs\superpowers\` content is preserved and indexed under `docs\history\` |
 | `ROADMAP.md`, `CHANGELOG.md` | Master plan of the Rust rewrite and chronological change record |
-| `scripts\` | Startup/recovery scripts (`start_m2_min.sh`, `start_m2_full.sh`, `mem_audit.sh`, `watch_*.sh`) |
+| `scripts\` | Windows runtime + ops (ADR-0012 primary): `start_win.ps1`, `stop_win.ps1`, `backup_win.ps1` (nightly pg_dump, retention 7); WSL parity/recovery (historical path): `start_m2_min.sh`, `start_m2_full.sh`, `mem_audit.sh`, `watch_*.sh` |
 
-**WSL (Debian-M2):**
-- `/home/m2/source` — build + deploy copy (THE source of truth for compiling the server).
-- `/home/m2/source/metin2_svfiles/main/srv1` — running instances (binaries via symlinks to `share/bin/{game,db}`).
+**WSL (Debian-M2) — ON-DEMAND ORACLE BOX ONLY (ADR-0012, 2026-08-12):**
+- Kept ONLY to run the frozen C++ binaries (`game_r41023`/`db_r41023`, Linux ELF, never rebuilt) + `mysql_proxy` for parity sessions (parity_boot A/B, golden captures, F6 side-by-side). Memory cap 1 GB (`.wslconfig`); `wsl --shutdown` when not in use.
+- `/home/m2/source` — was the build + deploy copy (THE source of truth for compiling the server until 2026-08-12); archived to `metin2-extra\archive`, full delete at F6 (`wsl --unregister Debian-M2`).
+- `/home/m2/source/metin2_svfiles/main/srv1` — the frozen C++ instances (binaries via symlinks to `share/bin/{game,db}`), used only in parity sessions.
 - `/home/m2/tmp4-server` — upstream old-metin2.com git repo (reference, NOT the active source).
 - The binary backups in `/root/m2_backup_bins` were DELETED in the disk cleanup (2026-08-08).
+- The proxy STAYS in WSL so the frozen C++ `conf.txt` (SQL slots → `127.0.0.1:3307`) is never touched; its PG target is the Windows host (WSL gateway IP, one TOML line patched per boot; Windows Firewall allows 5432 from the WSL subnet).
 
-## CRITICAL RULE: two copies of source (server)
+## CRITICAL RULE: the C++ server is FROZEN (supersedes the "two copies" rule, 2026-08-12)
 
-- `/home/m2/source` (WSL) is **the copy that compiles the server** (`VERSION.txt` bakes that path).
-- `C:\projects\Metin2\source` (Windows) is a reference copy — NOT used to compile the server.
+- **Since ADR-0012 (2026-08-12) the C++ server is NEVER rebuilt** (user decision: the Linux ELF binaries are the parity oracle and run only in the on-demand WSL box). There are no more WSL builds — `C:\projects\Metin2\source` (Windows) is now the ONLY source copy; the Rust rewrite and the client live only on Windows.
 - The client IS compiled from the Windows copy (`source\client`).
-- The previous model's disaster came from editing both copies inconsistently and from opposing protocol defines between client and server. **After any change, sync both copies** (diff/md5sum) and **verify the protocol defines match on both sides**.
-- CAUTION: WSL crashes can LOSE writes without flushing (ext4) — after deploying binaries, run `sync` in WSL and verify with md5sum.
+- Historical rule (until 2026-08-12): `/home/m2/source` (WSL) was the copy that compiled the server (`VERSION.txt` baked that path); the previous model's disaster came from editing both copies inconsistently and from opposing protocol defines between client and server — after any change both copies had to be synced (diff/md5sum) and the protocol defines verified on both sides.
+- CAUTION (still true for WSL parity sessions): WSL crashes can LOSE writes without flushing (ext4) — after deploying binaries in WSL, run `sync` and verify with md5sum.
 
 ## Protocol facts (verified 2026-08-08)
 
@@ -91,27 +128,42 @@ Chain of fixes applied in that session (each verified empirically):
 - Header tables coherent between server and both clients (handshake 0xff/0xfe, LOGIN3=111, GC_AUTH_SUCCESS=150, GC_LOGIN_SUCCESS=6, GC_LOGIN_SUCCESS_NEWSLOT=0x20, GC_EMPIRE=90...).
 - Login flow: client → auth(30001): GC_PHASE + GC_HANDSHAKE (with clock-bias retries ~40-80ms) → CG_HANDSHAKE echo → LOGIN3(65 bytes: 0x6F + name[31] + pwd[17] + keys[16]) → QID_AUTH_LOGIN (SQL in db) → strcmp(hash with *, stored hash) → GC_AUTH_SUCCESS(0x96+key+result) → client closes auth → connects to the channel(30003) → LOGIN3 → GD_LOGIN → QUERY_LOGIN (13 columns) → RESULT_LOGIN → GC_EMPIRE(0x5a+empire) + SendLoginSuccessPacket → character select.
 - **Encryption: `_IMPROVED_PACKET_ENCRYPTION_` OFF on both sides; `USE_NO_PACKET_ENCRYPTION` ON (plaintext).** Sequence OFF on both. If one side changes, change the other.
-- `serverinfo.py`: host `172.25.104.175` (WSL eth0 IP — **CHECK after every WSL restart**), auth 30001, ch1 30003, ch2 30007, ch3 30011, ch4 30015.
-- Runtime: MariaDB 127.0.0.1:3306 (dbs `account`,`common`,`player`,`log`, user/pass mt2/mt2), srv1-db 30000, auth1 30001/30002, cores 30003+.
+- `serverinfo.py`: host `127.0.0.1` (repacked 2026-08-12, ADR-0012 — client and servers share the Windows host), auth 30001, ch1 30003, ch2 30007, ch3 30011, ch4 30015.
+- Runtime (native Windows, ADR-0012): PostgreSQL 18.4 service `postgresql-metin2` on 127.0.0.1:5432 (db `metin2`, role mt2/mt2), Rust auth :30001 + Rust channel :30003 from `source\deploy\win`. Historical WSL runtime (until 2026-08-12, archived): MariaDB 127.0.0.1:3306 (dbs `account`,`common`,`player`,`log`, user/pass mt2/mt2), srv1-db 30000, auth1 30001/30002, cores 30003+.
+- Parity sessions (frozen C++ in the WSL oracle box): the old `serverinfo.py` host `172.25.104.175` (WSL eth0 IP — **CHECK after every WSL restart**).
 - Test account: `test` / `1234` (hash `*A4B6157319038724E3560894F7F932C8886EBFCF` in `account.account`).
 
-## Runbook: bring the server up and test
+## Runbook
+
+### Primary path (native Windows, ADR-0012) — the daily stack
 
 ```powershell
-# 1. Minimal start (db + auth + ch1-core1) — enough for login
-wsl -d Debian-M2 -- bash /mnt/c/projects/Metin2/scripts/start_m2_min.sh
-# 2. Verify: ports 30000-30004; Test-NetConnection 172.25.104.175 -Port 30001
+# 1. Start: PG service postgresql-metin2 -> Rust auth :30001 -> Rust channel :30003
+powershell -ExecutionPolicy Bypass -File scripts\start_win.ps1
+# 2. Verify: ports 5432, 30001, 30003 (the script prints OK/FALTA per port)
 # 3. Test login in the client (C:\projects\metin2-extra\client\metin2client.exe, test/1234)
-# 4. Logs: auth1 = auth/syslog; core1 = chan/ch1/core1/syslog ("LoginSuccess" = OK);
-#    db = db/syslog
+# 4. Logs: source\deploy\win\logs\{auth,channel}.{out,err}.log
+# 5. Stop: powershell -ExecutionPolicy Bypass -File scripts\stop_win.ps1
+# 6. Nightly backup: powershell -ExecutionPolicy Bypass -File scripts\backup_win.ps1
 ```
 
-- **The full stack (9 cores) blows this machine's memory** (4GB host, WSL cap 2GB). Use `start_m2_min.sh` unless there is more RAM.
-- **WSL unstable:** `Wsl/Service/E_UNEXPECTED` crashes during heavy I/O (builds, syncs, restarts) — 4GB RAM machine, Windows 10 22H2, WSL 2.7.3, WHEA PCIe errors. The SSD was FULL (5GB free) — cleaned (npm-cache, TEMP, WSL logs, build artifacts, backups) → 23GB free on host, 3.2G used in WSL. Config in `C:\Users\Ricardo Casamayor\.wslconfig` (memory=2GB, swap=8GB). After each crash: `wsl --shutdown` → `start_m2_min.sh`.
-- **Recompile the server:** in WSL: libraries first (`cd /home/m2/source/metin2_server/Srcs/Server && make -C liblua/5.0 && make -C libsql && make -C libgame/src && make -C libpoly && make -C libthecore/src`), then `make -C game/src` → `game_r41023` and `make -C db/src` → `db_r41023`; deploy to `main/srv1/share/bin/{game,db}` and restart auth+cores. **Always `sync` after deploy.**
+### Parity path (on-demand WSL oracle box, ADR-0012) — frozen C++ only
+
+```powershell
+# 1. Start the frozen C++ oracle (db + auth + ch1-core1) — parity sessions only
+wsl -d Debian-M2 -- bash /mnt/c/projects/Metin2/scripts/start_m2_min.sh
+# 2. Verify: ports 30000-30004; Test-NetConnection 172.25.104.175 -Port 30001
+# 3. Logs: auth1 = auth/syslog; core1 = chan/ch1/core1/syslog ("LoginSuccess" = OK);
+#    db = db/syslog
+# 4. After the session: wsl --shutdown (the box stays off ~95% of the time)
+```
+
+- **Memory:** the full C++ stack (9 cores) blows this machine's memory (4 GB host; WSL cap 1 GB since ADR-0012). Use `start_m2_min.sh` for parity sessions; the daily stack is the Windows one.
+- **WSL unstable (parity sessions):** `Wsl/Service/E_UNEXPECTED` crashes during heavy I/O — 4 GB RAM machine, Windows 10 22H2, WSL 2.7.3, WHEA PCIe errors. Config in `C:\Users\Ricardo Casamayor\.wslconfig` (memory=1GB, swap=8GB). After each crash: `wsl --shutdown` → `start_m2_min.sh`.
+- **Compile the C++ server: NEVER (frozen, ADR-0012).** Historical instruction (until 2026-08-12, kept for the record): in WSL — libraries first (`cd /home/m2/source/metin2_server/Srcs/Server && make -C liblua/5.0 && make -C libsql && make -C libgame/src && make -C libpoly && make -C libthecore/src`), then `make -C game/src` → `game_r41023` and `make -C db/src` → `db_r41023`; deploy to `main/srv1/share/bin/{game,db}` and restart auth+cores. **Always `sync` after deploy.**
 - **Recompile the client:** MSBuild `source\client\Metin2Client.sln` /p:Configuration=Release /p:Platform=Win32 → `source\client\bin\Release\metin2client.exe` → copy to `C:\projects\metin2-extra\client\metin2client.exe`.
 - **Repack the pack:** edit `source\tools\pack\root\*.py` → `cd source\tools\pack && PackMakerLite.exe --nolog --parallel -p root` → copy `root.epk`/`root.eix` to `C:\projects\metin2-extra\client\pack\`.
-- **Mandatory boot order:** mariadb → srv1-db → srv1-auth1 → cores.
+- **Mandatory boot order (Windows):** PG service → Rust auth → Rust channel (`start_win.ps1` does it). Parity boot order (WSL): mariadb(archived — proxy only) → srv1-db → srv1-auth1 → cores.
 
 ## Known pending items (2026-08-08, updated)
 
@@ -122,7 +174,7 @@ wsl -d Debian-M2 -- bash /mnt/c/projects/Metin2/scripts/start_m2_min.sh
 - LS pending items (full audit 2026-08-09, see CHANGELOG): language selector at login (flag column — user request; the native `IDD_SELECT_LOCALE` dialog is compiled but dead: `LOCALE_SERVICE_GLOBAL` not defined). ~~Multilanguage NPCs~~ — **RESOLVED (2026-08-09):** the client resolves NPCs from its pack (server fallback); client rebuild 5,115,904 bytes (see §17 and CHANGELOG). **Real server gaps:** (A) broadcasts/notices use the last packet's language (`LC_TEXT_LANG` defined but never used — 26 `SendNotice` affected); (B) quest/monster_chat do NOT translate (lua fixed Spanish at boot — `locale_quest_find`/`LC_QUEST_TEXT` from the mod not integrated; **the real cause of the ES/EN mix the user saw**); (C) ~437 `ChatPacket` without `LC_TEXT` (mostly protocol commands, some visible: arena, battle, char.cpp:3045); (D) server NPC names fixed from `mob_proto.locale_name` without a GetLang branch; (E) ES lacks 11 keys EN has (10 used: exchange won → `@0949`+English for ES players); (F) Windows svfiles copy out of sync (16 locale_string only in WSL). **mod locale_string compatibility (verified):** format 100% compatible with the parser; 11 base languages + AE/EN/GR cover ~75% of the code's 769 keys; **181 keys (23.5%) missing in ALL files → `@0949`+key for everyone** (52 English: exchange won/dados/fishing; 129 Korean: chat bans, monarch); **PT (44%) and RU (19%) are from another mod base — useless**. Correction: EN covers 100% of the ES keys (the "732 missing" figure from that session was a parse error — pair format, not lines).
 - The `test` account has 2 characters (slot 0 = `lkjsnlfknlsk`, slot 4 = `ninja`, both on map 41). **WATCH OUT:** the earlier "World entry VERIFIED" note was SERVER-side evidence (character-creation packet) — the CLIENT crashed during map load until the coordinate fix (`UPDATE player SET x=969600, y=278400`, 2026-08-09) and the `string_replace_word` bounds check; after both, **2/2 consecutive entries** (see "World-entry crash"). The chat spam (monster_chat) was fixed by the data fix of item 15 (`LoadQuestLocale returns 0` after core restart). Pending to test: full combat (partial: the user fought and killed mobs ✓), NPCs, items, drops.
 - The `intrologin.py` pack has the password-restoration fixes (lines 1082/1320) that became redundant after the client rebuild — can be kept or reverted.
-- Evaluate environment stability (more RAM, WSL update/downgrade, or Docker Desktop) before depending on long sessions.
+- ~~Evaluate environment stability (more RAM, WSL update/downgrade, or Docker Desktop) before depending on long sessions~~ — **RESOLVED by ADR-0012 (2026-08-12):** the runtime is native Windows; WSL is on-demand only (cap 1 GB, off when unused). The 4 GB host constraint remains — nightly `scripts\backup_win.ps1` covers the data-loss risk (oracle H.2).
 
 ## World-entry crash (0xc0000374 heap corruption) — RESOLVED (2026-08-09)
 
@@ -145,7 +197,7 @@ wsl -d Debian-M2 -- bash /mnt/c/projects/Metin2/scripts/start_m2_min.sh
 3. Declare the scope; preserve unrelated user changes.
 4. Minimal, localized change with justification. Do not hide warnings without documenting them.
 5. Proportional verification: inspection → focused check → build/run. Report with real command output; do not claim something works without evidence.
-6. Always sync the two source copies (WSL + Windows).
+6. **The C++ server is frozen — never rebuilt (ADR-0012).** The old "sync the two source copies" rule is dead for the server: `C:\projects\Metin2\source` (Windows) is the only source copy; Rust + client + docs live only on Windows. (WSL parity sessions still require `sync` + md5sum after touching the frozen oracle copy.)
 7. Confirm before destructive operations (deleting volumes, databases, build caches).
 8. **Docs after every change:** every task ends with its documentation updated — canonical docs, doc-comments and metadata `Last verified` (policy: `docs/DOCUMENTATION.md`; hub: `docs/README.md`). Never leave docs describing the old behavior; if a doc is outside the lane's write scope, the agent lists the exact required updates in its report. Update docs/ADRs when project knowledge changes (see "Documentation methodology" below).
 9. **Log the changes (orchestrator log):** at the end of each work session, record in `CHANGELOG.md` (Keep a Changelog style, grouped by date) what changed and with what evidence; mark progress in `ROADMAP.md`; write an ADR before deciding architecture. Never end a session with unlogged changes.
@@ -154,6 +206,8 @@ wsl -d Debian-M2 -- bash /mnt/c/projects/Metin2/scripts/start_m2_min.sh
 12. **Permanent pushback (devil's advocate):** the user explicitly asked: before accepting any plan of theirs, evaluate it critically and, if a significantly better option exists, propose it with concrete arguments (repo facts, measurements, risks). If the plan is solid, validate it with evidence instead of inventing fake pushback. Never accept a plan without analysis.
 13. **Graphs first (permanent user rule):** for ANY code search/explore/modify/refactor task, ALWAYS consult the graphify graphs BEFORE grep/glob/blind reading: `graphify query "..." --graph <merged>` for focused questions, `graphify explain/path/god-nodes` for specific nodes, or `GRAPH_REPORT.md` for broad context. The user should not have to ask: it is automatic in every code task. Available graphs: `graphify-out/graph.json` (root = server+client merge), `source\server\graphify-out\graph.json`, `source\client\graphify-out\graph.json`.
 14. **Ponytail personality (permanent):** the orchestrator always operates with the ponytail philosophy: YAGNI, the minimal solution that works, stdlib/native before dependencies, one line before fifty, do not write code that is not needed, do not over-build. Apply to all rewrite and baseline code. Never cut validation, security or accessibility — small is a consequence of necessary, not of trimming.
+15. **NEVER block the chat with long-running commands (permanent):** any command that takes >15 s (builds, server start/restart, deployments, dumps, restores) MUST run **detached/background** (`Start-Process ... -RedirectStandardOutput <log>` or a background task) and the orchestrator **ends the turn immediately** after launching — the user must be able to keep writing while it runs. Verify on the NEXT turn with quick read-only checks (<10 s each: log tails, `netstat`, `Get-Process`). NEVER chain build→copy→restart→verify in one synchronous call. Single quick commands (<15 s) are fine. Guardrail: `docs/guardrails/operations.md` §11.
+16. **NEVER chain server operations in one command (permanent, refinement of rule 15):** stopping a process, copying a binary, starting a server and verifying ports are **separate single-purpose commands**, each <10 s, NEVER concatenated with `;` in one call (2026-08-13: the stop+copy+start+verify one-liner hung 4+ times and blocked the chat every time — the output truncated mid-command). If a launch is needed: run ONLY the `Start-Process` line(s), then **end the turn**; check `netstat`/logs on the next turn. Do not "finish the job" in one shot at the cost of blocking the user.
 
 ## Documentation methodology (how the count is kept)
 
@@ -181,5 +235,5 @@ The project follows the standard pattern for AI-agent projects (AGENTS.md + CHAN
 - Keep the C++ baseline stable and reproducible while a module is ported; verify behavior parity per module.
 - Compatibility adapters between the Rust server and the legacy must be explicit: legacy peer protocol (ADR-0002 shim), PostgreSQL cutover adapter (ADR-0005 — Accepted 2026-08-10, gate 4/4; `mysql_proxy` live), legacy wire/pack boundary `protocol::legacy` (ADR-0006 — Accepted 2026-08-10, implemented in F2a).
 - No partial Rust embedded in the legacy client during F0–F6 (ADR-0007 — accepted for the already-agreed boundary).
-- Newer ADRs: **ADR-0008** (Accepted 2026-08-11 — data layer: tokio-postgres 0.7, save-by-event + WAL durable, RLS post-WAL, Patroni F5/F6), **ADR-0009** (Accepted 2026-08-12 — server-side locale: server owns all text per language), **ADR-0010** (Accepted 2026-08-12 — domain boundaries: pure-function modules + **bevy_ecs World adopted** (user decision: mob-farming density is the core requirement) + per-connection state + WorldStore; F5 benchmark validates), **ADR-0011** (Accepted 2026-08-12 — anti-hack model: always-on controls, signed clock wrap decided; server-authoritative invariant).
+- Newer ADRs: **ADR-0008** (Accepted 2026-08-11 — data layer: tokio-postgres 0.7, save-by-event + WAL durable, RLS post-WAL, Patroni F5/F6), **ADR-0009** (Accepted 2026-08-12 — server-side locale: server owns all text per language), **ADR-0010** (Accepted 2026-08-12 — domain boundaries: pure-function modules + **bevy_ecs World adopted** (user decision: mob-farming density is the core requirement) + per-connection state + WorldStore; F5 benchmark validates), **ADR-0011** (Accepted 2026-08-12 — anti-hack model: always-on controls, signed clock wrap decided; server-authoritative invariant), **ADR-0012** (Accepted + executed 2026-08-12 — runtime hosting: native Windows + WSL on-demand oracle box until F6; the C++ binaries are frozen and NEVER rebuilt).
 - Current Rust workspace: `source/reforge` (ADR-0003/0004) — flat layout, `unsafe_code = "forbid"`, `server_realms` single binary with roles by config.

@@ -83,6 +83,16 @@ bool CPythonNonPlayer::LoadNonPlayerData(const char * c_szFileName)
 
 bool CPythonNonPlayer::GetName(DWORD dwVnum, const char ** c_pszName)
 {
+	// F4 tail (override API): el nombre del SERVER manda sobre todo (dato por
+	// entidad, llega por la capa de red); luego el bundle del auth
+	// (CPythonLocale), luego el pack.
+	const auto itOverride = m_LocaleNameOverrideMap.find(dwVnum);
+	if (itOverride != m_LocaleNameOverrideMap.end())
+	{
+		*c_pszName = itOverride->second.c_str();
+		return true;
+	}
+
 	// F1 (locale redesign): el cache del servidor (CPythonLocale) manda —
 	// nombres UTF-8 del bundle; el pack es el fallback (un mob sin entrada
 	// en el bundle se muestra como antes).
@@ -101,6 +111,14 @@ bool CPythonNonPlayer::GetName(DWORD dwVnum, const char ** c_pszName)
 	*c_pszName = p->szLocaleName;
 
 	return true;
+}
+
+void CPythonNonPlayer::SetLocaleName(DWORD dwVnum, const char* szName)
+{
+	if (szName && szName[0] != '\0')
+		m_LocaleNameOverrideMap[dwVnum] = szName;
+	else
+		m_LocaleNameOverrideMap.erase(dwVnum);
 }
 
 bool CPythonNonPlayer::GetInstanceType(DWORD dwVnum, BYTE* pbType)
@@ -174,6 +192,12 @@ BYTE CPythonNonPlayer::GetEventTypeByVID(DWORD dwVID)
 
 const char*	CPythonNonPlayer::GetMonsterName(DWORD dwVnum)
 {
+	// F4 tail: el override del server manda también aquí (mismo nombre de
+	// display que GetName — tags, target, minimapa).
+	const auto itOverride = m_LocaleNameOverrideMap.find(dwVnum);
+	if (itOverride != m_LocaleNameOverrideMap.end())
+		return itOverride->second.c_str();
+
 	const CPythonNonPlayer::TMobTable * c_pTable = GetTable(dwVnum);
 	if (!c_pTable)
 	{
@@ -226,6 +250,7 @@ void CPythonNonPlayer::Destroy()
 		delete itor->second;
 	}
 	m_NonPlayerDataMap.clear();
+	m_LocaleNameOverrideMap.clear();
 }
 
 CPythonNonPlayer::CPythonNonPlayer()

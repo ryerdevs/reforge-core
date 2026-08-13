@@ -43,6 +43,13 @@ class CPythonLocale : public CSingleton<CPythonLocale>
 		void SetLanguage(const char* lang);
 		const char* GetLanguage() const { return m_strLanguage.c_str(); }
 
+		// F4 tail: conversión UTF-8 (wire del server) → codepage local de
+		// render (GetDefaultCodePage — 1252 para ES; GrpTextInstance.cpp:
+		// 202-240). Usada al ALMACENAR texto del server (bundle y overrides):
+		// los lookups devuelven strings listas para render. Fallback al raw
+		// si el decode falla (nunca cortar el render por un texto raro).
+		static std::string Utf8ToDisplay(const std::string& utf8);
+
 		// Reensamblado de chunks del GC_LOCALE: appendea el chunk y, cuando
 		// bChunkFlag == 0 (final), parsea el buffer completo.
 		bool AppendChunk(BYTE bChunkFlag, const BYTE* pChunk, int iChunkLen);

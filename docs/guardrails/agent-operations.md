@@ -2,7 +2,7 @@
 Type: Guardrail
 Status: Current
 Audience: Contributors, maintainers
-Last verified: 2026-08-10
+Last verified: 2026-08-13
 ---
 
 # Guardrails — agent operations
@@ -65,4 +65,11 @@ Operational lessons about running the agent team. Each rule follows the standard
 - **Why:** the edit tool fails on `oldString not found` when the target text contains characters that render differently from how they are stored (em-dash `—`, section sign `§`, arrows `→`, non-ASCII) — 2 failed edits on 2026-08-11. The rendered view and the stored bytes differ; blind oldString matching fails.
 - **Evidence:** 2026-08-11 session: `edit` failed twice on strings containing `§`/`—`; matching the exact text from `Select-String`/`read` output (ASCII-only anchors) succeeded.
 - **Consequence:** failed edits, wasted rounds, or editing the wrong occurrence after guessing.
+- **Status:** Active.
+
+## Rule 9 — Read-only loops that deliver nothing → the orchestrator implements directly
+
+- **Why:** 2026-08-13 the quest DSL core went through 3 agent attempts that returned EMPTY reports without writing code (read-only loops); the orchestrator implemented it directly and it landed in one pass.
+- **Evidence:** `quest_dsl` crate (ast/parser/family/render, 13 tests green, clippy clean — implemented directly by the orchestrator after 3 empty agent attempts; CHANGELOG 2026-08-13, 40th part).
+- **Consequence:** an agent that loops read-only without producing artifacts wastes sessions and blocks the lane; the orchestrator cuts the loop, implements directly, and re-scopes or retrains the lane.
 - **Status:** Active.

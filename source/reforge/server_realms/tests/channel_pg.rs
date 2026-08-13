@@ -1,4 +1,4 @@
-﻿//! Integration F4 slice 3 (HITO del slice): fake client legacy contra el
+//! Integration F4 slice 3 (HITO del slice): fake client legacy contra el
 //! channel REAL con PostgreSQL de verdad — el flujo login→select→**entrada al
 //! mundo** end-to-end (el cliente queda DENTRO del mapa, mundo vacío).
 //! Gated con `#[ignore]` (requiere la PG de WSL).
@@ -14,7 +14,7 @@
 //! Flujo verificado (parity input_login.cpp / input_db.cpp / building.cpp):
 //! handshake → GC_PHASE(LOGIN) → LOGIN3 65 B (test/1234) → GC_EMPIRE(3) →
 //! GC_PHASE(SELECT) → 449 B (slots [1,3,5,0,2]) → CG_PLAYER_SELECT(0) →
-//! **PLAYER LOAD**: GC_PHASE(LOADING) + MAIN_CHARACTER(113) + POINTS(16) +
+//! **PLAYER LOAD**: GC_PHASE(LOADING) + MAIN_CHARACTER(15) + POINTS(16) +
 //! SKILLS(76) → [el cliente carga el mapa] → CG_ENTERGAME(10) → **ENTERGAME**:
 //! ADD(1) + INFO(136) + GC_PHASE(GAME) + LAND_LIST(130, 18 lands del mapa 41).
 
@@ -179,7 +179,7 @@ async fn connect_login_449(addr: &str) -> Result<(Connection<TcpStream>, u32), S
 /// la lista (vid, x, y, wrace) de los adds — para que el fake elija el mob.
 ///
 /// TIMING (F5 perf): la resolución de spawns usa la caché compartida + una
-/// query batch (realm::npc::MobCache) — el entry + los spawns fluyen en
+/// query batch (game_core::npc::MobCache) — el entry + los spawns fluyen en
 /// SEGUNDOS. El assert de <15 s fija el contrato (la resolución previa,
 /// 10k × load_by_vnum con conexión por llamada, stallaba ~3-4 min).
 async fn enter_and_read_spawns(conn: &mut Connection<TcpStream>) -> Result<Vec<(u32, i32, i32, u32)>, String> {
@@ -189,7 +189,7 @@ async fn enter_and_read_spawns(conn: &mut Connection<TcpStream>) -> Result<Vec<(
         .await
         .map_err(|e| format!("select: {e}"))?;
     let _ = read_exact_size(conn, 2).await.map_err(|e| format!("loading: {e}"))?; // GC_PHASE(LOADING)
-    let _ = read_exact_size(conn, 47).await.map_err(|e| format!("113: {e}"))?; // MAIN_CHARACTER
+    let _ = read_exact_size(conn, 47).await.map_err(|e| format!("main_char: {e}"))?; // MAIN_CHARACTER (15, 47 B)
     for _ in 0..36 {
         let _ = read_exact_size(conn, 4).await.map_err(|e| format!("QS: {e}"))?;
     }
@@ -239,7 +239,7 @@ async fn enter_and_read_spawns(conn: &mut Connection<TcpStream>) -> Result<Vec<(
             }
         }
     }
-    assert!(!spawns.is_empty(), "el mapa 41 tiene spawns (realm::npc)");
+    assert!(!spawns.is_empty(), "el mapa 41 tiene spawns (game_core::npc)");
     // F5 perf: la resolución con caché no debe stallar la entrada (el
     // contrato previo sin batch: ~3-4 min por entrada — regresión acá).
     let elapsed = t0.elapsed();
@@ -258,7 +258,7 @@ async fn enter_and_read_spawns(conn: &mut Connection<TcpStream>) -> Result<Vec<(
 
 /// El flujo completo del cliente REAL: handshake → LOGIN3 → GC_EMPIRE →
 /// SELECT → 449 B → [conexión mark en paralelo] → CG_PLAYER_SELECT → PLAYER
-/// LOAD (LOADING+113+16+76) → CG_ENTERGAME → ENTERGAME (ADD+INFO+GAME+
+/// LOAD (LOADING+15+16+76) → CG_ENTERGAME → ENTERGAME (ADD+INFO+GAME+
 /// LAND_LIST). Reutilizado por el gated con subproceso y por el test contra
 /// el canal DESPLEGADO (30003).
 async fn full_login_select_entry_flow(addr: &str) -> Result<(), String> {
@@ -274,10 +274,10 @@ async fn full_login_select_entry_flow(addr: &str) -> Result<(), String> {
         let loading = read_exact_size(&mut conn, 2).await.map_err(|e| format!("loading: {e}"))?;
         assert_eq!(loading[0], 0xfd, "GC_PHASE");
         assert_eq!(loading[1], phase::LOADING, "parity input_db.cpp:428");
-        // MAIN_CHARACTER (113, 47 B — layout del CLIENTE, sin empire):
+        // MAIN_CHARACTER (15, 47 B — layout del CLIENTE sin BGM, sin empire):
         // vid = 1 (pid del slot 0), race = job.
-        let main_pkt = read_exact_size(&mut conn, 47).await.map_err(|e| format!("113: {e}"))?;
-        assert_eq!(main_pkt[0], 113, "header GC_MAIN_CHARACTER");
+        let main_pkt = read_exact_size(&mut conn, 47).await.map_err(|e| format!("main_char: {e}"))?;
+        assert_eq!(main_pkt[0], 15, "header GC_MAIN_CHARACTER (Packet.h:160)");
         assert_eq!(u32::from_le_bytes([main_pkt[1], main_pkt[2], main_pkt[3], main_pkt[4]]), 1, "dwVID");
         let name_end = main_pkt[9..34].iter().position(|&b| b == 0).unwrap_or(25);
         assert_eq!(&main_pkt[9..9 + name_end], b"lkjsnlfknlsk", "szName del main character");

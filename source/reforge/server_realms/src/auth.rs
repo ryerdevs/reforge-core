@@ -20,7 +20,16 @@
 //! 4. La key: `number(1, INT_MAX)` única por login (`desc_manager.cpp
 //!    CreateLoginKey`); `dwPanamaKey = dwKey ^ adwClientKey[0..3]` (parity
 //!    `input_auth.cpp:154-156`).
-//! 5. Timeout global por conexión (deuda F1.5): una conexión silenciosa no
+//! 5. LOGIN_BY_KEY (F2a, 2026-08-13): la key se emite/refresca en el
+//!    password-login exitoso y se valida en reconexiones SIN re-hash — el
+//!    campo `passwd` del LOGIN3 la trae como texto decimal (plan §5.8 item 4;
+//!    el wire NO cambia: 68/88 B — el cliente está congelado y hoy manda la
+//!    password). Registry en memoria del PROCESO (parity `m_map_pkLoginData`
+//!    del C++ db, `ClientManager.h:343`): las keys mueren con el proceso.
+//!    Emisión/refresh parity `ClientManager.cpp:1854-1901` (QUERY_AUTH_LOGIN:
+//!    la key vieja del login muere); validación parity
+//!    `ClientManagerLogin.cpp:81-178` (QUERY_LOGIN_BY_KEY).
+//! 6. Timeout global por conexión (deuda F1.5): una conexión silenciosa no
 //!    puede vivir los ~17.6 s de retries del handshake — el config lo acota.
 //!
 //! Pendiente documentado (NO bloquea el hito): en login exitoso el C++ envía
@@ -242,7 +251,7 @@ async fn connection_inner(stream: TcpStream, config: &Config, legacy: &LegacyDat
         }
     };
     let login = normalize_login(&login3.login);
-    let passwd = cstr(&login3.passwd).to_string();
+    let passwd = cstr(&login3.passwd);
     eprintln!(
         "server_realms: auth: LOGIN3 login={login} lang={:?} version={:?} hwid={:?}",
         extract_lang(&login3.sz_language),
@@ -279,42 +288,80 @@ async fn connection_inner(stream: TcpStream, config: &Config, legacy: &LegacyDat
         return Ok(());
     };
 
-    // 4. PG: validación de credenciales vía AccountRepo (F3/ADR-0008 — las
-    //    queries viven en el crate database). Los errores de DB NO abortan la
-    //    conexión: login denegado (bResult=0) con log — respuesta determinista
-    //    para el cliente (el C++ con el db caído no puede servir; el Rust
-    //    degrada a denegación, parity de resultado observable input_db.cpp:1719).
-    let ok = match account_login(
-        &config.pg_conn,
-        &login,
-        &passwd,
-        extract_lang(&login3.sz_language),
-        login3.hwid,
-    )
-    .await
-    {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("server_realms: auth: PG falló para {login}: {e} — bResult=0");
-            false
+    // 4. Credenciales — dos caminos (F2a, LOGIN_BY_KEY):
+    //    - password (cliente ACTUAL, 100% intacto): PG vía AccountRepo
+    //      (F3/ADR-0008 — las queries viven en el crate database); en éxito
+    //      se emite/refresca la dwLoginKey (token de sesión).
+    //    - key (LOGIN_BY_KEY): el campo passwd del LOGIN3 la trae como texto
+    //      decimal (plan §5.8 item 4 — el wire NO cambia: 68/88 B, el cliente
+    //      está congelado); validación contra el registry EN MEMORIA del
+    //      proceso (parity `m_map_pkLoginData` del C++ db — la key muere con
+    //      el proceso), sin re-hash ni query de password.
+    let mut ok = false;
+    let mut login_key = 0u32;
+    match resolve_login_key(&login, &login3.passwd, login3.adw_client_key) {
+        LoginKeyOutcome::Accepted(k) => {
+            eprintln!(
+                "server_realms: auth: LOGIN_BY_KEY OK {login} key {k} (token — sin re-hash, parity ClientManagerLogin.cpp:81-178)"
+            );
+            ok = true;
+            login_key = k; // sin rotación: el C++ no emite key nueva en LOGIN_BY_KEY
+            // lang: el auth persiste el idioma ANTES de validar (parity
+            // input_auth.cpp:133-152) — best-effort, nunca rompe el login.
+            if let Some(lang) = extract_lang(&login3.sz_language)
+                && let Err(e) = AccountRepo::new(&config.pg_conn).set_lang(&login, &lang).await
+            {
+                eprintln!("server_realms: auth: LOGIN_BY_KEY set_lang falló para {login}: {e} — login sigue");
+            }
         }
-    };
+        LoginKeyOutcome::Rejected => {
+            eprintln!(
+                "server_realms: auth: LOGIN_BY_KEY RECHAZADO {login} (key registrada para otro login o con client key distinta — parity ClientManagerLogin.cpp:96-124) — bResult=0"
+            );
+        }
+        LoginKeyOutcome::Fallback => {
+            // Path password (PG). Los errores de DB NO abortan la conexión:
+            // login denegado (bResult=0) con log — respuesta determinista
+            // para el cliente (el C++ con el db caído no puede servir; el
+            // Rust degrada a denegación, parity de resultado observable
+            // input_db.cpp:1719).
+            ok = match account_login(
+                &config.pg_conn,
+                &login,
+                passwd,
+                extract_lang(&login3.sz_language),
+                login3.hwid,
+            )
+            .await
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("server_realms: auth: PG falló para {login}: {e} — bResult=0");
+                    false
+                }
+            };
+            if ok {
+                // Emitir/refrescar la key del login (parity QUERY_AUTH_LOGIN:
+                // la key vieja del login muere — ClientManager.cpp:1862).
+                login_key = issue_login_key(&login, login3.adw_client_key);
+            }
+        }
+    }
 
-    // 7. Key (parity CreateLoginKey: única, 1..INT_MAX) + panama key (parity
-    //    input_auth.cpp:154-156 — el 151 la usa para XOR-ear los IVs).
-    let key = if ok { unique_login_key() } else { 0 };
-    let panama_key = key
+    // 5. Panama key (parity input_auth.cpp:154-156 — el 151 la usa para
+    //    XOR-ear los IVs).
+    let panama_key = login_key
         ^ login3.adw_client_key[0]
         ^ login3.adw_client_key[1]
         ^ login3.adw_client_key[2]
         ^ login3.adw_client_key[3];
     if ok {
-        eprintln!("server_realms: auth: login OK {login} key {key} panama 0x{panama_key:08x}");
+        eprintln!("server_realms: auth: login OK {login} key {login_key} panama 0x{panama_key:08x}");
     } else {
         eprintln!("server_realms: auth: login FALLIDO {login} (bResult=0, parity input_db.cpp:1719-1726)");
     }
 
-    // 8. Respuesta: el C++ SIEMPRE responde GC_AUTH_SUCCESS (bResult 0/1) para
+    // 6. Respuesta: el C++ SIEMPRE responde GC_AUTH_SUCCESS (bResult 0/1) para
     //    credenciales; GC_LOGIN_FAILURE solo para NOID/ALREADY/SHUTDOWN.
     //    En login exitoso, ANTES del GC_AUTH_SUCCESS: PanamaPack 151 +
     //    hybrid-crypt 152/153 (parity input_db.cpp:1710-1716 — el runtime
@@ -328,7 +375,7 @@ async fn connection_inner(stream: TcpStream, config: &Config, legacy: &LegacyDat
     if ok {
         send_legacy_packets(&mut conn, legacy, panama_key).await?;
         send_channel_list(&mut conn, config).await?;
-        conn.send(&TPacketGCAuthSuccess::new(key, 1).to_bytes())
+        conn.send(&TPacketGCAuthSuccess::new(login_key, 1).to_bytes())
             .await
             .map_err(|e| format!("enviando GC_AUTH_SUCCESS: {e}"))?;
     } else {
@@ -542,36 +589,140 @@ impl Drop for ActiveLoginGuard {
     }
 }
 
-/// Almacén `dwLoginKey` → login — esqueleto LOGIN_BY_KEY (ROADMAP F2a): el
-/// flujo actual del cliente re-manda la password en el LOGIN3 del canal
-/// (AGENTS.md §14), así que la validación por key sin password queda
-/// documentada, no exigida por el flujo real todavía (F2b la consumirá).
-fn login_keys() -> &'static Mutex<HashMap<u32, String>> {
-    static M: OnceLock<Mutex<HashMap<u32, String>>> = OnceLock::new();
+// ---------------------------------------------------------------------------
+// Almacén de dwLoginKey (F2a — LOGIN_BY_KEY real, 2026-08-13)
+// ---------------------------------------------------------------------------
+
+/// Entrada del registry de keys — parity `CLoginData` del C++ db
+/// (`ClientManager.cpp:1877-1896` QUERY_AUTH_LOGIN): el registry guarda por
+/// key la login y la client key del LOGIN3 que la emitió.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoginKeyEntry {
+    /// Login normalizado (trim + lowercase) de la cuenta dueña de la key.
+    pub login: String,
+    /// `adwClientKey[4]` del LOGIN3 emisor — segundo factor de validación
+    /// (memcmp parity `ClientManagerLogin.cpp:113-124`).
+    pub adw_client_key: [u32; 4],
+    /// Momento de emisión (diagnóstico; el C++ no lo expone).
+    pub issued_at: Instant,
+}
+
+/// Registry en memoria del PROCESO auth — parity exacta: el C++ mantiene
+/// `m_map_pkLoginData` en memoria del db (`ClientManager.h:343`,
+/// InsertLoginData/DeleteLoginData `ClientManager.cpp:1832-1852`).
+/// CONSECUENCIA documentada (parity): las keys mueren con el proceso —
+/// restart del auth = todas las sesiones tokenizadas invalidadas, el cliente
+/// vuelve al password-login. Sin TTL: el C++ solo las borra por re-login del
+/// mismo usuario (`DeleteLoginData` en QUERY_AUTH_LOGIN) o por logout del
+/// canal (`DeleteLoginKey`, `ClientManager.cpp:4000-4014` — lane del canal).
+fn login_keys() -> &'static Mutex<HashMap<u32, LoginKeyEntry>> {
+    static M: OnceLock<Mutex<HashMap<u32, LoginKeyEntry>>> = OnceLock::new();
     M.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Key de login única (parity `CreateLoginKey`: `number(1, INT_MAX)` sin
-/// colisiones). Zero-deps: mezcla de nanos + contador (patrón del nonce del
-/// handshake); nunca 0; reintenta si colisiona con una key viva.
-fn unique_login_key() -> u32 {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
+/// Contador para `issue_login_key` (mezcla con nanos — patrón del nonce del
+/// handshake; zero-deps).
+static KEY_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Emite una key fresca para `login` y registra la sesión. Parity
+/// `CreateLoginKey` (`number(1, INT_MAX)` única, nunca 0) + `QUERY_AUTH_LOGIN`
+/// (`ClientManager.cpp:1858-1863`): la key vieja del MISMO login muere
+/// (DeleteLoginData) — cada password-login refresca el token.
+/// Se llama SOLO en password-login exitoso (el C++ crea/registra la key antes
+/// de validar; en el wire es indistinguible: fallo → key=0 — no se replica el
+/// hueco del registry).
+pub fn issue_login_key(login: &str, adw_client_key: [u32; 4]) -> u32 {
+    let mut map = login_keys().lock().expect("login_keys lock");
+    map.retain(|_, e| e.login != login);
     loop {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(0);
-        let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let counter = KEY_COUNTER.fetch_add(1, Ordering::Relaxed);
         let mixed = nanos ^ counter.wrapping_mul(0x9E37_79B9_7F4A_7C15);
         let key = mixed as u32 & 0x7FFF_FFFF; // 1..INT_MAX (parity)
         if key == 0 {
             continue;
         }
-        let mut map = login_keys().lock().expect("login_keys lock");
         if let std::collections::hash_map::Entry::Vacant(e) = map.entry(key) {
-            e.insert(String::new()); // login se rellena en F2b
+            e.insert(LoginKeyEntry {
+                login: login.to_string(),
+                adw_client_key,
+                issued_at: Instant::now(),
+            });
             return key;
         }
+    }
+}
+
+/// Resultado de `check_login_key` (parity `QUERY_LOGIN_BY_KEY`,
+/// `ClientManagerLogin.cpp:81-124`):
+/// - `Valid`: key registrada + login coincide + client key coincide → aceptar.
+/// - `NotFound`: la key NO está en el registry — el caller del LOGIN3 cae al
+///   path password (una password numérica legítima no debe romper el login).
+/// - `Mismatch`: key registrada pero con login o client key distintos — parity
+///   `HEADER_DG_LOGIN_NOT_EXIST` (rechazo; una key ajena no cae al probe).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyCheck {
+    Valid,
+    NotFound,
+    Mismatch,
+}
+
+/// Valida la key contra el registry (sin red, sin re-hash). Parity del C++
+/// db: existencia (`ClientManagerLogin.cpp:87-92`), login coincide
+/// (case-insensitive, `:96-101`), client key coincide (`:113-124`).
+pub fn check_login_key(login: &str, key: u32, adw_client_key: [u32; 4]) -> KeyCheck {
+    let map = login_keys().lock().expect("login_keys lock");
+    let Some(e) = map.get(&key) else {
+        return KeyCheck::NotFound;
+    };
+    if e.login == login && e.adw_client_key == adw_client_key {
+        KeyCheck::Valid
+    } else {
+        KeyCheck::Mismatch
+    }
+}
+
+/// Detecta la dwLoginKey en el campo `passwd[17]` del LOGIN3 — F2a: el wire
+/// NO cambia (68/88 B intactos; el cliente está congelado) y la key viaja
+/// como texto decimal en el campo de password (plan §5.8 item 4). Reglas:
+/// vacío / no dígitos / >10 dígitos / fuera de 1..=INT_MAX → `None` (una
+/// password normal no es nunca una key candidata; la key 0 no existe —
+/// parity `CreateLoginKey`).
+pub fn parse_login_key(passwd: &[u8; 17]) -> Option<u32> {
+    let s = cstr(passwd).trim();
+    if s.is_empty() || s.len() > 10 || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    s.parse::<u32>().ok().filter(|k| (1..=i32::MAX as u32).contains(k))
+}
+
+/// Decisión del camino de login del LOGIN3 (F2a).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoginKeyOutcome {
+    /// Key presentada válida → aceptar SIN re-hash (sesión tokenizada).
+    Accepted(u32),
+    /// Key registrada pero de otro login / con otra client key → rechazo
+    /// (parity `HEADER_DG_LOGIN_NOT_EXIST` → bResult=0).
+    Rejected,
+    /// No es una key registrada → path password intacto (PG).
+    Fallback,
+}
+
+/// Resuelve el camino: `Accepted` solo si el campo passwd trae una key
+/// REGISTRADA para esa login con esa client key. Cualquier password normal
+/// (o una key no registrada) cae a `Fallback` — el path password queda 100%
+/// intacto para el cliente actual (que manda la password en claro).
+pub fn resolve_login_key(login: &str, passwd: &[u8; 17], adw_client_key: [u32; 4]) -> LoginKeyOutcome {
+    let Some(presented) = parse_login_key(passwd) else {
+        return LoginKeyOutcome::Fallback;
+    };
+    match check_login_key(login, presented, adw_client_key) {
+        KeyCheck::Valid => LoginKeyOutcome::Accepted(presented),
+        KeyCheck::NotFound => LoginKeyOutcome::Fallback,
+        KeyCheck::Mismatch => LoginKeyOutcome::Rejected,
     }
 }
 
@@ -616,13 +767,141 @@ mod tests {
         assert_eq!(extract_lang(b"e1\0"), None);
     }
 
+    // -----------------------------------------------------------------------
+    // F2a — LOGIN_BY_KEY (registry en memoria, 2026-08-13)
+    // -----------------------------------------------------------------------
+
+    /// El registry es un static compartido y los tests corren en paralelo:
+    /// cada test de keys se serializa y arranca con el registry vacío.
+    static TEST_KEY_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Guard de serialización + registry vacío (se libera al dropear el guard).
+    fn empty_key_store() -> std::sync::MutexGuard<'static, ()> {
+        let guard = TEST_KEY_LOCK.lock().unwrap();
+        login_keys().lock().unwrap().clear();
+        guard
+    }
+
+    /// Campo `passwd[17]` del LOGIN3 con `s` (cstr-padded a 17 B).
+    fn pwd_field(s: &str) -> [u8; 17] {
+        let mut f = [0u8; 17];
+        let n = s.len().min(16);
+        f[..n].copy_from_slice(&s.as_bytes()[..n]);
+        f
+    }
+
+    /// F2a: password-login exitoso → key emitida y registrada (token).
     #[test]
-    fn login_key_never_zero_and_unique() {
-        let k1 = unique_login_key();
-        let k2 = unique_login_key();
+    fn key_issued_on_password_login() {
+        let _s = empty_key_store();
+        let k = issue_login_key("test", [1, 2, 3, 4]);
+        assert!(k != 0 && k <= i32::MAX as u32, "1..INT_MAX (parity CreateLoginKey)");
+        assert_eq!(check_login_key("test", k, [1, 2, 3, 4]), KeyCheck::Valid);
+        // El registry guarda login + client key (parity QUERY_AUTH_LOGIN).
+        let map = login_keys().lock().unwrap();
+        let e = map.get(&k).unwrap();
+        assert_eq!(e.login, "test");
+        assert_eq!(e.adw_client_key, [1, 2, 3, 4]);
+    }
+
+    /// F2a: reconexión con la key en el campo passwd → Accepted SIN re-hash
+    /// (la sesión tokenizada sobrevive al cierre de la conexión auth — el
+    /// registry es del proceso, parity del db C++).
+    #[test]
+    fn key_accepted_on_reconnect() {
+        let _s = empty_key_store();
+        let k = issue_login_key("test", [1, 2, 3, 4]);
+        // El "reconnect" es otro LOGIN3 con la key en lugar del password.
+        assert_eq!(
+            resolve_login_key("test", &pwd_field(&k.to_string()), [1, 2, 3, 4]),
+            LoginKeyOutcome::Accepted(k)
+        );
+        // Y la key sigue viva para otra reconexión (sin rotación en el camino key).
+        assert_eq!(
+            resolve_login_key("test", &pwd_field(&k.to_string()), [1, 2, 3, 4]),
+            LoginKeyOutcome::Accepted(k)
+        );
+    }
+
+    /// F2a: key ajena o con client key distinta → Rejected (bResult=0, parity
+    /// HEADER_DG_LOGIN_NOT_EXIST); key inexistente → Fallback (password path).
+    #[test]
+    fn wrong_key_rejected() {
+        let _s = empty_key_store();
+        let k = issue_login_key("alice", [1, 2, 3, 4]);
+        // La key de alice presentada por bob → Rejected (parity "login differ").
+        assert_eq!(
+            resolve_login_key("bob", &pwd_field(&k.to_string()), [1, 2, 3, 4]),
+            LoginKeyOutcome::Rejected
+        );
+        // La key de alice con OTRA client key → Rejected (parity "client key differ").
+        assert_eq!(
+            resolve_login_key("alice", &pwd_field(&k.to_string()), [9, 9, 9, 9]),
+            LoginKeyOutcome::Rejected
+        );
+        // Un número no registrado → Fallback: el path password decide (una
+        // password numérica legítima no se rompe).
+        assert_eq!(
+            resolve_login_key("bob", &pwd_field("1234"), [1, 2, 3, 4]),
+            LoginKeyOutcome::Fallback
+        );
+    }
+
+    /// F2a: el path password queda intacto — el cliente actual manda la
+    /// password en claro ("1234" del test/1234): nunca es una key registrada
+    /// → Fallback; y un password-login refresca el token (la key vieja muere,
+    /// parity QUERY_AUTH_LOGIN DeleteLoginData).
+    #[test]
+    fn password_path_unaffected() {
+        let _s = empty_key_store();
+        // Password normal del cliente actual (con letras): ni candidata a key.
+        assert_eq!(
+            resolve_login_key("test", &pwd_field("abcd1234"), [1, 2, 3, 4]),
+            LoginKeyOutcome::Fallback
+        );
+        assert_eq!(parse_login_key(&pwd_field("abcd1234")), None);
+        // "1234" (test/1234) es numérica pero NO está registrada → Fallback.
+        assert_eq!(
+            resolve_login_key("test", &pwd_field("1234"), [1, 2, 3, 4]),
+            LoginKeyOutcome::Fallback
+        );
+        // Password-login exitoso → key; el siguiente password-login la
+        // REFRESCA: la key vieja deja de ser válida (NotFound → Fallback).
+        let k1 = issue_login_key("test", [1, 2, 3, 4]);
+        let k2 = issue_login_key("test", [1, 2, 3, 4]);
+        assert_ne!(k1, k2, "refresh: key nueva por password-login");
+        assert_eq!(check_login_key("test", k1, [1, 2, 3, 4]), KeyCheck::NotFound, "key vieja muerta");
+        assert_eq!(check_login_key("test", k2, [1, 2, 3, 4]), KeyCheck::Valid);
+    }
+
+    /// F2a: parse del campo passwd — dígitos válidos, ceros a la izquierda,
+    /// límites 1..=INT_MAX, padding NUL, basura.
+    #[test]
+    fn parse_login_key_edges() {
+        assert_eq!(parse_login_key(&pwd_field("1234")), Some(1234));
+        assert_eq!(parse_login_key(&pwd_field("00001234")), Some(1234));
+        assert_eq!(parse_login_key(&pwd_field("2147483647")), Some(i32::MAX as u32));
+        assert_eq!(parse_login_key(&pwd_field("2147483648")), None, "> INT_MAX");
+        assert_eq!(parse_login_key(&pwd_field("4294967296")), None, "overflow u32");
+        assert_eq!(parse_login_key(&pwd_field("0")), None, "la key 0 no existe");
+        assert_eq!(parse_login_key(&pwd_field("")), None);
+        assert_eq!(parse_login_key(&pwd_field("123a")), None);
+        assert_eq!(parse_login_key(&pwd_field("12 34")), None);
+        assert_eq!(parse_login_key(&[0u8; 17]), None, "todo NUL");
+        assert_eq!(parse_login_key(&pwd_field("12345678901")), None, "11 dígitos");
+    }
+
+    /// F2a: keys emitidas para logins distintos viven a la vez y son únicas.
+    #[test]
+    fn issue_login_key_never_zero_and_unique() {
+        let _s = empty_key_store();
+        let k1 = issue_login_key("alice", [1; 4]);
+        let k2 = issue_login_key("bob", [1; 4]);
         assert_ne!(k1, 0);
         assert_ne!(k1, k2);
-        assert!(k1 <= i32::MAX as u32, "1..INT_MAX (parity CreateLoginKey)");
+        assert!(k1 <= i32::MAX as u32 && k2 <= i32::MAX as u32, "1..INT_MAX (parity CreateLoginKey)");
+        assert_eq!(check_login_key("alice", k1, [1; 4]), KeyCheck::Valid);
+        assert_eq!(check_login_key("bob", k2, [1; 4]), KeyCheck::Valid);
     }
 
     /// F2b fix: el parámetro del `UPDATE account SET hwid` es el hex como

@@ -1,13 +1,13 @@
 ---
 Type: Reference
-Status: Proposed
+Status: Accepted (2026-08-13)
 Audience: Contributors, quest designers
-Last verified: 2026-08-10
+Last verified: 2026-08-13
 ---
 
 # Quest DSL — Specification v0.1 (draft for discussion)
 
-> **Status: DRAFT v0.1** — discussion document; not the final spec. The DSL decisions are not accepted yet (§11).
+> **Status: ACCEPTED (2026-08-13, 41st part)** — the `quest_dsl` crate implements this spec (`source/reforge/quest_dsl`: ast/parser/family/render; 44 tests green, clippy clean) and the qc→DSL converter proves the grammar against the full legacy corpus (**194/194 files convert, 0 failed, ~2 s**; 6 family proposals covering 112/194 files). The former draft decisions (§11) are resolved and recorded below; the draft text that follows is kept as history.
 > **Date:** 2026-08-09 · **Project:** Metin2 server rewrite in Rust
 > **Context:** replaces the Lua runtime (mlua 5.1 + shim) previously considered. Decision: **no scripting language in the Rust server; quests as declarative data in an own DSL.**
 > Canonical plan: [../../plans/server-rewrite.md](../../plans/server-rewrite.md) (§12).
@@ -251,14 +251,18 @@ on 20011.chat with get_gm_level() == 5
 
 **Open decision (§11):** nested `if` allowed (1 level) or `elif`? We propose 1 level + `else` to keep readability.
 
-## 11. Open decisions (for reviewers)
+## 11. Open decisions (for reviewers) — RESOLVED 2026-08-13
 
-1. `between a, b` in conditions: native syntax or only comparisons?
-2. `if` inside events: 1 level + else (proposed) or unlimited?
-3. Does `select` with `as` capture cover all corpus uses, or are there nested menus forcing a quest restructure?
-4. Locale keys: `@key` with a per-family key table, or the direct literal?
-5. Naming: `.quest` (continuity) vs `.qdsl` vs `.mq` (metin quest).
-6. Do `wait()` and timers require an explicit `timer` trigger, or is `on login ... with get_time() >= get_qf(...)` enough?
+All six decisions were resolved by the `quest_dsl` core implementation (41st part; the draft questions below are kept as history):
+
+1. `between a, b` in conditions — **RESOLVED: native `between`** (parsed as a first-class comparison, not composed).
+2. `if` inside events — **RESOLVED: 1 level + `else`** (readability; no `elif`).
+3. `select` with `as` capture — **RESOLVED: `as`-capture covers the corpus** (no nested-menu restructure forced).
+4. Locale keys — **RESOLVED: `@key`** (per-family key table).
+5. Naming — **RESOLVED: `.quest`** (continuity with legacy; eases diff during migration).
+6. `wait()` / timers — **RESOLVED: explicit `timer` trigger** (alias; not only composed `on login ... with get_time()` conditions).
+
+Original draft questions (historical):
 
 ## 12. Out of scope of this spec
 

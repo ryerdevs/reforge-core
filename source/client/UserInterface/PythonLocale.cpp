@@ -16,7 +16,7 @@ extern DWORD GetDefaultCodePage();
 // GetDefaultCodePage() (1252 para ES — GrpTextInstance.cpp:202-240). Sin esta
 // conversión "Jabalí" UTF-8 (C3 AD) se vería "JabalÃ". Fallback al raw si el
 // decode falla (nunca cortar el render por un texto raro).
-static std::string Utf8ToDisplay(const std::string& utf8)
+std::string CPythonLocale::Utf8ToDisplay(const std::string& utf8)
 {
 	if (utf8.empty())
 		return utf8;

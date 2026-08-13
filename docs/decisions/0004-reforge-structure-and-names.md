@@ -3,12 +3,14 @@ Type: Decision
 Status: Accepted
 Audience: Contributors, maintainers
 Date: 2026-08-10
-Last verified: 2026-08-10
+Last verified: 2026-08-13
 Supersedes: ADR-0003 (partial — workspace layout and crate names)
 Superseded by: —
 ---
 
 # ADR-0004: `reforge` workspace structure and names
+
+> **Rename note (2026-08-13, 42nd part — user decision):** the crate `realm` was renamed to **`game_core`** — directory `source/reforge/realm/` → `source/reforge/game_core/`, 78 code refs, workspace 512 passed / 0 failed. The naming rationale and the remaining decisions below stand; the body of this ADR records the 2026-08-10 decision under the original name.
 
 ## Context
 

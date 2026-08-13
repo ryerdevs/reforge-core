@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["protocol", "network", "database", "realm", "server_realms", "mysql_proxy", "locale_import"]
+members = ["protocol", "network", "database", "game_core", "server_realms", "mysql_proxy", "locale_import", "bench_bot", "quest_dsl"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,6 +11,11 @@ license = "MPL-2.0"
 tokio = { version = "1.49", features = ["rt-multi-thread", "net", "io-util", "time", "sync", "macros", "test-util"] }
 tokio-postgres = { version = "0.7", features = ["with-uuid-1"] }
 uuid = "1"
+# ADR-0010 §2: bevy_ecs standalone — default-features = false (sin
+# bevy_reflect; std sí — el runtime es std). `multi_threaded` (ejecución
+# paralela de sistemas) queda como toggle del benchmark F5: los sistemas del
+# slice son pocos y encadenados; la paralelización no cambia el diseño.
+bevy_ecs = { version = "0.19", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

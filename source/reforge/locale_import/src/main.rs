@@ -1,4 +1,4 @@
-﻿//! F1 â€” Importer del locale (plan `docs/plans/locale-redesign.md`): un
+//! F1 â€” Importer del locale (plan `docs/plans/locale-redesign.md`): un
 //! subcomando POR DOMINIO, cada uno independiente y re-ejecutable
 //! (idempotente: borra las filas del dominio antes de insertar).
 //!
@@ -17,7 +17,7 @@
 //! - `import-ui <lang>`     â€” common.ui_texts (locale_interface.txt)
 //! - `import-messages`      â€” common.message_texts (16 Ã— locale_string_XX.txt)
 //! - `import-maps`          â€” world.maps (index + Setting + Town)
-//! - `import-spawns`        â€” world.spawns (vÃ­a realm::npc::load_map_spawns)
+//! - `import-spawns`        â€” world.spawns (vÃ­a game_core::npc::load_map_spawns)
 //!
 //! NOTA: `common.map_names` e `common.item_icons` NO tienen fuente en el
 //! runtime (los nombres de mapa son imÃ¡genes en el pack; los iconos son
@@ -31,7 +31,7 @@ mod parse;
 
 use std::fs;
 
-use realm::npc::{load_map_spawns, SpawnEntry, SpawnKind};
+use game_core::npc::{load_map_spawns, SpawnEntry, SpawnKind};
 use tokio_postgres::{types::ToSql, Client, NoTls};
 
 use parse::{
@@ -77,7 +77,7 @@ Subcomandos (uno por dominio, re-ejecutables â€” borran sus filas antes):
   import-ui <lang>      common.ui_texts       (pack <lang>/locale_interface.txt)
   import-messages       common.message_texts (16 x runtime locale_string_XX.txt)
   import-maps           world.maps            (runtime map/index + Setting + Town)
-  import-spawns         world.spawns          (runtime, via realm::npc::load_map_spawns)
+  import-spawns         world.spawns          (runtime, via game_core::npc::load_map_spawns)
 
 Flags:
   --pg <conn>           cadena PG (default: host=127.0.0.1 port=5432 user=mt2 password=mt2 dbname=metin2)
@@ -373,7 +373,7 @@ async fn import_maps(client: &Client, map_path: &str) -> Result<String, String> 
 }
 
 /// import-spawns: world.spawns desde el runtime para TODOS los mapas del
-/// index, reutilizando el parser verificado `realm::npc::load_map_spawns`
+/// index, reutilizando el parser verificado `game_core::npc::load_map_spawns`
 /// (expansiÃ³n de grupos incluida â€” el resultado solo contiene Mob/Anywhere).
 async fn import_spawns(client: &Client, map_path: &str) -> Result<String, String> {
     let index = parse_map_index(&read(&format!("{map_path}/index"))?);
@@ -410,7 +410,7 @@ async fn import_spawns(client: &Client, map_path: &str) -> Result<String, String
 }
 
 /// Fila de world.spawns para una entrada EXPANDIDA (kind Mob/Anywhere â€” la
-/// expansiÃ³n nunca emite grupos, doc realm::npc).
+/// expansiÃ³n nunca emite grupos, doc game_core::npc).
 fn spawn_row(map_id: i32, e: &SpawnEntry) -> Vec<SqlVal> {
     let kind = match e.kind {
         SpawnKind::Mob => "mob",

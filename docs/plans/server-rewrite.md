@@ -501,7 +501,7 @@ Data parity: `scripts/gpg/parity_check.py` — per table, row count + md5 over t
 | 0001 | PostgreSQL as primary DB, no TimescaleDB by default | Accepted |
 | 0002 | Unify `game` + `db` into one process per region | Accepted |
 | 0003 | Rust workspace in `source/reforge` | Accepted (partially superseded by 0004) |
-| 0004 | Flat workspace: `protocol`, `network`, `database`, `realm`, `server_realms`; config TOML | Accepted |
+| 0004 | Flat workspace: `protocol`, `network`, `database`, `game_core` (renamed from `realm` 2026-08-13), `server_realms`; config TOML | Accepted |
 | 0005 | PostgreSQL cutover (G-PG) + temporary legacy compatibility adapter (single canonical PG; C++ operates on it through the adapter); F2 gated | **Accepted** (gate 4/4, 2026-08-10; implemented) |
 | 0006 | Legacy wire/pack compatibility boundary (`protocol::legacy`, deletion at F7) | **Accepted** (implemented in F2a 2026-08-10) |
 | 0007 | No partial Rust embedded in the legacy client (F0–F6) | Accepted |

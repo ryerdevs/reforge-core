@@ -1,4 +1,4 @@
-//! `realm` — lógica de juego por regiones (F4+): world entry, entidades, ECS.
+//! `game_core` — lógica de juego por regiones (F4+): world entry, entidades, ECS.
 //!
 //! Primer slice de F4 (ROADMAP): la composición `WorldStore` (repos + pipeline
 //! durable) y el mapeo de paquetes del flujo select/spawn con parity C++
@@ -17,10 +17,21 @@
 //!   `handle_attack(...)` para el dispatch del canal (CG_ATTACK).
 //! - `ai` — F5.3: la AI mínima de los mobs (paso de movimiento hacia el
 //!   jugador + rotación) — funciones puras que el canal usa en su tick.
+//! - `ecs` — F5.3 (ADR-0010): el mundo ECS (bevy_ecs standalone) — los
+//!   componentes del mundo (Position/Hp/Aggro/Mob/Item), los sistemas del
+//!   tick de AI (chase/attack → aggro proactivo → patrulla) y `WorldSim`,
+//!   el wrapper del canal sobre el `World` de bevy.
+//! - `map` — F5.4 (ADR-0011): walkability server-side — port de
+//!   `IsMovablePosition` (`sectree_manager.cpp`): grid de atributos por mapa
+//!   desde los archivos del server (`server_attr` LZO1X + `Setting.txt`),
+//!   caché por mapa y `is_movable(map, x, y)` en units (celdas de 50 u).
 
 pub mod ai;
-pub mod movement;
-pub mod packets;
-pub mod world;
-pub mod npc;
 pub mod combat;
+pub mod ecs;
+pub mod map;
+pub mod movement;
+pub mod npc;
+pub mod packets;
+pub mod skill;
+pub mod world;

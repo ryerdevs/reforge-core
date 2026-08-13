@@ -5,10 +5,19 @@
 
 CDynamicPool<CItemData>		CItemData::ms_kPool;
 CItemData::TLocaleNameProvider CItemData::ms_pfnLocaleName = nullptr;
+std::map<DWORD, std::string> CItemData::ms_mapLocaleNameOverride;
 
 void CItemData::SetLocaleNameProvider(TLocaleNameProvider pfnProvider)
 {
 	ms_pfnLocaleName = pfnProvider;
+}
+
+void CItemData::SetLocaleName(DWORD dwVnum, const char* szName)
+{
+	if (szName && szName[0] != '\0')
+		ms_mapLocaleNameOverride[dwVnum] = szName;
+	else
+		ms_mapLocaleNameOverride.erase(dwVnum);
 }
 
 extern DWORD GetDefaultCodePage();
@@ -26,6 +35,7 @@ void CItemData::Delete(CItemData* pkItemData)
 
 void CItemData::DestroySystem()
 {
+	ms_mapLocaleNameOverride.clear();
 	ms_kPool.Destroy();
 }
 
@@ -186,6 +196,12 @@ DWORD CItemData::GetIndex() const
 
 const char * CItemData::GetName() const
 {
+	// F4 tail (override API): el nombre del SERVER (dato por vnum) manda
+	// sobre el bundle y el pack.
+	const auto itOverride = ms_mapLocaleNameOverride.find(m_ItemTable.dwVnum);
+	if (itOverride != ms_mapLocaleNameOverride.end())
+		return itOverride->second.c_str();
+
 	// F1 (locale redesign): el cache del servidor manda; el pack es el
 	// fallback (un item sin entrada en el bundle se muestra como antes).
 	if (ms_pfnLocaleName)

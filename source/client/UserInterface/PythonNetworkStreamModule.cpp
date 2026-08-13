@@ -5,6 +5,9 @@
 #include "Test.h"
 
 #include "AbstractPlayer.h"
+#include "PythonNonPlayer.h" // F4 tail: override de nombres de mobs/NPCs
+#include "PythonLocale.h"    // F4 tail: conversión UTF-8 → codepage local
+#include "../GameLib/ItemData.h" // F4 tail: override de nombres de items
 
 static std::string gs_stServerInfo;
 extern BOOL gs_bEmpireLanuageEnable;
@@ -1654,6 +1657,42 @@ PyObject* netGetRates(PyObject* poSelf, PyObject* poArgs)
 		(int) rkAccountConnector.GetDropRate());
 }
 
+// F4 tail — override API de nombres del server (vnum/race -> nombre UTF-8).
+// El futuro GC_LOCALE/data channel llama estos desde la capa de red; hoy el
+// pack/scripts pueden usarlos como hook de prueba. El nombre llega UTF-8
+// (wire del server) y se convierte a codepage local de render al almacenar
+// (CPythonLocale::Utf8ToDisplay — el render legacy decodifica con
+// GetDefaultCodePage, GrpTextInstance.cpp:202-240). Orden de lookup final:
+// override -> bundle del auth -> pack. Nombre vacío = eliminar el override.
+
+PyObject* netSetLocaleName(PyObject* poSelf, PyObject* poArgs)
+{
+	int iRace;
+	char* szName;
+	if (!PyTuple_GetInteger(poArgs, 0, &iRace))
+		return Py_BuildException();
+	if (!PyTuple_GetString(poArgs, 1, &szName))
+		return Py_BuildException();
+
+	const std::string strDisplay = CPythonLocale::Utf8ToDisplay(szName ? szName : "");
+	CPythonNonPlayer::Instance().SetLocaleName((DWORD) iRace, strDisplay.c_str());
+	return Py_BuildNone();
+}
+
+PyObject* netSetItemLocaleName(PyObject* poSelf, PyObject* poArgs)
+{
+	int iVnum;
+	char* szName;
+	if (!PyTuple_GetInteger(poArgs, 0, &iVnum))
+		return Py_BuildException();
+	if (!PyTuple_GetString(poArgs, 1, &szName))
+		return Py_BuildException();
+
+	const std::string strDisplay = CPythonLocale::Utf8ToDisplay(szName ? szName : "");
+	CItemData::SetLocaleName((DWORD) iVnum, strDisplay.c_str());
+	return Py_BuildNone();
+}
+
 void initnet()
 {
 	static PyMethodDef s_methods[] =
@@ -1665,6 +1704,8 @@ void initnet()
 		{ "SetChannelIndex",					netSetChannelIndex,						METH_VARARGS },
 		{ "GetChannelList",						netGetChannelList,						METH_VARARGS },
 		{ "GetRates",							netGetRates,							METH_VARARGS },
+		{ "SetLocaleName",						netSetLocaleName,						METH_VARARGS },
+		{ "SetItemLocaleName",					netSetItemLocaleName,					METH_VARARGS },
 		{ "PreserveServerCommand",				netPreserveServerCommand,				METH_VARARGS },
 		{ "GetPreservedServerCommand",			netGetPreservedServerCommand,			METH_VARARGS },
 

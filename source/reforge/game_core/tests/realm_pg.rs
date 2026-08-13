@@ -6,7 +6,7 @@
 //! ```text
 //! source ~/.cargo/env
 //! cd /mnt/c/projects/Metin2/source/reforge
-//! cargo test --package realm -- --ignored
+//! cargo test --package game_core -- --ignored
 //! ```
 //!
 //! Reglas: SOLO lecturas sobre datos vivos (cuenta `test` — asserts
@@ -16,7 +16,7 @@
 
 use database::player::{PlayerCreate, PlayerRepo};
 use database::wal::audit_ddl;
-use realm::world::WorldStore;
+use game_core::world::WorldStore;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_PG: &str = "host=127.0.0.1 port=5432 user=mt2 password=mt2 dbname=metin2";
@@ -67,7 +67,7 @@ async fn wait_for_audit(client: &tokio_postgres::Client, audit: &str, expected: 
 
 /// list_characters(cuenta test) -> >=3 personajes con los del E2E Q3.
 #[tokio::test]
-#[ignore = "requiere PG real (WSL): cargo test --package realm -- --ignored"]
+#[ignore = "requiere PG real (WSL): cargo test --package game_core -- --ignored"]
 async fn realm_list_characters_live_account() {
     let store = WorldStore::new(pg_conn()).await.expect("WorldStore::new (PG up)");
     let list = store.list_characters(TEST_ACCOUNT).await.expect("list");
@@ -82,7 +82,7 @@ async fn realm_list_characters_live_account() {
 /// player_index pid1..pid5 = [1, 3, 5, 0, 2] (E2E Q1) -> slots 0,1,2,4
 /// devuelven personaje; slot 3 (pid=0) -> None; x/y en UNITS.
 #[tokio::test]
-#[ignore = "requiere PG real (WSL): cargo test --package realm -- --ignored"]
+#[ignore = "requiere PG real (WSL): cargo test --package game_core -- --ignored"]
 async fn realm_select_player_each_live_character() {
     let store = WorldStore::new(pg_conn()).await.expect("WorldStore::new");
 
@@ -119,7 +119,7 @@ async fn realm_select_player_each_live_character() {
 /// account_slots: los 5 pids de la cuenta test EN ORDEN de slot
 /// (pid1..pid5 = [1, 3, 5, 0, 2], E2E Q1) — el orden es el contrato del 449B.
 #[tokio::test]
-#[ignore = "requiere PG real (WSL): cargo test --package realm -- --ignored"]
+#[ignore = "requiere PG real (WSL): cargo test --package game_core -- --ignored"]
 async fn realm_account_slots_live_account() {
     let store = WorldStore::new(pg_conn()).await.expect("WorldStore::new");
     let slots = store.account_slots(TEST_ACCOUNT).await.expect("account_slots");
@@ -139,7 +139,7 @@ async fn realm_account_slots_live_account() {
 /// select_player con slot inválido -> Err (parity: el game valida antes,
 /// input_login.cpp:260-264).
 #[tokio::test]
-#[ignore = "requiere PG real (WSL): cargo test --package realm -- --ignored"]
+#[ignore = "requiere PG real (WSL): cargo test --package game_core -- --ignored"]
 async fn realm_select_player_invalid_slot() {
     let store = WorldStore::new(pg_conn()).await.expect("WorldStore::new");
     for slot in [5u8, 6, 200] {

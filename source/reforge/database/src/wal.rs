@@ -317,34 +317,63 @@ impl MutationSink for PgMutationSink {
     }
 }
 
+/// Mensaje interno del worker del Batcher: mutation normal o flush forzado
+/// con ack (el ack recibe el resultado de la tx del batch).
+enum Msg {
+    M(Mutation),
+    Flush(tokio::sync::oneshot::Sender<Result<(), String>>),
+}
+
 /// Batcher: recoge mutations y las flushea en batches — flush por tamaño
 /// (`max_batch`) o por tiempo (`flush_interval` desde la PRIMERA mutation del
 /// batch, <=100ms en produccion). El worker es una task tokio; el sender se
-/// clona para pushear desde cualquier task.
+/// clona para pushear desde cualquier task. `flush()` fuerza el cierre del
+/// batch actual en UNA transaccion y espera el commit (unidad ACID).
 pub struct Batcher {
-    tx: mpsc::UnboundedSender<Mutation>,
+    tx: mpsc::UnboundedSender<Msg>,
 }
 
 impl Batcher {
     /// Arranca el worker; `sink` aplica los batches (UNA transaccion cada uno).
     pub fn spawn(flush_interval: Duration, max_batch: usize, sink: impl MutationSink) -> Self {
-        let (tx, mut rx) = mpsc::unbounded_channel::<Mutation>();
+        let (tx, mut rx) = mpsc::unbounded_channel::<Msg>();
         tokio::spawn(async move {
             let mut sink = sink;
             loop {
                 // Primera mutation del batch: espera indefinida (el canal se
                 // cierra al dropear todos los senders -> fin del worker).
                 let Some(first) = rx.recv().await else { break };
-                let mut batch = vec![first];
-                // Acumula hasta max_batch o hasta que pase flush_interval.
+                let mut batch = Vec::new();
+                let mut flush_ack: Option<tokio::sync::oneshot::Sender<Result<(), String>>> = None;
+                match first {
+                    Msg::M(m) => batch.push(m),
+                    // Flush sin batch pendiente: no-op con ack Ok.
+                    Msg::Flush(ack) => {
+                        let _ = ack.send(Ok(()));
+                        continue;
+                    }
+                }
+                // Acumula hasta max_batch, hasta que pase flush_interval, o
+                // hasta un flush explicito (el batch se cierra YA).
                 while batch.len() < max_batch {
                     match tokio::time::timeout(flush_interval, rx.recv()).await {
-                        Ok(Some(m)) => batch.push(m),
+                        Ok(Some(Msg::M(m))) => batch.push(m),
+                        Ok(Some(Msg::Flush(ack))) => {
+                            flush_ack = Some(ack);
+                            break;
+                        }
                         _ => break, // timeout o canal cerrado -> flush ya
                     }
                 }
-                if let Err(e) = sink.apply(batch).await {
+                // UNA transaccion para todo el batch. El flush explicito
+                // recibe el resultado (Ok = commit; Err = el WAL local lo
+                // re-aplicara al arrancar).
+                let result = sink.apply(batch).await;
+                if let Err(e) = &result {
                     eprintln!("database: wal: batch falló: {e} — el WAL local lo re-aplicará al arrancar");
+                }
+                if let Some(ack) = flush_ack {
+                    let _ = ack.send(result);
                 }
             }
         });
@@ -353,7 +382,23 @@ impl Batcher {
 
     /// Push de una mutation (unbounded: nunca bloquea al caller).
     pub fn push(&self, m: Mutation) {
-        let _ = self.tx.send(m);
+        let _ = self.tx.send(Msg::M(m));
+    }
+
+    /// Flush explicito: cierra el batch actual (todo lo pusheado ANTES de
+    /// esta llamada) y espera el commit — UNA transaccion + audit. Devuelve
+    /// `Ok` si el sink confirmo; `Err` si el batch fallo (el WAL local
+    /// conserva el archivo para el replay del proximo arranque, ADR-0008).
+    ///
+    /// Contrato de la unidad ACID (ADR-0011 "items as ACID units"): el caller
+    /// pushea TODAS las mutations de la unidad y llama a `flush()` sin pausas
+    /// mayores a `flush_interval` entre pushes y con la unidad por debajo de
+    /// `max_batch` — entonces la unidad entera commit en una sola tx (o no
+    /// commit nada).
+    pub async fn flush(&self) -> Result<(), String> {
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        let _ = self.tx.send(Msg::Flush(ack_tx));
+        ack_rx.await.map_err(|e| format!("batcher worker caido: {e}"))?
     }
 }
 
@@ -380,10 +425,18 @@ impl Batcher {
 ///   lApplyValue)` + DELETE — idempotente.
 /// - `ItemRepo::take_award`: UPDATE con `taken_time = NOW()` — idempotente
 ///   salvo la columna NOW().
+/// - `SafeboxRepo::set_size` (`set_size_mutated`): rama `size == 1` INSERT
+///   con `ON CONFLICT (account_id) DO NOTHING` (la PK); rama UPDATE por PK —
+///   idempotente. El quirk legacy "size==1 -> INSERT" se conserva.
+/// - `MessengerRepo::add` (`add_mutated`): INSERT con
+///   `ON CONFLICT (account, companion) DO NOTHING` (la PK natural) —
+///   idempotente (un par repetido devuelve 0 en vez de 23505).
 ///
-/// NO cableadas (INSERT plano — el replay violaría la PK; convertirlas antes
-/// de cablearlas, documentado como pendiente): `SafeboxRepo::set_size` (rama
-/// `size == 1`), `MessengerRepo::add`.
+/// Los dos INSERTs que fueron un gap documentado (ver ADR-0011/ROADMAP) —
+/// `SafeboxRepo::set_size` (rama `size == 1`) y `MessengerRepo::add` — ya
+/// están cableados con `ON CONFLICT DO NOTHING` sobre su PK natural. La regla
+/// para cablear una ruta nueva al Batcher: el SQL debe ser idempotente bajo
+/// re-aplicación (upsert por PK o conflict target), o no se cablea.
 pub struct WalSink<S: MutationSink> {
     inner: S,
     wal_dir: String,
@@ -835,6 +888,50 @@ mod tests {
         let batches = sink.0.lock().unwrap();
         assert_eq!(batches.len(), 3, "5 -> 2+2+1");
         assert_eq!(batches.iter().map(|b| b.len()).sum::<usize>(), 5);
+    }
+
+    // ------------------------------------------------------------- flush (unidad ACID)
+
+    /// `flush()` cierra el batch pendiente INMEDIATAMENTE (sin avanzar el
+    /// reloj — el flush rompe la ventana de acumulacion) y espera el commit:
+    /// las mutations pusheadas antes aplican en UNA tx.
+    #[tokio::test(start_paused = true)]
+    async fn flush_applies_pending_batch_immediately() {
+        let sink = CountingSink::default();
+        let batcher = Batcher::spawn(Duration::from_millis(1000), 64, sink.clone());
+        batcher.push(Mutation::new("SELECT 1", vec![]));
+        batcher.push(Mutation::new("SELECT 2", vec![]));
+        // Sin advance del reloj: el flush fuerza el cierre del batch.
+        batcher.flush().await.expect("flush ok");
+        let batches = sink.0.lock().unwrap();
+        assert_eq!(batches.len(), 1, "1 batch");
+        assert_eq!(batches[0].len(), 2, "las 2 mutations del flush");
+    }
+
+    /// `flush()` con cola vacia: no-op con Ok (nada que aplicar).
+    #[tokio::test(start_paused = true)]
+    async fn flush_with_empty_queue_returns_ok() {
+        let sink = CountingSink::default();
+        let batcher = Batcher::spawn(Duration::from_millis(100), 64, sink.clone());
+        batcher.flush().await.expect("flush vacio ok");
+        assert_eq!(batches(&sink), 0, "sin batches aplicados");
+    }
+
+    /// `flush()` propaga el error del sink: el batch fallo -> Err (el WAL
+    /// local conserva el archivo para el replay del proximo arranque).
+    #[tokio::test(start_paused = true)]
+    async fn flush_propagates_sink_error() {
+        #[derive(Clone)]
+        struct AlwaysFailSink;
+        impl MutationSink for AlwaysFailSink {
+            fn apply(&mut self, _batch: Vec<Mutation>) -> impl std::future::Future<Output = Result<(), String>> + Send {
+                async move { Err("PG caída (simulado)".into()) }
+            }
+        }
+        let batcher = Batcher::spawn(Duration::from_millis(100), 64, AlwaysFailSink);
+        batcher.push(Mutation::new("SELECT 1", vec![]));
+        let err = batcher.flush().await.expect_err("sink falla");
+        assert!(err.contains("PG caída"), "error del sink propagado: {err}");
     }
 
     // ------------------------------------------------------------------ WAL local (F3 phase 2)

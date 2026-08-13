@@ -757,8 +757,12 @@ fn character_add_packets(entry: &SpawnEntry, mob: &MobRow, vid: u32, b_type: u8)
             0, // z (parity SpawnMobRange)
             b_type,
             entry.vnum,
-            0, // b_moving_speed (runtime F5)
-            0, // b_attack_speed (runtime F5)
+            // b_moving_speed = move_speed de la tabla (parity char.cpp:2257
+            // `SetPoint(POINT_MOV_SPEED, sMovingSpeed)` → GetLimitPoint →
+            // wire BYTE, truncación igual que el cast (BYTE) del C++). El
+            // cliente lo usa para la animación del paso (SetMoveSpeed(x/100)).
+            mob.move_speed as u8,
+            0, // b_attack_speed: columna attack_speed NO seleccionada aún (GAP — mismo bug de animación que el PC; F5)
             0, // b_state_flag (runtime F5)
             [0, 0], // dw_affect_flag (runtime F5)
         )

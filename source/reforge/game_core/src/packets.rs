@@ -262,8 +262,13 @@ pub fn login_success(
 /// - `x/y/z` = row.x/y/z (UNITS — el cliente divide por 100).
 /// - `w_race_num` = row.job: `GetRaceNum()` para un PC sin polymorph =
 ///   `m_points.job` (`char.cpp:1634-1643`).
-/// - GAP runtime: `b_moving_speed`/`b_attack_speed` (`GetLimitPoint`, se
-///   calculan de stats), `b_state_flag` (`m_bAddChrState`) y `dw_affect_flag`
+/// - `b_moving_speed` = 100, `b_attack_speed` = 100: `GetLimitPoint(
+///   POINT_MOV_SPEED/ATT_SPEED)` — ComputePoints fija ambos a 100 para un PC
+///   (`char.cpp:2245-2246`). El cliente los usa DIRECTOS (SetMoveSpeed(x/100)
+///   — InstanceBaseMovement.cpp:20); un 0 congela al personaje (no avanza,
+///   no refresca su z del terreno → invisible) y bloquea las animaciones de
+///   ataque (`m_fAtkSpd < 1.0f` → skip, ActorInstanceBattle.cpp:587).
+/// - GAP runtime: `b_state_flag` (`m_bAddChrState`) y `dw_affect_flag`
 ///   (afects cargados con `AffectRepo` -> flags) -> 0 aquí.
 pub fn character_add(row: &PlayerRow) -> TPacketGCCharacterAdd {
     TPacketGCCharacterAdd::new(
@@ -274,8 +279,8 @@ pub fn character_add(row: &PlayerRow) -> TPacketGCCharacterAdd {
         row.z,
         CHAR_TYPE_PC,
         row.job as u32,
-        0, // mov speed (runtime)
-        0, // attack speed (runtime)
+        100, // mov speed (parity char.cpp:2245)
+        100, // attack speed (parity char.cpp:2246)
         0, // state flag (runtime)
         [0, 0], // affect flags (runtime)
     )
@@ -479,17 +484,17 @@ pub fn skill_level_packet(skill_level: Option<&Vec<u8>>) -> TPacketGCSkillLevel 
     p
 }
 
-/// `PlayerRow` -> `TPacketGCMainCharacter` (47 B, header 113 — layout del
-/// CLIENTE, `Packet.h:1349-1357`; el C++ manda este struct cuando el mapa NO
+/// `PlayerRow` -> `TPacketGCMainCharacter` (47 B, header **15** — layout del
+/// CLIENTE, `Packet.h:1347-1350`; el C++ manda este struct cuando el mapa NO
 /// tiene BGM configurado, `char.cpp:1536-1550`; con BGM manda 137/138 — GAP
 /// documentado: el runtime actual no configura BGM por mapa).
 ///
 /// Parity `char.cpp:1539-1549`: vid = row.id, wRaceNum = job (GetRaceNum),
 /// name, lx/ly/lz = x/y/z UNITS, skill_group del row.
 ///
-/// ⚠️ NO lleva empire: el struct del cliente no tiene el campo (47 B) — el
-/// canal emite el layout del cliente (discrepancia 48 vs 47 verificada en el
-/// slice 3.4 — emitir 48 B desalinea el stream del cliente).
+/// ⚠️ NO lleva empire y NO es 113: el 113 del cliente es la variante 48 B con
+/// empire (`Packet.h:251,1376-1385`) — emitir 113 con 47 B desalinea el
+/// stream 1 byte (ver doc de la struct en `protocol::world`).
 pub fn main_character(row: &PlayerRow) -> TPacketGCMainCharacter {
     TPacketGCMainCharacter {
         header: TPacketGCMainCharacter::HEADER,
@@ -788,7 +793,7 @@ mod tests {
         assert_eq!((p.x, p.y, p.z), (969600, 278400, 0), "units");
         assert_eq!(p.b_type, CHAR_TYPE_PC, "CHAR_TYPE_PC = 6");
         assert_eq!(p.w_race_num, 1, "GetRaceNum() = job para PC");
-        assert_eq!((p.b_moving_speed, p.b_attack_speed, p.b_state_flag), (0, 0, 0), "runtime GAP");
+        assert_eq!((p.b_moving_speed, p.b_attack_speed, p.b_state_flag), (100, 100, 0), "parity char.cpp:2245-2246; state flag runtime GAP");
         assert_eq!(p.dw_affect_flag, [0, 0], "runtime GAP");
         // wRaceNum@22 (LE) en el wire.
         assert_eq!(&b[22..26], &[1, 0, 0, 0]);
@@ -1035,7 +1040,7 @@ mod tests {
         let p = main_character(&row());
         let b = p.to_bytes();
         assert_eq!(b.len(), TPacketGCMainCharacter::SIZE, "47 B (layout del cliente)");
-        assert_eq!(b[0], TPacketGCMainCharacter::HEADER, "header 113");
+        assert_eq!(b[0], TPacketGCMainCharacter::HEADER, "header 15 (MAIN_CHARACTER sin BGM — Packet.h:160)");
         assert_eq!(p.dw_vid, 2);
         assert_eq!(p.w_race_num, 1, "GetRaceNum() = job");
         assert_eq!(p.name(), "ninja");

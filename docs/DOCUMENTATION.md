@@ -118,7 +118,7 @@ Template for a phase status entry (used in `CURRENT.md` and phase docs):
 
 - Use **relative links** between documents (`../ROADMAP.md`, `reference/protocol/login-flow.md`); never absolute filesystem paths.
 - Links must point to **existing paths**; never link to empty or missing categories. Verify before writing.
-- Never link to a stale name: the workspace crates are `protocol`, `network`, `database`, `realm`, `server_realms` (ADR-0004). Old names (`net`, `db`, `game`, `auth` crate) must not appear in new links or prose describing the current workspace. The same rule applies to moved documents: canonical paths are `plans/server-rewrite.md`, `reference/protocol/login-flow.md`, `reference/quests/quest-dsl.md` — never the superseded `superpowers/...` paths.
+- Never link to a stale name: the workspace crates are `protocol`, `network`, `database`, `game_core`, `server_realms` (ADR-0004; `realm` → `game_core` 2026-08-13). Old names (`net`, `db`, `game`, `realm`, `auth` crate) must not appear in new links or prose describing the current workspace. The same rule applies to moved documents: canonical paths are `plans/server-rewrite.md`, `reference/protocol/login-flow.md`, `reference/quests/quest-dsl.md` — never the superseded `superpowers/...` paths.
 
 ## 9. ADRs before architecture code
 
