@@ -7,6 +7,33 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-12] (36th part) — Consolidated master plan + oracle review applied (H.1–H.5)
+
+> User asked to join the current documentation and plan into ONE big plan and pass it through the oracle for improvement proposals. Done and applied.
+
+### Consolidated plan
+
+- **`docs/plans/master-plan.md` (new, Draft v0.2):** one document joining ROADMAP.md + `docs/plans/server-rewrite.md` (canonical design v0.3) + `docs/plans/locale-redesign.md` + ADRs 0001–0011 + `docs/CURRENT.md` snapshot: mission/principles, verified state, ADR index, target architecture (concurrency, domains, regional channels, data layer, manifest+locale, anti-speedhack), anti-hack table, stack, phases F0–F7 with milestones, F5.3 slices + tail, quest DSL, non-ported items, risks, open decisions, deferrals, ops.
+
+### Oracle review (ora-1) — verdict: architecture sound; not ready to act as-is (H.1–H.5); no code changes required
+
+- **H.1 — ECS migration is the next slice + provisional benchmark:** ADR-0010 mandates `MobCache → bevy World` next (ADR-0010:148-150) but the F5.3 tail omitted it; every slice built on `Arc<Mutex<MobCache>>` is rework. Applied to master-plan §8 + ROADMAP tail + CURRENT gates: **(1) ECS migration slice, (2) provisional N-bot benchmark** (wire-level bot simulator with sharded-region case, mob-density dimension, defined failure path), then walkability + speed envelope, the 2 non-idempotent WAL paths, `dw_arrow`, skills, shops, quests, safebox, trade, GM. **User confirmed ECS implementation** (mob-farming density is the core requirement — "con ECS lo que ganamos de rendimiento es una locura").
+- **H.2 — Push + backup cadence:** local is **53 commits ahead** of origin/main (verified `git rev-list`, HEAD `d6d80d3`), the 4 GB host holds the ONLY copy of history + PG + WAL + client. Documented as data-loss risk (master-plan §13/§15, ROADMAP GitHub section); push still pending user confirmation.
+- **H.3 — YAGNI cuts:** **Slint standalone deferred F5 → F7** (double protocol work — legacy wire now, new wire at F7; ADR-0007 amended) and **REST/metrics deferred post-cutover** (no F5 consumer); benchmark instrumentation stays in F5. Applied to master-plan, ROADMAP (lines kept as history), server-rewrite.md §8.2.
+- **H.4 — Milestones redefined + E2E gate:** **F3 milestone rewritten** ("C++ game runs against the Rust database" is unreachable post-G-PG — the C++ runs on PG via `mysql_proxy`; now: ported QIDs identical on PG via the Rust crate + active pull channel + PROTO_FROM_DB); **F5 milestone = defined real-client session script** (login → kill → loot → stack → equip → potion → death → revive → warp); real-client E2E smoke gate every N slices (zero real-client evidence for slices 2–17 since F4).
+- **H.5 — Staleness sweep:** CURRENT.md (ADR-0006/0009 statuses fixed to Accepted; ADR-0010/0011 added to the decisions list; commit → `d6d80d3`); ROADMAP Phase-0 ADR checkboxes (boundaries/concurrency/anti-hack → done, ADR-0010/0011); sqlx "deferred to the WAL phase" remnants removed (WAL phase DONE, decision stands); docs/README hub (ADRs 0001–0011, stale snapshot warning, master-plan link); server-rewrite.md document map 0001–0011; per-schema-permissions claim corrected (`mt2` owns all four schemas today; separation by repo discipline until RLS); **CP949 hard rules restated verbatim** in master-plan §11 (locale lua MUST be CP949/EUC-KR; `item_proto` names MUST stay original CP949).
+- **Runner-ups applied:** migration tooling DECIDED (plain SQL files + small runner, no sqlx::migrate); `replay_wal` gated PG test to un-gate BEFORE trade/safebox (untested crash path of the anti-dupe guarantee); single-region double-login semantics added as a small decision (§13); locale wire header numbers to be pinned before the slice (162/163 taken by datachannel).
+
+### Evidence
+
+- Oracle review read the plan + all sources; `git rev-list origin/main..HEAD` = 53; HEAD `d6d80d3`; bevy_ecs absent from `source/reforge/Cargo.toml` (ECS decision vs implementation gap confirmed).
+- Docs: 8 files updated (master-plan.md, ROADMAP.md, CURRENT.md, docs/README.md, server-rewrite.md, ADR-0007, locale-redesign.md, CHANGELOG.md); no code changed.
+
+### Pending
+
+- User confirmation to **push the 53-commit backlog** (H.2) and start the nightly `pg_dump` backup cadence.
+- Next work slice: **ECS migration** (`MobCache` → bevy World) + provisional benchmark spec.
+
 ## [2026-08-12] (35th part) — Skill adjustments per agent (approved inventory)
 
 > User asked for the full skill inventory per agent (current / candidates / unnecessary). Analysis delivered from verified config + skill descriptions (config skills dir, `~/.agents/skills`, project `.agents/skills`). Applied the 3 approved changes; the rest of the roster is already correct.

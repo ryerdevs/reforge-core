@@ -29,7 +29,7 @@ Rules for working inside the Rust rewrite (`source/reforge`) and around the C++ 
 
 - **Rule:** domain boundaries, data ownership, protocols, concurrency, failures and migration are decided **in writing (ADR) before** implementation.
 - **Why:** the project's methodology (AGENTS.md rule 8; `../DOCUMENTATION.md` §9). Architecture is not improvised in code.
-- **Evidence:** ADRs 0001–0007 in [`../decisions/`](../decisions/); the G-PG/F2 gate depends on ADR-0005 acceptance.
+- **Evidence:** ADRs 0001–0011 in [`../decisions/`](../decisions/) (the G-PG/F2 gate was unblocked by ADR-0005 acceptance on 2026-08-10).
 - **Consequence:** rejected work and re-architecture churn; the oracle review flags code that precedes its ADR.
 - **Status:** Active.
 

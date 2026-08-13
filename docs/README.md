@@ -22,7 +22,7 @@ The rewrite goal, verified state of the legacy baseline, and working rules live 
 | Section | What it holds | Entry point |
 |---|---|---|
 | **[Plans](plans/)** | Active design and migration plans (single-file canonical design) | [`plans/server-rewrite.md`](plans/server-rewrite.md) |
-| **[Decisions](decisions/)** | Architecture decision records (ADRs 0001–0007) | [`decisions/`](decisions/) (table below) |
+| **[Decisions](decisions/)** | Architecture decision records (ADRs 0001–0011) | [`decisions/`](decisions/) (table below) |
 | **[Reference](reference/)** | Technical contracts: wire protocol, legacy compatibility, quest DSL, legacy system notes | [`reference/`](reference/README.md) |
 | **[Guardrails](guardrails/)** | Lessons and rules not to repeat (encoding traps, operations, crash postmortem) | [`guardrails/`](guardrails/README.md) |
 | **[History](history/)** | Superseded plans, specs and snapshots — read-only, never deleted | [`history/`](history/README.md) |
@@ -48,6 +48,8 @@ The rewrite goal, verified state of the legacy baseline, and working rules live 
 
 Real state as of 2026-08-10 (see [`CURRENT.md`](CURRENT.md) for the full snapshot).
 
+> ⚠️ **Stale snapshot (2026-08-10), kept for reference. Current state (2026-08-12):** G-PG COMPLETE, F2a/F2b DONE, F4 milestone MET, F5.3 slices 1–17 DONE, ECS migration slice next. See [`CURRENT.md`](CURRENT.md) and [`plans/master-plan.md`](plans/master-plan.md) (oracle-reviewed 2026-08-12).
+
 | Phase | Code (all under `source/reforge/`) | Docs | Verification | Next gate |
 |---|---|---|---|---|
 | **F0 — Foundations** | crate `protocol` (17 login-flow packets, zero-deps, byte-exact) | ADR-0003, ADR-0004, [`reference/protocol/login-flow.md`](reference/protocol/login-flow.md) | **done**: 30/30 tests (golden vectors, roundtrips, sizes, bad lengths) | **pending**: real-capture harness (tcpdump against C++ server in WSL) |
@@ -60,8 +62,9 @@ Real state as of 2026-08-10 (see [`CURRENT.md`](CURRENT.md) for the full snapsho
 
 ## Plans
 
+- [`plans/master-plan.md`](plans/master-plan.md) — **the consolidated master plan** (joins ROADMAP + canonical design + locale plan + ADRs 0001–0011 + CURRENT snapshot; **oracle-reviewed 2026-08-12**, recommendations H.1–H.5 applied). Status: **Draft v0.2**.
 - [`plans/server-rewrite.md`](plans/server-rewrite.md) — canonical single-file design: architecture, anti-hack, data layer, migration order (G-PG before F2), quest DSL, regional channels, modifiable client. Status: **Draft v0.3 (canonical)**.
-- [`plans/locale-redesign.md`](plans/locale-redesign.md) — server-side locale: one PG table + one packet (GC_LOCALE) + client cache; per-language text owned by the server. Status: **Draft (2026-08-11)**.
+- [`plans/locale-redesign.md`](plans/locale-redesign.md) — server-side locale: one PG table + one packet (GC_LOCALE) + client cache; per-language text owned by the server. Status: **F1 importer DONE (2026-08-12); wire slice next; ADR-0009 Accepted**.
 
 ## Decisions (ADRs)
 
@@ -71,9 +74,13 @@ Real state as of 2026-08-10 (see [`CURRENT.md`](CURRENT.md) for the full snapsho
 | [0002](decisions/0002-unify-game-and-db.md) | Unify `game` + `db` into one process per region | Accepted |
 | [0003](decisions/0003-reforge-workspace-rust-layout.md) | Rust workspace in `source/reforge` | Accepted (partially superseded by 0004) |
 | [0004](decisions/0004-reforge-structure-and-names.md) | Flat workspace: `protocol`, `network`, `database`, `realm`, `server_realms`; config TOML | Accepted (2026-08-10) |
-| [0005](decisions/0005-postgresql-cutover-and-legacy-adapter.md) | PostgreSQL cutover (G-PG) + temporary legacy compatibility adapter (single canonical PG) | **Proposed** (2026-08-10) |
-| [0006](decisions/0006-legacy-wire-pack-compat-boundary.md) | Legacy wire/pack compatibility boundary, isolated/deletable (`protocol::legacy`) | **Proposed** (2026-08-10) |
-| [0007](decisions/0007-no-partial-rust-in-legacy-client.md) | No partial Rust embedded in the legacy client (F0–F6) | Accepted (2026-08-10) |
+| [0005](decisions/0005-postgresql-cutover-and-legacy-adapter.md) | PostgreSQL cutover (G-PG) + temporary legacy compatibility adapter (single canonical PG) | Accepted (2026-08-10, gate 4/4, implemented) |
+| [0006](decisions/0006-legacy-wire-pack-compat-boundary.md) | Legacy wire/pack compatibility boundary, isolated/deletable (`protocol::legacy`) | Accepted (2026-08-10, implemented in F2a) |
+| [0007](decisions/0007-no-partial-rust-in-legacy-client.md) | No partial Rust embedded in the legacy client (F0–F6) | Accepted (2026-08-10; Slint standalone deferred to F7 2026-08-12) |
+| [0008](decisions/0008-data-layer.md) | Data layer: tokio-postgres 0.7, domain repos, save-by-event + WAL + idempotent replay | Accepted (2026-08-11) |
+| [0009](decisions/0009-server-side-locale.md) | Server-side locale (server owns all text per language) | Accepted (2026-08-12) |
+| [0010](decisions/0010-domain-boundaries-and-data-ownership.md) | Domain boundaries + bevy_ecs World + per-connection state + WorldStore | Accepted (2026-08-12) |
+| [0011](decisions/0011-anti-hack-model.md) | Anti-hack model (always-on controls) | Accepted (2026-08-12) |
 
 ## Reference
 
@@ -103,8 +110,8 @@ docs/
 ├── README.md            ← you are here (hub)
 ├── CURRENT.md           current snapshot (status source of truth)
 ├── DOCUMENTATION.md     documentation policy (mandatory reading before writing docs)
-├── plans/               active design/migration plans (server-rewrite.md)
-├── decisions/           ADRs 0001–0007 (architecture decisions)
+├── plans/               active design/migration plans (master-plan.md, server-rewrite.md)
+├── decisions/           ADRs 0001–0011 (architecture decisions)
 ├── reference/           technical contracts (protocol, quests, legacy notes)
 ├── guardrails/          lessons and rules not to repeat (index + 5 files)
 ├── history/             superseded plans and specs (read-only; index)

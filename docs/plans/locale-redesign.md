@@ -1,6 +1,6 @@
 ---
 Type: Plan
-Status: F1 importer DONE (2026-08-12 — tables live, data imported, counts in CHANGELOG); wire slice (CG_LOCALE + client cache) next; ADR-0009 Proposed
+Status: F1 importer DONE (2026-08-12 — tables live, data imported, counts in CHANGELOG); wire slice next (client cache integration DONE 2026-08-12, 9th part); ADR-0009 **Accepted (2026-08-12)**
 Audience: Contributors, maintainers
 Last verified: 2026-08-12
 ---
@@ -87,7 +87,7 @@ Same architecture as the locale tables: the runtime map files become import-only
 ```
 client starts → loading screen ("Conectando...")
   → connect auth → CG_LOCALE_REQUEST(lang)
-  → GC_LOCALE (chunked if the legacy wire caps packet size — verified in F1)
+  → GC_LOCALE (chunked if the legacy wire caps packet size — to verify empirically in the F1 wire slice)
   → login screen rendered with server strings → LOGIN3 (login, lang)
 ```
 
@@ -160,7 +160,7 @@ Touchpoints (recon 2026-08-11):
 
 - **Map names**: image kept (single set, original style — the 17 per-language image sets die) + server-provided localized text overlaid.
 - **Fetch timing**: at connect, under a loading screen (map-loading pattern), before the login screen renders.
-- **Chunking**: chunked if the legacy wire caps packet size (verified empirically in F1).
+- **Chunking**: chunked if the legacy wire caps packet size (to verify empirically in the F1 wire slice).
 - **Language selector**: yes — client-side choice, default EN on fresh install, applies at login, hot-switchable live.
 - **Fallback language**: EN (differs from the C++ `LANGUAGE_DEFAULT = ES` — intentional; the new system's data is imported per language and EN is the completeness baseline).
 
