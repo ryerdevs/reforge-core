@@ -48,13 +48,16 @@ mod combat;
 mod entry;
 mod events;
 mod game;
+mod gm;
 mod items;
 mod movement;
 mod quest;
 mod script;
 mod session;
+mod shop;
 mod skills;
 mod social;
+mod trade;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
@@ -62,6 +65,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use database::item::ItemRepo;
 use game_core::ecs::{CombatEvent, Intent, NpcEvent, WorldSim};
+use protocol::world::TItemPos;
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::config::Config;
@@ -270,6 +274,54 @@ const INVENTORY_MAX_NUM: u16 = 180;
 
 /// `WEAR_MAX_NUM = 32` (length.h:77) — los slots de equipamiento.
 const WEAR_MAX_NUM: u16 = 32;
+
+/// `WEAR_ARROW = 9` (length.h:110) — el slot del arco/flechas (el cell del
+/// wire = INVENTORY_MAX_NUM + wear, length.h:827).
+const WEAR_ARROW: u16 = 9;
+
+/// El item de flechas EQUIPADO (WEAR_ARROW → cell 180+9=189): el slot que el
+/// legacy lee con `GetWear(WEAR_ARROW)` (char_battle.cpp:2747 —
+/// GetArrowAndBow; el count mínimo para disparar). `None` = sin flechas
+/// equipadas.
+pub(crate) fn equipped_arrow_index(inventory: &[database::item::ItemRow]) -> Option<usize> {
+    inventory
+        .iter()
+        .position(|i| i.window == "EQUIPMENT" && i.pos as u16 == INVENTORY_MAX_NUM + WEAR_ARROW)
+}
+
+/// Consume UNA flecha del slot equipado (dw_arrow — parity `UseArrow`,
+/// char_battle.cpp:2770-2789): el count baja y el item SE QUEDA con count 0
+/// (el gate del próximo disparo lo rechaza — GetArrowAndBow = 0); el cliente
+/// ve el count nuevo por GC_ITEM_UPDATE (38 B). Sin flecha equipada → no-op
+/// (el disparo ya se resolvió; defensivo).
+pub(crate) async fn consume_arrow(session: &mut Session) -> Result<(), String> {
+    let Some(idx) = equipped_arrow_index(&session.inventory) else {
+        return Ok(());
+    };
+    session.inventory[idx].count -= 1;
+    let up = protocol::world::TPacketGCItemUpdate {
+        header: protocol::world::TPacketGCItemUpdate::HEADER,
+        cell: TItemPos {
+            window: TItemPos::WINDOW_EQUIPMENT,
+            cell: INVENTORY_MAX_NUM + WEAR_ARROW,
+        },
+        count: session.inventory[idx].count as u8,
+        sockets: session.inventory[idx].sockets,
+        attrs: session.inventory[idx].attrs,
+    };
+    session
+        .send(&up.to_bytes())
+        .await
+        .map_err(|e| format!("enviando GC_ITEM_UPDATE (flecha): {e}"))?;
+    ItemRepo::new(&session.config.pg_conn)
+        .upsert(&session.inventory[idx], session.row().id)
+        .await?;
+    eprintln!(
+        "server_realms: channel conn {}: {} gastó 1 flecha (quedan {})",
+        session.conn_id, session.row().name, session.inventory[idx].count
+    );
+    Ok(())
+}
 
 /// `now_ms` — reloj del servidor en ms desde boot (parity `get_dword_time`).
 fn now_ms() -> u64 {

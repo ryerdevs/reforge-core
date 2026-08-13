@@ -29,9 +29,13 @@
 pub mod ai;
 pub mod combat;
 pub mod ecs;
+pub mod gm;
 pub mod map;
 pub mod movement;
 pub mod npc;
 pub mod packets;
+pub mod quest;
+pub mod shop;
 pub mod skill;
+pub mod trade;
 pub mod world;

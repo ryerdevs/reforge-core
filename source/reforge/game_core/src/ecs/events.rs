@@ -14,6 +14,8 @@
 //! del canal (Join es async y no pasa por `process_intent`); no pertenecen a
 //! ningún dominio. El mpsc sobrevive (UNO solo — `UnboundedSender<NpcEvent>`).
 
+use std::collections::HashMap;
+
 use database::item::ProtoItem;
 
 /// Datos del jugador al entrar al mundo (los manda la conexión tras el
@@ -119,14 +121,179 @@ pub enum ItemIntent {
     RemoveItem { item_vid: u32 },
 }
 
-/// Lane futuro SOCIAL (guild/party/emotes) — vacío hoy; el wrapper no cambia
-/// al crecer (C3: cada lane escribe su sub-enum).
+/// C→S de TIENDAS NPC (F6 social — parity `CInputMain::Shop`,
+/// input_main.cpp:1034-1096): el Open llega por el click en el NPC
+/// (CG_ON_CLICK — el mundo resuelve el shop por npc_vnum); Buy/Sell/Sell2
+/// por el CG_SHOP (50). El mundo valida el estado (shop abierto, pos, precio
+/// del `item_proto`); el CANAL aplica oro/inventario/DB (tiene el
+/// WorldStore/Batcher) y manda los paquetes GC.
 #[derive(Debug)]
-pub enum SocialIntent {}
+pub enum ShopIntent {
+    /// Click en un NPC: el mundo resuelve el shop (`shop.npc_vnum`), valida
+    /// la distancia (`SHOP_MAX_DISTANCE` = 1000, shop.h:6) y emite
+    /// `Opened` con los items (o NADA — parity: el C++ falla en silencio).
+    Open { player_vid: u32, npc_vid: u32 },
+    /// El jugador cerró la ventana (CG_SHOP END) — `Closed`.
+    Close { player_vid: u32 },
+    /// CG_SHOP BUY (pos): compra el item COMPLETO (count del shop) —
+    /// `BuyResult` con el precio, o `BuyRejected`.
+    Buy { player_vid: u32, pos: u8 },
+    /// CG_SHOP SELL (cell): vende todo el stack de la celda del inventario.
+    Sell { player_vid: u32, cell: u16 },
+    /// CG_SHOP SELL2 (cell, count): vende `count` unidades.
+    Sell2 { player_vid: u32, cell: u16, count: u32 },
+}
 
-/// Lane futuro QUEST — vacío hoy; el wrapper no cambia al crecer.
+/// S→C de tiendas NPC — eventos VALIDADOS del mundo; el canal aplica la
+/// parte PG (oro + items, unidad ACID del Batcher) y traduce al wire.
+#[derive(Debug, Clone)]
+pub enum ShopEvent {
+    /// El shop abrió (GC_SHOP START — el canal manda el item list del wire).
+    Opened { player_vid: u32, npc_vid: u32, items: Vec<crate::shop::ShopItem> },
+    /// El shop cerró (GC_SHOP END).
+    Closed { player_vid: u32 },
+    /// Compra validada: pos + precio del stack (el canal chequea oro/hueco y
+    /// aplica la DB).
+    BuyResult { player_vid: u32, pos: u8, vnum: i64, count: i64, price: i64 },
+    /// Venta validada (shop abierto): el canal resuelve el item de la celda
+    /// (count = el pedido — 0 = todo el stack, parity shop_manager.cpp:294).
+    SellResult { player_vid: u32, cell: u16, count: i64 },
+    /// Compra rechazada (pos inválido / shop no abierto / soldout).
+    BuyRejected { player_vid: u32, pos: u8, error: crate::shop::ShopError },
+    /// Venta rechazada (shop no abierto).
+    SellRejected { player_vid: u32, cell: u16, error: crate::shop::ShopError },
+}
+
+/// C→S del INTERCAMBIO (parity `CInputMain::Exchange`, input_main.cpp:
+/// 1111-1272): el canal valida oro/distancia/estado y manda el intent; el
+/// mundo corre la máquina de estado (`game_core::trade::TradeSession`) y
+/// emite los `TradeEvent` a AMBOS jugadores (routing por player_vid).
 #[derive(Debug)]
-pub enum QuestIntent {}
+pub enum TradeIntent {
+    /// CG_EXCHANGE START (arg1 = vid del target).
+    Start { player_vid: u32, target_vid: u32 },
+    /// CG_EXCHANGE ITEM_ADD: la fila COMPLETA del item (el commit necesita
+    /// id/count/vnum/sockets/attrs) + display_pos de la ventana.
+    ItemAdd { player_vid: u32, row: database::item::ItemRow, display_pos: u8 },
+    /// CG_EXCHANGE ITEM_DEL (arg1 = display_pos).
+    ItemDel { player_vid: u32, display_pos: u8 },
+    /// CG_EXCHANGE ELK_ADD (arg1 = oro — el canal validó `gold <= row.gold`).
+    GoldAdd { player_vid: u32, gold: i64 },
+    /// CG_EXCHANGE ACCEPT.
+    Accept { player_vid: u32 },
+    /// CG_EXCHANGE CANCEL — aborta para ambos.
+    Cancel { player_vid: u32 },
+    /// El ejecutor confirmó el commit ACID (DB ok) — el mundo emite `Done`
+    /// a ambos y libera el par.
+    CommitOk { player_vid: u32 },
+    /// El ejecutor rechazó el commit (validación o DB falló) — el mundo
+    /// cancela para ambos (parity `CExchange::Accept` → `goto EXCHANGE_END`).
+    CommitFail { player_vid: u32 },
+}
+
+/// Un item recibido por el trade (el row NUEVO ya commiteado — el receptor
+/// lo re-coloca en su inventario y re-upsertea, idempotente por id).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TradeReceivedItem {
+    pub row: database::item::ItemRow,
+}
+
+/// S→C del intercambio — el wire GC_EXCHANGE (47 B, `Packet.h:1828-1838`).
+#[derive(Debug, Clone)]
+pub enum TradeEvent {
+    /// El par arrancó (GC_EXCHANGE START — arg1 = el vid del otro).
+    Start { player_vid: u32, other_vid: u32 },
+    /// El target ya está ocupado (parity `GC_ALREADY` — exchange.cpp:85).
+    Already { player_vid: u32 },
+    /// Item añadido a la ventana (GC_EXCHANGE ITEM_ADD — is_me distingue la
+    /// ventana propia de la del target).
+    ItemAdded {
+        player_vid: u32,
+        is_me: bool,
+        display_pos: u8,
+        vnum: i64,
+        count: i64,
+        sockets: [i64; 3],
+        attrs: [(i16, i16); 7],
+    },
+    /// Item quitado de la ventana (GC_EXCHANGE ITEM_DEL).
+    ItemRemoved { player_vid: u32, is_me: bool, display_pos: u8 },
+    /// Oro añadido (GC_EXCHANGE GOLD_ADD).
+    GoldAdded { player_vid: u32, is_me: bool, gold: i64 },
+    /// Estado de aceptación (GC_EXCHANGE ACCEPT — solo cuando el par NO
+    /// completó; al completar va directo al commit, parity exchange.cpp:
+    /// 587-592).
+    AcceptState { player_vid: u32, is_me: bool, accept: bool },
+    /// El par completó: el EJECUTOR corre el commit ACID
+    /// (`game_core::trade::build_commit_units` + `WorldStore::exchange`) y
+    /// responde `CommitOk`/`CommitFail`.
+    Commit { player_vid: u32, plan: crate::trade::TradeCommitPlan },
+    /// Trade completado (a AMBOS, tras el CommitOk): oro recibido + items
+    /// recibidos (rows nuevos) + items entregados (para el GC_ITEM_DEL).
+    Done {
+        player_vid: u32,
+        gold_delta: i64,
+        received: Vec<TradeReceivedItem>,
+        delivered: Vec<database::item::ItemRow>,
+    },
+    /// Cancelado (GC_EXCHANGE END — sin cambios).
+    Cancelled { player_vid: u32 },
+}
+
+/// Lane SOCIAL (C3 + N1): TIENDAS NPC (compra/venta) + INTERCAMBIO
+/// jugador↔jugador (F6). Guild/party crecen aquí después.
+#[derive(Debug)]
+pub enum SocialIntent {
+    Shop(ShopIntent),
+    Trade(TradeIntent),
+}
+
+impl From<ShopIntent> for SocialIntent {
+    fn from(i: ShopIntent) -> Self {
+        SocialIntent::Shop(i)
+    }
+}
+impl From<TradeIntent> for SocialIntent {
+    fn from(i: TradeIntent) -> Self {
+        SocialIntent::Trade(i)
+    }
+}
+/// Conveniencia de los call sites (canal/tests): `ShopIntent.into()` →
+/// `Intent::Social(Shop)`.
+impl From<ShopIntent> for Intent {
+    fn from(i: ShopIntent) -> Self {
+        Intent::Social(SocialIntent::Shop(i))
+    }
+}
+impl From<TradeIntent> for Intent {
+    fn from(i: TradeIntent) -> Self {
+        Intent::Social(SocialIntent::Trade(i))
+    }
+}
+
+/// C→S del dominio QUEST: los triggers de evento del jugador + la
+/// reanudación del diálogo (CG_SCRIPT_ANSWER). El engine vive en
+/// `game_core::quest` (N1: la primera variante era un error de compilación
+/// en `systems/quest.rs` hasta implementarla).
+#[derive(Debug)]
+pub enum QuestIntent {
+    /// Carga las quests DSL (texto renderizado por `quest_dsl`) en el mundo —
+    /// la envía el canal al arrancar (directorio de quests del runtime).
+    Load { text: String },
+    /// Carga las filas persistidas del jugador (`player.quest` — la conexión
+    /// las leyó con `QuestRepo::load` en el entry).
+    Init { player_vid: u32, rows: Vec<crate::quest::PersistedFlag> },
+    /// Un trigger de evento. `items` = snapshot de counts del inventario
+    /// (las condiciones `count_item` — la conexión lo calcula al enviar).
+    Event {
+        player_vid: u32,
+        trigger: crate::quest::QuestTrigger,
+        items: HashMap<u32, i64>,
+    },
+    /// La respuesta del diálogo suspendido (CG_SCRIPT_ANSWER: 1..n del
+    /// select, 0 del [NEXT]).
+    Answer { player_vid: u32, answer: u8 },
+}
 
 /// Intents de la conexión hacia el mundo (mpsc unbounded — la tarea del
 /// canal los procesa y enruta los eventos de vuelta). `Join` lo maneja la
@@ -264,13 +431,30 @@ pub enum ItemEvent {
     PickupResult { player_vid: u32, item_vid: u32, item: Option<ItemView> },
 }
 
-/// Lane futuro SOCIAL (guild/party) — vacío hoy; el wrapper no cambia.
+/// S→C del lane SOCIAL (F6): tiendas NPC + intercambio — el canal enruta
+/// por `player_vid` y `social::emit` traduce al wire (GC_SHOP/GC_EXCHANGE).
 #[derive(Debug, Clone)]
-pub enum SocialEvent {}
+pub enum SocialEvent {
+    Shop(ShopEvent),
+    Trade(TradeEvent),
+}
 
-/// Lane futuro QUEST — vacío hoy; el wrapper no cambia.
+/// S→C del dominio QUEST: el resultado de procesar un intent — el diálogo
+/// (GC_SCRIPT 45), los efectos accionables y las filas sucias a persistir.
 #[derive(Debug, Clone)]
-pub enum QuestEvent {}
+pub enum QuestEvent {
+    /// El resultado del evento/reanudación: `script` = markup del GC_SCRIPT
+    /// (None sin diálogo); `effects` = items/warp/notice (los aplica la
+    /// conexión); `dirty` = filas `player.quest` (value 0 = delete);
+    /// `suspended` = la quest espera CG_SCRIPT_ANSWER.
+    Run {
+        player_vid: u32,
+        script: Option<String>,
+        effects: Vec<crate::quest::QuestEffect>,
+        dirty: Vec<crate::quest::DirtyFlag>,
+        suspended: bool,
+    },
+}
 
 /// Eventos S→C que el canal enruta por `player_vid` (la cola de cada
 /// conexión solo recibe los suyos). Wrapper por dominio (C3): los brazos
@@ -375,17 +559,38 @@ impl ItemEvent {
 }
 
 impl SocialEvent {
-    /// El jugador destino del evento (routing del canal) — sin variantes
-    /// hoy (lane futuro).
+    /// El jugador destino del evento (routing del canal) — delegado a los
+    /// sub-eventos del lane (shop/trade).
     pub fn player_vid(&self) -> u32 {
-        match *self {}
+        match self {
+            SocialEvent::Shop(e) => match e {
+                ShopEvent::Opened { player_vid, .. }
+                | ShopEvent::Closed { player_vid }
+                | ShopEvent::BuyResult { player_vid, .. }
+                | ShopEvent::SellResult { player_vid, .. }
+                | ShopEvent::BuyRejected { player_vid, .. }
+                | ShopEvent::SellRejected { player_vid, .. } => *player_vid,
+            },
+            SocialEvent::Trade(e) => match e {
+                TradeEvent::Start { player_vid, .. }
+                | TradeEvent::Already { player_vid }
+                | TradeEvent::ItemAdded { player_vid, .. }
+                | TradeEvent::ItemRemoved { player_vid, .. }
+                | TradeEvent::GoldAdded { player_vid, .. }
+                | TradeEvent::AcceptState { player_vid, .. }
+                | TradeEvent::Commit { player_vid, .. }
+                | TradeEvent::Done { player_vid, .. }
+                | TradeEvent::Cancelled { player_vid } => *player_vid,
+            },
+        }
     }
 }
 
 impl QuestEvent {
-    /// El jugador destino del evento (routing del canal) — sin variantes
-    /// hoy (lane futuro).
+    /// El jugador destino del evento (routing del canal).
     pub fn player_vid(&self) -> u32 {
-        match *self {}
+        match self {
+            QuestEvent::Run { player_vid, .. } => *player_vid,
+        }
     }
 }

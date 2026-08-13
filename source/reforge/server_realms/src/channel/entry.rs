@@ -143,6 +143,9 @@ pub async fn run(session: &mut Session) -> Result<(), String> {
         "server_realms: channel conn {}: login OK {login} (id {}, empire {:?})",
         session.conn_id, acc.id, acc.empire
     );
+    // El login de la cuenta queda en la sesión (el gmlist de GM — la pareja
+    // mName/mAccount — lo consulta channel/gm.rs por comando).
+    session.account_login = login.clone();
 
     // 6. WorldStore (repos + Batcher) + empire + paquete del select.
     let store = match WorldStore::new(&session.config.pg_conn).await {
@@ -301,6 +304,9 @@ pub async fn run(session: &mut Session) -> Result<(), String> {
         session.empire,
         &lands,
         &packets::equipped_parts(session.row(), &session.inventory),
+        super::equipped_arrow_index(&session.inventory)
+            .map(|i| session.inventory[i].count as u32)
+            .unwrap_or(0),
     );
     // Cola de entrada (parity input_login.cpp:648-656): TIME + CHANNEL tras
     // el land list — el reloj del server (get_global_time) y el canal.
@@ -461,15 +467,17 @@ fn entry_packets(
 /// `TPacketGCLandList` (130, `building.cpp:931-979`). Función pura.
 /// F5.3: `parts` = los 5 parts COMPUTADOS del equipo (ComputeParts — el
 /// personaje muestra el arma/armadura al entrar; `equipped_parts`).
+/// `arrows` = count de flechas equipadas (dw_arrow — ENABLE_QUIVER_SYSTEM).
 fn enter_packets(
     row: &database::player::PlayerRow,
     empire: u8,
     lands: &[database::land::LandRow],
     parts: &[u32; 5],
+    arrows: u32,
 ) -> Vec<Vec<u8>> {
     let mut out = vec![
         packets::character_add(row).to_bytes().to_vec(),
-        packets::character_additional_info_with_parts(row, empire, parts).to_bytes().to_vec(),
+        packets::character_additional_info_with_parts(row, empire, parts, arrows).to_bytes().to_vec(),
         TPacketGCPhase::new(phase::GAME).to_bytes().to_vec(),
     ];
     if !lands.is_empty() {
@@ -588,7 +596,7 @@ mod tests {
             guild_id: 0,
         }];
         let parts = packets::equipped_parts(&row, &[]);
-        let pkts = enter_packets(&row, 3, &lands, &parts);
+        let pkts = enter_packets(&row, 3, &lands, &parts, 0);
         assert_eq!(pkts.len(), 4, "ADD + INFO + GAME + LAND_LIST");
         assert_eq!(pkts[0].len(), TPacketGCCharacterAdd::SIZE);
         assert_eq!(pkts[0][0], header::GC_CHARACTER_ADD);
@@ -600,7 +608,7 @@ mod tests {
         assert_eq!(pkts[3][0], 130, "GC_LAND_LIST");
         assert_eq!(u16::from_le_bytes([pkts[3][1], pkts[3][2]]), 27, "3 + 1×24");
         // Sin lands -> 3 paquetes (el C++ no manda el paquete vacío).
-        assert_eq!(enter_packets(&row, 3, &[], &parts).len(), 3);
+        assert_eq!(enter_packets(&row, 3, &[], &parts, 0).len(), 3);
     }
 
     /// Tamaños del wire del flujo select/spawn (invariante byte-exacto).

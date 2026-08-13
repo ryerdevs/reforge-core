@@ -222,6 +222,19 @@ pub struct Session {
     pub walkability_warned: bool,
     /// Heartbeat del server (GC_PING — parity `ping_event`, desc.cpp:179-214).
     pub ping_timer: tokio::time::Interval,
+    /// Login de la CUENTA (normalizado, minúsculas) — el gmlist de GM exige
+    /// la pareja (mName del personaje, mAccount de la cuenta): set en el
+    /// login del entry (parity `gm_get_level` gm.cpp:50-105).
+    pub account_login: String,
+    /// dw_arrow (F4 slice): el último CG_USE_SKILL disparado fue un skill de
+    /// ARCO (flag USE_ARROW_DAMAGE) — la flecha se consume cuando llega el
+    /// `SkillResult` (el mundo pudo RECHAZAR el skill: cooldown/SP/rango →
+    /// sin evento → sin consumo). Se resetea en CADA dispatch (el gate de
+    /// skills.rs lo pone a true solo para skills de arco). Race residual
+    /// documentada: dos skills de arco DISTINTOS resueltos antes de drenar
+    /// la cola consumen 1 flecha en vez de 2 (el mismo skill lo rechaza el
+    /// cooldown del mundo).
+    pub pending_arrow_shot: bool,
 }
 
 impl Session {
@@ -263,6 +276,8 @@ impl Session {
             last_packet: tokio::time::Instant::now(),
             walkability_warned: false,
             ping_timer,
+            account_login: String::new(),
+            pending_arrow_shot: false,
         }
     }
 

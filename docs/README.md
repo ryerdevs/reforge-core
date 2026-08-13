@@ -2,7 +2,7 @@
 Type: Hub
 Status: Current
 Audience: Contributors, maintainers
-Last verified: 2026-08-12
+Last verified: 2026-08-13
 ---
 
 # Metin2 Documentation Hub
@@ -48,7 +48,7 @@ The rewrite goal, verified state of the legacy baseline, and working rules live 
 
 Real state as of 2026-08-10 (see [`CURRENT.md`](CURRENT.md) for the full snapshot).
 
-> ⚠️ **Stale snapshot (2026-08-10), kept for reference. Current state (2026-08-12):** G-PG COMPLETE, F2a/F2b DONE, F4 milestone MET, F5.3 slices 1–17 DONE, ECS migration slice next; **WSL retirement EXECUTED (ADR-0012)** — all-Windows native stack verified with the real client (login → select → world → movement). See [`CURRENT.md`](CURRENT.md) and [`plans/master-plan.md`](plans/master-plan.md) (oracle-reviewed 2026-08-12).
+> ⚠️ **Stale snapshot (2026-08-10), kept for reference — the phase table below and its statuses are NOT current.** Current state (2026-08-13): G-PG COMPLETE, F2a/F2b DONE, F4 milestone MET, F5.3 slices 1–17 + ECS + spawn dinámico + walkability + skills + shops/trade + quest runtime + GM + dw_arrow DONE, benchmark FIRST LOAD SIGNAL (20/20 bots), crate `realm` → `game_core` (42nd part), **WSL retirement EXECUTED (ADR-0012)** — all-Windows native stack. See [`CURRENT.md`](CURRENT.md) and [`plans/master-plan.md`](plans/master-plan.md) (oracle-reviewed 2026-08-12).
 
 | Phase | Code (all under `source/reforge/`) | Docs | Verification | Next gate |
 |---|---|---|---|---|
@@ -88,7 +88,7 @@ Real state as of 2026-08-10 (see [`CURRENT.md`](CURRENT.md) for the full snapsho
 - [`reference/README.md`](reference/README.md) — index of the technical contracts.
 - [`reference/protocol/login-flow.md`](reference/protocol/login-flow.md) — byte-exact wire contract of the login flow (contract of the `protocol` crate).
 - [`reference/protocol/legacy-compatibility.md`](reference/protocol/legacy-compatibility.md) — PanamaPack 151/hybrid-crypt 152/153 boundary (ADR-0006).
-- [`reference/quests/quest-dsl.md`](reference/quests/quest-dsl.md) — quest DSL specification (replaces Lua).
+- [`reference/quests/quest-dsl.md`](reference/quests/quest-dsl.md) — quest DSL specification (replaces Lua). **Accepted 2026-08-13** (core `quest_dsl` crate + qc→DSL converter, corpus 194/194).
 - [`reference/legacy/language-system.md`](reference/legacy/language-system.md) — Language System integration state (read-only, historical).
 
 ## Guardrails

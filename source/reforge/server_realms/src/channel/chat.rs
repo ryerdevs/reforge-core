@@ -1,6 +1,8 @@
 //! `channel/chat.rs` — el handler del CG_CHAT (R-s3): echo GC_CHAT (4) al
 //! jugador (parity `Chat()` input_main.cpp:641-685 → `ChatPacket` →
-//! char.cpp — sin interpret_command por ahora, YAGNI).
+//! char.cpp) + el hook de COMANDOS: el mensaje que empieza con '/' es un
+//! comando de GM (parity input_main.cpp:661-665 — `interpret_command` ANTES
+//! del echo y del anti-spam; el comando no se muestra).
 //!
 //! CG_CHAT (3): header + length(WORD) + type + msg (el framer ya entrega
 //! `length` bytes totales — el formato de TPacketCGChat Packet.h:534-539).
@@ -13,7 +15,9 @@
 use crate::channel::session::{Outcome, Session};
 use protocol::header;
 
-/// CG_CHAT (3): eco del mensaje al emisor con su vid + empire.
+/// CG_CHAT (3): si el mensaje empieza con '/' → comando (GM — parity
+/// `interpret_command`); si no → eco del mensaje al emisor con su vid +
+/// empire.
 pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String> {
     if pkt.len() < 4 {
         // C6a: malformado → Continue con log (antes cerraba la conexión).
@@ -26,6 +30,15 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
     }
     let chat_type = pkt[3];
     let msg = &pkt[4..];
+    // El comando: '/' + texto (parity input_main.cpp:661-665 — `*buf == '/'`
+    // → `interpret_command(ch, buf + 1, ...)`; el comando NO se muestra).
+    if msg.len() > 1 && msg[0] == b'/' {
+        return crate::channel::gm::handle(
+            session,
+            &String::from_utf8_lossy(&msg[1..]),
+        )
+        .await;
+    }
     // GC_CHAT: header(4) + size(WORD, incluye header 9 B) + type + dwVID +
     // bEmpire + msg (Packet.h:1336-1343; el cliente hace
     // size - sizeof(TPacketGCChat)).

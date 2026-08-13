@@ -302,17 +302,20 @@ pub fn character_add(row: &PlayerRow) -> TPacketGCCharacterAdd {
 pub fn character_additional_info(row: &PlayerRow, empire: u8) -> TPacketGCCharacterAdditionalInfo {
     // Default: los parts persistidos del row (sin items — GAP heredado).
     let parts = equipped_parts(row, &[]);
-    character_additional_info_with_parts(row, empire, &parts)
+    character_additional_info_with_parts(row, empire, &parts, 0)
 }
 
 /// Igual que `character_additional_info` pero con los 5 parts COMPUTADOS del
 /// runtime (F5.3 — `equipped_parts`: el personaje muestra el arma/armadura
 /// equipada; el C++ los deriva de `GetPart()` tras `SetPart` al equipar,
-/// item.cpp:793,833).
+/// item.cpp:793,833). `arrow_count` = count de flechas equipadas (dw_arrow —
+/// ENABLE_QUIVER_SYSTEM, Packet.h:1229; el C++ `GetArrowAndBow` lo usa para
+/// mostrar el count; 0 = sin flechas — parity `GetCount()`).
 pub fn character_additional_info_with_parts(
     row: &PlayerRow,
     empire: u8,
     parts: &[u32; 5],
+    arrow_count: u32,
 ) -> TPacketGCCharacterAdditionalInfo {
     let mut aw_part = [0u32; 5];
     aw_part.copy_from_slice(parts);
@@ -327,7 +330,7 @@ pub fn character_additional_info_with_parts(
         s_alignment: (row.alignment / 10) as i16,
         b_pk_mode: 0,
         dw_mount_vnum: 0,
-        dw_arrow: 0,
+        dw_arrow: arrow_count,
     }
 }
 

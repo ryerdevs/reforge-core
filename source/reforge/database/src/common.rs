@@ -43,6 +43,34 @@ impl CommonRepo {
             .map_err(|e| pg_err("NEXT_EXP", &e))?;
         row.try_get(0).map_err(|e| format!("NEXT_EXP col0: {e}"))
     }
+
+    /// Autoridad GM del jugador desde `common.gmlist` (parity `gm_get_level`
+    /// gm.cpp:50-105 + `__GetAdminInfo` ClientManager.cpp:3476-3526): la
+    /// clave es el nombre de PERSONAJE (`mName`, exacto — el C++ indexa el
+    /// map por nombre), la cuenta DEBE coincidir (`mAccount` — el boot la
+    /// guarda con `trim_and_lower`; el login del canal ya viene en
+    /// minúsculas, `normalize_login`) y el scope del server (`mServerIP =
+    /// 'ALL'` — el C++ filtra por la IP del canal al cargar; el runtime Rust
+    /// de un solo canal solo sirve filas 'ALL'/vacías).
+    ///
+    /// `None` = no es GM (o la cuenta no coincide — parity gm.cpp:69-73:
+    /// BAD ACCOUNT → GM_PLAYER). El texto `mAuthority` lo mapea
+    /// `game_core::gm::gm_level_from_text` (IMPLEMENTOR/GOD/HIGH_WIZARD/
+    /// LOW_WIZARD/WIZARD — el boot OMITE cualquier otro valor).
+    pub async fn gm_authority(&self, name: &str, account: &str) -> Result<Option<String>, String> {
+        let client = self.connect().await?;
+        let row = client
+            .query_opt(
+                "SELECT mauthority FROM common.gmlist \
+                 WHERE mname = $1 AND maccount = $2 \
+                   AND (mserverip = 'ALL' OR mserverip = '')",
+                &[&name, &account.to_ascii_lowercase()],
+            )
+            .await
+            .map_err(|e| pg_err("GM_AUTHORITY", &e))?;
+        row.map(|r| r.try_get(0).map_err(|e| format!("GM_AUTHORITY col0: {e}")))
+            .transpose()
+    }
 }
 
 #[cfg(test)]
@@ -55,6 +83,15 @@ mod tests {
     fn next_exp_sql_shape() {
         // El SQL es inline en next_exp(); el contrato se verifica en el gated
         // contra la tabla real (common.exp_table — level 1 -> 300).
+        let repo = CommonRepo::new("host=noop");
+        let _ = repo;
+    }
+
+    /// gm_authority: el shape del SQL (gmlist por mName + mAccount + scope).
+    /// El contrato con la tabla real se prueba en el harness gated
+    /// (common.gmlist — 0 filas hoy; el test no puede crear filas).
+    #[test]
+    fn gm_authority_sql_shape() {
         let repo = CommonRepo::new("host=noop");
         let _ = repo;
     }

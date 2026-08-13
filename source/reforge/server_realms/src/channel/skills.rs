@@ -1,7 +1,9 @@
 //! `channel/skills.rs` — el handler del CG_USE_SKILL (R-s3): el filtro
-//! temprano de nivel + la query del arma (la var `atk` del poly la usa) + el
-//! intent `UseSkill` al mundo (la resolución — nivel/cooldown/SP/rango/
-//! efecto — vive EN EL MUNDO, `WorldSim::process_skill`).
+//! temprano de nivel + la query del arma (la var `atk` del poly la usa) +
+//! el gate de FLECHAS (dw_arrow: las skills de arco exigen flechas
+//! equipadas — parity `GetArrowAndBow`) + el intent `UseSkill` al mundo (la
+//! resolución — nivel/cooldown/SP/rango/efecto — vive EN EL MUNDO,
+//! `WorldSim::process_skill`).
 //!
 //! CG_USE_SKILL (52, 9 B — Packet.h:854: `bHeader + dwVnum + dwTargetVID`).
 //! El cliente muestra su cooldown; el SERVIDOR lo impone (ADR-0011 — el
@@ -12,13 +14,15 @@
 
 use database::item::ItemRepo;
 use game_core::ecs::{Intent, SkillIntent};
+use game_core::skill::{skill_flag, SkillRepo};
 
 use crate::channel::session::{Outcome, Session};
-use crate::channel::INVENTORY_MAX_NUM;
+use crate::channel::{equipped_arrow_index, INVENTORY_MAX_NUM};
 
 /// CG_USE_SKILL (52): filtro temprano de nivel (parity UseSkill:
-/// `GetSkillLevel == 0` → rechazo sin respuesta — el mundo re-valida) + el
-/// intent `UseSkill` con el arma equipada.
+/// `GetSkillLevel == 0` → rechazo sin respuesta — el mundo re-valida) +
+/// gate de flechas de las skills de arco (dw_arrow) + el intent `UseSkill`
+/// con el arma equipada.
 pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String> {
     if pkt.len() < 9 {
         // C6a: malformado → Continue con log (antes cerraba la conexión).
@@ -57,6 +61,36 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
     } else {
         None
     };
+    // dw_arrow: las skills de ARCO (flag USE_ARROW_DAMAGE — el `atk` del
+    // poly usa CalcArrowDamage, char_skill.cpp:1104-1112) exigen flechas
+    // equipadas con count >= 1 (parity `GetArrowAndBow(&pkBow, &pkArrow, 1)`
+    // — char_battle.cpp:2919-2941: el skill de arco NO dispara sin flechas).
+    // El flag `pending_arrow_shot` consume la flecha cuando llega el
+    // `SkillResult` (events.rs — el disparo se RESOLVIÓ).
+    let proto = SkillRepo::new(&session.config.pg_conn).load(skill_id).await?;
+    let is_arrow_skill = proto
+        .as_ref()
+        .is_some_and(|p| p.flag & skill_flag::USE_ARROW_DAMAGE != 0);
+    if is_arrow_skill {
+        match equipped_arrow_index(&session.inventory) {
+            Some(idx) if session.inventory[idx].count >= 1 => {
+                session.pending_arrow_shot = true;
+            }
+            _ => {
+                eprintln!(
+                    "server_realms: channel conn {}: skill {skill_id} de {} \
+                     sin flechas equipadas (WEAR_ARROW) — ignorado (parity \
+                     GetArrowAndBow)",
+                    session.conn_id, session.row().name
+                );
+                return Ok(Outcome::Continue);
+            }
+        }
+    } else {
+        // Reset del flag: el skill anterior pudo ser un skill de arco
+        // RECHAZADO por el mundo (sin SkillResult — el flag quedaría stale).
+        session.pending_arrow_shot = false;
+    }
     session.intent(Intent::Skill(SkillIntent::UseSkill {
         player_vid: session.player_vid(),
         skill_id,

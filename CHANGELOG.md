@@ -7,6 +7,49 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-13] (43rd part) — Wave 7: NPC shops + player trade · quest runtime engine · GM commands · dw_arrow (quiver gate)
+
+> Wave 7 complete (social lane cod-3, cod-1, fix-4, orchestrator direct). All verified by the orchestrator with real outputs. **Deploy note: the servers still run the pre-wave-7 binary (3,935,232 B, 07:23 build) — redeploy pending the orchestrator.**
+
+### NPC shops + player trade DONE (social lane, cod-3)
+
+- **`game_core/src/shop.rs` (406 lines, pure)**: buy price = `item_proto.gold × count` (parity `shop.cpp:166-180`); sell = `shop_buy_price × count / 5 − 3% tax` (parity `shop_manager.cpp:297-319`); rejects SoldOut / NotEnoughMoney / InventoryFull / NotSellable / Equipped / GoldOverflow.
+- **`game_core/src/trade.rs` (370 lines, pure)**: `TradeSession` state machine — 12-item cap, gold once, 2-phase accept, **commit via `ItemExchange::exchange_mutated` + `Batcher::flush()` — ONE tx per unit, new ids 100M–200M, dupe-protected**.
+- **`ecs/systems/social.rs`**: `ShopTable` resource + `handle_social` arms; **`channel/shop.rs` + `channel/trade.rs`** wire byte-exact (GC_SHOP START 1888 B, GC_EXCHANGE 47 B, CG_SHOP 50 B, CG_EXCHANGE 27 B — Packet.h sizes; cheque field 0 for NPC shops). `WorldStore` gained the `exchange(&ItemExchange)` facade.
+- Workspace **548 passed / 0 failed** at that point.
+
+### Quest runtime engine DONE (cod-1)
+
+- **`game_core/src/quest/engine.rs` (859 lines)**: state machine (flag `{quest}.__status` 1-based — parity `questpc.cpp:115-118`; 0 = not started → start-state events start it); **`wait()`/`select()` suspension scheduler** (event SUSPENDS, saved path, client answers `CG_SCRIPT_ANSWER` → re-enter); conditions (pc.level/count_item/get_qf/number/get_time/get_map_index/get_gm_level/pet.is_summon/is_test_server + arith/compare/between); actions (say/say_title/wait/select/set_state/set_qf/give_item2/remove_item/warp/notice/return — **pending: say_reward, send_letter, set_quest_state, target_vid, affect_*, input_number**).
+- Persistence via `player.quest` (`QuestRepo`; value 0 = DELETE). Wire: `GC_SCRIPT` (45) 6 B header + markup [ENTER]/[NEXT]/[QUESTION], `CG_SCRIPT_ANSWER` (29, 2 B). `QuestIntent {Load, Init, Event, Answer}` + `QuestEvent::Run`.
+- Workspace **564 passed / 0 failed** at that point.
+
+### GM commands DONE (fix-4, subset)
+
+- **`game_core/src/gm.rs` (221 lines) + `channel/gm.rs`**: chat `/` prefix → `interpret_command` parity (`input_main.cpp:661-665`); permissions re-checked in DB per command (`common.gmlist`, `gm.cpp:50-105` isGM parity, ADR-0011); subset: warp/item/notice/level (**mob spawn deferred** — needs a new intent); unknown/rejected → EN message (locale pending, documented divergence). Wired in `channel/mod.rs` + `chat.rs`.
+
+### dw_arrow DONE (orchestrator direct)
+
+- **Arrow gate in `channel/skills.rs`**: `USE_ARROW_DAMAGE` skills require equipped arrows ≥1 (parity `GetArrowAndBow` `char_battle.cpp:2919-2941`).
+- `equipped_arrow_index` + `consume_arrow` (parity `UseArrow` `char_battle.cpp:2770-2789`; count-1, `GC_ITEM_UPDATE` 38 B) in `channel/mod.rs`; `pending_arrow_shot` flag in `session.rs` (:237,280) consumed at SkillResult (events.rs:360-370).
+- **`dw_arrow` field of `GC_CHARACTER_ADDITIONAL_INFO` now carries the real equipped arrow count** (was hardcoded 0; client `ENABLE_QUIVER_SYSTEM` `Packet.h:1229`) — `game_core/src/packets.rs` `character_additional_info_with_parts(row, empire, parts, arrow_count)` (:311-333) + channel call sites (items.rs ×2 equip/unequip, script.rs revive, entry.rs enter_packets).
+- Verified: **cargo check 4.52 s; game_core 154 + server_realms 42 passed, 0 failed**.
+
+### Ops: background subagents ENABLED (user-facing)
+
+- `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` added to `~/.config/opencode/opencode.jsonc` (verified) — tasks now run in background; the conversation never blocks while an agent works (root fix for the recurring "agent stuck / chat frozen" problem). **The user must restart opencode for it to take effect.**
+
+### Evidence
+
+- My attribute scan 2026-08-13 (post-wave-7): protocol 81, network 28, database 96, game_core **161**, server_realms **55**, mysql_proxy 67, locale_import 19, bench_bot 34, quest_dsl 66 = **607 attributes**; orchestrator runs: 548 (shops/trade) → 564 (quest engine) → after dw_arrow: game_core 154 + server_realms 42 passed 0 failed (cargo check 4.52 s).
+- File:line: `game_core/src/{shop,trade,gm}.rs` (406/370/221), `game_core/src/quest/engine.rs` (859), `channel/{shop,trade,gm}.rs`, `packets.rs:311-333`, `session.rs:237,280`, `skills.rs` (arrow gate), `opencode.jsonc` (background flag).
+
+### Pending
+
+- **Redeploy** the wave-7 binary (servers still on the 07:23 build).
+- Quest pending actions (say_reward, send_letter, set_quest_state, target_vid, affect_*, input_number); GM mob spawn (new intent) + GM locale; auction/unified trade.
+- Benchmark full ladder (WorldSim::metrics, sharded-region, 100→1000 bots); spawn-concurrency fix; family extraction; skill GAPs (SPLASH/PARTY/HORSE, `skill_power.txt`, buff numeric application); data channel 162/163; locale wire slice; manifest/hot reload; auto-ban.
+
 ## [2026-08-13] (42nd part) — Structural refactor: `realm` → `game_core` rename + channel/ecs splits + PG migrations + quest similarity engine
 
 > Wave 6 (rename lane). User decision: the crate `realm` is renamed `game_core`. Workspace 512 passed / 0 failed, clippy no new, release green. **Deploy note: the servers still run the pre-refactor binary (3,935,232 B from 07:23, auth8/chan8) — redeploy pending the orchestrator.**
