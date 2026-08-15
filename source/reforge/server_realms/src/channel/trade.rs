@@ -276,7 +276,7 @@ async fn apply_commit(session: &mut Session, plan: &TradeCommitPlan) -> Result<(
     }
     // (2) El oro del partner (fresco — parity `CExchange::Check` sobre el
     // company) + overflow GOLD_MAX del post propio.
-    let partner_gold = PlayerRepo::new(&session.config.pg_conn)
+    let partner_gold = PlayerRepo::new(session.pool.clone())
         .load(i64::from(plan.partner))
         .await?
         .map(|r| i64::from(r.gold))
@@ -290,7 +290,7 @@ async fn apply_commit(session: &mut Session, plan: &TradeCommitPlan) -> Result<(
             .await;
     }
     // (3) Las unidades ACID (ids nuevos del rango — patrón del split).
-    let base = ItemRepo::new(&session.config.pg_conn)
+    let base = ItemRepo::new(session.pool.clone())
         .max_id_in_range(
             trade::ITEM_ID_RANGE_MIN,
             trade::ITEM_ID_RANGE_MAX,
@@ -339,7 +339,7 @@ async fn apply_done(
         if let Some(idx) = session.inventory.iter().position(|i| i.id == d.id) {
             let del = TPacketGCItemDelDeprecated::new(
                 TItemPos { window: TItemPos::WINDOW_INVENTORY, cell: session.inventory[idx].pos as u16 },
-                d.vnum as u32,
+                0,
                 0,
             );
             session
@@ -376,7 +376,7 @@ async fn apply_done(
             .map_err(|e| format!("enviando GC_ITEM_SET (trade): {e}"))?;
         // El re-upsert corrige el pos (idempotente por id — la fila ya
         // existe del commit).
-        ItemRepo::new(&session.config.pg_conn)
+        ItemRepo::new(session.pool.clone())
             .upsert(&row, session.row().id)
             .await?;
         session.inventory.push(row);
@@ -388,7 +388,7 @@ async fn apply_done(
         .await
         .map_err(|e| format!("enviando GC_EXCHANGE END: {e}"))?;
     session
-        .send(&game_core::packets::points_packet(session.row(), session.next_exp).to_bytes())
+        .send(&game_core::packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
         .await
         .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
     Ok(())

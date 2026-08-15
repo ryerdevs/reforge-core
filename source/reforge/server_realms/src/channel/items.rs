@@ -206,7 +206,7 @@ pub async fn handle_use(session: &mut Session, pkt: &[u8]) -> Result<Outcome, St
         let vnum = session.inventory[idx].vnum;
         let id = session.inventory[idx].id;
         session
-            .send(&TPacketGCItemDelDeprecated::new(cell, vnum as u32, 0).to_bytes())
+            .send(&TPacketGCItemDelDeprecated::new(cell, 0, 0).to_bytes())
             .await
             .map_err(|e| format!("enviando GC_ITEM_DEL: {e}"))?;
         ItemRepo::new(session.pool.clone()).delete(id).await?;
@@ -399,12 +399,7 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
             cell: mv.pos.cell,
         };
         session
-            .send(&TPacketGCItemDelDeprecated::new(
-                cell,
-                vnum as u32,
-                session.inventory[src].count as u8,
-            )
-            .to_bytes())
+            .send(&TPacketGCItemDelDeprecated::new(cell, 0, 0).to_bytes())
             .await
             .map_err(|e| format!("enviando GC_ITEM_DEL: {e}"))?;
         session.inventory[src].window = "EQUIPMENT".to_string();
@@ -493,12 +488,7 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
             cell: mv.pos.cell,
         };
         session
-            .send(&TPacketGCItemDelDeprecated::new(
-                cell,
-                vnum as u32,
-                session.inventory[src].count as u8,
-            )
-            .to_bytes())
+            .send(&TPacketGCItemDelDeprecated::new(cell, 0, 0).to_bytes())
             .await
             .map_err(|e| format!("enviando GC_ITEM_DEL: {e}"))?;
         session.inventory[src].window = "INVENTORY".to_string();
@@ -617,10 +607,10 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
                     window: TItemPos::WINDOW_INVENTORY,
                     cell: mv.pos.cell,
                 };
-                let vnum = session.inventory[src].vnum;
+                let _vnum = session.inventory[src].vnum;
                 let id = session.inventory[src].id;
                 session
-                    .send(&TPacketGCItemDelDeprecated::new(cell, vnum as u32, 0).to_bytes())
+                    .send(&TPacketGCItemDelDeprecated::new(cell, 0, 0).to_bytes())
                     .await
                     .map_err(|e| format!("enviando GC_ITEM_DEL: {e}"))?;
                 ItemRepo::new(session.pool.clone()).delete(id).await?;
@@ -728,14 +718,9 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
             window: TItemPos::WINDOW_INVENTORY,
             cell: mv.pos.cell,
         };
-        let vnum = session.inventory[src].vnum;
+        let _vnum = session.inventory[src].vnum;
         session
-            .send(&TPacketGCItemDelDeprecated::new(
-                cell,
-                vnum as u32,
-                session.inventory[src].count as u8,
-            )
-            .to_bytes())
+            .send(&TPacketGCItemDelDeprecated::new(cell, 0, 0).to_bytes())
             .await
             .map_err(|e| format!("enviando GC_ITEM_DEL: {e}"))?;
         session.inventory[src].pos = mv.change_pos.cell as i32;
