@@ -7,6 +7,49 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-15] (48th part) — Real-client session fixes + full gap analysis
+
+> Sl session (continuation). Despliegue del wave de los 5 bugs (build release 04:10,
+> auth.041013/channel.041013) + sesión de juego del usuario que reveló 3 problemas
+> reales. Análisis completo de brechas vs el legacy (docs/plans/gap-analysis-2026-08-15.md).
+
+### Fixes de la sesión real del cliente
+
+- **Doble-click en item equipado → desequipa (toggle parity)**: `handle_use` solo
+  buscaba en INVENTORY — el doble-click en un item EQUIPADO daba "uso de celda 182 sin
+  item". Fix: buscar en INVENTORY o EQUIPMENT + toggle (parity UseItemEx
+  char_item.cpp:1874-1938 — equipado → UnequipItem). (items.rs, `46517a8`)
+- **Diag de tiendas**: el silencio parity impedía saber qué NPC fallaba al click. Se
+  añade log con el vnum (`world: shop Open vid X — NPC vnum Y SIN shop`). (social.rs,
+  `46517a8`)
+- **Tick del mundo 500→250 ms**: los mobs se veían "a saltos rápidos" (pasos de
+  speed×0.5s con pausas entre ellos; el C++ mueve cada ~100ms). Con 250ms los pasos son
+  speed×0.25s — 2× más suave, misma velocidad (step_toward usa tick.dt_ms). (mod.rs +
+  world.rs, `58cad3a`)
+
+### Despliegue
+
+- Build release 04:09, deploy 04:10 (binario 5,045,760 B, auth.041013/channel.041013),
+  boot limpio (0 panics).
+
+### Hallazgos del gap analysis (documento nuevo)
+
+- **Comandos**: 174 en el C++ vs 9 en el Rust (5%). Los botones del cliente mandan
+  comandos por el chat (PythonNetworkStream.cpp:203-240).
+- **Headers de juego**: 27 en el framer, 16 con dispatch, 11 ignorados en silencio
+  (CG_ITEM_DROP, CG_QUICKSLOT_*, CG_WHISPER, CG_PVP, CG_MYSHOP...).
+- **Tiendas — BUG DE DATOS**: los shops 1-8 legacy apuntaban a npc_vnum 9001-9009; el
+  wave 45-46 re-asignó 1-3 a 20002/20006/20023 y los vnums legacy se perdieron. El NPC
+  9003 del pueblo (con shop en el legacy) ya no tiene. Fix propuesto: re-asignar
+  npc_vnum (requiere confirmación del usuario — no game-data edits sin OK).
+- **Cobertura global ~35-40%** (no 90%): party/guild/safebox/messenger/PvP/refinar/
+  data-channel en 0%.
+
+### Commits
+
+- `46517a8` fix(items+shop): doble-click en equipado desequipa (toggle) + diag shop
+- `58cad3a` fix(movement): tick del mundo 500->250ms — mobs a saltos rapidos
+
 ## [2026-08-15] (47th part) — "Base jugable": 5 bugs gameplay fixeados (equip drag, GC_ITEM_DEL, CG_SHOP framer, comandos GM_PLAYER, barra de vida del mob)
 
 > Sl session (pi-loop-mode `/loop`). Los 5 bugs del plan "Base jugable" con causa raíz confirmada se arreglaron, cada uno con tests + `cargo test --workspace` + commit. El servidor C++ quedó FROZEN (solo parity, nunca se reconstruyó). Workspace **584 passed / 0 failed** (+20 desde los 564 del último wave).
