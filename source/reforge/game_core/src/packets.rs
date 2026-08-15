@@ -17,7 +17,7 @@
 //! los subsistemas de F4/F5).
 
 use database::affect::AffectRow;
-use database::item::ItemRow;
+use database::item::{ItemRow, ProtoItem};
 use database::land::LandRow;
 use database::player::{PlayerRow, PlayerSummary};
 use protocol::world::{
@@ -251,6 +251,32 @@ pub fn login_success(
     out
 }
 
+/// `APPLY_MOV_SPEED = 8` (length.h:359 — el enum `EApplyTypes`; el apply
+/// del item_proto que sube POINT_MOV_SPEED — constants.cpp:601
+/// `{ POINT_MOV_SPEED } // APPLY_MOV_SPEED, 8`).
+pub const APPLY_MOV_SPEED: i16 = 8;
+
+/// Velocidad de movimiento del PC (parity `ModifyPoints` item.cpp:718-735 +
+/// `GetLimitPoint(POINT_MOV_SPEED)` char.cpp:2245,2895-2906): base 100 +
+/// la suma de los `aApplies` con `APPLY_MOV_SPEED` de la BOTA equipada
+/// (WEAR_FOOTS — el C++ aplica los applies de TODO el equipo vía
+/// `ApplyPoint`; el subset solo lee las botas, el resto de items con
+/// MOV_SPEED son F5). Clamp al límite del PC (200 — `limit = 200` con
+/// `IsPC()`, char.cpp:2902-2906) y al byte del wire (el cast `(BYTE)` del
+/// C++ trunca; el clamp es el techo real de GetLimitPoint).
+pub fn mov_speed_for_boots(boots: Option<&ProtoItem>) -> u8 {
+    let bonus: i32 = boots
+        .map(|b| {
+            b.applies
+                .iter()
+                .filter(|(t, _)| *t == APPLY_MOV_SPEED)
+                .map(|(_, v)| *v)
+                .sum()
+        })
+        .unwrap_or(0);
+    (100 + bonus).clamp(0, 200) as u8
+}
+
 /// `PlayerRow` -> `TPacketGCCharacterAdd` (37 B, header 1).
 ///
 /// Parity `char.cpp:886-920` (`EncodeInsertPacket`):
@@ -262,15 +288,17 @@ pub fn login_success(
 /// - `x/y/z` = row.x/y/z (UNITS — el cliente divide por 100).
 /// - `w_race_num` = row.job: `GetRaceNum()` para un PC sin polymorph =
 ///   `m_points.job` (`char.cpp:1634-1643`).
-/// - `b_moving_speed` = 100, `b_attack_speed` = 100: `GetLimitPoint(
-///   POINT_MOV_SPEED/ATT_SPEED)` — ComputePoints fija ambos a 100 para un PC
+/// - `b_moving_speed` = `mov_speed` (GetLimitPoint(POINT_MOV_SPEED) — base
+///   100 + el apply APPLY_MOV_SPEED de la bota equipada, ver
+///   `mov_speed_for_boots`), `b_attack_speed` = 100: GetLimitPoint(
+///   POINT_ATT_SPEED) — ComputePoints fija ambos a 100 para un PC
 ///   (`char.cpp:2245-2246`). El cliente los usa DIRECTOS (SetMoveSpeed(x/100)
 ///   — InstanceBaseMovement.cpp:20); un 0 congela al personaje (no avanza,
 ///   no refresca su z del terreno → invisible) y bloquea las animaciones de
 ///   ataque (`m_fAtkSpd < 1.0f` → skip, ActorInstanceBattle.cpp:587).
 /// - GAP runtime: `b_state_flag` (`m_bAddChrState`) y `dw_affect_flag`
 ///   (afects cargados con `AffectRepo` -> flags) -> 0 aquí.
-pub fn character_add(row: &PlayerRow) -> TPacketGCCharacterAdd {
+pub fn character_add(row: &PlayerRow, mov_speed: u8) -> TPacketGCCharacterAdd {
     TPacketGCCharacterAdd::new(
         row.id as u32,
         0.0,
@@ -279,7 +307,7 @@ pub fn character_add(row: &PlayerRow) -> TPacketGCCharacterAdd {
         row.z,
         CHAR_TYPE_PC,
         row.job as u32,
-        100, // mov speed (parity char.cpp:2245)
+        mov_speed, // GetLimitPoint(POINT_MOV_SPEED) — parity char.cpp:2245 + botas
         100, // attack speed (parity char.cpp:2246)
         0, // state flag (runtime)
         [0, 0], // affect flags (runtime)
@@ -310,7 +338,10 @@ pub fn character_additional_info(row: &PlayerRow, empire: u8) -> TPacketGCCharac
 /// equipada; el C++ los deriva de `GetPart()` tras `SetPart` al equipar,
 /// item.cpp:793,833). `arrow_count` = count de flechas equipadas (dw_arrow —
 /// ENABLE_QUIVER_SYSTEM, Packet.h:1229; el C++ `GetArrowAndBow` lo usa para
-/// mostrar el count; 0 = sin flechas — parity `GetCount()`).
+/// mostrar el count; 0 = sin flechas — parity `GetCount()`). NOTA (C27):
+/// este paquete NO lleva b_moving_speed (packet.h:1348-1368 — el ADD (1) y
+/// el UPDATE (19) son los únicos con speeds); la velocidad con botas viaja
+/// en `character_add`/`character_update_with_parts`.
 pub fn character_additional_info_with_parts(
     row: &PlayerRow,
     empire: u8,
@@ -344,13 +375,15 @@ pub fn character_additional_info_with_parts(
 /// El ADDITIONAL_INFO (136) NO sirve en runtime: es el paquete de la
 /// secuencia de ENTRADA (el cliente lo aplica solo si el VID coincide con el
 /// `s_kNetActorData` pendiente — PythonNetworkStreamPhaseGameActor.cpp:153,
-/// 165). Speeds = 100 (GetLimitPoint — char.cpp:1025-1026); flags/guild/
+/// 165). Speeds = GetLimitPoint (char.cpp:1025-1026; el `mov_speed` del
+/// parámetro = la velocidad con la bota equipada — C27); flags/guild/
 /// montura a 0 (sin affects/mount — F5); `s_alignment` = row.alignment/10
 /// (char.cpp:1034); `dw_arrow` = count de flechas equipadas (QUIVER).
 pub fn character_update_with_parts(
     row: &PlayerRow,
     parts: &[u32; 5],
     arrow_count: u32,
+    mov_speed: u8,
 ) -> TPacketGCCharacterUpdate {
     let mut aw_part = [0u32; 5];
     aw_part.copy_from_slice(parts);
@@ -358,7 +391,7 @@ pub fn character_update_with_parts(
         header: TPacketGCCharacterUpdate::HEADER,
         dw_vid: row.id as u32,
         aw_part,
-        b_moving_speed: 100,
+        b_moving_speed: mov_speed, // GetLimitPoint(POINT_MOV_SPEED) — C27 botas
         b_attack_speed: 100,
         b_state_flag: 0,
         dw_affect_flag: [0, 0],
@@ -921,7 +954,7 @@ mod tests {
     /// character_add: 37 B y campos spot (parity char.cpp:886-920).
     #[test]
     fn character_add_fields_and_size() {
-        let p = character_add(&row());
+        let p = character_add(&row(), 100);
         let b = p.to_bytes();
         assert_eq!(b.len(), TPacketGCCharacterAdd::SIZE, "37 B");
         assert_eq!(b[0], TPacketGCCharacterAdd::HEADER, "header 1");
@@ -934,6 +967,40 @@ mod tests {
         assert_eq!(p.dw_affect_flag, [0, 0], "runtime GAP");
         // wRaceNum@22 (LE) en el wire.
         assert_eq!(&b[22..26], &[1, 0, 0, 0]);
+    }
+
+    /// C27 (velocidad de botas): `mov_speed_for_boots` = 100 + la suma de
+    /// los applies `APPLY_MOV_SPEED` de la bota equipada (parity
+    /// `ModifyPoints` item.cpp:718-735 → `ApplyPoint(APPLY_MOV_SPEED, lValue)`
+    /// sobre la base 100 del `ComputePoints` PC, char.cpp:2245; techo 200 —
+    /// `GetLimitPoint` IsPC, char.cpp:2902-2906). El valor viaja en el
+    /// `b_moving_speed` del ADD/UPDATE/ADDITIONAL_INFO.
+    #[test]
+    fn mov_speed_for_boots_sums_apply_mov_speed() {
+        use database::item::ProtoItem;
+        let boots = |applies: [(i16, i32); 3]| ProtoItem {
+            b_type: 2,
+            b_sub_type: 4, // ARMOR_FOOTS
+            applies,
+            values: [0; 6],
+            wear_flag: 1 << 2, // WEARABLE_FOOTS
+            weight: 0,
+        };
+        // Sin botas (o bota sin applies): base 100.
+        assert_eq!(mov_speed_for_boots(None), 100);
+        assert_eq!(mov_speed_for_boots(Some(&boots([(0, 0); 3]))), 100);
+        // Bota con APPLY_MOV_SPEED (8): 100 + valor (porcentaje).
+        assert_eq!(mov_speed_for_boots(Some(&boots([(8, 5), (0, 0), (0, 0)]))), 105);
+        // Varios applies de velocidad se SUMAN (el C++ aplica todos).
+        assert_eq!(mov_speed_for_boots(Some(&boots([(8, 5), (8, 5), (3, 20)]))), 110);
+        // Otros applies NO afectan (p.ej. APPLY_CON = 3).
+        assert_eq!(mov_speed_for_boots(Some(&boots([(3, 20), (0, 0), (0, 0)]))), 100);
+        // Techo del GetLimitPoint PC (200) + byte del wire.
+        assert_eq!(mov_speed_for_boots(Some(&boots([(8, 500), (0, 0), (0, 0)]))), 200);
+        // El ADD lleva la velocidad computada (el wire b[26] — mov speed).
+        let p = character_add(&row(), mov_speed_for_boots(Some(&boots([(8, 5), (0, 0), (0, 0)]))));
+        let b = p.to_bytes();
+        assert_eq!(b[26], 105, "b_moving_speed@26 del ADD");
     }
 
     /// character_additional_info: 70 B y campos spot (parity char.cpp:924-948).
@@ -1037,6 +1104,7 @@ mod tests {
         let p = |wear_flag: u32| ProtoItem {
             b_type: 1,
             b_sub_type: 0,
+            applies: [(0, 0); 3],
             values: [0; 6],
             wear_flag: i64::from(wear_flag),
             weight: 0,
@@ -1123,6 +1191,7 @@ mod tests {
         let weapon = database::item::ProtoItem {
             b_type: 1,
             b_sub_type: 0,
+            applies: [(0, 0); 3],
             // El daño del arma vive en value3/value4 (GetValue(3)/(4) —
             // battle.cpp:460-461; el cliente lee los mismos en
             // `__SetWeaponPower`, PythonNetworkStreamPhaseGameActor.cpp:50-51).
@@ -1154,19 +1223,21 @@ mod tests {
     /// `character_update_with_parts` — el paquete que el C++ manda al
     /// equipar/desequipar (`UpdatePacket` char.cpp:1017-1052 — el cliente
     /// recalcula ATT_MIN/ATT_MAX y refresca la ventana): 51 B, parts del
-    /// equipo, speeds 100 y los campos del row (vid/alignment).
+    /// equipo, speeds (el mov_speed con la bota — C27) y los campos del row
+    /// (vid/alignment).
     #[test]
     fn character_update_with_parts_fields_and_size() {
         let mut r = row();
         r.alignment = 1234;
         let parts = [0x1001, 0x1002, 0x1003, 0x1004, 0x1005];
-        let p = character_update_with_parts(&r, &parts, 42);
+        let p = character_update_with_parts(&r, &parts, 42, 110);
         let b = p.to_bytes();
         assert_eq!(b.len(), TPacketGCCharacterUpdate::SIZE, "51 B");
         assert_eq!(b[0], TPacketGCCharacterUpdate::HEADER, "header 19");
         assert_eq!(p.dw_vid, r.id as u32);
         assert_eq!(p.aw_part, parts, "parts del equipo (el arma en WEAPON)");
-        assert_eq!((p.b_moving_speed, p.b_attack_speed), (100, 100), "GetLimitPoint — char.cpp:1025-1026");
+        assert_eq!((p.b_moving_speed, p.b_attack_speed), (110, 100), "mov_speed con botas +10 — GetLimitPoint char.cpp:1025-1026");
+        assert_eq!(b[25], 110, "b_moving_speed@25 del UPDATE (5 + 5×4)");
         assert_eq!(p.b_state_flag, 0);
         assert_eq!(p.dw_affect_flag, [0, 0], "sin affects (F5)");
         assert_eq!(p.dw_guild_id, 0);

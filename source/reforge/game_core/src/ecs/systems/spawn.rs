@@ -11,24 +11,27 @@ use crate::combat::distance_approx;
 use crate::ecs::components::{Aggro, Hp, Map, Mob, Player, Position, SpawnRef, SpawnSeen, Vid};
 use crate::ecs::events::CombatEvent;
 use crate::ecs::resources::{
-    NpcIndex, NpcOutbox, SpawnCache, SpawnTable, VidAlloc, WorldMetrics,
+    NpcIndex, NpcOutbox, Rand, RespawnQueue, SpawnCache, SpawnTable, VidAlloc, WorldClock,
+    WorldMetrics,
 };
 use crate::ecs::world::WorldSim;
 use crate::npc::{entry_spawns, SpawnEntry, SpawnKind};
 use database::npc::{MobRepo, MobRow};
 
-/// Rango de materialización del spawn dinámico (units) — el mismo radio que
-/// el filtro SPAWN_VIEW del entry que este slice elimina.
-pub const SPAWN_VIEW: i32 = 2_500;
+/// Rango de materialización del spawn dinámico (units). 8000 (petición
+/// explícita del usuario 2026-08-13: "la distancia de visión para cargar las
+/// cosas es muy pequeña, agrándala aún más" — ampliado de 5000); el coste del
+/// loop por tick (10k entradas × checks de distancia) es despreciable.
+pub const SPAWN_VIEW: i32 = 8_000;
 /// Radio de desmaterialización (units) — margen de histéresis sobre el
 /// spawn (evita el flapping en el borde). Documentado: los mobs aparecen a
-/// ≤ 2500 y desaparecen a > 4000 de TODOS los jugadores.
-pub const DESPAWN_RADIUS: i32 = 4_000;
+/// ≤ 8000 y desaparecen a > 10000 de TODOS los jugadores.
+pub const DESPAWN_RADIUS: i32 = 10_000;
 
 /// 0) SPAWN/DESPAWN DINÁMICO — el fix del mundo vacío (parity sectree): los
 ///    mobs se MATERIALIZAN cuando un jugador de su mapa está a ≤ SPAWN_VIEW
-///    (2500) de su punto de spawn y se DESMATERIALIZAN cuando están a
-///    más de DESPAWN_RADIUS (4000) de TODOS los jugadores (o el mapa se quedó
+///    (8000) de su punto de spawn y se DESMATERIALIZAN cuando están a
+///    más de DESPAWN_RADIUS (10000) de TODOS los jugadores (o el mapa se quedó
 ///    sin jugadores). Los mobs EN COMBATE (hp < max o con aggro) NO se
 ///    desmaterializan (parity: el C++ no los quita del sectree — evita el
 ///    reset de HP al kite). Los ADD(+INFO) los construye `entry_spawns`
@@ -48,10 +51,13 @@ pub(crate) fn spawn_despawn_system(
     mut vids: ResMut<VidAlloc>,
     mut npc_index: ResMut<NpcIndex>,
     mut metrics: ResMut<WorldMetrics>,
+    now: Res<WorldClock>,
+    mut respawns: ResMut<RespawnQueue>,
+    mut rng: ResMut<Rand>,
     spawn_refs: Query<&SpawnRef>,
     players: Query<(&Player, &Map, &Position), Without<Mob>>,
     mut mobs: Query<(&Vid, &Map, &Position, &SpawnRef, &mut SpawnSeen), Without<Player>>,
-    mobs_state: Query<(Entity, &Vid, &Map, &Position, &Hp, &Aggro), Without<Player>>,
+    mobs_state: Query<(Entity, &Vid, &Map, &Position, &Hp, &Aggro, &SpawnRef), Without<Player>>,
     mut outbox: ResMut<NpcOutbox>,
 ) {
     // Jugadores por mapa: (vid, x, y) — una sola pasada para ambos pases.
@@ -76,6 +82,18 @@ pub(crate) fn spawn_despawn_system(
             if !matches!(se.entry.kind, SpawnKind::Mob | SpawnKind::Anywhere) {
                 continue; // TRAP grupos (parity entry_spawns — vnums de grupo)
             }
+            // C23 (respawn por tiempo): la entrada con mobs muertos pendientes
+            // NO se re-materializa hasta el deadline (parity regen_event — el
+            // C++ respawnea cada `time` segundos; aquí el delay empieza en la
+            // muerte). Al vencer: materializar SOLO las copias pendientes.
+            let spawn_count = match respawns.0.get(&(*map_index, index)).copied() {
+                Some((due, _)) if due > now.0 => continue, // aún no toca
+                Some((_, copies)) => {
+                    respawns.0.remove(&(*map_index, index));
+                    copies.min(se.entry.count)
+                }
+                None => se.entry.count,
+            };
             let near: Vec<u32> = viewers
                 .iter()
                 .filter(|(_, x, y)| {
@@ -86,19 +104,32 @@ pub(crate) fn spawn_despawn_system(
             if near.is_empty() {
                 continue;
             }
-            // Materializar las `count` copias con vids FRESCOS del allocador.
+            // Materializar las copias con vids FRESCOS del allocador. C28
+            // (jitter del spawn — parity `SpawnMobRange`, char_manager.cpp:
+            // 545-563: `number(sx, ex)` sobre el rect del regen; el rewrite
+            // spawneaba TODAS en el centro -> copias apiladas): cada copia
+            // cae en un punto ALEATORIO del rect `±(w_x, w_y)` celdas
+            // (×100 a units). El ADD de cada copia lleva SU posición.
             let base = vids.npc;
-            for _ in 0..se.entry.count {
+            let mut copies: Vec<(SpawnEntry, u32)> = Vec::with_capacity(spawn_count as usize);
+            for _ in 0..spawn_count {
                 let vid = vids.npc;
                 vids.npc += 1;
+                let jx = if se.entry.w_x > 0 { rng.roll(-se.entry.w_x, se.entry.w_x) * 100 } else { 0 };
+                let jy = if se.entry.w_y > 0 { rng.roll(-se.entry.w_y, se.entry.w_y) * 100 } else { 0 };
+                let mut copy = se.entry; // Copy
+                copy.x = se.entry.x + jx;
+                copy.y = se.entry.y + jy;
+                copy.count = 1;
+                copies.push((copy, vid));
                 let e = commands
                     .spawn((
                         Vid { vid },
                         Map { map_index: *map_index },
-                        Position { x: se.entry.x, y: se.entry.y },
+                        Position { x: copy.x, y: copy.y },
                         Hp { hp: se.mob.max_hp as i32, max_hp: se.mob.max_hp as i32 },
                         Aggro { target: None },
-                        Mob::from_row(&se.entry, &se.mob),
+                        Mob::from_row(&copy, &se.mob),
                         SpawnRef { map: *map_index, index },
                     ))
                     .id();
@@ -107,10 +138,14 @@ pub(crate) fn spawn_despawn_system(
                 commands.entity(e).insert(SpawnSeen(near.iter().copied().collect()));
                 npc_index.0.insert(vid, e);
             }
-            metrics.mobs_spawned += u64::from(se.entry.count);
-            // ADD(+INFO) por copia — parity byte-exacta del wire del entry.
-            let packets =
-                entry_spawns(*map_index, &[(se.entry, se.mob.clone())], base);
+            metrics.mobs_spawned += u64::from(spawn_count);
+            // ADD(+INFO) por copia — parity byte-exacta del wire del entry
+            // (cada copia con SU posición jittereada y su vid).
+            let entries: Vec<(SpawnEntry, MobRow)> = copies
+                .iter()
+                .map(|(c, _)| (*c, se.mob.clone()))
+                .collect();
+            let packets = entry_spawns(*map_index, &entries, base);
             for pv in near {
                 outbox.0.push(CombatEvent::Spawned { player_vid: pv, packets: packets.clone() }.into());
             }
@@ -154,7 +189,7 @@ pub(crate) fn spawn_despawn_system(
 
     // --- DESPAWN: intactos (hp lleno, sin aggro) a > DESPAWN_RADIUS de
     // TODOS los jugadores de su mapa (o sin jugadores en el mapa) ---
-    for (e, vid, map, pos, hp, aggro) in &mobs_state {
+    for (e, vid, map, pos, hp, aggro, spawn_ref) in &mobs_state {
         if hp.hp != hp.max_hp || aggro.target.is_some() {
             continue; // en combate: se queda (parity sectree + sin reset de HP)
         }
@@ -168,6 +203,11 @@ pub(crate) fn spawn_despawn_system(
         if !far {
             continue;
         }
+        // C23: el despawn por DISTANCIA no es una muerte — la entrada queda
+        // libre para re-materializar en cuanto un jugador se acerque (si un
+        // mob muerto de la misma entrada tiene un respawn pendiente, se
+        // cancela: ocultar copias VIVAS hasta el deadline sería peor).
+        respawns.0.remove(&(map.map_index, spawn_ref.index));
         commands.entity(e).despawn();
         npc_index.0.remove(&vid.vid);
         metrics.mobs_despawned += 1;
@@ -203,9 +243,11 @@ mod tests {
     #[test]
     fn spawns_only_entries_within_view() {
         let mut w = world_with(42);
+        let mut far = mob_row(2101);
+        far.ai_flag = Some("NOMOVE".into()); // determinista: no patrulla hacia la vista
         load(&mut w, vec![
             (entry(101, 0, 0, 1), mob_row(101)),
-            (entry(2101, 5_000, 0, 1), mob_row(2101)), // fuera de 2500
+            (entry(2101, 8_600, 0, 1), far), // fuera de SPAWN_VIEW 8000 (dist_approx 8264)
         ]);
         let events = join(&mut w);
         let spawned = spawn_events(&events);
@@ -228,7 +270,7 @@ mod tests {
         let events = join(&mut w);
         assert_eq!(spawn_events(&events).len(), 1);
         assert_eq!(w.npc_count(), 1);
-        w.process_intent(MoveIntent::Move { player_vid: 2, x: 6_000, y: 0 }.into(), 1_000);
+        w.process_intent(MoveIntent::Move { player_vid: 2, x: 10_800, y: 0 }.into(), 1_000);
         let events = w.update(500);
         assert!(events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Despawned { vid: 10_000, .. }))), "{events:?}");
         assert_eq!(w.npc_count(), 0);
@@ -249,7 +291,7 @@ mod tests {
             CombatIntent::Attack { player_vid: 2, victim_vid: 10_000, b_type: 0, weapon: None }.into(),
             1_000,
         );
-        w.process_intent(MoveIntent::Move { player_vid: 2, x: 6_000, y: 0 }.into(), 2_000);
+        w.process_intent(MoveIntent::Move { player_vid: 2, x: 10_800, y: 0 }.into(), 2_000);
         let events = w.update(500);
         assert!(!events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Despawned { .. }))), "{events:?}");
         assert_eq!(w.npc_count(), 1, "dañado: se queda en el mundo");
@@ -264,7 +306,7 @@ mod tests {
         row.ai_flag = Some("NOMOVE".into());
         load(&mut w, vec![(entry(101, 0, 0, 1), row)]);
         join(&mut w);
-        w.process_intent(MoveIntent::Move { player_vid: 2, x: 6_000, y: 0 }.into(), 1_000);
+        w.process_intent(MoveIntent::Move { player_vid: 2, x: 10_800, y: 0 }.into(), 1_000);
         w.update(500);
         assert_eq!(w.npc_count(), 0);
         w.process_intent(MoveIntent::Move { player_vid: 2, x: 0, y: 0 }.into(), 2_000);
@@ -330,16 +372,18 @@ mod tests {
     #[test]
     fn spawn_adds_scoped_to_each_players_view() {
         let mut w = world_with(42);
+        let mut far = mob_row(2101);
+        far.ai_flag = Some("NOMOVE".into()); // determinista: no patrulla hacia el P2
         load(&mut w, vec![
             (entry(101, 0, 0, 1), mob_row(101)),
-            (entry(2101, 2_400, 0, 1), mob_row(2101)), // vista del P1, fuera de la del P2
+            (entry(2101, 6_900, 0, 1), far), // vista del P1 (6900 -> 6631 < 8000), fuera de la del P2 (8900 -> 8554 > 8000)
         ]);
         let events1 = join_at(&mut w, 1, 0, 0);
         assert_eq!(spawn_events(&events1).len(), 2, "P1 ve ambas entradas");
         assert_eq!(w.npc_count(), 2);
-        // P2 a 400 units del spawn del 101: el 2101 (2800 units) queda fuera
+        // P2 a 2000 units del spawn del 101: el 2101 (8900 units) queda fuera
         // de su vista → solo recibe el ADD del 101.
-        let events2 = join_at(&mut w, 2, -400, 0);
+        let events2 = join_at(&mut w, 2, -2_000, 0);
         let vids: Vec<u32> = spawn_events(&events2)
             .iter()
             .flat_map(|pkts| pkts.iter().map(|p| u32::from_le_bytes(p[1..5].try_into().unwrap())))

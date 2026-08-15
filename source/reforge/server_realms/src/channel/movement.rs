@@ -140,6 +140,15 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
     // aceptan como el C++ (el cliente valida su propia colisión); SOLO los
     // saltos anómalos (fuera del envelope) verifican que el destino no sea
     // terreno bloqueado — un teleport no puede aterrizar en una montaña.
+    // C27: el envelope anti-speedhack escala con la velocidad EFECTIVA del
+    // personaje (POINT_MOV_SPEED — la bota equipada la sube; parity
+    // `GetMoveMotionSpeed() * 10000 / CalculateDuration(GetLimitPoint(
+    // POINT_MOV_SPEED), 10000)` — char.cpp:2753: el cliente se mueve a
+    // `velocidad_base × mov_speed/100`). El `speed` del motion es la base
+    // 500 del envelope (DEFAULT_MOVE_SPEED, ajustada al cliente real
+    // 2026-08-13) — con la bota, la base escala igual que el C++.
+    session.motion_mut().speed =
+        game_core::movement::DEFAULT_MOVE_SPEED * u32::from(session.mov_speed) / 100;
     match game_core::movement::process_move(session.motion_mut(), &mv, now32()) {
         Ok(r) => {
             eprintln!(

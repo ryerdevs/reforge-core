@@ -713,8 +713,19 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
         let arrows = super::equipped_arrow_index(&session.inventory)
             .map(|i| session.inventory[i].vnum as u32)
             .unwrap_or(0);
+        // C27 (velocidad de botas): re-computar la velocidad con el equipo
+        // NUEVO (el apply APPLY_MOV_SPEED de la bota — parity ModifyPoints
+        // item.cpp:718-735) y mandarla en el UPDATE (b_moving_speed).
+        let boots = super::equipped_boots_proto(&session.pool, &session.inventory).await?;
+        session.mov_speed = packets::mov_speed_for_boots(boots.as_ref());
         session
-            .send(&packets::character_update_with_parts(session.row(), &parts, arrows).to_bytes())
+            .send(&packets::character_update_with_parts(
+                session.row(),
+                &parts,
+                arrows,
+                session.mov_speed,
+            )
+            .to_bytes())
             .await
             .map_err(|e| format!("enviando GC_CHARACTER_UPDATE (equip): {e}"))?;
         // El iArmor del mundo COMPARTIDO (el ataque del mob usa
@@ -797,8 +808,18 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
         let arrows = super::equipped_arrow_index(&session.inventory)
             .map(|i| session.inventory[i].vnum as u32)
             .unwrap_or(0);
+        // C27: si se desequipó la BOTA, la velocidad vuelve a 100 (parity
+        // `CItem::Unequip` → `ModifyPoints(false)` — el apply se quita).
+        let boots = super::equipped_boots_proto(&session.pool, &session.inventory).await?;
+        session.mov_speed = packets::mov_speed_for_boots(boots.as_ref());
         session
-            .send(&packets::character_update_with_parts(session.row(), &parts, arrows).to_bytes())
+            .send(&packets::character_update_with_parts(
+                session.row(),
+                &parts,
+                arrows,
+                session.mov_speed,
+            )
+            .to_bytes())
             .await
             .map_err(|e| format!("enviando GC_CHARACTER_UPDATE (desequip): {e}"))?;
         // El iArmor del mundo COMPARTIDO baja con el item quitado.

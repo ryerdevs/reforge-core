@@ -11,16 +11,67 @@ use crate::combat::{
     player_def_grade, CombatState, NpcState, PlayerState,
 };
 use crate::ecs::components::{
-    Affects, Aggro, Combat, Hp, Map, Mob, Mp, Player, Position, Vid,
+    Affects, Aggro, Combat, Hp, Map, Mob, Mp, Player, Position, SpawnRef, Vid,
 };
 use crate::ecs::events::{CombatEvent, KillInfo, MoveEvent, NpcEvent};
-use crate::ecs::resources::{NpcIndex, NpcOutbox, Rand, Tick};
+use crate::ecs::resources::{
+    NpcIndex, NpcOutbox, Rand, RespawnQueue, SpawnTable, Tick, WorldClock,
+};
 use crate::ecs::world::WorldSim;
 use database::item::ProtoItem;
 
 /// Floor del de-aggro por distancia: un mob con sight 0 (nunca proactivo)
 /// pero GOLPEADO por el jugador sigue persiguiendo un mínimo (channel.rs).
 const DE_AGGRO_FLOOR: i32 = 2_000;
+
+/// Radio de SEPARACIÓN entre mobs (C28 — units): un mob no avanza si otro
+/// mob está a ≤ SEP_MOBS del punto donde aterrizaría su paso (evita el
+/// amontonamiento de la persecución — el C++ mantiene distancia porque
+/// spawnea las copias ALEATORIAMENTE dentro del rect y cada mob se detiene
+/// en su rango de ataque; el rewrite spawnea en el centro y el check
+/// conserva la separación cuando convergen al mismo jugador).
+pub(crate) const SEP_MOBS: i32 = 60;
+
+/// ¿Hay OTRO mob (vid distinto) dentro de `radius` de (x, y)? (C28).
+fn mob_near(others: &[(u32, i32, i32)], self_vid: u32, x: i32, y: i32, radius: i32) -> bool {
+    others
+        .iter()
+        .any(|(v, ox, oy)| *v != self_vid && distance_approx(x - ox, y - oy) <= radius)
+}
+
+/// Destino del paso libre de otros mobs (C28 — chase y patrol): si el
+/// aterrizaje recto está a ≤ SEP_MOBS de otro mob, prueba los FLANCOS ±90°
+/// (misma longitud de paso — el mob rodea al que bloquea); si todos los
+/// destinos están ocupados por mobs YA pegados a mí (a ≤ SEP_MOBS de mi
+/// posición actual — copias co-localizadas del spawn), avanza igual al
+/// aterrizaje recto (bloquear congelaría al par); si el bloqueo es de un
+/// mob LEJANO (a > SEP_MOBS de mí), no moverse este tick (el mob espera a
+/// que el camino se despeje — "no avanzar"). Devuelve el destino final.
+pub(crate) fn separate_landing(
+    others: &[(u32, i32, i32)],
+    self_vid: u32,
+    pos: (i32, i32),
+    nx: i32,
+    ny: i32,
+) -> Option<(i32, i32)> {
+    if !mob_near(others, self_vid, nx, ny, SEP_MOBS) {
+        return Some((nx, ny));
+    }
+    // Flancos: rotar el vector del paso ±90° (rotación exacta en enteros,
+    // misma longitud — `(dx,dy) -> (-dy,dx)` / `(dy,-dx)`).
+    let (dx, dy) = (nx - pos.0, ny - pos.1);
+    for (lx, ly) in [(pos.0 - dy, pos.1 + dx), (pos.0 + dy, pos.1 - dx)] {
+        if !mob_near(others, self_vid, lx, ly, SEP_MOBS) {
+            return Some((lx, ly));
+        }
+    }
+    // ¿El bloqueo es de mobs YA pegados a mí? -> avanzar (evita congelar
+    // al par co-localizado; no empeora la superposición que ya existe).
+    if mob_near(others, self_vid, pos.0, pos.1, SEP_MOBS) {
+        return Some((nx, ny));
+    }
+    None // otro mob (lejano) bloquea el avance — no moverse este tick
+}
 
 /// La vista `NpcState` que `game_core::combat` consume, desde los componentes
 /// (parity del `LiveNpc.state` del canal — la "dx" del mob es su columna ht).
@@ -43,13 +94,24 @@ fn npc_state(vid: u32, pos: &Position, mob: &Mob) -> NpcState {
 ///    char_state.cpp:386 + `battle_hit`) o paso de persecución (`step_toward`).
 ///    Multi-jugador: cada mob persigue SU objetivo (`Aggro.target`).
 pub(crate) fn chase_attack_system(
-    mut mobs: Query<(&Vid, &Mob, &mut Aggro, &mut Position), Without<Player>>,
+    mut mobs: ParamSet<(
+        // Posiciones de TODOS los mobs (C28 — separación; read-only).
+        Query<(&Vid, &Position), Without<Player>>,
+        Query<(&Vid, &Mob, &mut Aggro, &mut Position), Without<Player>>,
+    )>,
     mut players: Query<(Entity, &Player, &Position, &mut Hp, &Affects), Without<Mob>>,
     tick: Res<Tick>,
     mut rng: ResMut<Rand>,
     mut outbox: ResMut<NpcOutbox>,
 ) {
-    for (vid, mob, mut aggro, mut pos) in &mut mobs {
+    // C28: snapshot de las posiciones de los mobs (la separación consulta
+    // a los OTROS mobs — el ParamSet evita el conflicto de queries).
+    let others: Vec<(u32, i32, i32)> = mobs
+        .p0()
+        .iter()
+        .map(|(v, p)| (v.vid, p.x, p.y))
+        .collect();
+    for (vid, mob, mut aggro, mut pos) in &mut mobs.p1() {
         let Some(target) = aggro.target else {
             continue;
         };
@@ -91,10 +153,15 @@ pub(crate) fn chase_attack_system(
         }
         // Persecución: paso hacia el jugador a `move_speed` (parity
         // `step_toward` — el canal difundía el GC_MOVE FUNC_MOVE).
-        let (nx, ny) = step_toward(pos.x, pos.y, ppos.x, ppos.y, mob.move_speed, tick.dt_ms);
-        if (nx, ny) == (pos.x, pos.y) {
+        let (sx, sy) = step_toward(pos.x, pos.y, ppos.x, ppos.y, mob.move_speed, tick.dt_ms);
+        if (sx, sy) == (pos.x, pos.y) {
             continue; // ya en el jugador (o speed 0)
         }
+        // C28 (separación): el destino del paso debe quedar libre de otros
+        // mobs — si está ocupado, probar flancos o no moverse este tick.
+        let Some((nx, ny)) = separate_landing(&others, vid.vid, (pos.x, pos.y), sx, sy) else {
+            continue; // otro mob bloquea — no moverse este tick
+        };
         let rot = rotation_5deg(pos.x, pos.y, nx, ny);
         // La duración REAL del paso (parity CalculateMoveDuration,
         // char.cpp:2765-2768) — el cliente interpola con ESTA duración; el
@@ -207,12 +274,59 @@ impl WorldSim {
         Some(NpcDamage { hp: hp_after, dead: hp_after <= 0 })
     }
 
-    /// Quita el mob del mundo (muerte o despawn). Idempotente.
+    /// Quita el mob del mundo (muerte o despawn). Idempotente. C23: si el
+    /// mob vino de una entrada de la tabla de spawns, programa su RESPAWN
+    /// por tiempo (parity `regen_event`, regen.cpp:582-600): la entrada
+    /// vuelve a materializarse tras el intervalo del regen.txt (`entry.time`
+    /// — 5s/30s/60s/3600s en el runtime) o 60 s por defecto si la entrada
+    /// no tiene intervalo (tests).
     pub(crate) fn remove_npc(&mut self, vid: u32) {
+        // Deadline + copias ANTES del despawn (necesita el SpawnRef y la
+        // tabla — borrows secuenciales).
+        let respawn = {
+            let Some(e) = self.world.resource::<NpcIndex>().0.get(&vid).copied() else {
+                return;
+            };
+            let Ok(ent) = self.world.get_entity(e) else {
+                return;
+            };
+            let Some(sr) = ent.get::<SpawnRef>() else {
+                return; // sin entrada de spawn (p.ej. tests con entidades sueltas)
+            };
+            let interval = self
+                .world
+                .resource::<SpawnTable>()
+                .maps
+                .get(&sr.map)
+                .and_then(|es| es.get(sr.index))
+                .map(|se| se.entry.time)
+                .unwrap_or(0);
+            // Default 60 s si la entrada no declara intervalo (el C++ solo
+            // re-spawnea entradas con `time != 0`, regen.cpp:682-693; las
+            // entradas sin intervalo del runtime no existen — el loader las
+            // salta — así que el default solo aplica a los tests).
+            let interval = if interval == 0 { 60 } else { interval };
+            let due = self.world.resource::<WorldClock>().0 + u64::from(interval) * 1000;
+            Some((sr.map, sr.index, due))
+        };
         if let Some(e) = self.world.resource_mut::<NpcIndex>().0.remove(&vid)
             && self.world.get_entity(e).is_ok()
         {
             self.world.despawn(e);
+        }
+        if let Some((map, index, due)) = respawn {
+            // count>1: las copias muertas se acumulan (se spaw nean juntas
+            // al vencer el deadline de la ÚLTIMA muerte).
+            let mut q = self.world.resource_mut::<RespawnQueue>();
+            match q.0.get_mut(&(map, index)) {
+                Some((d, copies)) => {
+                    *d = due;
+                    *copies += 1;
+                }
+                None => {
+                    q.0.insert((map, index), (due, 1));
+                }
+            }
         }
     }
 
@@ -615,5 +729,121 @@ mod tests {
             1_000,
         );
         assert!(events.is_empty(), "vid inexistente -> sin respuesta");
+    }
+
+    /// C28 (separación): `separate_landing` — el aterrizaje recto ocupado
+    /// por otro mob se evita probando los flancos ±90°; si TODO está
+    /// ocupado por un mob LEJANO -> None (no moverse este tick); si el
+    /// bloqueo es de mobs YA pegados a mi posición -> avanzar igual (no
+    /// congelar al par co-localizado del spawn).
+    #[test]
+    fn separate_landing_blocks_flanks_and_advances_when_adjacent() {
+        use super::separate_landing;
+        // Aterrizaje recto (50,0) libre -> se usa directo.
+        assert_eq!(
+            separate_landing(&[(10_001, 200, 0)], 10_000, (0, 0), 50, 0),
+            Some((50, 0))
+        );
+        // Aterrizaje recto ocupado (mob a 0 u del landing) -> flanco ±90°
+        // libre ((0,50): el mob queda a ~70 u).
+        assert_eq!(
+            separate_landing(&[(10_001, 50, 0)], 10_000, (0, 0), 50, 0),
+            Some((0, 50)),
+            "el primer flanco (rotación +90°)"
+        );
+        // Todos los destinos ocupados por mobs LEJANOS (a > 60 de mi
+        // posición, pero ≤ 60 de cada candidato) -> None: no moverse este
+        // tick (el mob espera a que el camino se despeje).
+        let wall = [(10_001, 90, 0), (10_002, 0, 90), (10_003, 0, -90)];
+        assert_eq!(separate_landing(&wall, 10_000, (0, 0), 50, 0), None);
+        // Bloqueo por un mob YA pegado a mi posición -> avanzar igual
+        // (el par co-localizado del spawn no se congela).
+        assert_eq!(
+            separate_landing(&[(10_001, 0, 0)], 10_000, (0, 0), 50, 0),
+            Some((50, 0))
+        );
+        // El propio vid nunca bloquea (el snapshot incluye al mob mismo).
+        assert_eq!(
+            separate_landing(&[(10_000, 0, 0)], 10_000, (0, 0), 50, 0),
+            Some((50, 0))
+        );
+    }
+
+    /// C28 (amontonamiento): 2 mobs del MISMO entry persiguiendo al mismo
+    /// jugador NUNCA ocupan la misma celda — el jitter del spawn los separa
+    /// (parity `SpawnMobRange`, char_manager.cpp:545-563) y la separación
+    /// del chase conserva la distancia cuando convergen (flanco/espera).
+    /// Con seed 42 las posiciones son deterministas (incluido el jitter).
+    #[test]
+    fn mobs_chasing_same_player_never_share_a_cell() {
+        use crate::ecs::world::WorldSim;
+        use crate::npc::SpawnEntry;
+        fn pos(w: &WorldSim, vid: u32) -> (i32, i32) {
+            let v = w.npc_view(vid).expect("mob vivo");
+            (v.state.x, v.state.y)
+        }
+        let mut w = world_with(42);
+        let mut row = mob_row(101);
+        row.ai_flag = Some("AGGR".into());
+        // 2 copias, rect ±5 celdas (500 u) alrededor de (0,0).
+        let e = SpawnEntry { w_x: 5, w_y: 5, ..entry(101, 0, 0, 2) };
+        load(&mut w, vec![(e, row)]);
+        join(&mut w); // spawn con jitter + AggroOn de ambos
+        assert_eq!(w.npc_count(), 2);
+        let (x0, y0) = pos(&w, 10_000);
+        let (x1, y1) = pos(&w, 10_001);
+        assert!(
+            (x0, y0) != (x1, y1),
+            "el jitter separó las copias en el spawn: ({x0},{y0}) vs ({x1},{y1})"
+        );
+        // Correr la persecución hasta que ambos ataquen (rango 300) — en
+        // NINGÚN tick ocupan la misma celda.
+        for _ in 0..30 {
+            w.update(500);
+            let (a, b) = (pos(&w, 10_000), pos(&w, 10_001));
+            assert_ne!(a, b, "los mobs se apilaron: {a:?} vs {b:?}");
+        }
+        // Ambos llegaron al rango del jugador (atacan — no siguen moviéndose
+        // y la posición final queda estable y separada).
+        let (x0, y0) = pos(&w, 10_000);
+        let (x1, y1) = pos(&w, 10_001);
+        let d0 = crate::combat::distance_approx(x0, y0);
+        let d1 = crate::combat::distance_approx(x1, y1);
+        assert!(d0 <= 300, "mob A en rango: {d0}");
+        assert!(d1 <= 300, "mob B en rango: {d1}");
+    }
+
+    /// C23 (respawn por tiempo): el mob MUERTO no reaparece hasta el
+    /// intervalo del regen.txt (entry.time — parity `regen_event`,
+    /// regen.cpp:582-600: el C++ re-spawnea cada `time` segundos) y luego
+    /// re-materializa con vid FRESCO en su entrada.
+    #[test]
+    fn killed_mob_respawns_after_regen_interval() {
+        use crate::npc::SpawnEntry;
+        let mut w = world_with(42);
+        let mut row = mob_row(101);
+        row.max_hp = 10; // un golpe (46+) mata
+        let e = SpawnEntry { time: 2, ..entry(101, 0, 0, 1) }; // intervalo 2 s
+        load(&mut w, vec![(e, row)]);
+        join(&mut w);
+        assert_eq!(w.npc_count(), 1);
+        // Muerte (el reloj del mundo va en 500 ms — el del join).
+        w.process_intent(
+            CombatIntent::Attack { player_vid: 2, victim_vid: 10_000, b_type: 0, weapon: None }.into(),
+            1_000,
+        );
+        assert_eq!(w.npc_count(), 0, "muerto: despawn inmediato");
+        // t+1.0 s y t+1.5 s: aún dentro del intervalo de 2 s -> sin spawn.
+        assert_eq!(w.update(500).iter().filter(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))).count(), 0, "t+0.5 s");
+        assert_eq!(w.update(500).iter().filter(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))).count(), 0, "t+1.0 s");
+        assert_eq!(w.update(500).iter().filter(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))).count(), 0, "t+1.5 s");
+        assert_eq!(w.npc_count(), 0, "aún pendiente");
+        // t+2.0 s: vence el deadline -> la entrada re-materializa (el
+        // jugador sigue en la vista) con un vid FRESCO (el allocador no
+        // reusa — parity del flujo dinámico).
+        let events = w.update(500);
+        assert!(events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))), "respawn: {events:?}");
+        assert_eq!(w.npc_count(), 1, "reapareció tras el intervalo");
+        assert!(w.npc_view(10_001).is_some(), "vid fresco 10_001 (el 10_000 murió)");
     }
 }
