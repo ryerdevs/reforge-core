@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use database::affect::AffectRow;
 use database::common::CommonRepo;
-use database::item::ItemRow;
+use database::item::{ItemRepo, ItemRow};
 use database::player::PlayerRow;
 use network::framer::{ConnectionRole, Framer};
 use network::Connection;
@@ -188,6 +188,15 @@ pub struct Session {
     pub event_tx: UnboundedSender<NpcEvent>,
     /// Cola de eventos S→C del mundo (la drena el game loop).
     pub event_rx: UnboundedReceiver<NpcEvent>,
+    /// Lado emisor del canal de CHAT S→C (el broadcast/whisper de OTRAS
+    /// sesiones entrega aquí los bytes — gap-lane-C; el registro de peers
+    /// guarda un clone por sesión activa).
+    pub chat_tx: UnboundedSender<Vec<u8>>,
+    /// Cola de bytes de chat S→C (la drena el game loop — ver game.rs).
+    pub chat_rx: UnboundedReceiver<Vec<u8>>,
+    /// RAII del peer de chat (registrado en el world join — chat.rs;
+    /// desregistra al soltar la sesión).
+    pub chat_guard: Option<crate::channel::chat::ChatPeerGuard>,
     /// RAII de la captura golden del harness (open al crear, close al soltar).
     /// Nunca se LEE — vive solo por su Drop (dead_code intencional).
     #[allow(dead_code)]
@@ -244,6 +253,20 @@ pub struct Session {
     /// la pareja (mName del personaje, mAccount de la cuenta): set en el
     /// login del entry (parity `gm_get_level` gm.cpp:50-105).
     pub account_login: String,
+    /// Id de la CUENTA (PG) — set en el login del entry; lo usan los
+    /// handlers de la fase select (create/delete/empire/change-name) para
+    /// las queries del `player_index`.
+    pub account_id: i64,
+    /// `social_id` de la cuenta — confirmación del borrado de personaje
+    /// (parity `ClientManagerPlayer.cpp:972-977`: los ÚLTIMOS 7 chars vs los
+    /// primeros 7 del `private_code` del CG_CHARACTER_DELETE).
+    pub social_id: String,
+    /// Empire de la cuenta en el LOGIN (`player_index.empire` — `None` = sin
+    /// fila de índice). Distinto de `empire` (el byte del GC_EMPIRE, que es
+    /// RANDOM cuando la cuenta no tiene imperio — `empire_byte`): el handler
+    /// de CG_EMPIRE necesita saber si la cuenta YA tenía imperio (parity
+    /// `input_login.cpp:814-823` — con imperio + personajes → cierre).
+    pub account_empire: Option<i16>,
     /// dw_arrow (F4 slice): el último CG_USE_SKILL disparado fue un skill de
     /// ARCO (flag USE_ARROW_DAMAGE) — la flecha se consume cuando llega el
     /// `SkillResult` (el mundo pudo RECHAZAR el skill: cooldown/SP/rango →
@@ -279,6 +302,7 @@ impl Session {
         batcher: std::sync::Arc<database::wal::Batcher>,
     ) -> Self {
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (chat_tx, chat_rx) = tokio::sync::mpsc::unbounded_channel();
         let ping_timer = tokio::time::interval_at(
             tokio::time::Instant::now() + Duration::from_millis(config.ping_interval_ms),
             Duration::from_millis(config.ping_interval_ms),
@@ -294,6 +318,9 @@ impl Session {
             intent_tx,
             event_tx,
             event_rx,
+            chat_tx,
+            chat_rx,
+            chat_guard: None,
             cap: CaptureGuard::open(conn_id),
             leave: None,
             login_guard: None,
@@ -311,6 +338,9 @@ impl Session {
             walkability_warned: false,
             ping_timer,
             account_login: String::new(),
+            account_id: 0,
+            social_id: String::new(),
+            account_empire: None,
             pending_arrow_shot: false,
             pvp_mode: false,
             sitting: false,

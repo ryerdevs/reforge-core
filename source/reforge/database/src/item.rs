@@ -103,14 +103,18 @@ pub struct ItemRepo {
 /// ARMOR_BODY=0/HEAD=1/SHIELD=2/FOOTS=4, ItemData.h:71-74,169-185) +
 /// `value0..5` (`alValues`) + `wearflag` (los bits `WEARABLE_*` —
 /// item_length.h:379-392, el slot del equip lo decide `FindEquipCell`,
-/// item.cpp:509-623). El combate usa value3/4 (daño del arma) y value5
-/// (bonus); la armadura value1 + 2×value5; las pociones value0/1/3/4.
+/// item.cpp:509-623) + `weight` (columna `weight` del item_proto — el PESO
+/// básico del lane D; el C++ de esta variante no tiene sistema de peso, la
+/// columna llega vía mysql_proxy). El combate usa value3/4 (daño del arma)
+/// y value5 (bonus); la armadura value1 + 2×value5; las pociones value0/1/3/4.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProtoItem {
     pub b_type: i16,
     pub b_sub_type: i16,
     pub values: [i32; 6],
     pub wear_flag: i64,
+    /// Peso del item (unidades crudas de la columna `weight`).
+    pub weight: i64,
 }
 
 impl ItemRepo {
@@ -176,7 +180,7 @@ impl ItemRepo {
         let client = self.connect().await?;
         let rows = client
             .query(
-                "SELECT type, subtype, value0, value1, value2, value3, value4, value5, wearflag \
+                "SELECT type, subtype, value0, value1, value2, value3, value4, value5, wearflag, weight \
                  FROM player.item_proto WHERE vnum = $1",
                 &[&vnum],
             )
@@ -194,6 +198,7 @@ impl ItemRepo {
             b_sub_type: r.try_get(1).map_err(|e| format!("item_proto.sub_type: {e}"))?,
             values,
             wear_flag: r.try_get(8).map_err(|e| format!("item_proto.wearflag: {e}"))?,
+            weight: r.try_get(9).map_err(|e| format!("item_proto.weight: {e}"))?,
         }))
     }
 

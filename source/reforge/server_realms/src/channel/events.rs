@@ -224,6 +224,28 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                 );
                 return Ok(());
             }
+            // PESO básico (lane D): el pickup se rechaza si el item excede
+            // el peso máximo (parity GetMaxWeight/GetWeight del Metin2
+            // clásico — el C++ de esta variante no tiene el sistema; gate
+            // server-side, el cliente no muestra la barra). Sin fila de
+            // proto → fail-open (el vnum pesa 0).
+            if let Some(proto) = ItemRepo::new(session.pool.clone())
+                .load_proto_use_values(gi.vnum as i64)
+                .await?
+            {
+                let current = session.inventory_weight().await?;
+                let add = proto.weight * i64::from(gi.count) / 10;
+                let max = session.max_weight();
+                if current + add > max {
+                    eprintln!(
+                        "server_realms: channel conn {}: pickup de vid \
+                         {item_vid} (vnum {}, ×{}) — RECHAZADO por PESO \
+                         (actual {current} + {add} > máximo {max})",
+                        session.conn_id, gi.vnum, gi.count
+                    );
+                    return Ok(());
+                }
+            }
             // F5.3 (STACKING — parity `AutoStackItemProto`,
             // char_item.cpp:6722-6755): si ya existe un item del MISMO vnum
             // en el inventario con count < 200 (`g_bItemCountLimit`,

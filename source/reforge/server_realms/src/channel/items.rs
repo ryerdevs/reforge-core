@@ -17,7 +17,8 @@
 
 use database::item::ItemRepo;
 use protocol::world::{
-    TPacketCGItemUse, TPacketGCItemDelDeprecated, TPacketGCItemSet, TItemPos,
+    TPacketCGItemDrop, TPacketCGItemDrop2, TPacketCGItemUse, TPacketGCItemDelDeprecated,
+    TPacketGCItemSet, TItemPos,
 };
 use game_core::ecs::{CombatIntent, Intent, ItemIntent};
 use game_core::packets;
@@ -34,9 +35,233 @@ const ITEM_TYPE_AUTOUSE: i16 = 4;
 fn is_consumable(b_type: i16) -> bool {
     b_type == ITEM_TYPE_USE || b_type == ITEM_TYPE_AUTOUSE
 }
-use crate::channel::{equipped_armor, ITEM_COUNT_LIMIT, INVENTORY_MAX_NUM, WEAR_MAX_NUM};
+use crate::channel::{
+    equipped_armor, quickslot, ITEM_COUNT_LIMIT, INVENTORY_MAX_NUM, WEAR_MAX_NUM,
+};
 
-/// CG_ITEM_PICKUP (11): manda el intent `PickupItem` al mundo (la respuesta
+/// `ITEM_GOLD_VNUM = 1` — el oro del suelo es el item vnum 1 (parity
+/// `DropGold` char_item.cpp:5518-5540: `CreateItem(1, gold)`).
+const ITEM_GOLD_VNUM: u32 = 1;
+
+/// Clamp del count del DropItem (parity char_item.cpp:5424-5430: `bCount == 0
+/// || bCount > item->GetCount()` → count del item).
+fn drop_want(count: u8, stack: i64) -> i64 {
+    if count == 0 || i64::from(count) > stack {
+        stack
+    } else {
+        i64::from(count)
+    }
+}
+
+/// CG_ITEM_DROP (12, 8 B: header + TItemPos + gold DWORD — Packet.h:566-570):
+/// soltar un item del inventario o oro al suelo (lane D). Parity `ItemDrop`
+/// (input_main.cpp:855-871): `gold > 0` → `DropGold` (item vnum 1 con
+/// count = gold + `PointChange(POINT_GOLD, -gold)`); si no → `DropItem`.
+pub async fn handle_drop(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String> {
+    let d = match TPacketCGItemDrop::from_bytes(pkt) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!(
+                "server_realms: channel conn {}: CG_ITEM_DROP malformado: {e}",
+                session.conn_id
+            );
+            return Ok(Outcome::Continue);
+        }
+    };
+    drop_cell_or_gold(session, d.cell, d.gold, 0).await
+}
+
+/// CG_ITEM_DROP2 (20, 9 B: header + TItemPos + gold DWORD + count BYTE —
+/// Packet.h:566-575): soltar con CANTIDAD. Parity `ItemDrop2`
+/// (input_main.cpp:875-890): `gold > 0` → `DropGold`; si no →
+/// `DropItem(Cell, count)`.
+pub async fn handle_drop2(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String> {
+    let d = match TPacketCGItemDrop2::from_bytes(pkt) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!(
+                "server_realms: channel conn {}: CG_ITEM_DROP2 malformado: {e}",
+                session.conn_id
+            );
+            return Ok(Outcome::Continue);
+        }
+    };
+    drop_cell_or_gold(session, d.cell, d.gold, d.count).await
+}
+
+/// Router del drop (parity ItemDrop/ItemDrop2): gold > 0 → DropGold;
+/// si no → DropItem(Cell, count).
+async fn drop_cell_or_gold(
+    session: &mut Session,
+    cell: TItemPos,
+    gold: u32,
+    count: u8,
+) -> Result<Outcome, String> {
+    if gold > 0 {
+        return drop_gold(session, gold).await;
+    }
+    drop_item(session, cell, count).await
+}
+
+/// `DropGold(gold)` (parity char_item.cpp:5518-5540): crea el item vnum 1
+/// (oro) con count = gold en la posición del jugador (el mundo asigna el vid
+/// y el `DropResult` manda el GC_ITEM_GROUND_ADD + ownership) y descuenta
+/// el oro (GC_POINTS + save). Rechazos: `gold <= 0` o `gold > GetGold()`
+/// (el C++ devuelve false en silencio). El intent se envía ANTES de mutar
+/// el oro (si el mundo está muerto, el send falla y no se pierde nada).
+async fn drop_gold(session: &mut Session, gold: u32) -> Result<Outcome, String> {
+    if i64::from(gold) > i64::from(session.row().gold) {
+        eprintln!(
+            "server_realms: channel conn {}: {} — drop de {gold} oro \
+             con {} en el monedero — rechazado (parity DropGold)",
+            session.conn_id,
+            session.row().name,
+            session.row().gold
+        );
+        return Ok(Outcome::Continue);
+    }
+    let (x, y) = (session.motion().x, session.motion().y);
+    session.intent(Intent::Item(ItemIntent::DropItem {
+        player_vid: session.player_vid(),
+        vnum: ITEM_GOLD_VNUM,
+        count: gold,
+        x,
+        y,
+        z: 0,
+    }))?;
+    {
+        let row = session.row_mut();
+        // El gate de arriba garantiza `gold <= row.gold` (i32) — cast seguro.
+        row.gold = row.gold.saturating_sub(gold as i32);
+    }
+    session
+        .send(&packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
+        .await
+        .map_err(|e| format!("enviando GC_POINTS (drop oro): {e}"))?;
+    session.save();
+    eprintln!(
+        "server_realms: channel conn {}: {} soltó {gold} oro en el suelo \
+         (vnum {ITEM_GOLD_VNUM}, {x},{y})",
+        session.conn_id, session.row().name
+    );
+    Ok(Outcome::Continue)
+}
+
+/// `DropItem(Cell, count)` (parity char_item.cpp:5424-5516): valida
+/// muerto/celda/item, clamp del count al count del stack, SyncQuickslot de
+/// la celda (la barra rápida deja de referenciar el item soltado), quita del
+/// inventario (GC_ITEM_UPDATE/DEL + upsert/delete) y crea el item en el
+/// suelo con el intent `DropItem` del mundo (el `DropResult` →
+/// GC_ITEM_GROUND_ADD + ownership — events.rs). Subset documentado: sin
+/// gate de antiflag (ITEM_ANTIFLAG_DROP — el C++ chequea; el cliente ya
+/// bloquea items protegidos en su UI), sin cheque/ENABLE_CHEQUE_SYSTEM.
+async fn drop_item(
+    session: &mut Session,
+    cell: TItemPos,
+    count: u8,
+) -> Result<Outcome, String> {
+    if session.row().hp <= 0 {
+        eprintln!(
+            "server_realms: channel conn {}: {} — drop con hp 0 \
+             (muerto) — rechazado (parity IsDead)",
+            session.conn_id, session.row().name
+        );
+        return Ok(Outcome::Continue);
+    }
+    if cell.window != TItemPos::WINDOW_INVENTORY || cell.cell >= INVENTORY_MAX_NUM {
+        eprintln!(
+            "server_realms: channel conn {}: drop de celda inválida \
+             (window {} cell {}) — rechazado",
+            session.conn_id, cell.window, cell.cell
+        );
+        return Ok(Outcome::Continue);
+    }
+    let Some(idx) = session
+        .inventory
+        .iter()
+        .position(|i| i.window == "INVENTORY" && i.pos as u16 == cell.cell)
+    else {
+        eprintln!(
+            "server_realms: channel conn {}: drop de celda {} sin item",
+            session.conn_id, cell.cell
+        );
+        return Ok(Outcome::Continue);
+    };
+    // Clamp del count (parity: `bCount == 0 || bCount > item->GetCount()` →
+    // count del item).
+    let want = drop_want(count, session.inventory[idx].count);
+    // SyncQuickslot del cell (parity char_item.cpp:5432): la barra rápida
+    // deja de referenciar el item soltado (GC_QUICKSLOT_DEL por slot).
+    let mut qblob = quickslot::blob(session.row());
+    let cleared = quickslot::clear_item_refs(&mut qblob, cell.cell);
+    if !cleared.is_empty() {
+        for pos in &cleared {
+            session
+                .send(&protocol::world::TPacketGCQuickSlotDel::new(*pos).to_bytes())
+                .await
+                .map_err(|e| format!("enviando GC_QUICKSLOT_DEL: {e}"))?;
+        }
+        session.row_mut().quickslot = Some(qblob);
+    }
+    // El INTENT primero (el mundo asigna el vid; el send falla → no se
+    // muta el inventario).
+    let (x, y) = (session.motion().x, session.motion().y);
+    let vnum = session.inventory[idx].vnum;
+    session.intent(Intent::Item(ItemIntent::DropItem {
+        player_vid: session.player_vid(),
+        vnum: vnum as u32,
+        count: want as u32,
+        x,
+        y,
+        z: 0,
+    }))?;
+    // Quitar del inventario (parity RemoveFromCharacter + SetCount).
+    session.inventory[idx].count -= want;
+    if session.inventory[idx].count <= 0 {
+        let id = session.inventory[idx].id;
+        session
+            .send(&TPacketGCItemDelDeprecated::new(
+                TItemPos {
+                    window: TItemPos::WINDOW_INVENTORY,
+                    cell: cell.cell,
+                },
+                0,
+                0,
+            )
+            .to_bytes())
+            .await
+            .map_err(|e| format!("enviando GC_ITEM_DEL: {e}"))?;
+        ItemRepo::new(session.pool.clone()).delete(id).await?;
+        session.inventory.remove(idx);
+    } else {
+        let up = protocol::world::TPacketGCItemUpdate {
+            header: protocol::world::TPacketGCItemUpdate::HEADER,
+            cell: TItemPos {
+                window: TItemPos::WINDOW_INVENTORY,
+                cell: cell.cell,
+            },
+            count: session.inventory[idx].count as u8,
+            sockets: session.inventory[idx].sockets,
+            attrs: session.inventory[idx].attrs,
+        };
+        session
+            .send(&up.to_bytes())
+            .await
+            .map_err(|e| format!("enviando GC_ITEM_UPDATE: {e}"))?;
+        ItemRepo::new(session.pool.clone())
+            .upsert(&session.inventory[idx], session.row().id)
+            .await?;
+    }
+    session.save();
+    eprintln!(
+        "server_realms: channel conn {}: {} soltó item vnum {vnum} \
+         (×{want}, celda {}) en {x},{y}",
+        session.conn_id, session.row().name, cell.cell
+    );
+    Ok(Outcome::Continue)
+}
+
+
 /// `PickupResult` llega por la cola y el EVENTO decide distancia/inventario).
 /// `pending_pickups` evita duplicar el MISMO vid mientras el primer pickup
 /// se resuelve (la respuesta es asíncrona — parity del flujo síncrono).
@@ -838,5 +1063,23 @@ mod tests {
         assert!(!is_equip_position(p(inv, INVENTORY_MAX_NUM + WEAR_MAX_NUM)), "cell 212");
         // Otras ventanas (p. ej. SAFEBOX) nunca son equip.
         assert!(!is_equip_position(p(5, INVENTORY_MAX_NUM + 4)), "safebox");
+    }
+
+    /// Clamp del count del DropItem (parity char_item.cpp:5424-5430):
+    /// count 0 o > stack → todo el stack; si no, el count pedido.
+    #[test]
+    fn drop_want_clamps_to_stack() {
+        assert_eq!(drop_want(0, 5), 5, "count 0 → todo");
+        assert_eq!(drop_want(3, 5), 3, "count válido");
+        assert_eq!(drop_want(9, 5), 5, "count > stack → todo");
+        assert_eq!(drop_want(0, 1), 1);
+        assert_eq!(drop_want(200, 0), 0, "stack vacío → 0 (el gate de arriba ya rechazó)");
+    }
+
+    /// El oro del suelo es el item vnum 1 (parity `DropGold`
+    /// char_item.cpp:5534 — `CreateItem(1, gold)`).
+    #[test]
+    fn gold_drop_uses_vnum_1() {
+        assert_eq!(ITEM_GOLD_VNUM, 1);
     }
 }

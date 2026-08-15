@@ -58,7 +58,7 @@
 //! a atacante y víctima-PC); el GC_ATTACK se incluye por contrato wire
 //! (observadores futuros — el cliente v24 lo ignora, ver `protocol::combat`).
 
-use protocol::combat::{damage_flag, CgAttack, GcAttack, GcDamageInfo};
+use protocol::combat::{damage_flag, CgAttack, GcDamageInfo};
 
 // ---------------------------------------------------------------------------
 // Estados (dominio — los construye el canal)
@@ -201,7 +201,7 @@ const ANI_SPEED_BARE_HAND_MS: u32 = 1000;
 /// (Daga/garra → /2, `:774-779`; arma con animación → data-driven .msa,
 /// fuera del subset.)
 pub fn default_attack_speed() -> u32 {
-    (ANI_SPEED_BARE_HAND_MS * 100) / (SPEEDHACK_LIMIT_BONUS + 0 + 0)
+    (ANI_SPEED_BARE_HAND_MS * 100) / SPEEDHACK_LIMIT_BONUS
 }
 
 /// Subtipos de arma (`WEAPON_*` — ani.cpp:37-49: SWORD=0, DAGGER=1, BOW=2,
@@ -218,14 +218,13 @@ pub mod weapon_subtype {
 /// (battle.cpp:774-779). `weapon = None` → 1250 (manos desnudas).
 pub fn attack_speed_for_weapon(weapon: Option<&database::item::ProtoItem>) -> u32 {
     const ANI_SPEED_MS: u32 = 1000; // default del constructor ANI (ani.cpp:121)
-    let mut real = (ANI_SPEED_MS * 100) / (SPEEDHACK_LIMIT_BONUS + 0 + 0);
-    if let Some(w) = weapon {
-        if w.b_type == 1 /* ITEM_WEAPON (ItemData.h:72) */
+    let mut real = (ANI_SPEED_MS * 100) / SPEEDHACK_LIMIT_BONUS;
+    if let Some(w) = weapon
+        && w.b_type == 1 /* ITEM_WEAPON (ItemData.h:72) */
             && (w.b_sub_type == weapon_subtype::DAGGER || w.b_sub_type == weapon_subtype::CLAW)
         {
             real /= 2;
         }
-    }
     real
 }
 
@@ -446,9 +445,15 @@ pub fn handle_attack(
 
     // (5) Daño (battle.cpp:731-755).
     let damage = melee_damage(attacker, target, weapon, roll);
-    let mut packets = vec![
-        GcAttack::new(attacker.vid, target.vid, attack.b_type).to_bytes().to_vec(),
-    ];
+    // FIX 2026-08-14 (el cliente se cerraba al dañar a un mob): el `GcAttack`
+    // (header 12) NO se manda — el cliente S3llMetin2 v24 NO tiene case para
+    // HEADER_GC_ATTACK en su dispatch (PythonNetworkStreamPhaseGame.cpp —
+    // solo HEADER_GC_DAMAGE_INFO 135) y cierra la conexión al recibirlo
+    // (CheckPacket). El C++ tampoco lo manda (SendDamagePacket,
+    // char_battle.cpp:1508 — solo TPacketGCDamageInfo). El golpe =
+    // [GcDamageInfo] (+ la animación FUNC_ATTACK via GC_MOVE la difunde el
+    // canal para los MOBS).
+    let mut packets = Vec::new();
     if damage > 0 {
         packets.push(
             GcDamageInfo::new(target.vid, damage_flag::NORMAL, damage).to_bytes().to_vec(),
@@ -704,6 +709,7 @@ mod tests {
             b_sub_type: 0, // WEAPON_SWORD
             values: [0; 6],
             wear_flag: 1 << 4, // WEARABLE_WEAPON
+            weight: 0,
         };
         assert_eq!(attack_speed_for_weapon(Some(&sword)), 1250, "espada: ANI default 1000");
         let dagger = ProtoItem { b_sub_type: weapon_subtype::DAGGER, ..sword };
@@ -717,6 +723,7 @@ mod tests {
             b_sub_type: 0,
             values: [0; 6],
             wear_flag: 1 << 0,
+            weight: 0,
         };
         assert_eq!(attack_speed_for_weapon(Some(&armor)), 1250, "no-weapon: sin /2");
     }
@@ -768,8 +775,10 @@ mod tests {
         assert_eq!(handle_attack(&mut combat, &atk_skill, &a, Some(&m), None, 1000, &mut roll), CombatResult::empty());
     }
 
-    /// Los paquetes del resultado: `[GcAttack(12), GcDamageInfo(135)]` con los
-    /// campos exactos (VID atacante = player id, VID víctima, flag NORMAL).
+    /// Los paquetes del resultado: `[GcDamageInfo(135)]` SOLO (fix
+    /// 2026-08-14: GcAttack 12 cerraba el cliente — sin case en su dispatch;
+    /// el C++ tampoco lo manda, char_battle.cpp:1508) — con los campos
+    /// exactos (VID víctima, flag NORMAL).
     #[test]
     fn result_packets_bytes() {
         let a = ninja();
@@ -778,11 +787,9 @@ mod tests {
         let mut roll = roll_fixed(0);
         let r = handle_attack(&mut combat, &atk(m.vid), &a, Some(&m), None, 1000, &mut roll);
         assert_eq!(r.damage, 46);
-        assert_eq!(r.packets.len(), 2);
-        // GC_ATTACK: header 12, dwVID=2 (player id), dwVictimVID=101, bType=0.
-        assert_eq!(r.packets[0], [12, 2, 0, 0, 0, 101, 0, 0, 0, 0]);
+        assert_eq!(r.packets.len(), 1, "solo GcDamageInfo (fix 2026-08-14 — GcAttack 12 cerraba el cliente)");
         // GC_DAMAGE_INFO: header 135, dwVID=101, flag=NORMAL(1), damage=46.
-        assert_eq!(r.packets[1], [135, 101, 0, 0, 0, 1, 46, 0, 0, 0]);
+        assert_eq!(r.packets[0], [135, 101, 0, 0, 0, 1, 46, 0, 0, 0]);
     }
 
     fn atk(victim_vid: u32) -> CgAttack {
