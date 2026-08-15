@@ -163,6 +163,11 @@ pub mod header {
     /// `HEADER_GC_WARP` (cliente `Packet.h:199`, server `packet.h:169` —
     /// 65): el warp del jugador (revive en la ciudad / teletransporte).
     pub const GC_WARP: u8 = 65;
+    /// `HEADER_GC_TARGET` (cliente `Packet.h:167`, server `packet.h:167` —
+    /// 63): la barra de vida del objetivo (`TPacketGCTarget` 6 B — vid +
+    /// bHPPercent). Parity `SetTarget`/`BroadcastTargetPacket`
+    /// (char.cpp:5048-5143).
+    pub const GC_TARGET: u8 = 63;
     /// LoginSuccess "new slot" = 0x20 (server `HEADER_GC_LOGIN_SUCCESS_NEWSLOT`,
     /// cliente `HEADER_GC_LOGIN_SUCCESS4`).
     pub const GC_LOGIN_SUCCESS_NEWSLOT: u8 = 32;

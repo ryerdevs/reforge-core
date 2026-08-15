@@ -692,6 +692,35 @@ pub struct TPacketGCCharacterDelete {
     pub vid: u32,
 }
 
+/// `TPacketGCTarget` (6 B, header 63 — `Packet.h:1374-1379`): la barra de
+/// vida del objetivo (el cliente la dibuja con `SetHPTargetBoard` vía
+/// `RecvTargetPacket`). `b_hp_percent` = 0..100; 0 para PCs (parity
+/// `CHARACTER::SetTarget`/`BroadcastTargetPacket`, char.cpp:5048-5143).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketGCTarget {
+    pub header: u8,
+    pub vid: u32,
+    pub b_hp_percent: u8,
+}
+
+impl TPacketGCTarget {
+    pub const SIZE: usize = 6;
+    pub const HEADER: u8 = 63;
+
+    pub fn new(vid: u32, b_hp_percent: u8) -> Self {
+        Self { header: Self::HEADER, vid, b_hp_percent }
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        b[1..5].copy_from_slice(&self.vid.to_le_bytes());
+        b[5] = self.b_hp_percent;
+        b
+    }
+}
+
 impl TPacketGCCharacterDelete {
     pub const SIZE: usize = 5;
     pub const HEADER: u8 = 2;
@@ -1064,6 +1093,7 @@ mod tests {
         assert_eq!(TPacketGCMainCharacter::SIZE, 47, "layout del CLIENTE (sin empire — Packet.h:1349-1357)");
         assert_eq!(TPacketGCDead::SIZE, 5, "header + vid");
         assert_eq!(TPacketGCCharacterDelete::SIZE, 5, "header + vid");
+        assert_eq!(TPacketGCTarget::SIZE, 6, "header + vid + bHPPercent (Packet.h:1374-1379)");
         assert_eq!(TPacketGCPoints::SIZE, 1 + 255 * 4);
         assert_eq!(TPacketGCSkillLevel::SIZE, 1 + 255 * 6);
         assert_eq!(TLandPacketElement::SIZE, 24);
@@ -1075,6 +1105,11 @@ mod tests {
         let b = q.to_bytes();
         assert_eq!(b, [28, 3, 0, 5]);
         assert_eq!(TPacketGCQuickSlotAdd::from_bytes(&b).unwrap(), q);
+
+        // GC_TARGET (63): header + vid LE + bHPPercent (fix bug 5).
+        let t = TPacketGCTarget::new(0x1234_5678, 37);
+        let tb = t.to_bytes();
+        assert_eq!(tb, [63, 0x78, 0x56, 0x34, 0x12, 37]);
 
         let it = TPacketGCItemSet {
             header: TPacketGCItemSet::HEADER,

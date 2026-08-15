@@ -81,6 +81,11 @@ pub enum CombatIntent {
     /// (`handle_attack` puro) y emite `AttackResult`. `weapon` = el proto del
     /// arma equipada (la query PG la hizo la conexión).
     Attack { player_vid: u32, victim_vid: u32, b_type: u8, weapon: Option<ProtoItem> },
+    /// CG_TARGET del jugador (61, 5 B: header + vid — Packet.h:1369-1372):
+    /// el cliente pide la barra de vida del objetivo (parity `SetTarget`,
+    /// char.cpp:5048-5094 → GC_TARGET con el hp%). El mundo responde con
+    /// `TargetResult` (o nada si el vid no es un mob materializado).
+    Target { player_vid: u32, target_vid: u32 },
     /// HP del jugador cambiado por la sesión (pociones/revive).
     SetHp { player_vid: u32, hp: i32 },
     /// SP del jugador cambiado por la sesión (pociones/revive — el coste de
@@ -279,7 +284,10 @@ impl From<TradeIntent> for Intent {
 pub enum QuestIntent {
     /// Carga las quests DSL (texto renderizado por `quest_dsl`) en el mundo —
     /// la envía el canal al arrancar (directorio de quests del runtime).
-    Load { text: String },
+    /// `texts` = diccionario clave->texto del quest_text del runtime
+    /// (ADR-0009 — el server resuelve los textos de diálogo; vacío = las
+    /// claves se envían tal cual).
+    Load { text: String, texts: HashMap<String, String> },
     /// Carga las filas persistidas del jugador (`player.quest` — la conexión
     /// las leyó con `QuestRepo::load` en el entry).
     Init { player_vid: u32, rows: Vec<crate::quest::PersistedFlag> },
@@ -290,6 +298,12 @@ pub enum QuestIntent {
         trigger: crate::quest::QuestTrigger,
         items: HashMap<u32, i64>,
     },
+    /// CLICK a un NPC (CG_ON_CLICK — wiring 2026-08-13): el mundo resuelve
+    /// el VNUM del vid (NpcIndex → Mob) y dispara el trigger `Chat(vnum)`
+    /// — las quests con `when <vnum>.chat` ofrecen su diálogo. `items` =
+    /// counts del inventario (igual que Event). Sin quests para el vnum →
+    /// sin evento (silencio, parity StartShopping).
+    NpcClick { player_vid: u32, npc_vid: u32, items: HashMap<u32, i64> },
     /// La respuesta del diálogo suspendido (CG_SCRIPT_ANSWER: 1..n del
     /// select, 0 del [NEXT]).
     Answer { player_vid: u32, answer: u8 },
@@ -380,6 +394,10 @@ pub enum CombatEvent {
         dead: bool,
         victim: Option<KillInfo>,
     },
+    /// Respuesta al CG_TARGET: el vid del objetivo + su HP% (parity
+    /// `SetTarget`/`BroadcastTargetPacket` — GC_TARGET 63, char.cpp:
+    /// 5048-5143; bHPPercent 0 para PCs — el subset solo apunta mobs).
+    TargetResult { player_vid: u32, vid: u32, hp: i32, max_hp: i32 },
 }
 
 /// S→C del dominio MOVIMIENTO: el mob se MOVIÓ (GC_MOVE FUNC_MOVE —
@@ -524,7 +542,8 @@ impl CombatEvent {
             | CombatEvent::AggroOff { player_vid, .. }
             | CombatEvent::Spawned { player_vid, .. }
             | CombatEvent::Despawned { player_vid, .. }
-            | CombatEvent::AttackResult { player_vid, .. } => *player_vid,
+            | CombatEvent::AttackResult { player_vid, .. }
+            | CombatEvent::TargetResult { player_vid, .. } => *player_vid,
         }
     }
 }

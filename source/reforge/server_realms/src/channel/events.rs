@@ -100,10 +100,10 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                 );
             }
             session
-                .send(&packets::points_packet(session.row(), session.next_exp).to_bytes())
+                .send(&packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
                 .await
                 .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
-            session.store().save_character(session.row());
+            session.save();
         }
         NpcEvent::Combat(CombatEvent::AggroOn { vid, vnum, .. }) => {
             eprintln!(
@@ -167,12 +167,40 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                     // GC_DEAD/DEL + recompensa + drop.
                     session.apply_kill(victim_vid, v).await?;
                 } else {
+                    // GC_TARGET (63) — la barra de vida del mob baja tras el
+                    // golpe (fix bug 5: parity `BroadcastTargetPacket`,
+                    // char.cpp:5115-5143 — el daño al mob se difunde a quien
+                    // lo tiene apuntado).
+                    let pct = if v.max_hp > 0 {
+                        (v.hp.saturating_mul(100) / v.max_hp).clamp(0, 100) as u8
+                    } else {
+                        0
+                    };
+                    session
+                        .send(&protocol::world::TPacketGCTarget::new(victim_vid, pct).to_bytes())
+                        .await
+                        .map_err(|e| format!("enviando GC_TARGET: {e}"))?;
                     eprintln!(
                         "server_realms: channel conn {}: {} golpeó mob vnum {} ({}/{})",
                         session.conn_id, session.row().name, v.vnum, v.hp, v.max_hp
                     );
                 }
             }
+        }
+        NpcEvent::Combat(CombatEvent::TargetResult { vid, hp, max_hp, .. }) => {
+            // GC_TARGET (63) — la barra de vida del objetivo al apuntarlo
+            // (parity `SetTarget`, char.cpp:5048-5094: bHPPercent =
+            // hp*100/max; 0 para PCs/mobs sin max — el subset solo apunta
+            // mobs materializados).
+            let pct = if max_hp > 0 { (hp.saturating_mul(100) / max_hp).clamp(0, 100) as u8 } else { 0 };
+            session
+                .send(&protocol::world::TPacketGCTarget::new(vid, pct).to_bytes())
+                .await
+                .map_err(|e| format!("enviando GC_TARGET: {e}"))?;
+            eprintln!(
+                "server_realms: channel conn {}: target a vid {vid} — barra {pct}%",
+                session.conn_id
+            );
         }
         NpcEvent::Item(ItemEvent::PickupResult { item_vid, item, .. }) => {
             session.pending_pickups.remove(&item_vid);
@@ -232,7 +260,7 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                     .await
                     .map_err(|e| format!("enviando GC_ITEM_UPDATE: {e}"))?;
                 // Persistencia del stack actualizado.
-                ItemRepo::new(&session.config.pg_conn)
+                ItemRepo::new(session.pool.clone())
                     .upsert(&session.inventory[idx], session.row().id)
                     .await?;
                 eprintln!(
@@ -277,7 +305,7 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
             // Item nuevo del pickup: id del rango ITEM_ID_RANGE (100M-200M —
             // parity `ItemIDRangeManager.cpp:93,121`; el E2E Q8 sondea ese
             // rango).
-            let id = ItemRepo::new(&session.config.pg_conn)
+            let id = ItemRepo::new(session.pool.clone())
                 .max_id_in_range(100_000_000, 200_000_000)
                 .await?
                 .map(|m| m + 1)
@@ -312,7 +340,7 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                 .await
                 .map_err(|e| format!("enviando GC_ITEM_GROUND_DEL: {e}"))?;
             // Persistencia durable + commit del mundo.
-            ItemRepo::new(&session.config.pg_conn)
+            ItemRepo::new(session.pool.clone())
                 .upsert(&new_item, session.row().id)
                 .await?;
             session.intent(Intent::Item(ItemIntent::RemoveItem { item_vid }))?;
@@ -386,10 +414,10 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                     row.hp = row.hp.saturating_sub(hp_cost);
                 }
                 session
-                    .send(&packets::points_packet(session.row(), session.next_exp).to_bytes())
+                    .send(&packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
                     .await
                     .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
-                session.store().save_character(session.row());
+                session.save();
             }
             // Buff aplicado: GC_AFFECT_ADD (126) — el icono del cliente (el
             // mundo ya lo tiene en `Affects`).

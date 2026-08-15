@@ -200,6 +200,9 @@ impl WorldSim {
                 CombatIntent::Attack { player_vid, victim_vid, b_type, weapon } => {
                     self.process_attack(player_vid, victim_vid, b_type, weapon.as_ref(), now_ms)
                 }
+                CombatIntent::Target { player_vid, target_vid } => {
+                    self.process_target(player_vid, target_vid)
+                }
                 CombatIntent::SetHp { player_vid, hp } => {
                     self.set_player_hp(player_vid, hp);
                     Vec::new()
@@ -249,13 +252,18 @@ impl WorldSim {
 
     /// TICK del mundo (AI 500 ms — el `ai_timer` de la tarea del canal):
     /// corre los sistemas (spawn/despawn → chase → detect → patrulla) y
-    /// devuelve los eventos S→C para el routing por jugador.
+    /// devuelve los eventos S→C para el routing por jugador. Mide el tiempo
+    /// del `schedule.run` en `WorldMetrics::last_tick_ms` (el harness F5 lo
+    /// registra por tick vía `--bench-capture`).
     pub fn update(&mut self, dt_ms: u64) -> Vec<NpcEvent> {
         self.world.resource_mut::<Tick>().dt_ms = dt_ms;
+        let t0 = std::time::Instant::now();
         self.schedule.run(&mut self.world);
+        let tick_ms = t0.elapsed().as_millis() as u64;
         let events: Vec<NpcEvent> = self.world.resource_mut::<NpcOutbox>().0.drain(..).collect();
         let mut m = self.world.resource_mut::<WorldMetrics>();
         m.ticks += 1;
+        m.last_tick_ms = tick_ms;
         m.events_emitted += events.len() as u64;
         events
     }

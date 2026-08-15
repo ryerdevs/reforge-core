@@ -5,7 +5,7 @@
 
 use bevy_ecs::prelude::*;
 
-use crate::ai::{attack_damage, rotation_5deg, step_toward};
+use crate::ai::{attack_damage, move_duration_ms, rotation_5deg, step_toward};
 use crate::combat::{
     attack_speed_for_weapon, distance_approx, handle_attack, melee_max_range,
     player_def_grade, CombatState, NpcState, PlayerState,
@@ -96,6 +96,10 @@ pub(crate) fn chase_attack_system(
             continue; // ya en el jugador (o speed 0)
         }
         let rot = rotation_5deg(pos.x, pos.y, nx, ny);
+        // La duración REAL del paso (parity CalculateMoveDuration,
+        // char.cpp:2765-2768) — el cliente interpola con ESTA duración; el
+        // dt del tick fijo animaba los pasos largos a velocidad altísima.
+        let duration_ms = move_duration_ms(nx - pos.x, ny - pos.y, mob.move_speed);
         pos.x = nx;
         pos.y = ny;
         outbox.0.push(MoveEvent::Moved {
@@ -104,7 +108,7 @@ pub(crate) fn chase_attack_system(
             x: nx,
             y: ny,
             rot,
-            duration_ms: tick.dt_ms as u32,
+            duration_ms,
         }.into());
     }
 }
@@ -325,6 +329,23 @@ impl WorldSim {
         }.into()]
     }
 
+    /// CG_TARGET del jugador (fix bug 5, 2026-08-15): responde con el HP%
+    /// del mob apuntado (parity `SetTarget` char.cpp:5048-5094 — GC_TARGET
+    /// 63 con bHPPercent = hp*100/max). Sin mob materializado para el vid →
+    /// nada (el cliente mantiene la barra anterior; parity: SetTarget con
+    /// nullptr manda vid 0/hp 0 — el subset no borra la barra).
+    pub(crate) fn process_target(&mut self, player_vid: u32, target_vid: u32) -> Vec<NpcEvent> {
+        let Some(view) = self.npc_view(target_vid) else {
+            return Vec::new();
+        };
+        vec![CombatEvent::TargetResult {
+            player_vid,
+            vid: target_vid,
+            hp: view.hp,
+            max_hp: view.max_hp,
+        }.into()]
+    }
+
     /// Sincroniza el HP del jugador (pociones/revive — la sesión ya aplicó el
     /// cambio a row.hp; el mundo lo refleja para el daño del AI).
     pub(crate) fn set_player_hp(&mut self, player_vid: u32, hp: i32) {
@@ -395,7 +416,8 @@ mod tests {
         });
         let (victim_vid, packets, damage, dead, victim) = attack.expect("AttackResult");
         assert_eq!(victim_vid, 10_000);
-        assert_eq!(packets.len(), 2, "GcAttack + GcDamageInfo (daño > 0)");
+        assert_eq!(packets.len(), 1, "solo GcDamageInfo (fix 2026-08-14 — GcAttack 12 cerraba el cliente)");
+        assert_eq!(packets[0][0], 135, "header GC_DAMAGE_INFO");
         assert!((46..=47).contains(&damage), "daño del ninja vs mob 101: {damage}");
         assert!(!dead);
         let v = victim.expect("víctima");
@@ -481,7 +503,7 @@ mod tests {
         let (vid, x, y, rot, dur) = moved.expect("paso hacia el jugador");
         assert_eq!((vid, x, y), (10_000, 350, 0), "400 − 100 units/s × 0.5 s");
         assert_eq!(rot, 36, "oeste (180°/5) — el mob avanza hacia el origen");
-        assert_eq!(dur, 500, "dw_duration = el dt del tick");
+        assert_eq!(dur, 500, "dw_duration = dist/move_speed = 50 u / 100 u/s = 500 ms (parity CalculateMoveDuration)");
         assert!(!events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::MobAttack { .. }))), "400 > rango melee");
     }
 
@@ -563,5 +585,35 @@ mod tests {
             _ => None,
         });
         assert_eq!(attack, Some(2), "el ataque va al objetivo del aggro");
+    }
+
+    /// Fix bug 5 (2026-08-15): el CG_TARGET del jugador responde con el
+    /// HP% del mob apuntado (parity SetTarget, char.cpp:5048-5094 — GC_TARGET
+    /// 63). Un vid sin mob materializado -> nada.
+    #[test]
+    fn target_returns_mob_hp_percent() {
+        let mut w = world_with(42);
+        let mut row = mob_row(101);
+        row.max_hp = 100;
+        load(&mut w, vec![(entry(101, 0, 0, 1), row)]);
+        join(&mut w);
+        // El mob tiene 100 max — el target reporta hp/max sin dañar.
+        let events = w.process_intent(
+            CombatIntent::Target { player_vid: 2, target_vid: 10_000 }.into(),
+            1_000,
+        );
+        let result = events.iter().find_map(|e| match e {
+            NpcEvent::Combat(CombatEvent::TargetResult { vid, hp, max_hp, .. }) => {
+                Some((*vid, *hp, *max_hp))
+            }
+            _ => None,
+        });
+        assert_eq!(result, Some((10_000, 100, 100)), "hp/max del mob apuntado");
+        // Vid sin entidad -> sin evento (el cliente mantiene la barra).
+        let events = w.process_intent(
+            CombatIntent::Target { player_vid: 2, target_vid: 99_999 }.into(),
+            1_000,
+        );
+        assert!(events.is_empty(), "vid inexistente -> sin respuesta");
     }
 }
