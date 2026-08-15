@@ -1,22 +1,14 @@
 //! `channel/entry.rs` — las fases de ENTRADA del canal (R-s2 del refactor):
-//! login DIRECTO → select → player load → ENTERGAME → world join.
+//! handshake → login → select → player load → ENTERGAME → world join.
 //!
 //! Antes vivían en `connection_inner` (channel.rs:291-570) con ~20 locales;
 //! desde R-s1 operan sobre `session::Session` y desde R-s2 viven en este
 //! módulo — el loop de juego (game.rs) solo corre con la sesión llena.
 //!
 //! Paridad con el canal C++ (`input_login.cpp` + `input_db.cpp` + `desc.cpp`):
-//! 1. `GC_PHASE(LOGIN)` DIRECTO al aceptar (divergencia deliberada 2026-08-14:
-//!    el C++ del canal handshakeaba — `desc.cpp:258`; el rewrite entra
-//!    directo a Login porque el cliente legacy conecta con `Connect()` crudo
-//!    (KEEP_ACCOUNT_CONNETION_ENABLE=1) y dispara su LOGIN3 al procesar la
-//!    fase — sin handshake la carrera intermitente (ni eco ni LOGIN3 tras
-//!    32 intentos + 45 s de leniencia) NO PUEDE ocurrir; el reloj del cliente
-//!    queda alineado con el AUTH (ambos procesos arrancan juntos) y el canal
-//!    manda GC_TIME al entrar al mundo — ADR-0010/0011, rediseño).
-//! 2. `CG_LOGIN3` (65 B — el framer con rol Channel ya lo entrega así) o
-//!    `CG_MARK_LOGIN` (0x64, 9 B — la conexión paralela del guild mark:
-//!    cierre limpio sin responder, parity `input.cpp:560-572`).
+//! 1. Handshake server-side (`network::handshake` — igual que el auth).
+//! 2. `GC_PHASE(LOGIN)` — parity `input.cpp:194-196`.
+//! 3. `CG_LOGIN3` (65 B — el framer con rol Channel ya lo entrega así).
 //! 4. Validaciones en orden (parity `input_login.cpp:97-147` + `db.cpp:244-365`).
 //! 5. Credenciales vs PG (`AccountRepo::login` — 13 columnas).
 //! 6. `GC_EMPIRE` + `GC_PHASE(SELECT)` + `GC_LOGIN_SUCCESS_NEWSLOT` (449 B).
@@ -28,24 +20,21 @@ use database::affect::AffectRepo;
 use database::common::CommonRepo;
 use database::item::ItemRepo;
 use database::land::LandRepo;
-use database::player::{PlayerCreate, PlayerSummary};
-use network::Connection;
+use network::handshake::HandshakeError;
+use network::{handshake, Connection};
 use protocol::world::{TPacketGCChannel, TPacketGCTime};
-use protocol::world::TPacketCGMarkLogin;
 use protocol::{
-    header, phase, TPacketCGChangeName, TPacketCGEmpire, TPacketCGLogin3, TPacketCGPlayerCreate,
-    TPacketCGPlayerDelete, TPacketCGPlayerSelect, TPacketGCDestroyCharacterSuccess,
-    TPacketGCChangeName, TPacketGCCreateFailure, TPacketGCEmpire, TPacketGCLoginFailure,
-    TPacketGCLoginSuccess, TPacketGCPhase, TPacketGCPlayerCreateSuccess, PLAYER_PER_ACCOUNT,
+    header, phase, TPacketCGLogin3, TPacketCGPlayerSelect, TPacketGCEmpire, TPacketGCLoginFailure,
+    TPacketGCLoginSuccess, TPacketGCPhase, PLAYER_PER_ACCOUNT,
 };
-use game_core::ecs::{Intent, PlayerJoin, QuestIntent};
+use game_core::ecs::{Intent, PlayerJoin};
 use game_core::packets;
 use game_core::world::WorldStore;
 use tokio::net::TcpStream;
 
 use crate::auth::{is_valid_login_string, normalize_login};
 use crate::channel::session::{ChannelLoginGuard, LeaveGuard, Session};
-use crate::channel::{equipped_armor, now32, parse_listen};
+use crate::channel::{equipped_armor, now_ms, parse_listen};
 
 /// Fases 1-7 de la conexión del canal (parity `input_login.cpp` +
 /// `input_db.cpp` + `desc.cpp`): el flujo completo hasta que el jugador
@@ -56,44 +45,53 @@ use crate::channel::{equipped_armor, now32, parse_listen};
 /// login rechazado, slot vacío) — el mismo comportamiento que tenía el
 /// cuerpo único de `connection_inner`.
 pub async fn run(session: &mut Session) -> Result<(), String> {
-    // 1. GC_PHASE(LOGIN) DIRECTO — SIN handshake del canal (SOLUCIÓN
-    //    DEFINITIVA 2026-08-14 del handshake silencioso intermitente):
-    //    el cliente legacy conecta con Connect() crudo tras el auth
-    //    (KEEP_ACCOUNT_CONNETION_ENABLE=1, AccountConnector.cpp:468-472) y
-    //    manda su LOGIN3 al procesar la fase Login — ya en ella o al recibir
-    //    este paquete (PythonNetworkStreamPhaseLogin.cpp:85-138). El AUTH
-    //    MANTIENE su handshake (siempre funciona); el canal ya no lo tiene:
-    //    la carrera ("el cliente conecta y no envía nada — 32 intentos +
-    //    45 s de leniencia → cierre") no puede ocurrir. Divergencia
-    //    deliberada documentada: el C++ del canal handshakeaba
-    //    (`desc.cpp:258`); el rewrite entra directo — el reloj del cliente
-    //    queda alineado con el AUTH (misma base Instant al arrancar ambos) y
-    //    el canal manda GC_TIME al entrar al mundo (ADR-0010/0011).
+    // 1. Handshake server-side (F1.5, validado contra el canal real en F1.6).
+    //    El cliente del GUILD MARK abre una conexión SEPARADA en paralelo al
+    //    select y responde al handshake con CG_MARK_LOGIN (0x64) en vez del
+    //    eco (`GuildMarkDownloader.cpp:213-229`). El canal normal
+    //    (`guild_mark_server` OFF — config del runtime) cierra esa conexión
+    //    sin responder (`input.cpp:560-572`) — el cliente NO lo interpreta
+    //    como fallo (el mark es opcional; el select sigue en la otra conexión).
+    let hs = match handshake::perform(&mut session.conn, &mut session.framer, now_ms()).await {
+        Err(HandshakeError::MarkLogin(p)) => {
+            eprintln!(
+                "server_realms: channel conn {}: guild mark login (handle 0x{:08x}, \
+                 random 0x{:08x}) — no mark server, cierre limpio (parity input.cpp:562-566)",
+                session.conn_id, p.handle, p.random_key
+            );
+            return Ok(());
+        }
+        Err(e) => return Err(format!("handshake: {e}")),
+        Ok(hs) => hs,
+    };
+    eprintln!(
+        "server_realms: channel conn {}: handshake OK (delta {} ms)",
+        session.conn_id, hs.delta
+    );
+
+    // 2. GC_PHASE(LOGIN) — el cliente responde con el LOGIN3 del canal (65 B).
     session
         .send(&TPacketGCPhase::new(phase::LOGIN).to_bytes())
         .await
         .map_err(|e| format!("enviando GC_PHASE(LOGIN): {e}"))?;
     eprintln!("server_realms: channel conn {}: enviado GC_PHASE(LOGIN)", session.conn_id);
 
-    // 2. Primer paquete: el LOGIN3 del canal (65 B) o el CG_MARK_LOGIN
-    //    (0x64, 9 B) de la conexión paralela del guild mark — sin handshake
-    //    el mark manda su login directo (GuildMarkDownloader.cpp:213-229);
-    //    el canal normal (`guild_mark_server` OFF) lo cierra sin responder
-    //    (parity `input.cpp:560-572` — el cliente no lo interpreta como fallo).
-    let login3 = match recv_login3(session).await? {
-        Some(l) => l,
-        None => return Ok(()), // guild mark: cierre limpio
+    // 3. LOGIN3 (65 B al canal — framer rol Channel).
+    let login3 = loop {
+        let pkt = session.recv_idle().await?;
+        match pkt[0] {
+            header::CG_TIME_SYNC | header::CG_PONG => continue, // keepalives (F1.4)
+            header::CG_LOGIN3 => {
+                break TPacketCGLogin3::from_bytes(&pkt).map_err(|e| format!("LOGIN3: {e}"))?
+            }
+            other => {
+                return Err(format!(
+                    "channel conn {}: header inesperado 0x{other:02x} tras el handshake",
+                    session.conn_id
+                ))
+            }
+        }
     };
-    login_flow(session, login3).await
-}
-
-/// Flujo de login tras el LOGIN3 — compartido por el camino NORMAL (handshake
-/// OK → GC_PHASE(LOGIN) → LOGIN3) y el camino `LoginEarly` (el LOGIN3 llegó
-/// antes del eco y se procesa directo, sin reenviar GC_PHASE(LOGIN)).
-/// Validaciones de la fase 4 en adelante (parity `input_login.cpp:97-147` +
-/// `db.cpp:244-365`): login → WorldStore → GC_EMPIRE + SELECT + 449 B →
-/// select → PLAYER LOAD → ENTERGAME → join al mundo.
-async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<(), String> {
     let login = normalize_login(&login3.login);
     let passwd = cstr(&login3.passwd).to_string();
     eprintln!("server_realms: channel conn {}: LOGIN3 login={login}", session.conn_id);
@@ -116,7 +114,7 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
 
     // 5. Credenciales vs PG (QUERY_LOGIN — 13 columnas; el canal C++ hace
     //    GD_LOGIN → db → RESULT_LOGIN, `db.cpp:244-365`).
-    let acc = match AccountRepo::new(session.pool.clone()).login(&login, &passwd).await {
+    let acc = match AccountRepo::new(&session.config.pg_conn).login(&login, &passwd).await {
         Ok(Some(acc)) => acc,
         Ok(None) => {
             eprintln!("server_realms: channel conn {}: NOID {login}", session.conn_id);
@@ -148,17 +146,17 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
     // El login de la cuenta queda en la sesión (el gmlist de GM — la pareja
     // mName/mAccount — lo consulta channel/gm.rs por comando).
     session.account_login = login.clone();
-    // El resto del AccountLogin del canal: los handlers de la fase select
-    // (create/delete/empire/change-name) trabajan contra el player_index y
-    // la social_id de la cuenta (parity `TAccountTable` del desc C++).
-    session.account_id = acc.id;
-    session.social_id = acc.social_id.clone();
-    session.account_empire = acc.empire;
 
-    // 6. WorldStore (repos sobre el pool COMPARTIDO + el Batcher UNICO del
-    //    canal - ya no un Batcher por jugador) + empire + paquete del select.
-    //    El sanity y el replay del WAL ya ocurrieron en el arranque del canal.
-    session.store = Some(WorldStore::new(session.pool.clone(), session.batcher.clone()));
+    // 6. WorldStore (repos + Batcher) + empire + paquete del select.
+    let store = match WorldStore::new(&session.config.pg_conn).await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("server_realms: channel conn {}: WorldStore: {e} — NOTAVAIL", session.conn_id);
+            send_login_failure(&mut session.conn, session.conn_id, "NOTAVAIL").await?;
+            return Ok(());
+        }
+    };
+    session.store = Some(store);
     session.empire = empire_byte(acc.empire);
     eprintln!("server_realms: channel conn {}: empire={}", session.conn_id, session.empire);
 
@@ -184,34 +182,19 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
         session.conn_id
     );
 
-    // 7. Select: CG_PLAYER_SELECT (2 B) → load → spawn best-effort. Los
-    // handlers de la fase select (crear/borrar/imperio/renombrar — lane E)
-    // se atienden AQUÍ sin cerrar la conexión (parity `input_login.cpp`
-    // `Analyze` — el cliente legacy los manda en PhaseSelect).
+    // 7. Select: CG_PLAYER_SELECT (2 B) → load → spawn best-effort.
     let select = loop {
         let pkt = session.recv_idle().await?;
-        match select_kind(pkt[0]) {
-            SelectKind::Keepalive => continue,
-            SelectKind::Create => {
-                select_create(session, &pkt).await?;
-            }
-            SelectKind::Delete => {
-                select_delete(session, &pkt).await?;
-            }
-            SelectKind::Empire => {
-                select_empire(session, &pkt).await?;
-            }
-            SelectKind::ChangeName => {
-                select_change_name(session, &pkt).await?;
-            }
-            SelectKind::Select => {
+        match pkt[0] {
+            header::CG_TIME_SYNC | header::CG_PONG => continue,
+            header::CG_CHARACTER_SELECT => {
                 break TPacketCGPlayerSelect::from_bytes(&pkt)
                     .map_err(|e| format!("CG_PLAYER_SELECT: {e}"))?
             }
-            SelectKind::Other => {
+            other => {
                 return Err(format!(
-                    "channel conn {}: header inesperado 0x{:02x} esperando el select",
-                    session.conn_id, pkt[0]
+                    "channel conn {}: header inesperado 0x{other:02x} esperando el select",
+                    session.conn_id
                 ))
             }
         }
@@ -227,35 +210,8 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
         return Ok(());
     };
     session.row = Some(row);
-    // P0-B (2026-08-14): validación de la posición del load — parity
-    // `GetValidLocation` del C++ (sectree_manager). Sin esto, un row con
-    // coords FUERA del mapa crashea el CLIENTE con 0xC0000374 al cargar el
-    // mapa (probado 2×: 08-09 y hoy — reparado con UPDATE manual). Fuera de
-    // límites → primera celda movible (fallback determinista); mapa no
-    // cargable → fail-open (el movimiento también fail-opens). Leniente a
-    // propósito: las celdas del pueblo son ATTR_BLOCK legítimas (wave 45) —
-    // solo se corrige lo que rompería al cliente (out of bounds).
-    if let Some((fx, fy)) = validated_load_position(session) {
-        let (ox, oy) = (session.row().x, session.row().y);
-        session.row_mut().x = fx;
-        session.row_mut().y = fy;
-        eprintln!(
-            "server_realms: channel conn {}: posición ({ox},{oy}) inválida en el mapa {} — \
-             fallback a la primera celda movible ({fx},{fy})",
-            session.conn_id, session.row().map_index
-        );
-    }
-    // F5.1: el estado de movimiento del jugador (posición del load). El ANCLA
-    // del anti-speedhack = el reloj del server AHORA (parity
-    // `DESC::m_dwClientTime` — el reloj del server en el handshake del canal,
-    // desc.cpp:714): el gate de 7 s (input_main.cpp:1496) y el `iServerDelta`
-    // (input_main.cpp:1501) se miden desde aquí; con el canal sin handshake
-    // (2026-08-14) el reloj del cliente queda anclado al AUTH y el desfase de
-    // arranque entre procesos queda dentro del umbral.
+    // F5.1: el estado de movimiento del jugador (posición del load).
     session.motion = Some(game_core::movement::initial(session.row().x, session.row().y));
-    session
-        .motion_mut()
-        .anchor_server_time = now32();
     eprintln!(
         "server_realms: channel conn {}: player_load {} id={} lvl={} x={} y={} map={}",
         session.conn_id,
@@ -276,30 +232,17 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
     // M×AFFECT_ADD (126, AffectLoad input_db.cpp:1563-1583).
     // ------------------------------------------------------------------
     // F5.3: next_exp MUTABLE — el level-up del kill lo recalcula por nivel.
-    session.next_exp = CommonRepo::new(session.pool.clone())
+    session.next_exp = CommonRepo::new(&session.config.pg_conn)
         .next_exp(session.row().level)
         .await
         .unwrap_or(0);
     // Inventario del jugador (F5.3): MUTABLE — el pickup (CG_ITEM_PICKUP)
     // busca el primer cell libre y añade el item recogido.
-    session.inventory = ItemRepo::new(session.pool.clone())
+    session.inventory = ItemRepo::new(&session.config.pg_conn)
         .load_by_owner(session.row().id)
         .await?;
-    session.affects = AffectRepo::new(session.pool.clone()).load(session.row().id).await?;
-    // Battle points (ComputeBattlePoints — char.cpp:2051-2152): el arma
-    // equipada (daño value0/value1 → la ventana del cliente) + la armadura
-    // (el iArmor). Se cachean en la sesión (los GC_POINTS de todos los caminos
-    // los leen) y van en el POINTS del entry.
-    let weapon_proto = super::equipped_weapon_proto(&session.pool, &session.inventory).await?;
-    let armor_sum = super::equipped_armor(&session.inventory, &session.pool).await?;
-    session.battle = packets::compute_battle_points(session.row(), weapon_proto.as_ref(), armor_sum);
-    for pkt in entry_packets(
-        session.row(),
-        session.next_exp,
-        &session.inventory,
-        &session.affects,
-        &session.battle,
-    ) {
+    session.affects = AffectRepo::new(&session.config.pg_conn).load(session.row().id).await?;
+    for pkt in entry_packets(session.row(), session.next_exp, &session.inventory, &session.affects) {
         session.send(&pkt).await.map_err(|e| format!("enviando entry: {e}"))?;
     }
     eprintln!(
@@ -347,7 +290,7 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
     // Show()/EncodeInsertPacket -> GC_PHASE(GAME) -> LandList (130) ->
     // GC_TIME (106, get_global_time) -> GC_CHANNEL (121, g_bChannel).
     // ------------------------------------------------------------------
-    let lands = LandRepo::new(session.pool.clone())
+    let lands = LandRepo::new(&session.config.pg_conn)
         .load_by_map(i64::from(session.row().map_index))
         .await?;
     if lands.is_empty() {
@@ -392,7 +335,7 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
     // el mundo procesa el join — mismo wire que el entry previo.
     // ------------------------------------------------------------------
     let max_points = packets::compute_max_points(session.row()).unwrap_or([100, 100, 0]);
-    let armor = equipped_armor(&session.inventory, &session.pool).await?;
+    let armor = equipped_armor(&session.inventory, &session.config.pg_conn).await?;
     let join = Intent::Join {
         player: PlayerJoin {
             vid: session.player_vid(),
@@ -442,648 +385,7 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
          los adds de los mobs visibles llegan por la cola",
         session.conn_id, session.row().name, session.row().map_index
     );
-
-    // F5 quests (wiring 2026-08-13): el runtime de quests del jugador - las
-    // filas persistidas (player.quest) alimentan el engine (flags +
-    // {quest}.__status). Sin filas o con error: runtime vacio (fail-open -
-    // las quests de chat siguen disponibles, sin estado previo).
-    match database::quest::QuestRepo::new(session.pool.clone()).load(session.row().id).await {
-        Ok(rows) => {
-            let flags: Vec<game_core::quest::PersistedFlag> = rows
-                .into_iter()
-                .map(|r| game_core::quest::PersistedFlag {
-                    quest: r.sz_name,
-                    flag: r.sz_state,
-                    value: i64::from(r.l_value),
-                })
-                .collect();
-            session.intent(Intent::Quest(QuestIntent::Init {
-                player_vid: session.player_vid(),
-                rows: flags.clone(),
-            }))?;
-            eprintln!(
-                "server_realms: channel conn {}: quest runtime init ({} flags)",
-                session.conn_id,
-                flags.len()
-            );
-        }
-        Err(e) => {
-            eprintln!(
-                "server_realms: channel conn {}: quest flags: {e} - sin runtime de quests",
-                session.conn_id
-            );
-        }
-    }
     Ok(())
-}
-
-/// Lee el primer paquete del canal filtrando keepalives (0xfc/0xfe):
-/// `Some(LOGIN3)` = conexión NORMAL (login); `None` = CG_MARK_LOGIN (0x64)
-/// o CG_MARK_IDXLIST (0x68) de la conexión paralela del guild mark → cierre
-/// limpio sin responder (parity `input.cpp:560-566`), o CG_STATE_CHECKER
-/// (0xce) del chequeo de estado del canal → se RESPONDE con el estado
-/// (parity `input.cpp:573-589` + `input_db.cpp:2433-2461`). El timeout lo
-/// pone el recv_idle del config.
-async fn recv_login3(session: &mut Session) -> Result<Option<TPacketCGLogin3>, String> {
-    let pkt = loop {
-        let pkt = session.recv_idle().await?;
-        match pkt[0] {
-            header::CG_TIME_SYNC | header::CG_PONG => continue, // keepalives (F1.4)
-            header::CG_MARK_LOGIN => {
-                let m = TPacketCGMarkLogin::from_bytes(&pkt)
-                    .map_err(|e| format!("CG_MARK_LOGIN: {e}"))?;
-                eprintln!(
-                    "server_realms: channel conn {}: guild mark login (handle 0x{:08x}, \
-                     random 0x{:08x}) — no mark server, cierre limpio (parity input.cpp:562-566)",
-                    session.conn_id, m.handle, m.random_key
-                );
-                return Ok(None);
-            }
-            // FIX 2026-08-14 (canal sin handshake): el mark downloader recibe
-            // GC_PHASE(LOGIN) directo (ya no hay GC_HANDSHAKE) y su primer
-            // paquete es CG_MARK_IDXLIST (0x68) en vez del CG_MARK_LOGIN
-            // (GuildMarkDownloader.cpp `__LoginState_RecvPhase` → TODO_RECV_MARK
-            // → `__SendMarkIDXList`). Sin mark server → cierre limpio sin
-            // responder (parity input.cpp:560-566 — el cliente no lo interpreta
-            // como fallo; el mark es opcional).
-            header::CG_MARK_IDXLIST => {
-                eprintln!(
-                    "server_realms: channel conn {}: guild mark index list (0x68, sin handshake) \
-                     — no mark server, cierre limpio (parity input.cpp:562-566)",
-                    session.conn_id
-                );
-                return Ok(None);
-            }
-            // Chequeo de estado del canal (ServerStateChecker.cpp:43-69 — el
-            // cliente abre UNA conexión paralela al seleccionar el servidor y
-            // manda 0xce como PRIMER paquete). Parity input.cpp:573-589 +
-            // input_db.cpp:2433-2461: responder GC_RESPOND_CHANNELSTATUS
-            // (0xd2): [bHeader][nSize:4][TChannelStatus port:2+status:1][0x01]
-            // — el cliente hace Initialize()/Disconnect al recibirla.
-            header::CG_STATE_CHECKER => {
-                let resp = channel_status_packet(&session.config.listen, session.config.no_more_clients);
-                session
-                    .send(&resp)
-                    .await
-                    .map_err(|e| format!("respondiendo CG_STATE_CHECKER: {e}"))?;
-                eprintln!(
-                    "server_realms: channel conn {}: estado del canal respondido ({}) — cierre",
-                    session.conn_id, session.config.listen
-                );
-                return Ok(None);
-            }
-            header::CG_LOGIN3 => break pkt,
-            other => {
-                return Err(format!(
-                    "channel conn {}: header inesperado 0x{other:02x} esperando el LOGIN3",
-                    session.conn_id
-                ))
-            }
-        }
-    };
-    TPacketCGLogin3::from_bytes(&pkt).map(Some).map_err(|e| format!("LOGIN3: {e}"))
-}
-
-// ---------------------------------------------------------------------------
-// Fase select (lane E — parity `input_login.cpp:203-245,460-571,806-830` +
-// `input_db.cpp:188-340` + `ClientManagerPlayer.cpp:774-1130`): crear,
-// borrar, elegir imperio y renombrar personaje. Contrato de los handlers:
-// - `Err` → CIERRE de la conexión (parity de los `SetPhase(PHASE_CLOSE)`).
-// - `Ok(())` → se responde (o no-op, parity) y el loop del select SIGUE
-//   esperando el CG_PLAYER_SELECT — el cliente actualiza su ventana con la
-//   respuesta recibida y reintenta el select.
-// ---------------------------------------------------------------------------
-
-/// Paquetes de la fase select (dispatch del loop): los headers de
-/// crear/borrar/imperio/renombrar se ATIENDEN dentro del loop; solo `Other`
-/// cierra la conexión ("header inesperado" — parity `input_login.cpp:1124`
-/// "login phase does not handle this packet").
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SelectKind {
-    /// CG_TIME_SYNC (0xfc) / CG_PONG (0xfe) — keepalives, se ignoran.
-    Keepalive,
-    /// CG_CHARACTER_CREATE (4).
-    Create,
-    /// CG_CHARACTER_DELETE (5).
-    Delete,
-    /// CG_EMPIRE (90).
-    Empire,
-    /// CG_CHANGE_NAME (106).
-    ChangeName,
-    /// CG_CHARACTER_SELECT (6) — el que rompe el loop.
-    Select,
-    /// Cualquier otro header → cierre.
-    Other,
-}
-
-/// Dispatch del loop del select (función pura — testeable sin red).
-fn select_kind(h: u8) -> SelectKind {
-    match h {
-        header::CG_TIME_SYNC | header::CG_PONG => SelectKind::Keepalive,
-        header::CG_CHARACTER_CREATE => SelectKind::Create,
-        header::CG_CHARACTER_DELETE => SelectKind::Delete,
-        header::CG_EMPIRE => SelectKind::Empire,
-        header::CG_CHANGE_NAME => SelectKind::ChangeName,
-        header::CG_CHARACTER_SELECT => SelectKind::Select,
-        _ => SelectKind::Other,
-    }
-}
-
-/// `EMPIRE_MAX_NUM` (constants.h): el CG_EMPIRE valida `bEmpire < 4`
-/// (parity `input_login.cpp:809-812`).
-const EMPIRE_MAX_NUM: u8 = 4;
-/// Mapa del create: 41 — el ÚNICO que sirve el canal (parity
-/// `g_start_map[3]` del C++ — start_position.cpp:12-16).
-const CREATE_MAP: i32 = 41;
-/// Posición del create en UNITS — NO celdas (el cliente divide por 100;
-/// CRITICAL AGENTS.md: coords inválidas crashean el cliente 0xC0000374 — el
-/// P0-B del load valida contra el mapa igualmente). La aldea de Shinsoo
-/// (parity `g_start_position[3]` = 969600/278400; el C++ usa
-/// `CREATE_START_X/Y` con ±300 de jitter — el rewrite fija la aldea,
-/// determinista).
-const CREATE_X: i32 = 969600;
-const CREATE_Y: i32 = 278400;
-
-/// `CG_CHARACTER_CREATE` (4, 34 B) — parity `input_login.cpp:460-538` +
-/// `ClientManagerPlayer.cpp:774-913` + `input_db.cpp:201-248`: validaciones
-/// en el orden del C++, create en PG (INSERT + slot del índice) y respuesta
-/// `TPacketGCPlayerCreateSuccess` (73 B — el cliente rellena el slot del
-/// select con el TSimplePlayer, `__RecvPlayerCreateSuccessPacket`).
-async fn select_create(session: &mut Session, pkt: &[u8]) -> Result<(), String> {
-    let p = TPacketCGPlayerCreate::from_bytes(pkt)
-        .map_err(|e| format!("CG_CHARACTER_CREATE: {e}"))?;
-    let name = cstr(&p.name).to_string();
-    eprintln!(
-        "server_realms: channel conn {}: CG_CHARACTER_CREATE index={} name={name} job={} shape={}",
-        session.conn_id, p.index, p.job, p.shape
-    );
-    // 1. Slot fuera de rango → cierre (parity @fixme190 input_login.cpp:472-476).
-    if p.index >= PLAYER_PER_ACCOUNT as u8 {
-        return Err(format!(
-            "channel conn {}: create index overflow {} (parity PHASE_CLOSE)",
-            session.conn_id, p.index
-        ));
-    }
-    // 2. Nombre inválido o shape > 1 → failure bType=0 (parity
-    //    input_login.cpp:488-492).
-    if !check_name(&name) || p.shape > 1 {
-        eprintln!(
-            "server_realms: channel conn {}: create rechazado (nombre inválido o shape {})",
-            session.conn_id, p.shape
-        );
-        send_create_failure(session, 0).await?;
-        return Ok(());
-    }
-    // 3. Raza → job (parity RaceToJob input_login.cpp:356-380 + NewPlayerTable2
-    //    :407-458): raza fuera de 0..7 → failure bType=0 (el C++ sin wolfman
-    //    también la rechaza — MAIN_RACE_MAX_NUM=8).
-    let Some(job) = race_to_job(p.job) else {
-        eprintln!(
-            "server_realms: channel conn {}: create rechazado (raza {} fuera de rango)",
-            session.conn_id, p.job
-        );
-        send_create_failure(session, 0).await?;
-        return Ok(());
-    };
-    // 4. Nombre == login de la cuenta → failure bType=1 (parity
-    //    input_login.cpp:503-509 — strcmp del login contra el nombre).
-    if session.account_login == name {
-        eprintln!(
-            "server_realms: channel conn {}: create rechazado (nombre igual al login)",
-            session.conn_id
-        );
-        send_create_failure(session, 1).await?;
-        return Ok(());
-    }
-    // 5. Slot ocupado → failure bType=1 (parity DG_PLAYER_CREATE_ALREADY).
-    if session.store().account_slots(session.account_id).await?[p.index as usize].is_some() {
-        eprintln!(
-            "server_realms: channel conn {}: create rechazado (slot {} ocupado)",
-            session.conn_id, p.index
-        );
-        send_create_failure(session, 1).await?;
-        return Ok(());
-    }
-    // 6. Nombre ya existe → failure bType=1 (parity __QUERY_PLAYER_CREATE
-    //    ClientManagerPlayer.cpp:812-829 — COUNT por nombre).
-    if database::player::PlayerRepo::new(session.pool.clone())
-        .name_exists(&name, 0)
-        .await?
-    {
-        eprintln!(
-            "server_realms: channel conn {}: create rechazado (nombre {name} ya existe)",
-            session.conn_id
-        );
-        send_create_failure(session, 1).await?;
-        return Ok(());
-    }
-    // 7. Create: stats iniciales (parity NewPlayerTable2 input_login.cpp:434-441
-    //    + JobInitialPoints constants.cpp:18-21) y posición del mapa 41 en
-    //    UNITS (ver CREATE_X/Y). El C++ persiste la RAZA en `job` (el campo
-    //    `byJob` del TSimplePlayer = raza — el cliente pinta el modelo).
-    let (st, ht, dx, iq, max_hp, max_sp, hp_per_ht, sp_per_iq, max_stamina) =
-        job_initial_points(job);
-    let create = PlayerCreate {
-        account_id: session.account_id,
-        name,
-        level: 1,
-        st,
-        ht,
-        dx,
-        iq,
-        job: p.job as i16,
-        voice: 0,
-        dir: 0,
-        x: CREATE_X,
-        y: CREATE_Y,
-        z: 0,
-        map_index: CREATE_MAP,
-        hp: max_hp + i32::from(ht) * hp_per_ht,
-        mp: max_sp + i32::from(iq) * sp_per_iq,
-        random_hp: 0,
-        random_sp: 0,
-        stat_point: 0,
-        stamina: max_stamina,
-        part_base: i16::from(p.shape),
-        part_main: i64::from(p.shape), // parity: el INSERT del C++ pone part_main = part_base
-        part_hair: 0,
-        gold: 0,
-        playtime: 0,
-        skill_level: Vec::new(),
-        quickslot: Vec::new(),
-    };
-    let pid = match session.store().create_character(&create, p.index).await {
-        Ok(pid) => pid,
-        Err(e) => {
-            // El C++ responde bType=1 en los fallos del INSERT/índice
-            // (DG_PLAYER_CREATE_ALREADY en todos los caminos de error).
-            eprintln!(
-                "server_realms: channel conn {}: create falló en PG: {e}",
-                session.conn_id
-            );
-            send_create_failure(session, 1).await?;
-            return Ok(());
-        }
-    };
-    // 8. Respuesta: TPacketGCPlayerCreateSuccess (73 B) con el TSimplePlayer
-    //    (parity input_db.cpp:234-247 — los campos del DG success,
-    //    ClientManagerPlayer.cpp:889-903; lAddr/wPort = el canal real, como
-    //    en el 449 B del select).
-    let (ip, port) = parse_listen(&session.config.listen)?;
-    let server_ip = packets::ip_to_inet_addr(&ip)?;
-    let summary = PlayerSummary {
-        id: pid,
-        name: create.name.clone(),
-        job: create.job,
-        level: 1,
-        playtime: 0,
-        st: create.st,
-        ht: create.ht,
-        dx: create.dx,
-        iq: create.iq,
-        part_main: create.part_main,
-        part_hair: 0,
-        x: create.x,
-        y: create.y,
-        skill_group: 0,
-        change_name: 0,
-    };
-    let simple = packets::summary_to_simple_player(&summary, server_ip, port);
-    session
-        .send(&TPacketGCPlayerCreateSuccess::new(p.index, simple).to_bytes())
-        .await
-        .map_err(|e| format!("enviando GC_CHARACTER_CREATE_SUCCESS: {e}"))?;
-    eprintln!(
-        "server_realms: channel conn {}: personaje {} creado (pid {pid}, slot {})",
-        session.conn_id, create.name, p.index
-    );
-    Ok(())
-}
-
-/// `CG_CHARACTER_DELETE` (5, 10 B) — parity `input_login.cpp:539-571` +
-/// `ClientManagerPlayer.cpp:950-1130` + `input_db.cpp:289-311`: slot vacío o
-/// social_id incorrecta → GC_CHARACTER_DELETE_WRONG_SOCIAL_ID (0x0b, 1 B);
-/// ok → borrado + GC_CHARACTER_DELETE_SUCCESS (0x0a) + account_index.
-/// Divergencia documentada: sin límites de nivel del borrado (el C++ los
-/// lee de conf.txt — PLAYER_DELETE_LEVEL_LIMIT[_LOWER]; con los defaults
-/// 251/0 cualquier nivel es borrable — el rewrite no tiene el config).
-async fn select_delete(session: &mut Session, pkt: &[u8]) -> Result<(), String> {
-    let p = TPacketCGPlayerDelete::from_bytes(pkt)
-        .map_err(|e| format!("CG_CHARACTER_DELETE: {e}"))?;
-    eprintln!(
-        "server_realms: channel conn {}: CG_CHARACTER_DELETE index={} private_code={}",
-        session.conn_id,
-        p.index,
-        cstr(&p.private_code)
-    );
-    // Index overflow: el C++ solo loguea y sigue (input_login.cpp:552-556);
-    // el rewrite responde WRONG_SOCIAL_ID para que el cliente no se quede
-    // esperando (divergencia menor — un índice inválido nunca llega de un
-    // cliente sano).
-    if p.index >= PLAYER_PER_ACCOUNT as u8 {
-        eprintln!(
-            "server_realms: channel conn {}: delete index overflow {}",
-            session.conn_id, p.index
-        );
-        send_delete_wrong_social_id(session).await?;
-        return Ok(());
-    }
-    // Slot vacío → WRONG_SOCIAL_ID (parity input_login.cpp:558-564).
-    let slots = session.store().account_slots(session.account_id).await?;
-    let Some(pid) = slots[p.index as usize] else {
-        eprintln!(
-            "server_realms: channel conn {}: delete: slot {} vacío",
-            session.conn_id, p.index
-        );
-        send_delete_wrong_social_id(session).await?;
-        return Ok(());
-    };
-    // Confirmación: los ÚLTIMOS 7 chars de la social_id vs los primeros 7
-    // del private_code (parity ClientManagerPlayer.cpp:972-977 — strncmp de
-    // 7; un código más corto falla, como el strncmp con NUL).
-    let social = session.social_id.as_bytes();
-    let code = cstr(&p.private_code).as_bytes();
-    if social.len() < 7 || code.get(..7) != Some(&social[social.len() - 7..]) {
-        eprintln!(
-            "server_realms: channel conn {}: delete: social_id no coincide (slot {})",
-            session.conn_id, p.index
-        );
-        send_delete_wrong_social_id(session).await?;
-        return Ok(());
-    }
-    // Borrado + respuesta (parity input_db.cpp:294-298: BufferedPacket(0x0a)
-    // + account_index — el cliente los lee como UN paquete de 2 B).
-    if let Err(e) = session
-        .store()
-        .delete_character(session.account_id, p.index, pid)
-        .await
-    {
-        eprintln!(
-            "server_realms: channel conn {}: delete: {e}",
-            session.conn_id
-        );
-        send_delete_wrong_social_id(session).await?;
-        return Ok(());
-    }
-    session
-        .send(&TPacketGCDestroyCharacterSuccess::new(p.index).to_bytes())
-        .await
-        .map_err(|e| format!("enviando GC_CHARACTER_DELETE_SUCCESS: {e}"))?;
-    eprintln!(
-        "server_realms: channel conn {}: personaje pid {pid} borrado (slot {})",
-        session.conn_id, p.index
-    );
-    Ok(())
-}
-
-/// `CG_EMPIRE` (90, 2 B) — parity `input_login.cpp:806-830` +
-/// `ClientManager.cpp:1129-1200` + `input_db.cpp:1250-1265`: valida el
-/// imperio, lo persiste en `player_index`, reposiciona los personajes a la
-/// aldea y responde GC_EMPIRE (2 B). El cliente legacy solo muestra la
-/// ventana de imperio con bEmpire=0 (el login manda un imperio RANDOM —
-/// `empire_byte`); el handler existe por parity con el C++.
-async fn select_empire(session: &mut Session, pkt: &[u8]) -> Result<(), String> {
-    let p = TPacketCGEmpire::from_bytes(pkt).map_err(|e| format!("CG_EMPIRE: {e}"))?;
-    eprintln!(
-        "server_realms: channel conn {}: CG_EMPIRE bEmpire={}",
-        session.conn_id, p.b_empire
-    );
-    // bEmpire >= EMPIRE_MAX_NUM → cierre (parity input_login.cpp:809-812).
-    if p.b_empire >= EMPIRE_MAX_NUM {
-        return Err(format!(
-            "channel conn {}: empire {} fuera de rango (parity PHASE_CLOSE)",
-            session.conn_id, p.b_empire
-        ));
-    }
-    // Cuenta con imperio Y personajes → cierre (parity input_login.cpp:814-823:
-    // el imperio se elige ANTES de crear personajes; sin personajes se puede
-    // re-elegir).
-    if session.account_empire.is_some_and(|e| e > 0) {
-        let slots = session.store().account_slots(session.account_id).await?;
-        if slots.iter().any(Option::is_some) {
-            return Err(format!(
-                "channel conn {}: empire select fallido — la cuenta ya tiene \
-                 imperio y personajes (parity input_login.cpp:816-822)",
-                session.conn_id
-            ));
-        }
-    }
-    // Persiste el imperio + mueve los personajes a la aldea (WorldStore::
-    // set_empire — mapa 41/UNITS 969600-278400, el único mapa del canal).
-    if let Err(e) = session.store().set_empire(session.account_id, p.b_empire).await {
-        // Fail-open: sin respuesta, el cliente reintenta (parity — el C++
-        // tampoco responde si el db falla: no llega el DG_EMPIRE_SELECT).
-        eprintln!(
-            "server_realms: channel conn {}: empire select: {e}",
-            session.conn_id
-        );
-        return Ok(());
-    }
-    session.account_empire = Some(i16::from(p.b_empire));
-    session.empire = p.b_empire;
-    session
-        .send(&TPacketGCEmpire::new(p.b_empire).to_bytes())
-        .await
-        .map_err(|e| format!("enviando GC_EMPIRE: {e}"))?;
-    eprintln!(
-        "server_realms: channel conn {}: imperio {} elegido",
-        session.conn_id, p.b_empire
-    );
-    Ok(())
-}
-
-/// `CG_CHANGE_NAME` (106, 27 B) — parity `input_login.cpp:203-245` +
-/// `ClientManager.cpp:548-588` + `input_db.cpp:313-340`: solo si el
-/// personaje tiene el flag `bChangeName`; nombre inválido → failure bType=0;
-/// nombre tomado → failure bType=1; ok → GC_CHANGE_NAME (107, 30 B).
-async fn select_change_name(session: &mut Session, pkt: &[u8]) -> Result<(), String> {
-    let p = TPacketCGChangeName::from_bytes(pkt)
-        .map_err(|e| format!("CG_CHANGE_NAME: {e}"))?;
-    let name = cstr(&p.name).to_string();
-    eprintln!(
-        "server_realms: channel conn {}: CG_CHANGE_NAME index={} name={name}",
-        session.conn_id, p.index
-    );
-    // Index overflow → cierre (parity @fixme190 input_login.cpp:211-216).
-    if p.index >= PLAYER_PER_ACCOUNT as u8 {
-        return Err(format!(
-            "channel conn {}: change_name index overflow {} (parity PHASE_CLOSE)",
-            session.conn_id, p.index
-        ));
-    }
-    // Slot sin personaje → cierre (parity input_login.cpp:218-223).
-    let slots = session.store().account_slots(session.account_id).await?;
-    let Some(pid) = slots[p.index as usize] else {
-        return Err(format!(
-            "channel conn {}: change_name player index not found (parity PHASE_CLOSE)",
-            session.conn_id
-        ));
-    };
-    // Sin flag bChangeName → no-op sin respuesta (parity input_login.cpp:228-229).
-    let summaries = session.store().list_characters(session.account_id).await?;
-    let Some(summary) = summaries.iter().find(|s| s.id == pid) else {
-        return Ok(());
-    };
-    if summary.change_name == 0 {
-        return Ok(());
-    }
-    // Nombre inválido → failure bType=0 (parity input_login.cpp:231-238).
-    if !check_name(&name) {
-        send_create_failure(session, 0).await?;
-        return Ok(());
-    }
-    // Nombre tomado por OTRO personaje → failure bType=1 (parity
-    // QUERY_CHANGE_NAME ClientManager.cpp:548-570 — `AND id <> pid`).
-    if database::player::PlayerRepo::new(session.pool.clone())
-        .name_exists(&name, pid)
-        .await?
-    {
-        eprintln!(
-            "server_realms: channel conn {}: change_name: nombre {name} ya existe",
-            session.conn_id
-        );
-        send_create_failure(session, 1).await?;
-        return Ok(());
-    }
-    // Renombre + respuesta GC_CHANGE_NAME (parity input_db.cpp:325-338 — el
-    // cliente matchea el pid contra sus slots y actualiza el nombre).
-    if let Err(e) = session.store().rename_character(pid, &name).await {
-        eprintln!(
-            "server_realms: channel conn {}: change_name: {e}",
-            session.conn_id
-        );
-        send_create_failure(session, 0).await?;
-        return Ok(());
-    }
-    session
-        .send(&TPacketGCChangeName::new(pid as u32, &name).to_bytes())
-        .await
-        .map_err(|e| format!("enviando GC_CHANGE_NAME: {e}"))?;
-    eprintln!(
-        "server_realms: channel conn {}: personaje pid {pid} renombrado a {name}",
-        session.conn_id
-    );
-    Ok(())
-}
-
-/// `GC_CHARACTER_CREATE_FAILURE` (2 B) con log (parity `input_db.cpp:188-199`
-/// — `PlayerCreateFailure`).
-async fn send_create_failure(session: &mut Session, b_type: u8) -> Result<(), String> {
-    eprintln!(
-        "server_realms: channel conn {}: GC_CHARACTER_CREATE_FAILURE bType={b_type}",
-        session.conn_id
-    );
-    session
-        .send(&TPacketGCCreateFailure::new(b_type).to_bytes())
-        .await
-        .map_err(|e| format!("enviando GC_CHARACTER_CREATE_FAILURE: {e}"))
-}
-
-/// `GC_CHARACTER_DELETE_WRONG_SOCIAL_ID` (1 B — parity `input_db.cpp:302-310`
-/// `PlayerDeleteFail`; el cliente lo lee como `TPacketGCBlank` de 1 B).
-async fn send_delete_wrong_social_id(session: &mut Session) -> Result<(), String> {
-    eprintln!(
-        "server_realms: channel conn {}: GC_CHARACTER_DELETE_WRONG_SOCIAL_ID",
-        session.conn_id
-    );
-    session
-        .send(&[header::GC_CHARACTER_DELETE_WRONG_SOCIAL_ID])
-        .await
-        .map_err(|e| format!("enviando GC_CHARACTER_DELETE_WRONG_SOCIAL_ID: {e}"))
-}
-
-/// `check_name` del rewrite (parity `check_name_alphabet` — locale spain,
-/// `locale_service.cpp:311-326`): 2..=24 chars ASCII alfanuméricos.
-/// Divergencia documentada: sin banword ni tabla de nombres de mob (el
-/// rewrite no carga esos datos en runtime; el trigger `MakeCharacter` del PG
-/// valida `^[A-Za-z0-9]+$` como red de seguridad).
-fn check_name(name: &str) -> bool {
-    (2..=protocol::CHARACTER_NAME_MAX_LEN).contains(&name.len())
-        && name.chars().all(|c| c.is_ascii_alphanumeric())
-}
-
-/// `RaceToJob` (input_login.cpp:356-380): la raza del cliente (0..7 — el
-/// campo `job` del TPacketCGPlayerCreate) → índice del job (0..3) para los
-/// stats iniciales. `None` = raza fuera de rango (8+ — el C++ sin wolfman
-/// también la rechaza: MAIN_RACE_MAX_NUM=8 → NewPlayerTable2 false).
-fn race_to_job(race: u16) -> Option<u16> {
-    match race {
-        0 | 4 => Some(0), // MAIN_RACE_WARRIOR_M/W → JOB_WARRIOR
-        1 | 5 => Some(1), // MAIN_RACE_ASSASSIN_W/M → JOB_ASSASSIN
-        2 | 6 => Some(2), // MAIN_RACE_SURA_M/W → JOB_SURA
-        3 | 7 => Some(3), // MAIN_RACE_SHAMAN_W/M → JOB_SHAMAN
-        _ => None,
-    }
-}
-
-/// `JobInitialPoints` (constants.cpp:18-21) — `(st, ht, dx, iq, max_hp,
-/// max_sp, hp_per_ht, sp_per_iq, max_stamina)`: los stats INICIALES del
-/// create (parity `NewPlayerTable2` input_login.cpp:434-441 — hp = max_hp +
-/// ht×hp_per_ht, mp = max_sp + iq×sp_per_iq, stamina = max_stamina).
-fn job_initial_points(job: u16) -> (i16, i16, i16, i16, i32, i32, i32, i32, i16) {
-    match job {
-        0 => (6, 4, 3, 3, 600, 200, 40, 20, 800), // JOB_WARRIOR
-        1 => (4, 3, 6, 3, 650, 200, 40, 20, 800), // JOB_ASSASSIN
-        2 => (5, 3, 3, 5, 650, 200, 40, 20, 800), // JOB_SURA
-        _ => (3, 4, 3, 6, 700, 200, 40, 20, 800), // JOB_SHAMAN (3 — el C++ valida antes)
-    }
-}
-
-/// `GC_RESPOND_CHANNELSTATUS` (0xd2, parity `input_db.cpp:2433-2461`):
-/// `[bHeader=0xd2][nSize: i32 LE][nPort: u16 LE][bStatus: u8][bSuccess=0x01]`.
-/// El C++ responde con el estado CACHEADO del canal (input.cpp:573-589 +
-/// desc_client.cpp:291-295: `g_bNoMoreClient → 0`, si no → por ocupación);
-/// el Rust: 1 canal = este proceso — puerto del config, status 1
-/// (recomendado/verde — `STATE_DICT[1]` del serverinfo.py) u 0 (offline) con
-/// `no_more_clients`. El cliente matchea por puerto
-/// (`ServerStateChecker::Update` — `channelStatus.nPort == it->uPort`).
-fn channel_status_packet(listen: &str, no_more_clients: bool) -> Vec<u8> {
-    let port = parse_listen(listen).map(|(_, p)| p).unwrap_or(0);
-    let mut out = Vec::with_capacity(9);
-    out.push(header::GC_RESPOND_CHANNELSTATUS); // 0xd2 = 210
-    out.extend_from_slice(&1i32.to_le_bytes()); // nSize: 1 canal
-    out.extend_from_slice(&port.to_le_bytes()); // TChannelStatus.nPort
-    out.push(u8::from(!no_more_clients)); // TChannelStatus.bStatus: 1 = recomendado
-    out.push(1u8); // bSuccess (parity input_db.cpp:2457 — el cliente lo ignora)
-    out
-}
-
-/// Valida la posición cargada contra el mapa (P0-B 2026-08-14 — parity
-/// `GetValidLocation` del C++): `None` = posición válida (o mapa no
-/// cargable — fail-open, la posición cargada se mantiene); `Some((x, y))` =
-/// fallback determinista a la primera celda movible del mapa (un row con
-/// coords fuera del mapa crashea el CLIENTE con 0xC0000374 al cargar el
-/// mapa — probado 2×: 08-09 y hoy). Leniente a propósito: celdas bloqueadas
-/// in-bounds NO se corrigen (las celdas del pueblo son ATTR_BLOCK
-/// legítimas — wave 45).
-fn validated_load_position(session: &Session) -> Option<(i32, i32)> {
-    let mut store = session.map_store.lock().unwrap();
-    if let Err(e) = store.load(&session.config.map_path, session.row().map_index) {
-        eprintln!(
-            "server_realms: channel conn {}: walkability no disponible (mapa {}): {e} — \
-             fail-open (la posición cargada se mantiene)",
-            session.conn_id, session.row().map_index
-        );
-        return None;
-    }
-    let Some(map) = store.get(session.row().map_index) else {
-        return None; // fail-open defensivo
-    };
-    let (x, y) = (session.row().x, session.row().y);
-    if map.attr(x, y).is_some() {
-        return None; // in-bounds (aunque esté bloqueado — leniente)
-    }
-    match map.first_movable() {
-        Some(f) => Some(f),
-        None => {
-            eprintln!(
-                "server_realms: channel conn {}: mapa {} sin celdas movibles — \
-                 la posición cargada se mantiene",
-                session.conn_id, session.row().map_index
-            );
-            None
-        }
-    }
 }
 
 /// Armado del 449 B: slots del índice (orden del player_index) emparejados con
@@ -1110,10 +412,11 @@ async fn build_login_success(
     let mut players: [Option<database::player::PlayerSummary>; PLAYER_PER_ACCOUNT] =
         [None, None, None, None, None];
     for (i, pid) in slots.iter().enumerate() {
-        if let Some(pid) = pid
-            && let Some(s) = summaries.iter().find(|s| s.id == *pid) {
+        if let Some(pid) = pid {
+            if let Some(s) = summaries.iter().find(|s| s.id == *pid) {
                 players[i] = Some(s.clone());
             }
+        }
     }
     eprintln!(
         "server_realms: 449 B con server de juego {}:{} (DirectEnter)",
@@ -1158,14 +461,13 @@ fn entry_packets(
     next_exp: i64,
     items: &[database::item::ItemRow],
     affects: &[database::affect::AffectRow],
-    battle: &packets::BattlePoints,
 ) -> Vec<Vec<u8>> {
     let mut out = vec![
         TPacketGCPhase::new(phase::LOADING).to_bytes().to_vec(),
         packets::main_character(row).to_bytes().to_vec(),
     ];
     out.extend(packets::quickslot_packets(row.quickslot.as_ref()));
-    out.push(packets::points_packet(row, next_exp, battle).to_bytes().to_vec());
+    out.push(packets::points_packet(row, next_exp).to_bytes().to_vec());
     out.push(packets::skill_level_packet(row.skill_level.as_ref()).to_bytes().to_vec());
     out.extend(packets::item_set_packets(items));
     out.extend(packets::affect_add_packets(affects));
@@ -1255,7 +557,7 @@ mod tests {
             l_duration: 5,
             l_sp_cost: 6,
         }];
-        let pkts = entry_packets(&row, 300, &items, &affects, &packets::BattlePoints::default());
+        let pkts = entry_packets(&row, 300, &items, &affects);
         // 2 (LOADING+15) + 36 quickslots + 2 (16+76) + 1 item + 1 affect.
         assert_eq!(pkts.len(), 42, "2 + 36 + 2 + 1 + 1");
         assert_eq!(pkts[0].len(), TPacketGCPhase::SIZE);
@@ -1288,7 +590,7 @@ mod tests {
         // MOV_SPEED@77 (1 + 19×4) = 100 (parity char.cpp:2245).
         assert_eq!(i32::from_le_bytes([pkts[38][77], pkts[38][78], pkts[38][79], pkts[38][80]]), 100);
         // Sin items/affects: 40 paquetes (2 + 36 + 2).
-        assert_eq!(entry_packets(&row, 300, &[], &[], &packets::BattlePoints::default()).len(), 40);
+        assert_eq!(entry_packets(&row, 300, &[], &[]).len(), 40);
     }
 
     /// Enter (ENTERGAME): ADD + INFO + GAME (+ land list si hay lands) —
@@ -1330,99 +632,6 @@ mod tests {
         assert_eq!(TPacketCGPlayerSelect::SIZE, 2, "CG_PLAYER_SELECT");
         assert_eq!(TPacketGCPhase::SIZE, 2);
         assert_eq!(TPacketGCLoginFailure::SIZE, 10, "GC_LOGIN_FAILURE");
-    }
-
-    /// Dispatch del loop del select (lane E): los headers de
-    /// crear/borrar/imperio/renombrar NUNCA caen en `Other` (el cierre por
-    /// "header inesperado") — se atienden y el loop sigue esperando el
-    /// CG_PLAYER_SELECT.
-    #[test]
-    fn select_kind_accepts_lane_e_headers() {
-        assert_eq!(select_kind(header::CG_CHARACTER_CREATE), SelectKind::Create);
-        assert_eq!(select_kind(header::CG_CHARACTER_DELETE), SelectKind::Delete);
-        assert_eq!(select_kind(header::CG_EMPIRE), SelectKind::Empire);
-        assert_eq!(select_kind(header::CG_CHANGE_NAME), SelectKind::ChangeName);
-        assert_eq!(select_kind(header::CG_CHARACTER_SELECT), SelectKind::Select);
-        assert_eq!(select_kind(header::CG_TIME_SYNC), SelectKind::Keepalive);
-        assert_eq!(select_kind(header::CG_PONG), SelectKind::Keepalive);
-        assert_eq!(select_kind(0x7f), SelectKind::Other, "solo headers desconocidos cierran");
-    }
-
-    /// `check_name` del rewrite (parity `check_name_alphabet` + trigger
-    /// `MakeCharacter`): 2..=24 chars ASCII alfanuméricos.
-    #[test]
-    fn check_name_validation() {
-        assert!(check_name("Warrior"), "alfanumérico");
-        assert!(check_name("a1B2"), "mezcla");
-        assert!(check_name(&"x".repeat(24)), "máximo 24");
-        assert!(!check_name(""), "vacío");
-        assert!(!check_name("a"), "menor a 2 (parity strlen < 2)");
-        assert!(!check_name(&"x".repeat(25)), "mayor a 24 (el buffer es [25])");
-        assert!(!check_name("Warrior!"), "símbolo");
-        assert!(!check_name("War rior"), "espacio");
-        assert!(!check_name("ñandu"), "no-ASCII (parity isalpha/isdigit)");
-    }
-
-    /// `RaceToJob` (input_login.cpp:356-380): raza 0..7 → job 0..3;
-    /// 8+ → None (el C++ sin wolfman la rechaza igual).
-    #[test]
-    fn race_to_job_parity() {
-        assert_eq!(race_to_job(0), Some(0), "WARRIOR_M");
-        assert_eq!(race_to_job(4), Some(0), "WARRIOR_W");
-        assert_eq!(race_to_job(1), Some(1), "ASSASSIN_W");
-        assert_eq!(race_to_job(5), Some(1), "ASSASSIN_M");
-        assert_eq!(race_to_job(2), Some(2), "SURA_M");
-        assert_eq!(race_to_job(6), Some(2), "SURA_W");
-        assert_eq!(race_to_job(3), Some(3), "SHAMAN_W");
-        assert_eq!(race_to_job(7), Some(3), "SHAMAN_M");
-        assert_eq!(race_to_job(8), None, "wolfman/out-of-range");
-        assert_eq!(race_to_job(255), None);
-    }
-
-    /// Stats iniciales del create (parity JobInitialPoints constants.cpp:18-21
-    /// + NewPlayerTable2 input_login.cpp:434-441): hp = max_hp + ht×hp_per_ht,
-    /// mp = max_sp + iq×sp_per_iq, stamina = max_stamina.
-    #[test]
-    fn job_initial_points_parity() {
-        // JOB_WARRIOR: st6 ht4 dx3 iq3, 600/200, 40/20, 800.
-        let (st, ht, dx, iq, max_hp, max_sp, hph, sph, stamina) = job_initial_points(0);
-        assert_eq!((st, ht, dx, iq), (6, 4, 3, 3));
-        assert_eq!(max_hp + i32::from(ht) * hph, 760, "hp del warrior (600 + 4×40)");
-        assert_eq!(max_sp + i32::from(iq) * sph, 260, "mp del warrior (200 + 3×20)");
-        assert_eq!(stamina, 800, "stamina inicial (max_stamina)");
-        // JOB_ASSASSIN.
-        let (st, ht, dx, iq, max_hp, max_sp, hph, sph, _) = job_initial_points(1);
-        assert_eq!((st, ht, dx, iq), (4, 3, 6, 3));
-        assert_eq!(max_hp + i32::from(ht) * hph, 770, "hp del assassin (650 + 3×40)");
-        assert_eq!(max_sp + i32::from(iq) * sph, 260, "mp del assassin (200 + 3×20)");
-        // JOB_SURA.
-        let (st, ht, dx, iq, max_hp, _, hph, _, _) = job_initial_points(2);
-        assert_eq!((st, ht, dx, iq), (5, 3, 3, 5));
-        assert_eq!(max_hp + i32::from(ht) * hph, 770, "hp del sura (650 + 3×40)");
-        // JOB_SHAMAN (default del match).
-        let (st, ht, dx, iq, max_hp, _, hph, _, _) = job_initial_points(3);
-        assert_eq!((st, ht, dx, iq), (3, 4, 3, 6));
-        assert_eq!(max_hp + i32::from(ht) * hph, 860, "hp del shaman (700 + 4×40)");
-    }
-
-    /// Estado del canal (GC_RESPOND_CHANNELSTATUS 0xd2 — parity
-    /// input_db.cpp:2433-2461): [0xd2][nSize=1 LE i32][port LE u16][status
-    /// u8][bSuccess 0x01] = 9 B. El cliente matchea por puerto
-    /// (ServerStateChecker::Update — channelStatus.nPort == uPort).
-    #[test]
-    fn channel_status_packet_wire() {
-        let pkt = channel_status_packet("127.0.0.1:30003", false);
-        assert_eq!(pkt.len(), 9, "1 + 4 + 2 + 1 + 1");
-        assert_eq!(pkt[0], header::GC_RESPOND_CHANNELSTATUS, "0xd2");
-        assert_eq!(i32::from_le_bytes([pkt[1], pkt[2], pkt[3], pkt[4]]), 1, "nSize 1");
-        assert_eq!(u16::from_le_bytes([pkt[5], pkt[6]]), 30003, "puerto del canal");
-        assert_eq!(pkt[7], 1, "status recomendado (STATE_DICT[1])");
-        assert_eq!(pkt[8], 1, "bSuccess (parity — el cliente lo ignora)");
-        // no_more_clients → status 0 (offline, parity desc_client.cpp:294-295).
-        let off = channel_status_packet("127.0.0.1:30003", true);
-        assert_eq!(off[7], 0, "status offline");
-        // Listen inválido → puerto 0 (defensivo, nunca en runtime).
-        assert_eq!(channel_status_packet("", false)[5..7], [0, 0]);
     }
 
     /// Fila del player del harness (parity del dummy del channel_pg E2E).

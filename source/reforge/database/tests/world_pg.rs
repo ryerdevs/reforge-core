@@ -87,18 +87,18 @@ async fn wait_for_audit(client: &tokio_postgres::Client, audit: &str, expected: 
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
 async fn quest_affect_load_live_characters_structure_only() {
     let conn = pg_conn();
-    let quests = QuestRepo::new(database::pool::new_pool(&conn, 4).expect("pool PG")).load(NINJA_ID).await.expect("QUEST_LOAD no falla");
+    let quests = QuestRepo::new(&conn).load(NINJA_ID).await.expect("QUEST_LOAD no falla");
     for q in &quests {
         assert_eq!(q.dw_pid, NINJA_ID, "dwPID del row");
         assert!(!q.sz_name.is_empty(), "szName presente");
     }
-    let affects = AffectRepo::new(database::pool::new_pool(&conn, 4).expect("pool PG")).load(NINJA_ID).await.expect("AFFECT_LOAD no falla");
+    let affects = AffectRepo::new(&conn).load(NINJA_ID).await.expect("AFFECT_LOAD no falla");
     for a in &affects {
         assert_eq!(a.dw_pid, NINJA_ID, "dwPID del row");
     }
     // Ids inexistentes -> vec vacio (sin error).
-    assert!(QuestRepo::new(database::pool::new_pool(&conn, 4).expect("pool PG")).load(999_999_999).await.expect("DB up").is_empty());
-    assert!(AffectRepo::new(database::pool::new_pool(&conn, 4).expect("pool PG")).load(999_999_999).await.expect("DB up").is_empty());
+    assert!(QuestRepo::new(&conn).load(999_999_999).await.expect("DB up").is_empty());
+    assert!(AffectRepo::new(&conn).load(999_999_999).await.expect("DB up").is_empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -109,7 +109,7 @@ async fn quest_affect_load_live_characters_structure_only() {
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
 async fn quest_save_upsert_roundtrip_throwaway() {
     let conn = pg_conn();
-    let repo = QuestRepo::new(database::pool::new_pool(&conn, 4).expect("pool PG"));
+    let repo = QuestRepo::new(&conn);
 
     let result = async {
         // Insert de 2 quests (semantica QUERY_QUEST_SAVE: lValue!=0 -> upsert).
@@ -149,7 +149,7 @@ async fn quest_save_upsert_roundtrip_throwaway() {
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
 async fn affect_save_upsert_remove_roundtrip_throwaway() {
     let conn = pg_conn();
-    let repo = AffectRepo::new(database::pool::new_pool(&conn, 4).expect("pool PG"));
+    let repo = AffectRepo::new(&conn);
 
     let result = async {
         let row = AffectRow {
@@ -197,7 +197,7 @@ async fn affect_save_upsert_remove_roundtrip_throwaway() {
 #[tokio::test]
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
 async fn safebox_size_live_account_structure_only() {
-    let repo = SafeboxRepo::new(database::pool::new_pool(&pg_conn(), 4).expect("pool PG"));
+    let repo = SafeboxRepo::new(pg_conn());
     let _ = repo.size(1).await.expect("SAFEBOX_SIZE no falla");
     let _ = repo.load(1).await.expect("SAFEBOX_LOAD no falla");
 }
@@ -207,7 +207,7 @@ async fn safebox_size_live_account_structure_only() {
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
 async fn safebox_set_size_roundtrip_throwaway() {
     let conn = pg_conn();
-    let repo = SafeboxRepo::new(database::pool::new_pool(&conn, 4).expect("pool PG"));
+    let repo = SafeboxRepo::new(&conn);
 
     let result = async {
         assert_eq!(repo.size(THROWAWAY_ID).await.expect("size"), None, "sin fila todavia");
@@ -248,7 +248,7 @@ async fn safebox_set_size_roundtrip_throwaway() {
 #[tokio::test]
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
 async fn item_load_ninja_inventory_structure_only() {
-    let repo = ItemRepo::new(database::pool::new_pool(&pg_conn(), 4).expect("pool PG"));
+    let repo = ItemRepo::new(pg_conn());
     let items = repo.load_by_owner(NINJA_ID).await.expect("ITEM_LOAD no falla");
     assert!(!items.is_empty(), "ninja tiene items (hoy 22)");
     for it in &items {
@@ -270,7 +270,7 @@ async fn item_load_ninja_inventory_structure_only() {
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
 async fn item_upsert_delete_roundtrip_throwaway() {
     let conn = pg_conn();
-    let repo = ItemRepo::new(database::pool::new_pool(&conn, 4).expect("pool PG"));
+    let repo = ItemRepo::new(&conn);
     let explicit_id = 100_000_001i64; // dentro de ITEM_ID_RANGE (E2E Q8)
 
     let result = async {
@@ -346,7 +346,7 @@ async fn item_upsert_delete_roundtrip_throwaway() {
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
 async fn item_award_load_pending_and_take_throwaway() {
     let conn = pg_conn();
-    let repo = ItemRepo::new(database::pool::new_pool(&conn, 4).expect("pool PG"));
+    let repo = ItemRepo::new(&conn);
     let login = format!("m2e2_{}", ts() % 1_000_000_000);
 
     let result = async {
@@ -396,7 +396,7 @@ async fn item_award_load_pending_and_take_throwaway() {
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
 async fn messenger_add_list_remove_throwaway() {
     let conn = pg_conn();
-    let repo = MessengerRepo::new(database::pool::new_pool(&conn, 4).expect("pool PG"));
+    let repo = MessengerRepo::new(&conn);
     // varchar(16) en PG: login corto.
     let account = format!("m2e2_{}", ts() % 1_000_000_000);
     let companion = format!("m2e2c_{}", ts() % 1_000_000_000);
@@ -455,7 +455,7 @@ async fn pipeline_setup(name: &str) -> (String, tokio_postgres::Client, String) 
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
 async fn player_save_mutated_via_batcher_applies_with_audit() {
     let (conn, client, audit) = pipeline_setup("pmut").await;
-    let repo = PlayerRepo::new(database::pool::new_pool(&conn, 4).expect("pool PG"));
+    let repo = PlayerRepo::new(&conn);
     // Nombre UNICO por test (los tests del bin corren en paralelo y
     // player_pg.rs usa e2e_rust_<ts> — un prefijo compartido haria que los
     // cleanups se borraran los personajes entre si).
@@ -471,7 +471,6 @@ async fn player_save_mutated_via_batcher_applies_with_audit() {
             st: 30, ht: 30, dx: 30, iq: 30,
             job: 0, voice: 0, dir: 0,
             x: 0, y: 0, z: 0,
-            map_index: 41,
             hp: 100, mp: 100,
             random_hp: 0, random_sp: 0, stat_point: 0, stamina: 100,
             part_base: 0, part_main: 0, part_hair: 0,
@@ -485,7 +484,7 @@ async fn player_save_mutated_via_batcher_applies_with_audit() {
         let mut p = repo.load(id).await.expect("load").expect("existe");
         p.x = 969600;
         p.y = 278400;
-        let sink = PgMutationSink::new(database::pool::new_pool(&conn, 4).expect("pool")).with_audit_table(audit.clone());
+        let sink = PgMutationSink::new(&conn).with_audit_table(audit.clone());
         let batcher = Batcher::spawn(Duration::from_millis(100), 64, sink);
         repo.save_mutated(&batcher, &p);
         // Espera el flush: poll del audit (el sink abre conexion nueva).
@@ -525,7 +524,7 @@ async fn player_save_mutated_via_batcher_applies_with_audit() {
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
 async fn player_two_saves_same_batch_same_tx() {
     let (conn, client, audit) = pipeline_setup("pbatch").await;
-    let repo = PlayerRepo::new(database::pool::new_pool(&conn, 4).expect("pool PG"));
+    let repo = PlayerRepo::new(&conn);
     let name = format!("e2e_pbatch_{}", ts());
 
     let result = async {
@@ -536,7 +535,6 @@ async fn player_two_saves_same_batch_same_tx() {
             st: 30, ht: 30, dx: 30, iq: 30,
             job: 0, voice: 0, dir: 0,
             x: 0, y: 0, z: 0,
-            map_index: 41,
             hp: 100, mp: 100,
             random_hp: 0, random_sp: 0, stat_point: 0, stamina: 100,
             part_base: 0, part_main: 0, part_hair: 0,
@@ -547,7 +545,7 @@ async fn player_two_saves_same_batch_same_tx() {
         let id = repo.create(&c).await.expect("create");
         let p = repo.load(id).await.expect("load").expect("existe");
 
-        let sink = PgMutationSink::new(database::pool::new_pool(&conn, 4).expect("pool")).with_audit_table(audit.clone());
+        let sink = PgMutationSink::new(&conn).with_audit_table(audit.clone());
         let batcher = Batcher::spawn(Duration::from_millis(100), 64, sink);
         // Dos saves back-to-back: caen en la misma ventana de 100ms.
         let mut a = p.clone();
@@ -618,7 +616,7 @@ async fn item_exchange_atomic_unit_against_real_pg() {
 
     let result = async {
         // Player throwaway (sin FK a account; el id lo da la identity).
-        let repo = PlayerRepo::new(database::pool::new_pool(&conn, 4).expect("pool PG"));
+        let repo = PlayerRepo::new(&conn);
         let pid = repo
             .create(&PlayerCreate {
                 account_id: THROWAWAY_ID,
@@ -627,7 +625,6 @@ async fn item_exchange_atomic_unit_against_real_pg() {
                 st: 30, ht: 30, dx: 30, iq: 30,
                 job: 0, voice: 0, dir: 0,
                 x: 969600, y: 278400, z: 0,
-                map_index: 41,
                 hp: 100, mp: 100, random_hp: 0, random_sp: 0,
                 stat_point: 0, stamina: 100,
                 part_base: 0, part_main: 0, part_hair: 0,
@@ -638,7 +635,7 @@ async fn item_exchange_atomic_unit_against_real_pg() {
             .expect("create player throwaway");
 
         // Items material (INVENTORY, stacks de 5 y 3).
-        let items = ItemRepo::new(database::pool::new_pool(&conn, 4).expect("pool PG"));
+        let items = ItemRepo::new(&conn);
         let mk = |id: i64, pos: i32, vnum: i64, count: i64| ItemRow {
             id,
             window: "INVENTORY".into(),
@@ -659,7 +656,7 @@ async fn item_exchange_atomic_unit_against_real_pg() {
             result: Some((mk(RESULT_ID, 2, 30001, 1), pid)),
             gold: Some((1_000, 1_200)),
         };
-        let sink = PgMutationSink::new(database::pool::new_pool(&conn, 4).expect("pool")).with_audit_table(audit.clone());
+        let sink = PgMutationSink::new(&conn).with_audit_table(audit.clone());
         let batcher = Batcher::spawn(Duration::from_millis(100), 64, sink);
         items.exchange_mutated(&batcher, &ex).await.expect("unidad ACID commit");
 
@@ -673,7 +670,7 @@ async fn item_exchange_atomic_unit_against_real_pg() {
         );
         assert_eq!(get(RESULT_ID).count, 1, "resultado creado");
         assert_eq!(get(RESULT_ID).vnum, 30001);
-        let player = PlayerRepo::new(database::pool::new_pool(&conn, 4).expect("pool PG")).load(pid).await.expect("load").expect("player");
+        let player = PlayerRepo::new(&conn).load(pid).await.expect("load").expect("player");
         assert_eq!(player.gold, 1_200, "oro 1_000→1_200 en la misma tx");
 
         // Audit: 4 filas con el MISMO applied_at (misma transaccion).

@@ -183,7 +183,6 @@ async fn upsert_character(
         x: CHAR_X,
         y: CHAR_Y,
         z: 0,
-        map_index: 41,
         hp: CHAR_HP,
         mp: CHAR_MP,
         random_hp: 0,
@@ -199,7 +198,7 @@ async fn upsert_character(
         quickslot: vec![0; QUICKSLOT_BYTES],
     };
     let name = c.name.clone();
-    let player_id = PlayerRepo::new(database::pool::new_pool(pg, 2).expect("pool"))
+    let player_id = PlayerRepo::new(pg)
         .create(&c)
         .await
         .map_err(|e| format!("PLAYER_CREATE {login}/{name}: {e}"))?;
@@ -320,7 +319,7 @@ mod tests {
         assert_eq!(accs.len(), 2);
         // El login del canal acepta las credenciales (AccountRepo::login).
         for a in &accs {
-            let ok = database::account::AccountRepo::new(database::pool::new_pool(pg, 2).expect("pool"))
+            let ok = database::account::AccountRepo::new(pg)
                 .login(&a.login, "1234")
                 .await
                 .expect("login query");

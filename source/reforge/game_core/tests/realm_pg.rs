@@ -27,19 +27,6 @@ fn pg_conn() -> String {
     std::env::var("DATABASE_TEST_PG").unwrap_or_else(|_| DEFAULT_PG.to_string())
 }
 
-async fn test_store() -> game_core::world::WorldStore {
-    let pool = database::pool::new_pool(&pg_conn(), 4).expect("pool");
-    let sink = database::wal::WalSink::new(
-        database::wal::PgMutationSink::new(pool.clone()),
-        game_core::world::wal_dir(),
-    );
-    let batcher = std::sync::Arc::new(database::wal::Batcher::spawn(
-        std::time::Duration::from_millis(100),
-        64,
-        sink,
-    ));
-    game_core::world::WorldStore::new(pool, batcher)
-}
 fn ts() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -82,7 +69,7 @@ async fn wait_for_audit(client: &tokio_postgres::Client, audit: &str, expected: 
 #[tokio::test]
 #[ignore = "requiere PG real (WSL): cargo test --package game_core -- --ignored"]
 async fn realm_list_characters_live_account() {
-    let store = test_store().await;
+    let store = WorldStore::new(pg_conn()).await.expect("WorldStore::new (PG up)");
     let list = store.list_characters(TEST_ACCOUNT).await.expect("list");
     assert!(list.len() >= 3, ">=3 (E2E Q3): got {}", list.len());
     let names: Vec<&str> = list.iter().map(|s| s.name.as_str()).collect();
@@ -97,7 +84,7 @@ async fn realm_list_characters_live_account() {
 #[tokio::test]
 #[ignore = "requiere PG real (WSL): cargo test --package game_core -- --ignored"]
 async fn realm_select_player_each_live_character() {
-    let store = test_store().await;
+    let store = WorldStore::new(pg_conn()).await.expect("WorldStore::new");
 
     // Slot 0 -> pid1 = 1 (lkjsnlfknlsk).
     let p = store.select_player(TEST_ACCOUNT, 0).await.expect("select slot 0").expect("pid1=1 existe");
@@ -134,7 +121,7 @@ async fn realm_select_player_each_live_character() {
 #[tokio::test]
 #[ignore = "requiere PG real (WSL): cargo test --package game_core -- --ignored"]
 async fn realm_account_slots_live_account() {
-    let store = test_store().await;
+    let store = WorldStore::new(pg_conn()).await.expect("WorldStore::new");
     let slots = store.account_slots(TEST_ACCOUNT).await.expect("account_slots");
     assert_eq!(
         slots,
@@ -154,7 +141,7 @@ async fn realm_account_slots_live_account() {
 #[tokio::test]
 #[ignore = "requiere PG real (WSL): cargo test --package game_core -- --ignored"]
 async fn realm_select_player_invalid_slot() {
-    let store = test_store().await;
+    let store = WorldStore::new(pg_conn()).await.expect("WorldStore::new");
     for slot in [5u8, 6, 200] {
         let err = store.select_player(TEST_ACCOUNT, slot).await.expect_err("slot invalido -> Err");
         assert!(err.contains("fuera de rango"), "err: {err}");
@@ -179,18 +166,11 @@ async fn realm_save_character_via_batcher_audit() {
         .await
         .expect("setup schema de test");
 
-    let pool = database::pool::new_pool(&conn, 4).expect("pool");
-    let sink = database::wal::WalSink::new(
-        database::wal::PgMutationSink::new(pool.clone()).with_audit_table(audit.clone()),
-        game_core::world::wal_dir(),
-    );
-    let batcher = std::sync::Arc::new(database::wal::Batcher::spawn(
-        std::time::Duration::from_millis(100),
-        64,
-        sink,
-    ));
-    let store = WorldStore::new(pool.clone(), batcher);
-    let repo = PlayerRepo::new(pool);
+    let store = WorldStore::new(&conn)
+        .await
+        .expect("WorldStore::new")
+        .with_audit_table(audit.clone());
+    let repo = PlayerRepo::new(&conn);
     // Nombre UNICO por test (los tests del bin corren en paralelo).
     let name = format!("e2e_rsave_{}", ts());
 
@@ -203,7 +183,6 @@ async fn realm_save_character_via_batcher_audit() {
             st: 30, ht: 30, dx: 30, iq: 30,
             job: 0, voice: 0, dir: 0,
             x: 0, y: 0, z: 0,
-            map_index: 41,
             hp: 100, mp: 100,
             random_hp: 0, random_sp: 0, stat_point: 0, stamina: 100,
             part_base: 0, part_main: 0, part_hair: 0,
