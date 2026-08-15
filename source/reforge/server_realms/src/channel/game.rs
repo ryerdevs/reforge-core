@@ -16,6 +16,8 @@
 
 use protocol::header;
 
+use game_core::ecs::{CombatIntent, Intent};
+
 use crate::channel::session::Session;
 use crate::channel::{chat, combat, events, items, movement, script, shop, skills, trade};
 
@@ -73,6 +75,19 @@ async fn game_loop(session: &mut Session) -> Result<(), String> {
                     }
                     header::CG_MOVE => movement::handle(session, &pkt).await?.into_result()?,
                     header::CG_ATTACK => combat::handle(session, &pkt).await?.into_result()?,
+                    // F5.3+: TARGET de mob — CG_TARGET (61, 5 B: header + vid
+                    // — Packet.h:671-675). Parity `Target` (input_main.cpp:
+                    // 1918-1935 → SetTarget, char.cpp:5048-5094): el mundo
+                    // responde GC_TARGET (63) con el HP% del mob apuntado —
+                    // la barra de vida del objetivo (fix bug 5, 2026-08-15;
+                    // antes: header sin arm en el dispatch — sin barra).
+                    header::CG_TARGET => {
+                        let vid = u32::from_le_bytes([pkt[1], pkt[2], pkt[3], pkt[4]]);
+                        session.intent(Intent::Combat(CombatIntent::Target {
+                            player_vid: session.player_vid(),
+                            target_vid: vid,
+                        }))?;
+                    }
                     header::CG_USE_SKILL => skills::handle(session, &pkt).await?.into_result()?,
                     // F5.3: chat — echo GC_CHAT (4) al jugador (parity
                     // `Chat()` input_main.cpp:641-685 → `ChatPacket` →
