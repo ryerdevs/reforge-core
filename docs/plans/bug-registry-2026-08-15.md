@@ -212,6 +212,23 @@
 
 - channel/quickslot.rs:139 clippy::absurd_extreme_comparisons — pre-existente, sin commitear de otro proceso. Confirmado por 3 verifiers que no es de los lanes.
 
+### C21. [ABIERTO — NUEVO] Level-up sin cap de nivel 99
+
+- char.cpp:2976: `case POINT_LEVEL: if ((GetLevel() + amount) > gPlayerMaxLevel) return` — el C++ bloquea subir de 99. El rewrite (`level_up_step` session.rs:310) usa `saturating_add(1)` SIN tope.
+- Fix: cap en `level_up_step` — si prev_level >= 99, no subir.
+
+### C22. [ABIERTO — NUEVO, alto impacto] Pickup de ORO del suelo no suma al monedero
+
+- El oro en el suelo (item vnum 1, del kill o drop) va por el path NORMAL de items en `PickupResult` (events.rs:205+): se le busca proto, se pesa, y se mete al INVENTARIO como item — NO suma a `row.gold`.
+- C++ parity: `PickupItem` con vnum 1 (oro) → `PointChange(POINT_GOLD, count)` + GC_POINTS (el oro no entra al inventario).
+- Fix: en `PickupResult`, si `gi.vnum == 1` → `row.gold += count` + GC_POINTS + save + quitar del suelo.
+
+### C23. [ABIERTO — NUEVO, alto impacto] Mobs muertos NO respawnean en el sitio
+
+- El Rust lee `regen.txt`/`npc.txt` (npc.rs:186) pero solo materializa/desmaterializa por DISTANCIA del jugador (spawn.rs `respawns_with_new_vid_on_approach`). El C++ respawnea por TIEMPO (regen con intervalos, char_manager.cpp:230-464). Un mob que matas queda muerto para siempre (hasta que el jugador se aleje y vuelva).
+- Impacto: el farming no funciona — no hay mobs que respawneen en el sitio.
+- Fix: timer de respawn por entrada (el regen.txt ya tiene el intervalo — parse_regen_record npc.rs:500).
+
 ---
 
 ## D. Diferido / no aplica (documentado, no bug)
