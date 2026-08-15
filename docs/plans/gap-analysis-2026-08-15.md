@@ -29,7 +29,7 @@ los de cierre/revive, pero faltan los de juego:
 Comandos GM (nivel 1+): `mob`, `kill`, `goto`, `set`, `reset`, `makeguild`, `stat`,
 `notice_map`, `purge`, `transfer`... — todos pendientes (subset actual: warp/item/notice/level).
 
-## 2. Headers de juego C→S — 27 en el framer, 16 con dispatch
+## 2. Headers de juego C→S — 27 en el framer, 16 con dispatch + 22 sin frame
 
 De los 27 headers de fase de juego en la tabla del framer (`network/src/framer.rs`),
 el game loop (`server_realms/src/channel/game.rs`) maneja **16**; **11 caen en `other`
@@ -48,6 +48,37 @@ y se ignoran en silencio**:
 | CG_FLY_TARGETING (51) | Skill área | ❌ |
 | CG_SHOOT (54) | Disparo arco | ❌ |
 | CG_WHISPER (19) | Mensaje privado | ❌ |
+
+**Además, 22 headers C→S del C++ NO están ni en el framer** (caerían como
+UnknownHeader → cierre de conexión):
+
+| Header faltante | Función |
+| --- | --- |
+| CG_SAFEBOX_CHECKIN/OUT/ITEM_MOVE | Caja del banco |
+| CG_MESSENGER | Mensajero |
+| CG_PARTY_INVITE/ANSWER/PARAMETER/REMOVE/SET_STATE/USE_SKILL | Grupos (6) |
+| CG_GUILD / CG_ANSWER_MAKE_GUILD | Clanes |
+| CG_REFINE / CG_DRAGON_SOUL_REFINE | Refinar/DS |
+| CG_FISHING | Pesca |
+| CG_ACCE | Accesorios |
+| CG_MALL_CHECKOUT | Mall |
+| CG_ITEM_GIVE | Dar item |
+| CG_ADD_FLY_TARGETING | Target área |
+| CG_HACK | (debug) |
+| CG_SCRIPT_SELECT_ITEM | Select item script |
+
+⚠️ **Ojo**: estos headers sin frame NO se ignoran en silencio — son **UnknownHeader →
+cierre de conexión** (el framer devuelve Err y el caller cierra). Si el cliente manda
+cualquiera de ellos (p. ej. CG_MESSENGER al abrir el mensajero), **desconecta al jugador**.
+
+## 2b. Headers GC (S→C) — sin tabla central
+
+El C++ define **170 headers GC** (packet.h); el crate `protocol` centraliza ~23 en
+`protocol/src/lib.rs` y el resto se definen **ad-hoc en cada módulo** (p. ej.
+`GC_EXCHANGE=42` en trade.rs, `GC_AFFECT_ADD=126` en packets.rs). Esto es un
+anti-patrón estructural: no hay una fuente única de verdad del wire S→C. Los GC de
+juego sin definir en el protocol: GC_GUILD*, GC_CHANGE_EXP, GC_GOLD_ADD,
+GC_DESTINATION_POSITION, GC_DUNGEON, GC_FISHING, GC_MYSHOP, GC_SAFEBOX*...
 
 ## 3. Tiendas NPC — BUG DE DATOS (no de código)
 
@@ -89,6 +120,7 @@ npc_vnum=0 (all_*) no tienen vendedor asignado en el legacy tampoco.
 | PvP/eventos/raids | ❌ | 0% |
 | Refinar/blend/cube/DS/belt | ❌ | 0% |
 | Data channel F3 (162/163) | ❌ | 0% |
+| Header central GC (S→C) | ad-hoc por módulo | 0% (estructural) |
 
 **Estimación global: ~35-40% de la base jugable completa** (no el 90%).
 El plan "Base jugable" de 5 bugs fue un PRIMER BLOQUE, no la totalidad.
@@ -97,6 +129,10 @@ El plan "Base jugable" de 5 bugs fue un PRIMER BLOQUE, no la totalidad.
 
 1. **Tiendas**: re-asignar npc_vnum en PG (datos) + confirmar apertura (bug activo).
 2. **Comandos GM_PLAYER**: safebox, mount, party, pvp, emociones — cierran los botones del cliente.
-3. **Headers ignorados**: CG_ITEM_DROP, CG_QUICKSLOT_*, CG_WHISPER (fáciles, alto impacto).
-4. **Safebox + Messenger** (bancos del jugador — muy usados).
-5. **Refinar** (CG_ITEM_USE_TO_ITEM + refine_proto).
+3. **Headers sin frame (riesgo de desconexión)**: CG_MESSENGER, CG_SAFEBOX_*, CG_PARTY_*,
+   CG_GUILD — añadir al framer con tamaño correcto para que NO desconecten (aunque el
+   handler sea no-op).
+4. **Headers ignorados con handler fácil**: CG_ITEM_DROP, CG_QUICKSLOT_*, CG_WHISPER.
+5. **Safebox + Messenger** (bancos del jugador — muy usados).
+6. **Refinar** (CG_ITEM_USE_TO_ITEM + refine_proto).
+7. **Centralizar headers GC en `protocol`** (deuda estructural — hoy ad-hoc por módulo).
