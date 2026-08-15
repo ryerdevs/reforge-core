@@ -145,9 +145,13 @@ pub enum GmCommand {
     /// `/skillup <vnum>` — sube el skill (parity do_skillup
     /// cmd_general.cpp:754-793 → SkillLevelUp char_skill.cpp:641-760):
     /// gasta 1 skill_point del row, +1 nivel (cap 40 — SetSkillLevel
-    /// MIN(40, bLev) char_skill.cpp:207), GC_POINTS + GC_SKILL_LEVEL +
+    /// MIN(40, bLev) char_skill.cpp:207), escribe el bMasterType del nivel
+    /// nuevo (parity SetSkillLevel char_skill.cpp:207-217: 20/30/40 →
+    /// MASTER/GRAND/PERFECT), GC_POINTS + GC_SKILL_LEVEL +
     /// save. Sin vnum (o no numérico) → no-op silencioso (parity
-    /// `if (!*arg1) return;` y str_to_number→0). REAL (channel/gm.rs).
+    /// `if (!*arg1) return;` y str_to_number→0) y vnum 0 → no-op (parity
+    /// CanUseSkill char_skill.cpp:3572 `if (0 == dwSkillVnum) return false;`
+    /// + el switch del do_skillup). REAL (channel/gm.rs).
     /// GAP: sin skill_proto en reforge (CanUseSkill/level-limit/pre-skill/
     /// learnability y los saltos master por RNG 17→20/30/40).
     SkillUp {
@@ -495,15 +499,27 @@ mod tests {
     #[test]
     fn parse_gm_player_batch_names() {
         assert_eq!(parse_command("safebox"), Some(GmCommand::Safebox));
-        assert_eq!(parse_command("safebox_close"), Some(GmCommand::SafeboxClose));
+        assert_eq!(
+            parse_command("safebox_close"),
+            Some(GmCommand::SafeboxClose)
+        );
         assert_eq!(parse_command("mount"), Some(GmCommand::Mount));
         assert_eq!(parse_command("horse_state"), Some(GmCommand::HorseState));
         assert_eq!(parse_command("horse_level"), Some(GmCommand::HorseLevel));
         assert_eq!(parse_command("horse_ride"), Some(GmCommand::HorseRide));
         assert_eq!(parse_command("horse_summon"), Some(GmCommand::HorseSummon));
-        assert_eq!(parse_command("horse_unsummon"), Some(GmCommand::HorseUnsummon));
-        assert_eq!(parse_command("horse_set_stat"), Some(GmCommand::HorseSetStat));
-        assert_eq!(parse_command("party_request"), Some(GmCommand::PartyRequest));
+        assert_eq!(
+            parse_command("horse_unsummon"),
+            Some(GmCommand::HorseUnsummon)
+        );
+        assert_eq!(
+            parse_command("horse_set_stat"),
+            Some(GmCommand::HorseSetStat)
+        );
+        assert_eq!(
+            parse_command("party_request"),
+            Some(GmCommand::PartyRequest)
+        );
         assert_eq!(
             parse_command("party_request_accept"),
             Some(GmCommand::PartyRequestAccept)
@@ -515,11 +531,17 @@ mod tests {
         assert_eq!(parse_command("pvp"), Some(GmCommand::Pvp));
         assert_eq!(parse_command("view_equip"), Some(GmCommand::ViewEquip));
         assert_eq!(parse_command("observer"), Some(GmCommand::Observer));
-        assert_eq!(parse_command("observer_exit"), Some(GmCommand::ObserverExit));
+        assert_eq!(
+            parse_command("observer_exit"),
+            Some(GmCommand::ObserverExit)
+        );
         assert_eq!(parse_command("set_walk_mode"), Some(GmCommand::SetWalkMode));
         assert_eq!(parse_command("set_run_mode"), Some(GmCommand::SetRunMode));
         assert_eq!(parse_command("gskillup"), Some(GmCommand::GuildSkillUp));
-        assert_eq!(parse_command("emotion_allow"), Some(GmCommand::EmotionAllow));
+        assert_eq!(
+            parse_command("emotion_allow"),
+            Some(GmCommand::EmotionAllow)
+        );
         assert_eq!(parse_command("kiss"), Some(GmCommand::Kiss));
         assert_eq!(parse_command("slap"), Some(GmCommand::Slap));
         assert_eq!(parse_command("french_kiss"), Some(GmCommand::FrenchKiss));
@@ -547,14 +569,27 @@ mod tests {
         assert_eq!(parse_command("safebox 2"), Some(GmCommand::Safebox));
         assert_eq!(parse_command("kiss 7"), Some(GmCommand::Kiss));
         assert_eq!(parse_command("dance1 0"), Some(GmCommand::Dance1));
-        assert_eq!(parse_command("party_request 123"), Some(GmCommand::PartyRequest));
-        assert_eq!(parse_command("set_walk_mode 1"), Some(GmCommand::SetWalkMode));
-        assert_eq!(parse_command("emotion_allow 1"), Some(GmCommand::EmotionAllow));
+        assert_eq!(
+            parse_command("party_request 123"),
+            Some(GmCommand::PartyRequest)
+        );
+        assert_eq!(
+            parse_command("set_walk_mode 1"),
+            Some(GmCommand::SetWalkMode)
+        );
+        assert_eq!(
+            parse_command("emotion_allow 1"),
+            Some(GmCommand::EmotionAllow)
+        );
         assert_eq!(
             parse_command("horse_set_stat 1 2 3"),
             Some(GmCommand::HorseSetStat)
         );
-        assert_eq!(parse_command("KISS"), None, "case-sensitive (parity strcmp)");
+        assert_eq!(
+            parse_command("KISS"),
+            None,
+            "case-sensitive (parity strcmp)"
+        );
         assert_eq!(parse_command("Dance1"), None);
     }
 
