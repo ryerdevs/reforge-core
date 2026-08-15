@@ -454,6 +454,14 @@ bool CAccountConnector::__AuthState_RecvAuthSuccess()
 		CPythonNetworkStream & rkNet = CPythonNetworkStream::Instance();
 		rkNet.SetLoginKey(kAuthSuccessPacket.dwLoginKey);
 
+		// P0 2026-08-14 (handshake silencioso del cliente real): preparar la
+		// fase HandShake ANTES del Connect crudo al canal (la ventana de login
+		// ya esta cerrada: mismo tratamiento que el modo DirectEnter, sin el
+		// callback Python OnHandShake). Sin esto el cliente quedaba en fase
+		// previa, RecvPhasePacket -> OnHandShake contra la ventana cerrada ->
+		// excepcion Python silenciosa -> ni eco ni LOGIN3 (intermitente).
+		rkNet.SetHandShakePhaseNoPython();
+
 		// F5: la lista de canales del auth (GC_CHANNEL_LIST) tiene prioridad —
 		// el IP del canal ya NO depende de serverinfo.py. Sin lista (auth C++
 		// legacy) → fallback a la dirección bakeada (m_strAddr/m_iPort).

@@ -12,5 +12,6 @@ protocol = { path = "../protocol" }
 network = { path = "../network" }
 database = { path = "../database" }
 game_core = { path = "../game_core" }
+quest_dsl = { path = "../quest_dsl" }
 tokio-postgres.workspace = true
 tokio.workspace = true

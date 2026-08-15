@@ -986,7 +986,8 @@ class LoginWindow(ui.ScriptWindow):
 
 					# F5: la lista del auth si llegó; serverinfo.py si no.
 					channelDict = self.__GetChannelDict(0, k)
-					channel_info = channelDict[channel_idx]
+					# P0 2026-08-14: el idx guardado (de la era de 4 canales) puede no existir en el dict actual (1 canal) -> IndexError -> except silencioso -> sin SetConnectInfo.
+					channel_info = channelDict.get(channel_idx) or channelDict[0]
 					channel_name = channel_info["name"]
 					addr = channel_info["ip"]
 					port = channel_info["tcp_port"]

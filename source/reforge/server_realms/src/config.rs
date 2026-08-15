@@ -52,6 +52,11 @@ pub struct Config {
     /// `index`/`npc.txt`/`regen.txt`/... del runtime). Default: el path real
     /// del runtime srv1.
     pub map_path: String,
+    /// Directorio de las quests legacy (F5 - wiring 2026-08-13): el canal
+    /// convierte el corpus qc->DSL al arrancar (quest_dsl::convert) y carga
+    /// las quests convertibles. Vacio = derivado del map_path (el dir
+    /// quest hermano del map).
+    pub quest_path: String,
     /// Directorio base de los archivos legacy (panama/ + cshybridcrypt*) —
     /// parity del cwd del auth C++. Vacío = sin legacy (el runtime srv1 actual
     /// no tiene los archivos → el auth C++ tampoco envía 151-153).
@@ -71,6 +76,10 @@ pub struct Config {
     pub gold_rate: u16,
     /// F5 manifest: rate de drop en %.
     pub drop_rate: u16,
+    /// Tamaño máximo del pool de conexiones PG del proceso (fix del cuello
+    /// del entry 2026-08-13 — una conexión por llamada era el cuello del
+    /// login; el pool lo crea el arranque de cada rol). Default 10.
+    pub pool_max_size: usize,
 }
 
 /// Un canal de la lista F5 (`channels` del toml). Los mismos campos que el
@@ -97,12 +106,14 @@ impl Default for Config {
             channel: 1,
             ping_interval_ms: 10_000,
             map_path: "/home/m2/source/metin2_svfiles/main/srv1/share/locale/spain/map".into(),
+            quest_path: String::new(),
             legacy_dir: String::new(),
             expected_version: 40999,
             channels: Vec::new(),
             exp_rate: 100,
             gold_rate: 100,
             drop_rate: 100,
+            pool_max_size: 10,
         }
     }
 }
@@ -156,6 +167,7 @@ impl Config {
                         .map_err(|_| where_at("ping_interval_ms debe ser un entero (ms)"))?;
                 }
                 "map_path" => cfg.map_path = parse_string(value, &where_at)?,
+                "quest_path" => cfg.quest_path = parse_string(value, &where_at)?,
                 "legacy_dir" => cfg.legacy_dir = parse_string(value, &where_at)?,
                 "expected_version" => {
                     cfg.expected_version = value
@@ -171,6 +183,11 @@ impl Config {
                 }
                 "drop_rate" => {
                     cfg.drop_rate = parse_u16(value, &where_at, "drop_rate")?;
+                }
+                "pool_max_size" => {
+                    cfg.pool_max_size = value
+                        .parse()
+                        .map_err(|_| where_at("pool_max_size debe ser un entero (usize)"))?;
                 }
                 other => return Err(where_at(&format!("clave desconocida: {other}"))),
             }

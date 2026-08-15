@@ -3,7 +3,7 @@ Type: Decision
 Status: Accepted
 Audience: Contributors, maintainers
 Date: 2026-08-11
-Last verified: 2026-08-12
+Last verified: 2026-08-13
 Supersedes: —
 Superseded by: —
 ---
@@ -50,6 +50,23 @@ Evidence for the driver decision (both measured in this repo):
    is deferred (see below). If a pool is later measured to be needed, it can be added
    without changing the driver (e.g. `deadpool-postgres`) or by adopting sqlx then —
    both are compatible with this ADR's contract.
+
+   > **EXECUTED (2026-08-13, 44th part) — the pool clause in Decision 3 landed.**
+   > Trigger: the deferral recorded above ("If a pool is later measured to be
+   > needed, it can be added without changing the driver (e.g.
+   > `deadpool-postgres`)"); the orchestrator approved the oracle's plan and the
+   > coder lane executed it: **`deadpool-postgres 0.14.1`** (pairing verified —
+   > depends on tokio-postgres 0.7.9, the same workspace driver, no upgrade),
+   > NEW `database/src/pool.rs` (`PgPool`), ~13 repos moved from per-call
+   > `pg_conn`+`connect()` to `pool.get()`, `PgMutationSink::new(pool)`
+   > (wal.rs — no reconnect-per-batch), `WorldStore::new(pool, Arc<Batcher>)`
+   > with **one `Batcher` per channel** (was per player), `pool_max_size`
+   > default 10 (config.rs:110), and the direct SQL in `channel/shop.rs`
+   > absorbed by `ItemRepo::load_sell_proto` (ADR-0008 §2 "no direct-sql
+   > backend" restored). Verified: workspace **565 passed / 0 failed / 35
+   > ignored**, clippy identical to baseline, deployed 18:01:39 (binary
+   > 4,509,184 B, SHA256 `77D8ACD2…C732`).
+
 4. **Crate layout by domain** (ADR-0004 flat layout): `src/account.rs` first
    (`AccountRepo`: `login`, `set_lang`, `set_hwid` — port of `QUERY_LOGIN` +
    `input_auth.cpp:133-152` patterns), `src/world.rs`, `src/social.rs`, `src/economy.rs`,
@@ -121,8 +138,11 @@ a MariaDB-capable backend in `database` would double the test surface for zero r
   PG replay test remains pending by user directive).
 - **RLS** (`current_setting('app.pid')`) — after the WAL phase, per §5.5.
 - **Patroni hot-standby failover** (~2 min promotion target) — F5/F6 ops phase.
-- **Pool (deadpool-postgres or sqlx adoption)** — with the batch pipeline, only if
-  measurement shows per-call connections are insufficient.
+- ~~**Pool (deadpool-postgres or sqlx adoption)** — with the batch pipeline, only if
+  measurement shows per-call connections are insufficient.~~ — **EXECUTED
+  2026-08-13 (44th part)** (deadpool-postgres 0.14.1; channel-level `PgPool`;
+  one `Batcher` per channel — see the note in §Decision 3; sqlx remains a later
+  alternative).
 - **uuidv7 ID generation / `CHECK gold>=0` / append-only audit partition** — with the
   WAL batch pipeline (the account slice generates no IDs).
 

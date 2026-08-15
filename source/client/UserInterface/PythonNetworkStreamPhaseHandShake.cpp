@@ -77,6 +77,23 @@ void CPythonNetworkStream::HandShakePhase()
 
 void CPythonNetworkStream::SetHandShakePhase()
 {
+	SetHandShakePhaseNoPython();
+
+	if (!__DirectEnterMode_IsSet())
+	{
+		PyCallClassMemberFunc(m_apoPhaseWnd[PHASE_WINDOW_LOGIN], "OnHandShake", Py_BuildValue("()"));
+	}
+}
+
+// P0 2026-08-14 (handshake silencioso del cliente real, KEEP_ACCOUNT_CONNETION_ENABLE=1):
+// el canal se conecta con Connect() crudo desde CAccountConnector (AccountConnector.cpp
+// __AuthState_RecvAuthSuccess) tras el GC_AUTH_SUCCESS. Sin fase preparada, el
+// RecvPhasePacket -> SetHandShakePhase() llamaba OnHandShake contra la ventana de login
+// YA CERRADA post-auth -> excepcion Python silenciosa -> ni eco ni LOGIN3 (canal mudo).
+// Esta variante setea la fase HandShake sin el callback Python (equivalente al modo
+// DirectEnter: PythonNetworkStreamPhaseHandShake.cpp:95-102).
+void CPythonNetworkStream::SetHandShakePhaseNoPython()
+{
 	if ("HandShake"!=m_strPhase)
 		m_phaseLeaveFunc.Run();
 
@@ -91,15 +108,6 @@ void CPythonNetworkStream::SetHandShakePhase()
 	m_phaseLeaveFunc.Set(this, &CPythonNetworkStream::__LeaveHandshakePhase);
 
 	SetGameOnline();
-
-	if (__DirectEnterMode_IsSet())
-	{
-		// None
-	}
-	else
-	{
-		PyCallClassMemberFunc(m_apoPhaseWnd[PHASE_WINDOW_LOGIN], "OnHandShake", Py_BuildValue("()"));
-	}
 }
 
 bool CPythonNetworkStream::RecvHandshakePacket()

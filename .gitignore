@@ -101,3 +101,9 @@ source/client/Extern/
 
 # ---- Rust (reforge) ----
 **/target/
+
+# pi runtime artifacts
+.pi-lens/
+.pi-loop-log.jsonl
+probe.txt
+check_probe.txt

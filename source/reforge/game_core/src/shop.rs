@@ -256,44 +256,53 @@ ORDER BY s.vnum, si.item_vnum";
 /// para gold/flag — parity del query del db `ClientManagerBoot.cpp:247-254`
 /// + la resolución de precio del game `shop.cpp:166-180`).
 pub struct ShopRepo {
-    pg_conn: String,
+    pool: database::pool::PgPool,
 }
 
 impl ShopRepo {
-    pub fn new(pg_conn: impl Into<String>) -> Self {
-        Self { pg_conn: pg_conn.into() }
+    pub fn new(pool: database::pool::PgPool) -> Self {
+        Self { pool }
     }
 
     /// Carga TODAS las tiendas. Un shop sin items no se incluye (parity: el
     /// C++ los salta al materializar). Tope `SHOP_HOST_ITEM_MAX_NUM` items.
     pub async fn load(&self) -> Result<Vec<Shop>, String> {
-        let (client, connection) = tokio_postgres::connect(&self.pg_conn, tokio_postgres::NoTls)
+        let client = self
+            .pool
+            .get()
             .await
-            .map_err(|e| format!("PG connect: {e}"))?;
-        tokio::spawn(async move {
-            let _ = connection.await;
-        });
+            .map_err(|e| format!("PG pool get: {e}"))?;
         let rows = client
             .query(LOAD_SQL, &[])
             .await
             .map_err(|e| format!("SHOP_LOAD: {e}"))?;
         let mut shops: HashMap<i64, Shop> = HashMap::new();
         for r in &rows {
-            let shop_vnum: i64 = r.try_get(0).map_err(|e| format!("shop.vnum: {e}"))?;
-            let npc_vnum: i64 = r.try_get(1).map_err(|e| format!("shop.npc_vnum: {e}"))?;
+            // Tipos REALES del esquema (verificados 2026-08-14 con \d):
+            // shop.vnum integer, shop.npc_vnum smallint, shop_item.item_vnum
+            // integer, shop_item.count bigint, item_proto.flag bigint,
+            // item_proto.gold integer. El error "deserializing column 0" era
+            // leer vnum (int4) como i64 — los casts a i64 van DESPUÉS.
+            let shop_vnum: i32 = r.try_get(0).map_err(|e| format!("shop.vnum: {e}"))?;
+            let npc_vnum: i16 = r.try_get(1).map_err(|e| format!("shop.npc_vnum: {e}"))?;
+            let shop_vnum = i64::from(shop_vnum);
+            let npc_vnum = i64::from(npc_vnum);
             let shop = shops.entry(shop_vnum).or_insert_with(|| Shop {
                 vnum: shop_vnum,
                 npc_vnum,
                 items: Vec::new(),
             });
-            let item_vnum: Option<i64> = r.try_get(2).ok();
-            let Some(item_vnum) = item_vnum.filter(|v| *v > 0) else { continue };
+            let item_vnum: Option<i32> = r.try_get(2).ok();
+            let Some(item_vnum) = item_vnum.filter(|v| *v > 0).map(i64::from) else {
+                continue;
+            };
             if shop.items.len() >= SHOP_HOST_ITEM_MAX_NUM {
                 continue; // defensivo: el C++ llena 40 slots como tope
             }
             let count: i64 = r.try_get(3).map_err(|e| format!("shop_item.count: {e}"))?;
             let flag: i64 = r.try_get(4).map_err(|e| format!("item_proto.flag: {e}"))?;
-            let gold: i64 = r.try_get(5).map_err(|e| format!("item_proto.gold: {e}"))?;
+            let gold: i32 = r.try_get(5).map_err(|e| format!("item_proto.gold: {e}"))?;
+            let gold = i64::from(gold);
             shop.items.push(ShopItem {
                 vnum: item_vnum,
                 count,

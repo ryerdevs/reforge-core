@@ -13,7 +13,7 @@
 //! Tipos PG reales (verificados en el esquema): dwPID bigint, szName
 //! varchar(32), szState varchar(64), lValue integer.
 
-use tokio_postgres::{Client, NoTls};
+use crate::pool::{Client, PgPool};
 
 use crate::account::pg_err;
 
@@ -43,22 +43,16 @@ DELETE FROM player.quest WHERE dwPID = $1 AND szName = $2 AND szState = $3";
 
 /// Repositorio del dominio world (quest). Conexion por llamada (ADR-0008).
 pub struct QuestRepo {
-    pg_conn: String,
+    pool: PgPool,
 }
 
 impl QuestRepo {
-    pub fn new(pg_conn: impl Into<String>) -> Self {
-        Self { pg_conn: pg_conn.into() }
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
     }
 
     async fn connect(&self) -> Result<Client, String> {
-        let (client, connection) = tokio_postgres::connect(&self.pg_conn, NoTls)
-            .await
-            .map_err(|e| format!("PG connect: {e}"))?;
-        tokio::spawn(async move {
-            let _ = connection.await;
-        });
-        Ok(client)
+        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
     }
 
     /// Load del QID_QUEST (world entry). Sin filtro `lValue<>0` — parity del

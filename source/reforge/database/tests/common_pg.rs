@@ -16,7 +16,7 @@ fn pg_conn() -> String {
 #[tokio::test]
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
 async fn next_exp_contract_against_real_table() {
-    let repo = CommonRepo::new(pg_conn());
+    let repo = CommonRepo::new(database::pool::new_pool(&pg_conn(), 4).expect("pool PG"));
     let lvl1 = repo.next_exp(1).await.expect("next_exp(1)");
     assert_eq!(lvl1, 300, "exp_table[1] del runtime (verificado en PG)");
     let lvl2 = repo.next_exp(2).await.expect("next_exp(2)");

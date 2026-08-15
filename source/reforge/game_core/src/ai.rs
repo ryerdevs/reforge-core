@@ -31,6 +31,19 @@ pub fn step_toward(x: i32, y: i32, tx: i32, ty: i32, speed: i32, dt_ms: u64) -> 
     (x + (dx as f64 * f).round() as i32, y + (dy as f64 * f).round() as i32)
 }
 
+/// Duración del `GC_MOVE` de un paso de mob en ms (parity
+/// `CHARACTER::CalculateMoveDuration`, char.cpp:2765-2768: la duración es
+/// `(fDist / motionSpeed) × 1000` — el CLIENTE interpola el paso con ESTA
+/// duración). Fix 2026-08-13: el AI emitía `duration_ms = dt del tick` (fijo)
+/// — los pasos LARGOS (patrulla/chase) se animaban a velocidad altísima
+/// ("los mobs se mueven como muy rápido"). Floor 1 ms (un paso instantáneo
+/// de 0 u/s no puede durar 0).
+pub fn move_duration_ms(dx: i32, dy: i32, move_speed: i32) -> u32 {
+    let dist = ((dx * dx + dy * dy) as f64).sqrt();
+    let speed = move_speed.max(1) as f64;
+    (dist * 1000.0 / speed).max(1.0) as u32
+}
+
 /// Rotación del movimiento en pasos de 5 grados (parity `bRot` del
 /// `TPacketGCMove` — el C++ manda `GetRotation()/5`, char.cpp:2800).
 /// 0 = derecha, 90°/5 = 18 = abajo... (convención atan2 estándar; el
@@ -274,5 +287,18 @@ mod tests {
         };
         let (tx, ty) = patrol_step(0, 0, 0, 0, 500, &mut roll).expect("patrulla");
         assert_eq!((tx, ty), (300, 0), "dentro del radio: sin clamp");
+    }
+
+    /// move_duration_ms: la duración del GC_MOVE = dist/move_speed × 1000
+    /// (parity CalculateMoveDuration, char.cpp:2765-2768). Fix 2026-08-13:
+    /// con el dt del tick fijo, los pasos largos del patrulla/chase se
+    /// animaban "muy rápido" en el cliente (interpola con ESTA duración).
+    #[test]
+    fn move_duration_is_dist_over_speed() {
+        assert_eq!(move_duration_ms(50, 0, 100), 500, "50 u a 100 u/s = 500 ms");
+        assert_eq!(move_duration_ms(0, 50, 100), 500, "dy también");
+        assert_eq!(move_duration_ms(500, 0, 100), 5_000, "paso largo del patrulla");
+        assert_eq!(move_duration_ms(50, 0, 300), 166, "50×1000/300 = 166.67 — el C++ TRUNCA ((int) fDist/motionSpeed×1000, char.cpp:2767)");
+        assert_eq!(move_duration_ms(0, 0, 0), 1, "floor 1 ms (nunca 0)");
     }
 }

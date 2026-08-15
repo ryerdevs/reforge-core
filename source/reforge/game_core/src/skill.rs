@@ -48,8 +48,6 @@
 //! - `def`/`odef` = la DEF del PC (`player_def_grade` + bonus / sin bonus).
 //! - `skill_power.txt` no se carga (k = level × max_level / 100).
 
-use tokio_postgres::NoTls;
-
 // ---------------------------------------------------------------------------
 // Constantes del wire/dominio (parity char.h / skill.h / affect.h)
 // ---------------------------------------------------------------------------
@@ -478,22 +476,16 @@ pub fn damage_flag_for_attr(attr: u8) -> u8 {
 
 /// Repositorio del `skill_proto` (PG). Conexión por llamada (ADR-0008).
 pub struct SkillRepo {
-    pg_conn: String,
+    pool: database::pool::PgPool,
 }
 
 impl SkillRepo {
-    pub fn new(pg_conn: impl Into<String>) -> Self {
-        Self { pg_conn: pg_conn.into() }
+    pub fn new(pool: database::pool::PgPool) -> Self {
+        Self { pool }
     }
 
-    async fn connect(&self) -> Result<tokio_postgres::Client, String> {
-        let (client, connection) = tokio_postgres::connect(&self.pg_conn, NoTls)
-            .await
-            .map_err(|e| format!("PG connect: {e}"))?;
-        tokio::spawn(async move {
-            let _ = connection.await;
-        });
-        Ok(client)
+    async fn connect(&self) -> Result<database::pool::Client, String> {
+        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
     }
 
     /// Carga TODAS las skills del `skill_proto` (la tabla es estática en el

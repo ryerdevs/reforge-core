@@ -166,9 +166,14 @@ pub struct QuestOutcome {
     pub suspended: bool,
 }
 
-/// El motor de quests: las quests DSL cargadas (parse + familias expandidas).
+/// El motor de quests: las quests DSL cargadas (parse + familias expandidas) y
+/// el diccionario de textos de diálogo (ADR-0009 — el server es dueño del
+/// texto; resolución de claves `gameforge.*` con fallback a la clave).
 pub struct QuestEngine {
     quests: Vec<QuestDef>,
+    /// clave -> texto (cargado del quest_text del runtime; vacío = las
+    /// claves se envían tal cual — el cliente las resuelve de su pack).
+    texts: std::collections::HashMap<String, String>,
 }
 
 impl QuestEngine {
@@ -184,7 +189,15 @@ impl QuestEngine {
             }
         }
         quests.extend(quest_dsl::expand_families(&file)?);
-        Ok(QuestEngine { quests })
+        Ok(QuestEngine { quests, texts: std::collections::HashMap::new() })
+    }
+
+    /// Adjunta el diccionario de textos (clave -> texto) — la resolución
+    /// server-side de las claves de diálogo (ADR-0009). Sin diccionario, las
+    /// claves se envían tal cual (el cliente las resuelve de su pack).
+    pub fn with_texts(mut self, texts: std::collections::HashMap<String, String>) -> Self {
+        self.texts = texts;
+        self
     }
 
     /// Las quests concretas (familias ya expandidas) — en orden del archivo.
@@ -371,7 +384,7 @@ impl QuestEngine {
                             // envía sin resolver: la resolución de locale es un
                             // slice futuro, ADR-0009).
                             let k = args.first().ok_or_else(|| "say sin clave".to_string())?;
-                            script.push_str(&Self::key_text(k)?);
+                            script.push_str(&self.key_text(k)?);
                             script.push_str("[ENTER]");
                         }
                         ActionName::Wait => {
@@ -396,7 +409,7 @@ impl QuestEngine {
                                 if n > 0 {
                                     script.push('|');
                                 }
-                                script.push_str(&format!("{};{}", n + 1, Self::key_text(k)?));
+                                script.push_str(&format!("{};{}", n + 1, self.key_text(k)?));
                             }
                             script.push(']');
                             return Ok(Some(Suspension {
@@ -457,7 +470,7 @@ impl QuestEngine {
                         }
                         ActionName::Notice => {
                             let k = args.first().ok_or_else(|| "notice sin texto".to_string())?;
-                            out.effects.push(QuestEffect::Notice(Self::key_text(k)?));
+                            out.effects.push(QuestEffect::Notice(self.key_text(k)?));
                         }
                         ActionName::Return => return Ok(None), // parity `return` del lua — fin del evento
                         other => {
@@ -610,13 +623,17 @@ impl QuestEngine {
         }
     }
 
-    /// Clave de diálogo/locale (Str del corpus o `@key` del DSL).
-    fn key_text(v: &Value) -> Result<String, String> {
-        match v {
-            Value::Str(s) | Value::Key(s) => Ok(s.clone()),
-            Value::Num(n) => Ok(n.to_string()),
-            other => Err(format!("clave de diálogo inválida: {other:?}")),
-        }
+    /// Clave de diálogo/locale (Str del corpus o `@key` del DSL) — RESUELTA
+    /// contra el diccionario de textos (ADR-0009): si la clave está en
+    /// `texts`, se envía el TEXTO; si no, la clave tal cual (fallback — el
+    /// cliente la resolvería de su pack).
+    fn key_text(&self, v: &Value) -> Result<String, String> {
+        let key = match v {
+            Value::Str(s) | Value::Key(s) => s.clone(),
+            Value::Num(n) => n.to_string(),
+            other => return Err(format!("clave de diálogo inválida: {other:?}")),
+        };
+        Ok(self.texts.get(&key).cloned().unwrap_or(key))
     }
 
     /// Nombre (state, flag) — Str/Key del corpus.

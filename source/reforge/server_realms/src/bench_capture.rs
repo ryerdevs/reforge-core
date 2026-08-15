@@ -146,6 +146,31 @@ pub fn close_conn(conn_id: u32) {
     }
 }
 
+/// Registra las métricas del MUNDO por tick (harness F5 — el canal la llama
+/// tras cada `WorldSim::update`): una línea CSV por tick en `tick_ms.csv` del
+/// dir de captura (`ticks,intents_processed,mobs_spawned,mobs_despawned,
+/// events_emitted,tick_ms`) — el run de bench registra el tick_ms por tick
+/// (timing de sistemas) con los contadores del mundo. No-op sin
+/// `--bench-capture`.
+pub fn record_metrics(m: game_core::ecs::WorldMetrics) {
+    let guard = STATE.lock().unwrap();
+    let Some(st) = guard.as_ref() else { return };
+    let path = st.dir.join("tick_ms.csv");
+    let header = !path.exists();
+    let mut f = match OpenOptions::new().create(true).append(true).open(&path) {
+        Ok(f) => f,
+        Err(_) => return, // harness: un fallo de archivo no toca el runtime
+    };
+    if header {
+        let _ = writeln!(f, "ticks,intents_processed,mobs_spawned,mobs_despawned,events_emitted,tick_ms");
+    }
+    let _ = writeln!(
+        f,
+        "{},{},{},{},{},{}",
+        m.ticks, m.intents_processed, m.mobs_spawned, m.mobs_despawned, m.events_emitted, m.last_tick_ms
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,6 +241,28 @@ mod tests {
         capture_conn(9, Direction::Outbound, b"z");
         close_conn(9);
         assert_eq!(std::fs::read(dir2.join("conn_000009_out.bin")).unwrap(), b"z");
+        assert_eq!(std::fs::read(dir2.join("conn_000009_out.bin")).unwrap(), b"z");
+
+        // 6. record_metrics (harness F5): CSV con header + una linea por tick
+        //    (las metricas del mundo, con el tick_ms del ultimo update). Vive
+        //    AQUI (test serial): el STATE es global - un test paralelo lo
+        //    pisaria.
+        let m = game_core::ecs::WorldMetrics {
+            ticks: 3,
+            intents_processed: 7,
+            mobs_spawned: 11,
+            mobs_despawned: 2,
+            events_emitted: 5,
+            last_tick_ms: 42,
+        };
+        record_metrics(m);
+        record_metrics(m);
+        let csv = std::fs::read_to_string(dir2.join("tick_ms.csv")).unwrap();
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(lines.len(), 3, "header + 2 ticks");
+        assert_eq!(lines[0], "ticks,intents_processed,mobs_spawned,mobs_despawned,events_emitted,tick_ms");
+        assert_eq!(lines[1], "3,7,11,2,5,42", "linea por tick (tick_ms del ultimo update)");
+        assert_eq!(lines[2], "3,7,11,2,5,42");
 
         std::fs::remove_dir_all(&dir).unwrap();
         std::fs::remove_dir_all(&dir2).unwrap();

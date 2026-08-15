@@ -51,8 +51,20 @@ Four layers — pure logic, ECS world state, tokio per-connection, durable store
   stay pure so the parity tests keep passing unchanged.
 - **ECS world state** — `bevy_ecs` standalone `World` (components: Position,
   Hp, Aggro, Mob, Item…): replaces `Arc<Mutex<MobCache>>` (channel.rs:81);
-  systems scheduled on a tick (AI 500 ms, movement, combat, drops) with
-  parallel query iteration (SoA storage). `default-features = false` (no
+  systems scheduled on a tick (AI 500 ms, movement, combat, drops) over SoA
+  storage. **Executor: single-threaded today (verified 2026-08-13)** —
+  bevy_ecs 0.19.1 is compiled with only `features = ["std"]`
+  (`source/reforge/Cargo.toml:18`; no `multi_threaded` feature, so no
+  `bevy_tasks`), which makes `Schedule::default()` select a
+  `SingleThreadedExecutor` (bevy_ecs source `schedule/schedule.rs:410` +
+  `schedule/executor/mod.rs:49-64`), and the channel tick chains the five
+  systems sequentially by design (`game_core/src/ecs/world.rs:83-93` —
+  spawn_despawn → chase_attack → aggro_detect → patrol → affects). **Parallel
+  ECS execution is a PENDING decision**: it requires enabling the
+  `multi_threaded` cargo feature (pulling `bevy_tasks`) and re-ordering or
+  unchaining the systems — the "one-line toggle" mentioned in earlier docs
+  does not exist (there is no such flag anywhere in the workspace).
+  `default-features = false` (no
   bevy_reflect).
 - **Per-connection orchestration** — `server_realms::channel::handle_connection`
   (channel.rs:89-93): one tokio task per connection owning its session state;
@@ -70,7 +82,8 @@ The original benchmark gate is superseded. The user decided adoption today:
   core requirement (real data: 145,876 spawns, map 41 = 10,026). The legacy P1
   "global tick with allocs, O(all entities)" (char_manager.cpp:641) and the
   single `Arc<Mutex<MobCache>>` are exactly the contended shapes ECS solves
-  (SoA + parallel queries + no per-entity allocs).
+  (SoA storage + no per-entity allocs; parallel query execution is a later,
+  measured step — see §1).
 - **Solo-dev maintenance:** the ecosystem maintains archetypes/queries/change
   detection; a hand-rolled store would grow into a mini-ECS maintained by one
   person. bevy_ecs standalone is proven for game servers (Veloren).
@@ -128,8 +141,8 @@ Mapped at the boundary, absent from the domain model, deleted wholesale at F7
   shape): rejected as the FINAL design — it works today (single-player
   sessions, map 41), but the single `Arc<Mutex<MobCache>>` serializes the AI
   tick and every world read, and the domain is mob-farming (dense mob
-  simulation is the core requirement — 145,876 spawns imported). ECS (SoA +
-  parallel queries) is adopted instead (§2).
+  simulation is the core requirement — 145,876 spawns imported). ECS (SoA
+  storage; parallel execution pending — §1) is adopted instead (§2).
 - **Actor model (regions as message-passing actors):** rejected — the legacy
   single-writer property is preserved and elevated ("single-writer per region",
   server-rewrite.md:106); tokio tasks + the bevy World (single-writer access
@@ -158,15 +171,20 @@ Mapped at the boundary, absent from the domain model, deleted wholesale at F7
   (components/events/resources/world/test_util + `systems/`, incl. the N1 trap
   guards `systems/{social,quest}.rs`) with `Intent`/`NpcEvent` wrapper
   sub-enums; channel.rs split into `server_realms/src/channel/` (13 files,
-  `Session` + `Outcome`). Workspace **512+ passed / 0 failed**, clippy clean,
-  release green, deployed. **Accepted deviations**
-  (implementer-documented, accepted): `multi_threaded` not enabled
-  yet (one-line toggle at the F5 benchmark); SpawnCache stays
+   `Session` + `Outcome`). Workspace **512+ passed / 0 failed**, clippy clean,
+   release green. **The 42nd+43rd-part code shipped in the wave-44 binary —
+   deploy verified 2026-08-13 18:01:39 (see ROADMAP current state).** **Accepted deviations**
+  (implementer-documented, accepted): the ECS executor is **single-threaded**
+  (bevy_ecs `["std"]` only — the earlier "one-line `multi_threaded` toggle"
+  claim is corrected 2026-08-13: no such toggle exists, see §1); SpawnCache stays
   `Arc<Mutex<>>` as a World resource (cross-connection PG-row cache, not world
-  state); the World is per-connection for now (channel-level shared World = the
-  spawn-dinámico slice, IN PROGRESS); armor computed at entry/equip/unequip
+  state); **the World is shared at channel level since the 40th part (spawn
+  dinámico)** — `WorldSim` is owned by the channel task
+  (`game_core/src/ecs/world.rs:1-2`, `server_realms/src/channel/mod.rs:76`) and
+  connections enter via the `Intent::Join` mpsc (`game_core/src/ecs/events.rs:303-307`;
+  `channel/mod.rs:97`; `channel/entry.rs:330-368`); armor computed at entry/equip/unequip
   instead of per-tick (same values, zero per-tick PG round-trips); the mpsc
-  player-intent channel is deferred with the spawn-dinámico slice (ecs.rs:34).
+  player-intent channel landed with the spawn-dinámico slice.
 - ADR-0008 §5 is amended (volatile = event-driven save via Batcher+WAL).
 - ROADMAP.md:158 and the reforge README ("realm ... ECS (F4+)") must be
   updated in the staleness sweep (done 2026-08-12).

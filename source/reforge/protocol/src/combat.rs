@@ -62,7 +62,10 @@ impl CgAttack {
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
         Ok(Self {
             header: data[0],
@@ -105,12 +108,20 @@ impl GcAttack {
     pub const HEADER: u8 = crate::header::GC_ATTACK;
 
     pub fn new(vid: u32, victim_vid: u32, b_type: u8) -> Self {
-        Self { header: Self::HEADER, vid, victim_vid, b_type }
+        Self {
+            header: Self::HEADER,
+            vid,
+            victim_vid,
+            b_type,
+        }
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
         Ok(Self {
             header: data[0],
@@ -152,12 +163,20 @@ impl GcDamageInfo {
     pub const HEADER: u8 = crate::header::GC_DAMAGE_INFO;
 
     pub fn new(vid: u32, flag: u8, damage: i32) -> Self {
-        Self { header: Self::HEADER, vid, flag, damage }
+        Self {
+            header: Self::HEADER,
+            vid,
+            flag,
+            damage,
+        }
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
         Ok(Self {
             header: data[0],
@@ -232,16 +251,28 @@ mod tests {
         // damage negativo (el C++ manda el daño tal cual; el cliente exige >= 0
         // para el efecto — PythonNetworkStreamPhaseGame.cpp:2453).
         let neg = GcDamageInfo::new(1, damage_flag::BLOCK, -5);
-        assert_eq!(GcDamageInfo::from_bytes(&neg.to_bytes()).unwrap().damage, -5);
+        assert_eq!(
+            GcDamageInfo::from_bytes(&neg.to_bytes()).unwrap().damage,
+            -5
+        );
     }
 
     /// Longitudes incorrectas → `Err` (nunca panic).
     #[test]
     fn bad_lengths_error() {
         for len in [0usize, 1, 7, 9, 11, 32] {
-            assert!(CgAttack::from_bytes(&vec![0u8; len]).is_err(), "CgAttack len {len}");
-            assert!(GcAttack::from_bytes(&vec![0u8; len]).is_err(), "GcAttack len {len}");
-            assert!(GcDamageInfo::from_bytes(&vec![0u8; len]).is_err(), "GcDamageInfo len {len}");
+            assert!(
+                CgAttack::from_bytes(&vec![0u8; len]).is_err(),
+                "CgAttack len {len}"
+            );
+            assert!(
+                GcAttack::from_bytes(&vec![0u8; len]).is_err(),
+                "GcAttack len {len}"
+            );
+            assert!(
+                GcDamageInfo::from_bytes(&vec![0u8; len]).is_err(),
+                "GcDamageInfo len {len}"
+            );
         }
     }
 

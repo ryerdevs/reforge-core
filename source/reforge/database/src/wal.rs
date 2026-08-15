@@ -17,9 +17,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tokio::sync::mpsc;
 use tokio_postgres::types::{IsNull, ToSql, Type};
-use tokio_postgres::{Client, NoTls};
+
 /// `bytes::BytesMut` re-exportado por tokio-postgres (ruta del trait ToSql).
 use tokio_postgres::types::private::BytesMut;
+
+use crate::pool::{Client, PgPool};
 
 // ---------------------------------------------------------------------------
 // uuidv7 (RFC 9562): 48-bit ms timestamp | version 7 | rand_a | variant + rand
@@ -240,16 +242,18 @@ pub trait MutationSink: Send + 'static {
 }
 
 /// Sink real: conexion PG por batch, transaccion, replay idempotente + audit
-/// en la MISMA tx (ADR-0008: durable = batch transaccional <=100ms).
+/// en la MISMA tx (ADR-0008: durable = batch transaccional <=100ms). El
+/// pool es el del proceso (una conexion por batch ya NO - el cuello del
+/// entry 2026-08-13 era el connect() por llamada).
 pub struct PgMutationSink {
-    pg_conn: String,
+    pool: PgPool,
     /// Tabla de audit (default `log.mutation_audit`; los tests usan `e2e_wal.*`).
     audit_table: String,
 }
 
 impl PgMutationSink {
-    pub fn new(pg_conn: impl Into<String>) -> Self {
-        Self { pg_conn: pg_conn.into(), audit_table: "log.mutation_audit".to_string() }
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool, audit_table: "log.mutation_audit".to_string() }
     }
 
     pub fn with_audit_table(mut self, audit_table: impl Into<String>) -> Self {
@@ -258,13 +262,7 @@ impl PgMutationSink {
     }
 
     async fn connect(&self) -> Result<Client, String> {
-        let (client, connection) = tokio_postgres::connect(&self.pg_conn, NoTls)
-            .await
-            .map_err(|e| format!("PG connect: {e}"))?;
-        tokio::spawn(async move {
-            let _ = connection.await;
-        });
-        Ok(client)
+        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
     }
 }
 
@@ -494,7 +492,7 @@ fn persist_batch(wal_dir: &str, batch: &[Mutation]) -> std::io::Result<std::path
 /// audit), y borra el archivo SOLO tras el commit. Devuelve cuántos archivos
 /// se re-aplicaron. Función pura: los tests la invocan contra un dir temporal;
 /// en producción la invoca `WorldStore::new` UNA vez por proceso (OnceLock).
-pub async fn replay_wal(wal_dir: &str, pg_conn: &str) -> Result<usize, String> {
+pub async fn replay_wal(wal_dir: &str, pool: &PgPool) -> Result<usize, String> {
     let dir = std::path::Path::new(wal_dir);
     if !dir.is_dir() {
         return Ok(0); // sin WAL previo — nada que re-aplicar
@@ -506,7 +504,7 @@ pub async fn replay_wal(wal_dir: &str, pg_conn: &str) -> Result<usize, String> {
         .filter(|p| p.extension().map(|x| x == "wal").unwrap_or(false))
         .collect();
     files.sort(); // uuidv7 cronológico
-    let mut sink = PgMutationSink::new(pg_conn);
+    let mut sink = PgMutationSink::new(pool.clone());
     let mut replayed = 0usize;
     for path in files {
         let content = std::fs::read_to_string(&path)
@@ -645,15 +643,14 @@ fn parse_json_param(s: &str) -> Result<(Param, usize), String> {
     if trimmed.starts_with('"') {
         let (v, n) = parse_json_string(trimmed)?;
         // Bytes: el Display produce "\xHEX" — distinguir del Text escapado.
-        if let Some(hex) = v.strip_prefix("\\x") {
-            if hex.len() % 2 == 0 && !hex.is_empty() && hex.bytes().all(|c| c.is_ascii_hexdigit()) {
+        if let Some(hex) = v.strip_prefix("\\x")
+            && hex.len() % 2 == 0 && !hex.is_empty() && hex.bytes().all(|c| c.is_ascii_hexdigit()) {
                 let bytes = (0..hex.len())
                     .step_by(2)
                     .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("hex valido"))
                     .collect();
                 return Ok((Param::Bytes(bytes), off + n));
             }
-        }
         return Ok((Param::Text(v), off + n));
     }
     // Número (Display de Int: i64 con signo).
@@ -681,7 +678,7 @@ fn parse_json_value(s: &str) -> Result<(String, usize), String> {
     } else {
         // número u otro token simple: hasta la coma o llave.
         let end = trimmed
-            .find(|c: char| c == ',' || c == '}')
+            .find([',', '}'])
             .unwrap_or(trimmed.len());
         Ok((trimmed[..end].to_string(), off + end))
     }

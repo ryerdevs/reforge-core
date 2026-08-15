@@ -17,7 +17,7 @@
 //! Tipos PG reales: account_id bigint, size smallint, password varchar(6),
 //! gold integer.
 
-use tokio_postgres::{Client, NoTls};
+use crate::pool::{Client, PgPool};
 
 use crate::account::pg_err;
 use crate::wal::{Batcher, Mutation, Param};
@@ -36,22 +36,16 @@ SELECT account_id, size, password FROM player.safebox WHERE account_id = $1";
 
 /// Repositorio del dominio world (safebox). Conexion por llamada (ADR-0008).
 pub struct SafeboxRepo {
-    pg_conn: String,
+    pool: PgPool,
 }
 
 impl SafeboxRepo {
-    pub fn new(pg_conn: impl Into<String>) -> Self {
-        Self { pg_conn: pg_conn.into() }
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
     }
 
     async fn connect(&self) -> Result<Client, String> {
-        let (client, connection) = tokio_postgres::connect(&self.pg_conn, NoTls)
-            .await
-            .map_err(|e| format!("PG connect: {e}"))?;
-        tokio::spawn(async move {
-            let _ = connection.await;
-        });
-        Ok(client)
+        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
     }
 
     /// Size del safebox (QID_SAFEBOX_SIZE, `char.cpp:5741`). `None` = la
@@ -217,7 +211,7 @@ mod tests {
 
         let sink = CountingSink::default();
         let batcher = Batcher::spawn(std::time::Duration::from_millis(100), 64, sink.clone());
-        let repo = SafeboxRepo::new("host=noop");
+        let repo = SafeboxRepo::new(crate::pool::new_pool("host=127.0.0.1 port=1 user=x password=x dbname=x", 2).expect("pool"));
         repo.set_size_mutated(&batcher, 42, 1);
         repo.set_size_mutated(&batcher, 42, 4);
         // Fases del reloj pausado (patron de player.rs/wal.rs): 1) el worker

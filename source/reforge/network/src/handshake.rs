@@ -147,6 +147,14 @@ pub enum HandshakeError {
     /// El canal normal (`guild_mark_server` OFF) la cierra sin responder
     /// (`input.cpp:560-572`); el caller decide (ver `server_realms::channel`).
     MarkLogin(protocol::world::TPacketCGMarkLogin),
+    /// El cliente mandó su LOGIN3 (0x6f) ANTES del eco del handshake — su
+    /// `SetLoginPhase` envía `SendLoginPacket` inmediatamente al entrar en
+    /// fase Login (`PythonNetworkStreamPhaseLogin.cpp:85-138`). El paquete se
+    /// devuelve COMPLETO (65 B en el canal — tabla del framer rol Channel;
+    /// 68-88 B en el auth) para que el caller procese el login directamente.
+    /// Terminal (como MarkLogin): el cliente no está en fase handshake — no
+    /// habrá eco.
+    LoginEarly(Vec<u8>),
 }
 
 impl fmt::Display for HandshakeError {
@@ -165,6 +173,12 @@ impl fmt::Display for HandshakeError {
                  (parity input.cpp:560-572)",
                 p.handle
             ),
+            HandshakeError::LoginEarly(pkt) => write!(
+                f,
+                "login temprano (LOGIN3 0x6f, {} B) antes del eco del handshake — el caller \
+                 procesa el login directamente (SetLoginPhase, PythonNetworkStreamPhaseLogin.cpp:85-138)",
+                pkt.len()
+            ),
         }
     }
 }
@@ -174,7 +188,9 @@ impl std::error::Error for HandshakeError {
         match self {
             HandshakeError::Io(e) => Some(e),
             HandshakeError::Framing(e) => Some(e),
-            HandshakeError::RetriesExhausted { .. } | HandshakeError::MarkLogin(_) => None,
+            HandshakeError::RetriesExhausted { .. }
+            | HandshakeError::MarkLogin(_)
+            | HandshakeError::LoginEarly(_) => None,
         }
     }
 }
@@ -302,6 +318,16 @@ async fn wait_for_echo<S: AsyncRead + Unpin>(
 ) -> Result<TPacketCGHandshake, HandshakeError> {
     loop {
         let pkt = framer.next_packet(conn).await?; // FramingError → terminal
+        // DEBUG (2026-08-14, handshake silencioso/cierre del cliente real):
+        // con MT2_HS_DEBUG=1 se loguea TODO paquete recibido durante el
+        // handshake (header + primeros bytes) + los cierres de socket.
+        if std::env::var_os("MT2_HS_DEBUG").is_some() {
+            eprintln!(
+                "hs-debug: len={} first={:02x?}",
+                pkt.len(),
+                &pkt[..pkt.len().min(16)]
+            );
+        }
         match pkt[0] {
             header::CG_TIME_SYNC | header::CG_PONG => continue, // keepalives
             header::CG_HANDSHAKE => {
@@ -330,6 +356,17 @@ async fn wait_for_echo<S: AsyncRead + Unpin>(
                         ),
                     },
                 ));
+            }
+            // EL LOGIN3 ANTES DEL ECO (bug del cliente real 2026-08-13): el
+            // cliente a veces entra en fase Login y manda su LOGIN3 sin pasar
+            // por el eco (SetLoginPhase → SendLoginPacket inmediato,
+            // PythonNetworkStreamPhaseLogin.cpp:85-138). Descartarlo con
+            // `_ => continue` mataba la conexión: el servidor esperaba el eco
+            // que nunca llega → 32 intentos → cierre. Terminal: el caller
+            // procesa el login (el cliente NO está en fase handshake, no hay
+            // eco pendiente).
+            header::CG_LOGIN3 => {
+                return Err(HandshakeError::LoginEarly(pkt));
             }
             // Paquete conocido fuera de orden durante el handshake → se
             // descarta y se sigue esperando (parity input.cpp:625-626).
@@ -361,7 +398,7 @@ fn generate_nonce() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use protocol::TPacketCGLogin;
+    use protocol::{TPacketCGLogin, TPacketCGLogin3};
     use tokio::io::{duplex, AsyncReadExt, AsyncWriteExt, DuplexStream};
 
     use crate::ConnectionRole;
@@ -381,16 +418,25 @@ mod tests {
 
     /// Lado servidor del handshake en una tarea: `Connection` + `Framer` con
     /// rol auth (el handshake es idéntico en ambos roles).
+    fn spawn_server_with_role(
+        cfg: HandshakeConfig,
+        now_ms: u64,
+        stream: DuplexStream,
+        role: ConnectionRole,
+    ) -> tokio::task::JoinHandle<Result<Handshake, HandshakeError>> {
+        tokio::spawn(async move {
+            let mut conn = Connection::new(stream);
+            let mut framer = Framer::new(role);
+            perform_with(&mut conn, &mut framer, now_ms, &cfg).await
+        })
+    }
+
     fn spawn_server(
         cfg: HandshakeConfig,
         now_ms: u64,
         stream: DuplexStream,
     ) -> tokio::task::JoinHandle<Result<Handshake, HandshakeError>> {
-        tokio::spawn(async move {
-            let mut conn = Connection::new(stream);
-            let mut framer = Framer::new(ConnectionRole::Auth);
-            perform_with(&mut conn, &mut framer, now_ms, &cfg).await
-        })
+        spawn_server_with_role(cfg, now_ms, stream, ConnectionRole::Auth)
     }
 
     /// Lado cliente: lee `GC_PHASE(HANDSHAKE)` + `GC_HANDSHAKE` y devuelve el
@@ -651,5 +697,70 @@ mod tests {
     #[test]
     fn nonces_differ_across_calls() {
         assert_ne!(generate_nonce(), generate_nonce());
+    }
+
+    // ------------------------------------------------------------------
+    // LoginEarly (LOGIN3 antes del eco — bug del cliente real 2026-08-13)
+    // ------------------------------------------------------------------
+
+    /// (j) El cliente manda su LOGIN3 (65 B, rol Channel) ANTES del eco —
+    /// `SetLoginPhase` envía `SendLoginPacket` al entrar en fase Login
+    /// (PythonNetworkStreamPhaseLogin.cpp:85-138). → `LoginEarly` con los
+    /// bytes COMPLETOS (terminal — el caller procesa el login directamente;
+    /// el LOGIN3 ya no se descarta con `_ => continue`).
+    #[tokio::test]
+    async fn login3_before_echo_returns_login_early() {
+        let (server_side, mut client_side) = duplex(1024);
+        let server = spawn_server_with_role(
+            HandshakeConfig::default(),
+            NOW,
+            server_side,
+            ConnectionRole::Channel,
+        );
+
+        let hs = recv_handshake(&mut client_side).await;
+        assert_ne!(hs.dw_handshake, 0);
+
+        // El LOGIN3 del canal (65 B — tabla del framer rol Channel).
+        let login3 = TPacketCGLogin3::new_channel("test", "1234", [0; 4]).to_bytes_channel();
+        assert_eq!(login3.len(), 65, "LOGIN3 del canal");
+        client_side.write_all(&login3).await.unwrap();
+
+        let err = server.await.unwrap().unwrap_err();
+        match err {
+            HandshakeError::LoginEarly(pkt) => {
+                assert_eq!(pkt, login3, "bytes completos del LOGIN3");
+                assert_eq!(pkt[0], header::CG_LOGIN3, "header 111");
+            }
+            other => panic!("esperaba LoginEarly, got {other:?}"),
+        }
+    }
+
+    /// (k) Keepalive (0xfc) + LOGIN3 sin eco → también `LoginEarly`: el
+    /// filtro de keepalives no se traga el LOGIN3 (el caso real del cliente
+    /// con time-sync intercalado).
+    #[tokio::test]
+    async fn keepalive_then_login3_returns_login_early() {
+        let (server_side, mut client_side) = duplex(1024);
+        let server = spawn_server_with_role(
+            HandshakeConfig::default(),
+            NOW,
+            server_side,
+            ConnectionRole::Channel,
+        );
+
+        recv_handshake(&mut client_side).await;
+
+        let mut timesync = [0u8; TPacketCGHandshake::SIZE];
+        timesync[0] = header::CG_TIME_SYNC;
+        client_side.write_all(&timesync).await.unwrap();
+        let login3 = TPacketCGLogin3::new_channel("test", "1234", [0; 4]).to_bytes_channel();
+        client_side.write_all(&login3).await.unwrap();
+
+        let err = server.await.unwrap().unwrap_err();
+        match err {
+            HandshakeError::LoginEarly(pkt) => assert_eq!(pkt, login3),
+            other => panic!("esperaba LoginEarly, got {other:?}"),
+        }
     }
 }

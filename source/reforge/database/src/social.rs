@@ -25,7 +25,7 @@
 //! sobre estas tablas. Los metodos de `GuildRepo` aqui solo tocan
 //! `player.guild` (migrado).
 
-use tokio_postgres::{Client, NoTls};
+use crate::pool::{Client, PgPool};
 
 use crate::account::pg_err;
 
@@ -60,22 +60,16 @@ SELECT id, name, ladder_point FROM player.guild ORDER BY ladder_point DESC LIMIT
 
 /// Repositorio del dominio social (guildas). Conexion por llamada (ADR-0008).
 pub struct GuildRepo {
-    pg_conn: String,
+    pool: PgPool,
 }
 
 impl GuildRepo {
-    pub fn new(pg_conn: impl Into<String>) -> Self {
-        Self { pg_conn: pg_conn.into() }
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
     }
 
     async fn connect(&self) -> Result<Client, String> {
-        let (client, connection) = tokio_postgres::connect(&self.pg_conn, NoTls)
-            .await
-            .map_err(|e| format!("PG connect: {e}"))?;
-        tokio::spawn(async move {
-            let _ = connection.await;
-        });
-        Ok(client)
+        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
     }
 
     /// Load de TODAS las guildas (boot del db — `GuildManager.cpp:161`,
@@ -189,7 +183,7 @@ mod tests {
     /// El re-export del messenger sigue disponible desde el modulo social.
     #[test]
     fn social_reexports_messenger_repo() {
-        let _ = MessengerRepo::new("host=noop");
+        let _ = MessengerRepo::new(crate::pool::new_pool("host=127.0.0.1 port=1 user=x password=x dbname=x", 2).expect("pool"));
         let row = MessengerRow { account: "a".into(), companion: "b".into() };
         assert_eq!(row.account, "a");
     }
