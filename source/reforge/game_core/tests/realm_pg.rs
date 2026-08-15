@@ -240,3 +240,93 @@ async fn realm_save_character_via_batcher_audit() {
         .expect("cleanup schema");
     result.expect("save_character contra PG real");
 }
+
+/// Rollback del create (fix gap-lane-E, verifier E-2): si `set_slot` falla,
+/// la fila del player recién insertada se borra SIN el gate del índice
+/// (parity `ClientManagerPlayer.cpp:901-907` — el C++ hace `DELETE FROM
+/// player WHERE id=%d` incondicionalmente cuando el UPDATE del slot falla).
+/// Con el rollback viejo (`delete()` con gate) la fila quedaba huérfana y el
+/// nombre bloqueado para siempre (`name_exists` sin except_id).
+///
+/// Trigger determinista del fallo de `set_slot`: slot 5 inválido (fuera de
+/// 0..4) → `index_col` falla ANTES del SQL — mismo camino de rollback que un
+/// error real de PG, sin depender del esquema.
+#[tokio::test]
+#[ignore = "requiere PG real (WSL): cargo test --package game_core -- --ignored"]
+async fn realm_create_character_rollback_deletes_player_row() {
+    let store = test_store().await;
+    let client = raw_client(&pg_conn()).await;
+    // Cuenta THROWAWAY (lejos de la viva 1): el rollback ni el cleanup tocan
+    // datos reales.
+    let account = 990_000_002i64;
+    let rollback_name = format!("e2e_rrollback_{}", ts());
+    let ok_name = format!("e2e_rcreate_ok_{}", ts());
+
+    let result = async {
+        let mk = |name: String| PlayerCreate {
+            account_id: account,
+            name,
+            level: 1,
+            st: 30, ht: 30, dx: 30, iq: 30,
+            job: 0, voice: 0, dir: 0,
+            x: 0, y: 0, z: 0,
+            map_index: 41,
+            hp: 100, mp: 100,
+            random_hp: 0, random_sp: 0, stat_point: 0, stamina: 100,
+            part_base: 0, part_main: 0, part_hair: 0,
+            gold: 0, playtime: 0,
+            skill_level: Vec::new(),
+            quickslot: Vec::new(),
+        };
+
+        // 1. Rollback: create() inserta el player, set_slot(slot 5) falla →
+        //    la fila insertada se borra (parity ClientManagerPlayer.cpp:901-907).
+        let err = store
+            .create_character(&mk(rollback_name.clone()), 5)
+            .await
+            .expect_err("slot 5 -> Err de set_slot");
+        assert!(err.contains("fuera de rango"), "err: {err}");
+        let orphans: i64 = client
+            .query_one(
+                "SELECT COUNT(*) FROM player.player WHERE name = $1",
+                &[&rollback_name],
+            )
+            .await
+            .expect("count")
+            .get(0);
+        assert_eq!(
+            orphans, 0,
+            "rollback del create: la fila insertada se borra SIN el gate del índice"
+        );
+
+        // 2. Happy path intacto: create + set_slot con slot válido → pid, la
+        //    fila existe y el borrado normal (con gate) la limpia.
+        let pid = store
+            .create_character(&mk(ok_name.clone()), 0)
+            .await
+            .expect("create con slot 0");
+        let row = store.select_player(account, 0).await.expect("select").expect("existe");
+        assert_eq!(row.id, pid, "el slot 0 apunta al pid nuevo");
+        store.delete_character(account, 0, pid).await.expect("delete normal (gate ok)");
+        assert_eq!(
+            store.select_player(account, 0).await.expect("select"),
+            None,
+            "delete normal limpia índice + fila"
+        );
+        Ok::<(), String>(())
+    }
+    .await;
+
+    // Cleanup SIEMPRE (patrón trap del E2E): filas + fila de índice de la
+    // cuenta throwaway (por si un fallo dejara residuo).
+    let _ = client
+        .execute("DELETE FROM player.player WHERE name = $1", &[&rollback_name])
+        .await;
+    let _ = client
+        .execute("DELETE FROM player.player WHERE name = $1", &[&ok_name])
+        .await;
+    let _ = client
+        .execute("DELETE FROM player.player_index WHERE id = $1", &[&account])
+        .await;
+    result.expect("rollback del create contra PG real");
+}
