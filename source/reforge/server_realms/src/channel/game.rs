@@ -19,7 +19,7 @@ use protocol::header;
 use game_core::ecs::{CombatIntent, Intent};
 
 use crate::channel::session::Session;
-use crate::channel::{chat, combat, events, items, movement, script, shop, skills, trade};
+use crate::channel::{chat, combat, events, items, movement, pvp, quest, quickslot, script, shop, skills, trade};
 
 /// Loop de juego de la conexión: corre SOLO con la sesión llena (las fases
 /// 1-7 las hizo `entry::run`). `Err` = cierre con razón (fatal o protocolario
@@ -93,6 +93,14 @@ async fn game_loop(session: &mut Session) -> Result<(), String> {
                     // `Chat()` input_main.cpp:641-685 → `ChatPacket` →
                     // char.cpp — sin interpret_command por ahora, YAGNI).
                     header::CG_CHAT => chat::handle(session, &pkt).await?.into_result()?,
+                    // F6 social (gap-lane-C): whisper — CG_WHISPER (19,
+                    // variable: header + wSize + szNameTo[25] + msg — el
+                    // framer ya lo entrega completo; parity `Whisper()`
+                    // input_main.cpp:273-487 — destino por nombre, confirmación
+                    // al emisor.
+                    header::CG_WHISPER => {
+                        chat::handle_whisper(session, &pkt).await?.into_result()?;
+                    }
                     header::CG_ITEM_PICKUP => {
                         items::handle_pickup(session, &pkt).await?.into_result()?;
                     }
@@ -117,6 +125,47 @@ async fn game_loop(session: &mut Session) -> Result<(), String> {
                     header::CG_ITEM_MOVE => {
                         items::handle_move(session, &pkt).await?.into_result()?;
                     }
+                    // Lane D (gap loop 2026-08-15): SOLTAR item/oro del
+                    // inventario al suelo — CG_ITEM_DROP (12, 8 B: header +
+                    // TItemPos + gold) y CG_ITEM_DROP2 (20, 9 B: + count).
+                    // Parity `ItemDrop`/`ItemDrop2` (input_main.cpp:855-890):
+                    // gold > 0 → DropGold (item vnum 1 en el suelo + resta
+                    // del monedero); si no → DropItem (quita del inventario +
+                    // SyncQuickslot de la celda). El mundo responde el
+                    // GC_ITEM_GROUND_ADD (26) + GC_ITEM_OWNERSHIP (31) vía
+                    // el `DropResult` (events.rs — el vid lo asigna el mundo).
+                    header::CG_ITEM_DROP => {
+                        items::handle_drop(session, &pkt).await?.into_result()?;
+                    }
+                    header::CG_ITEM_DROP2 => {
+                        items::handle_drop2(session, &pkt).await?.into_result()?;
+                    }
+                    // Lane D: BARRA RÁPIDA — CG_QUICKSLOT_ADD (16, 4 B),
+                    // CG_QUICKSLOT_DEL (17, 2 B) y CG_QUICKSLOT_SWAP (18,
+                    // 3 B). Parity `QuickslotAdd/Delete/Swap`
+                    // (input_main.cpp:908-934): validan, mutan el bytea
+                    // `player.quickslot` (36 × TQuickslot — 72 B), lo
+                    // PERSISTEN y responden GC_QUICKSLOT_ADD (28) / DEL
+                    // (29) / SWAP (30) — el cliente pinta la barra.
+                    header::CG_QUICKSLOT_ADD => {
+                        quickslot::handle_add(session, &pkt).await?.into_result()?;
+                    }
+                    header::CG_QUICKSLOT_DEL => {
+                        quickslot::handle_del(session, &pkt).await?.into_result()?;
+                    }
+                    header::CG_QUICKSLOT_SWAP => {
+                        quickslot::handle_swap(session, &pkt).await?.into_result()?;
+                    }
+                    // Lane D: SENTARSE/PARARSE — CG_CHARACTER_POSITION
+                    // (28, 2 B: header + position). Parity `Position`
+                    // (input_main.cpp:1276-1295): GENERAL → Standup,
+                    // SITTING_CHAIR/GROUND → Sitdown (el wire de vuelta es
+                    // SIEMPRE SITTING_GROUND); el estado vive en la sesión y
+                    // se responde GC_CHARACTER_POSITION (28, 6 B) al propio
+                    // jugador (el broadcast de zona es F5).
+                    header::CG_CHARACTER_POSITION => {
+                        movement::handle_position(session, &pkt).await?.into_result()?;
+                    }
                     // F5.3: REVIVE del jugador — CG_SCRIPT_ANSWER (29, 2 B:
                     // header + answer BYTE — Packet.h:679). El diálogo de
                     // muerte del cliente manda la respuesta; el C++ revive
@@ -126,6 +175,30 @@ async fn game_loop(session: &mut Session) -> Result<(), String> {
                     header::CG_SCRIPT_ANSWER => {
                         script::handle(session, &pkt).await?.into_result()?;
                     }
+                    // Lane D: QUEST — CG_SCRIPT_BUTTON (66, 5 B: header +
+                    // idx), CG_QUEST_INPUT_STRING (30, 66 B: header + char
+                    // [65]) y CG_QUEST_CONFIRM (31, 6 B: header + answer +
+                    // requestPID). Parity `ScriptButton`/`QuestInputString`/
+                    // `QuestConfirm` (input_main.cpp:1850-1917): se re-envían
+                    // al mundo (`QuestIntent::Button/Input/Confirm` — el
+                    // engine aún no implementa botones/input/confirm
+                    // cross-player: log + no-op, GAP documentado en
+                    // game_core::quest).
+                    header::CG_SCRIPT_BUTTON => {
+                        quest::handle_button(session, &pkt).await?.into_result()?;
+                    }
+                    header::CG_QUEST_INPUT_STRING => {
+                        quest::handle_input_string(session, &pkt).await?.into_result()?;
+                    }
+                    header::CG_QUEST_CONFIRM => {
+                        quest::handle_confirm(session, &pkt).await?.into_result()?;
+                    }
+                    // Lane D: flag PvP — CG_PVP (41). El cliente de esta
+                    // variante define el header pero nunca lo envía (sin
+                    // sistema de duelo) y el C++ no lo despacha; el handler
+                    // es DEFENSIVO (parsea + flag de sesión + log, sin eco
+                    // GC_PVP). Detalle en channel/pvp.rs.
+                    header::CG_PVP => pvp::handle(session, &pkt).await?.into_result()?,
                     // F6 social: click en NPC (26, 5 B: header + vid — el
                     // mundo resuelve el shop del NPC) + CG_SHOP (50) +
                     // CG_EXCHANGE (27). CG_SHOP es variable (2-4 B según
@@ -138,6 +211,19 @@ async fn game_loop(session: &mut Session) -> Result<(), String> {
                     }
                     header::CG_EXCHANGE => trade::handle(session, &pkt).await?.into_result()?,
                     // TODO(F5 npcs): game_core::npc::... para los NPCs/mobs
+                    //
+                    // SUBIR STATS (lane D — documentado, sin paquete): el
+                    // cliente de esta variante NO tiene header de stat-up
+                    // (Packet.h:32-37 — el 21 es `//HEADER_BLANK21`, sin
+                    // sender; el C++ de esta variante tampoco lo despacha:
+                    // input_main.cpp no tiene AddPoint). No hay paquete
+                    // identificable → NO hay handler que añadir: si un
+                    // cliente externo mandara el 21 caería como
+                    // UnknownHeader del framer (cierre documentado). Los
+                    // stat_point se cargan y se mandan en GC_POINTS
+                    // (POINT_STAT) — el día que exista el wire, el handler
+                    // validará stat_point > 0, sumará al ST/DX/IQ/HT
+                    // pedido (parity ComputePoints) y reenviará GC_POINTS.
                     other => {
                         eprintln!(
                             "server_realms: channel conn {}: paquete de juego 0x{other:02x} ignorado \
@@ -168,6 +254,20 @@ async fn game_loop(session: &mut Session) -> Result<(), String> {
                 };
                 // R-s4: la traducción NpcEvent → GC vive en `events.rs`.
                 events::handle(session, ev).await?;
+            }
+            // F6 social (gap-lane-C): bytes de CHAT de OTRAS sesiones (el
+            // broadcast GC_CHAT y el whisper GC_WHISPER entregan aquí — el
+            // outbox `chat_rx` de la sesión; ver chat.rs). El cierre del
+            // canal es inalcanzable mientras la sesión vive (la sesión
+            // conserva su propio `chat_tx`); defensivo.
+            bytes = session.chat_rx.recv() => {
+                let Some(bytes) = bytes else {
+                    return Err("canal de chat de la sesión cerrado".into());
+                };
+                session
+                    .send(&bytes)
+                    .await
+                    .map_err(|e| format!("enviando chat de otra sesión: {e}"))?;
             }
         }
     }

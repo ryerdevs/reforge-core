@@ -52,7 +52,9 @@ mod game;
 mod gm;
 mod items;
 mod movement;
+mod pvp;
 mod quest;
+mod quickslot;
 mod script;
 mod session;
 mod shop;
@@ -156,6 +158,10 @@ pub async fn run(config: Config) -> std::io::Result<()> {
         u32,
         tokio::sync::mpsc::UnboundedSender<NpcEvent>,
     > = std::collections::HashMap::new();
+    // El CHAT (gap-lane-C) usa un registro EQUIVALENTE por su cuenta: el
+    // broadcast GC_CHAT y el whisper entregan bytes a otras sesiones por el
+    // outbox `chat_rx` de cada una (vid → peer en `chat.rs::peers()` — con
+    // nombre/posición/empire; `routes` solo sabe de eventos del mundo).
     // Tick de AI del mundo. 2026-08-15: 500 → 250 ms — los pasos de
     // speed×0.5s cada medio segundo se veían "a saltos rápidos" (el C++
     // mueve los mobs cada frame ~100ms con pasos continuos — con 500ms el

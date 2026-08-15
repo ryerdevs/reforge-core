@@ -80,7 +80,12 @@ pub enum CombatIntent {
     /// CG_ATTACK del jugador: el mundo resuelve cooldown/rango/daño
     /// (`handle_attack` puro) y emite `AttackResult`. `weapon` = el proto del
     /// arma equipada (la query PG la hizo la conexión).
-    Attack { player_vid: u32, victim_vid: u32, b_type: u8, weapon: Option<ProtoItem> },
+    Attack {
+        player_vid: u32,
+        victim_vid: u32,
+        b_type: u8,
+        weapon: Option<ProtoItem>,
+    },
     /// CG_TARGET del jugador (61, 5 B: header + vid — Packet.h:1369-1372):
     /// el cliente pide la barra de vida del objetivo (parity `SetTarget`,
     /// char.cpp:5048-5094 → GC_TARGET con el hp%). El mundo responde con
@@ -112,7 +117,12 @@ pub enum MoveIntent {
 /// del poly la usa).
 #[derive(Debug)]
 pub enum SkillIntent {
-    UseSkill { player_vid: u32, skill_id: u32, target_vid: u32, weapon: Option<ProtoItem> },
+    UseSkill {
+        player_vid: u32,
+        skill_id: u32,
+        target_vid: u32,
+        weapon: Option<ProtoItem>,
+    },
 }
 
 /// C→S de ITEMS del suelo: el drop del kill (el mundo asigna el vid con
@@ -121,9 +131,21 @@ pub enum SkillIntent {
 /// la conexión) y el commit del pickup (quita el item del suelo).
 #[derive(Debug)]
 pub enum ItemIntent {
-    DropItem { player_vid: u32, vnum: u32, count: u32, x: i32, y: i32, z: i32 },
-    PickupItem { player_vid: u32, item_vid: u32 },
-    RemoveItem { item_vid: u32 },
+    DropItem {
+        player_vid: u32,
+        vnum: u32,
+        count: u32,
+        x: i32,
+        y: i32,
+        z: i32,
+    },
+    PickupItem {
+        player_vid: u32,
+        item_vid: u32,
+    },
+    RemoveItem {
+        item_vid: u32,
+    },
 }
 
 /// C→S de TIENDAS NPC (F6 social — parity `CInputMain::Shop`,
@@ -146,7 +168,11 @@ pub enum ShopIntent {
     /// CG_SHOP SELL (cell): vende todo el stack de la celda del inventario.
     Sell { player_vid: u32, cell: u16 },
     /// CG_SHOP SELL2 (cell, count): vende `count` unidades.
-    Sell2 { player_vid: u32, cell: u16, count: u32 },
+    Sell2 {
+        player_vid: u32,
+        cell: u16,
+        count: u32,
+    },
 }
 
 /// S→C de tiendas NPC — eventos VALIDADOS del mundo; el canal aplica la
@@ -154,19 +180,41 @@ pub enum ShopIntent {
 #[derive(Debug, Clone)]
 pub enum ShopEvent {
     /// El shop abrió (GC_SHOP START — el canal manda el item list del wire).
-    Opened { player_vid: u32, npc_vid: u32, items: Vec<crate::shop::ShopItem> },
+    Opened {
+        player_vid: u32,
+        npc_vid: u32,
+        items: Vec<crate::shop::ShopItem>,
+    },
     /// El shop cerró (GC_SHOP END).
     Closed { player_vid: u32 },
     /// Compra validada: pos + precio del stack (el canal chequea oro/hueco y
     /// aplica la DB).
-    BuyResult { player_vid: u32, pos: u8, vnum: i64, count: i64, price: i64 },
+    BuyResult {
+        player_vid: u32,
+        pos: u8,
+        vnum: i64,
+        count: i64,
+        price: i64,
+    },
     /// Venta validada (shop abierto): el canal resuelve el item de la celda
     /// (count = el pedido — 0 = todo el stack, parity shop_manager.cpp:294).
-    SellResult { player_vid: u32, cell: u16, count: i64 },
+    SellResult {
+        player_vid: u32,
+        cell: u16,
+        count: i64,
+    },
     /// Compra rechazada (pos inválido / shop no abierto / soldout).
-    BuyRejected { player_vid: u32, pos: u8, error: crate::shop::ShopError },
+    BuyRejected {
+        player_vid: u32,
+        pos: u8,
+        error: crate::shop::ShopError,
+    },
     /// Venta rechazada (shop no abierto).
-    SellRejected { player_vid: u32, cell: u16, error: crate::shop::ShopError },
+    SellRejected {
+        player_vid: u32,
+        cell: u16,
+        error: crate::shop::ShopError,
+    },
 }
 
 /// C→S del INTERCAMBIO (parity `CInputMain::Exchange`, input_main.cpp:
@@ -179,7 +227,11 @@ pub enum TradeIntent {
     Start { player_vid: u32, target_vid: u32 },
     /// CG_EXCHANGE ITEM_ADD: la fila COMPLETA del item (el commit necesita
     /// id/count/vnum/sockets/attrs) + display_pos de la ventana.
-    ItemAdd { player_vid: u32, row: database::item::ItemRow, display_pos: u8 },
+    ItemAdd {
+        player_vid: u32,
+        row: database::item::ItemRow,
+        display_pos: u8,
+    },
     /// CG_EXCHANGE ITEM_DEL (arg1 = display_pos).
     ItemDel { player_vid: u32, display_pos: u8 },
     /// CG_EXCHANGE ELK_ADD (arg1 = oro — el canal validó `gold <= row.gold`).
@@ -222,17 +274,32 @@ pub enum TradeEvent {
         attrs: [(i16, i16); 7],
     },
     /// Item quitado de la ventana (GC_EXCHANGE ITEM_DEL).
-    ItemRemoved { player_vid: u32, is_me: bool, display_pos: u8 },
+    ItemRemoved {
+        player_vid: u32,
+        is_me: bool,
+        display_pos: u8,
+    },
     /// Oro añadido (GC_EXCHANGE GOLD_ADD).
-    GoldAdded { player_vid: u32, is_me: bool, gold: i64 },
+    GoldAdded {
+        player_vid: u32,
+        is_me: bool,
+        gold: i64,
+    },
     /// Estado de aceptación (GC_EXCHANGE ACCEPT — solo cuando el par NO
     /// completó; al completar va directo al commit, parity exchange.cpp:
     /// 587-592).
-    AcceptState { player_vid: u32, is_me: bool, accept: bool },
+    AcceptState {
+        player_vid: u32,
+        is_me: bool,
+        accept: bool,
+    },
     /// El par completó: el EJECUTOR corre el commit ACID
     /// (`game_core::trade::build_commit_units` + `WorldStore::exchange`) y
     /// responde `CommitOk`/`CommitFail`.
-    Commit { player_vid: u32, plan: crate::trade::TradeCommitPlan },
+    Commit {
+        player_vid: u32,
+        plan: crate::trade::TradeCommitPlan,
+    },
     /// Trade completado (a AMBOS, tras el CommitOk): oro recibido + items
     /// recibidos (rows nuevos) + items entregados (para el GC_ITEM_DEL).
     Done {
@@ -287,10 +354,16 @@ pub enum QuestIntent {
     /// `texts` = diccionario clave->texto del quest_text del runtime
     /// (ADR-0009 — el server resuelve los textos de diálogo; vacío = las
     /// claves se envían tal cual).
-    Load { text: String, texts: HashMap<String, String> },
+    Load {
+        text: String,
+        texts: HashMap<String, String>,
+    },
     /// Carga las filas persistidas del jugador (`player.quest` — la conexión
     /// las leyó con `QuestRepo::load` en el entry).
-    Init { player_vid: u32, rows: Vec<crate::quest::PersistedFlag> },
+    Init {
+        player_vid: u32,
+        rows: Vec<crate::quest::PersistedFlag>,
+    },
     /// Un trigger de evento. `items` = snapshot de counts del inventario
     /// (las condiciones `count_item` — la conexión lo calcula al enviar).
     Event {
@@ -303,10 +376,31 @@ pub enum QuestIntent {
     /// — las quests con `when <vnum>.chat` ofrecen su diálogo. `items` =
     /// counts del inventario (igual que Event). Sin quests para el vnum →
     /// sin evento (silencio, parity StartShopping).
-    NpcClick { player_vid: u32, npc_vid: u32, items: HashMap<u32, i64> },
+    NpcClick {
+        player_vid: u32,
+        npc_vid: u32,
+        items: HashMap<u32, i64>,
+    },
     /// La respuesta del diálogo suspendido (CG_SCRIPT_ANSWER: 1..n del
     /// select, 0 del [NEXT]).
     Answer { player_vid: u32, answer: u8 },
+    /// CG_QUEST_INPUT_STRING (30): el texto del diálogo de input del quest.
+    /// El engine aún no tiene la acción `input` del DSL (mapeada-pendiente) —
+    /// el mundo lo loguea y no-op (GAP documentado, mod.rs §Cobertura).
+    Input { player_vid: u32, text: String },
+    /// CG_QUEST_CONFIRM (31): la respuesta del diálogo de confirmación
+    /// (answer + el requestPID del jugador que espera). El engine no tiene
+    /// confirmación cross-player — log + no-op (GAP documentado).
+    Confirm {
+        player_vid: u32,
+        answer: u8,
+        request_pid: u32,
+    },
+    /// CG_SCRIPT_BUTTON (66): el índice del botón del diálogo/ventana de
+    /// quest (parity `ScriptButton` input_main.cpp:1850-1868 — Confirm
+    /// timeout / QuestInfo si idx & 0x80000000 / QuestButton). El engine no
+    /// tiene la API de botones — log + no-op (GAP documentado).
+    Button { player_vid: u32, idx: u32 },
 }
 
 /// Intents de la conexión hacia el mundo (mpsc unbounded — la tarea del
@@ -318,9 +412,14 @@ pub enum Intent {
     /// El jugador entra al mundo (tras el ENTERGAME). `out` = su cola de
     /// eventos (el routing del canal la registra con su vid). Lo maneja la
     /// tarea del canal (async — fuera de los dominios).
-    Join { player: PlayerJoin, out: tokio::sync::mpsc::UnboundedSender<NpcEvent> },
+    Join {
+        player: PlayerJoin,
+        out: tokio::sync::mpsc::UnboundedSender<NpcEvent>,
+    },
     /// El jugador salió (disconnect/error — lo manda el RAII de la conexión).
-    Leave { player_vid: u32 },
+    Leave {
+        player_vid: u32,
+    },
     Combat(CombatIntent),
     Move(MoveIntent),
     Skill(SkillIntent),
@@ -371,15 +470,33 @@ impl From<QuestIntent> for Intent {
 pub enum CombatEvent {
     /// El mob ATACÓ al jugador (GC_MOVE FUNC_ATTACK + GC_DAMAGE_INFO + daño
     /// ya aplicado al Hp del jugador en el mundo).
-    MobAttack { player_vid: u32, vid: u32, vnum: i64, x: i32, y: i32, damage: i32 },
+    MobAttack {
+        player_vid: u32,
+        vid: u32,
+        vnum: i64,
+        x: i32,
+        y: i32,
+        damage: i32,
+    },
     /// El mob empezó a perseguir al jugador (aggro proactivo).
-    AggroOn { player_vid: u32, vid: u32, vnum: i64 },
+    AggroOn {
+        player_vid: u32,
+        vid: u32,
+        vnum: i64,
+    },
     /// El mob perdió el aggro por distancia.
-    AggroOff { player_vid: u32, vid: u32, vnum: i64 },
+    AggroOff {
+        player_vid: u32,
+        vid: u32,
+        vnum: i64,
+    },
     /// El mob se MATERIALIZÓ al acercarse el jugador — paquetes
     /// ADD(+INFO) ya construidos por `game_core::npc::entry_spawns` (parity
     /// byte-exacta del entry).
-    Spawned { player_vid: u32, packets: Vec<Vec<u8>> },
+    Spawned {
+        player_vid: u32,
+        packets: Vec<Vec<u8>>,
+    },
     /// El mob se DESMATERIALIZÓ (lejos de todos los jugadores) —
     /// GC_CHARACTER_DEL.
     Despawned { player_vid: u32, vid: u32 },
@@ -397,14 +514,26 @@ pub enum CombatEvent {
     /// Respuesta al CG_TARGET: el vid del objetivo + su HP% (parity
     /// `SetTarget`/`BroadcastTargetPacket` — GC_TARGET 63, char.cpp:
     /// 5048-5143; bHPPercent 0 para PCs — el subset solo apunta mobs).
-    TargetResult { player_vid: u32, vid: u32, hp: i32, max_hp: i32 },
+    TargetResult {
+        player_vid: u32,
+        vid: u32,
+        hp: i32,
+        max_hp: i32,
+    },
 }
 
 /// S→C del dominio MOVIMIENTO: el mob se MOVIÓ (GC_MOVE FUNC_MOVE —
 /// persecución o patrulla).
 #[derive(Debug, Clone)]
 pub enum MoveEvent {
-    Moved { player_vid: u32, vid: u32, x: i32, y: i32, rot: u8, duration_ms: u32 },
+    Moved {
+        player_vid: u32,
+        vid: u32,
+        x: i32,
+        y: i32,
+        rot: u8,
+        duration_ms: u32,
+    },
 }
 
 /// S→C del dominio SKILLS: el resultado del CG_USE_SKILL (los paquetes del
@@ -434,7 +563,11 @@ pub enum SkillEvent {
         buff: Option<protocol::world::TPacketAffectElement>,
     },
     /// Un buff expiró (el mundo lo revirtió — GC_AFFECT_REMOVE en el canal).
-    AffectRemoved { player_vid: u32, skill_id: u32, point: u8 },
+    AffectRemoved {
+        player_vid: u32,
+        skill_id: u32,
+        point: u8,
+    },
 }
 
 /// S→C del dominio ITEMS: el drop se creó en el mundo (el vid lo asignó el
@@ -444,9 +577,21 @@ pub enum SkillEvent {
 pub enum ItemEvent {
     /// El drop se creó en el mundo — el vid lo asignó el mundo (el canal
     /// manda GC_ITEM_GROUND_ADD + GC_ITEM_OWNERSHIP con él).
-    DropResult { player_vid: u32, item_vid: u32, vnum: u32, count: u32, x: i32, y: i32, z: i32 },
+    DropResult {
+        player_vid: u32,
+        item_vid: u32,
+        vnum: u32,
+        count: u32,
+        x: i32,
+        y: i32,
+        z: i32,
+    },
     /// Respuesta al pickup: el item (si sigue en el suelo).
-    PickupResult { player_vid: u32, item_vid: u32, item: Option<ItemView> },
+    PickupResult {
+        player_vid: u32,
+        item_vid: u32,
+        item: Option<ItemView>,
+    },
 }
 
 /// S→C del lane SOCIAL (F6): tiendas NPC + intercambio — el canal enruta

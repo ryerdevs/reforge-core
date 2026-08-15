@@ -10,15 +10,114 @@
 
 use database::item::{ItemRepo, ItemRow};
 use database::quest::{QuestRepo, QuestRow};
-use game_core::ecs::QuestEvent;
+use game_core::ecs::{Intent, QuestEvent, QuestIntent};
 use game_core::packets;
 use game_core::quest::{DirtyFlag, QuestEffect};
 use protocol::world::{
     TItemPos, TPacketGCItemDelDeprecated, TPacketGCItemSet, TPacketGCItemUpdate,
 };
 
-use crate::channel::session::Session;
+use crate::channel::session::{Outcome, Session};
 use crate::channel::{parse_listen, ITEM_COUNT_LIMIT, INVENTORY_MAX_NUM};
+
+/// CG_SCRIPT_BUTTON (66, 5 B: header + idx DWORD — Packet.h:665-669): el
+/// índice del botón del diálogo/ventana de quest (lane D). Parity
+/// `ScriptButton` (input_main.cpp:1850-1868): Confirm timeout si el PC
+/// espera confirmación; QuestInfo si `idx & 0x80000000`; QuestButton si no.
+/// Se re-envía al mundo (`QuestIntent::Button`) — el engine aún no tiene la
+/// API de botones: el mundo lo loguea y no-op (GAP documentado en
+/// game_core::quest mod.rs §Cobertura).
+pub async fn handle_button(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String> {
+    if pkt.len() < 5 {
+        eprintln!(
+            "server_realms: channel conn {}: CG_SCRIPT_BUTTON malformado ({})",
+            session.conn_id,
+            pkt.len()
+        );
+        return Ok(Outcome::Continue);
+    }
+    let idx = u32::from_le_bytes([pkt[1], pkt[2], pkt[3], pkt[4]]);
+    session.intent(Intent::Quest(QuestIntent::Button {
+        player_vid: session.player_vid(),
+        idx,
+    }))?;
+    eprintln!(
+        "server_realms: channel conn {}: botón de quest idx {idx} → mundo",
+        session.conn_id
+    );
+    Ok(Outcome::Continue)
+}
+
+/// Texto del CG_QUEST_INPUT_STRING (bytes 1.. hasta el primer NUL — parity
+/// strlcpy del C++). `None` si el paquete está malformado (< 2 B).
+fn parse_input_string(pkt: &[u8]) -> Option<String> {
+    if pkt.len() < 2 {
+        return None;
+    }
+    let end = pkt[1..]
+        .iter()
+        .position(|&b| b == 0)
+        .map(|i| i + 1)
+        .unwrap_or(pkt.len());
+    Some(String::from_utf8_lossy(&pkt[1..end]).into_owned())
+}
+
+/// CG_QUEST_INPUT_STRING (30, 66 B: header + char[65] — Packet.h:1002-1006):
+/// el texto del diálogo de input de quest (lane D). Parity `QuestInputString`
+/// (input_main.cpp:1894-1903): strlcpy a 65 y `CQuestManager::Input(pid,
+/// msg)`. Se re-envía al mundo (`QuestIntent::Input`) — el engine aún no
+/// implementa la acción `input` del DSL: el mundo lo loguea y no-op (GAP
+/// documentado).
+pub async fn handle_input_string(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String> {
+    let Some(text) = parse_input_string(pkt) else {
+        eprintln!(
+            "server_realms: channel conn {}: CG_QUEST_INPUT_STRING malformado ({})",
+            session.conn_id,
+            pkt.len()
+        );
+        return Ok(Outcome::Continue);
+    };
+    session.intent(Intent::Quest(QuestIntent::Input {
+        player_vid: session.player_vid(),
+        text,
+    }))?;
+    eprintln!(
+        "server_realms: channel conn {}: input de quest → mundo",
+        session.conn_id
+    );
+    Ok(Outcome::Continue)
+}
+
+/// CG_QUEST_CONFIRM (31, 6 B: header + answer + requestPID DWORD —
+/// Packet.h:1008-1013): la respuesta del diálogo de confirmación de quest
+/// (lane D). Parity `QuestConfirm` (input_main.cpp:1905-1917): el C++ la
+/// reenvía al `CQuestManager::Confirm(requestPID, answer, pid)` del jugador
+/// que ESPERA. Se re-envía al mundo (`QuestIntent::Confirm`) — el engine no
+/// tiene confirmación cross-player: el mundo lo loguea y no-op (GAP
+/// documentado).
+pub async fn handle_confirm(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String> {
+    if pkt.len() < 6 {
+        eprintln!(
+            "server_realms: channel conn {}: CG_QUEST_CONFIRM malformado ({})",
+            session.conn_id,
+            pkt.len()
+        );
+        return Ok(Outcome::Continue);
+    }
+    let answer = pkt[1];
+    let request_pid = u32::from_le_bytes([pkt[2], pkt[3], pkt[4], pkt[5]]);
+    session.intent(Intent::Quest(QuestIntent::Confirm {
+        player_vid: session.player_vid(),
+        answer,
+        request_pid,
+    }))?;
+    eprintln!(
+        "server_realms: channel conn {}: confirm de quest (answer {answer}, \
+         requestPID {request_pid}) → mundo",
+        session.conn_id
+    );
+    Ok(Outcome::Continue)
+}
 
 /// Delegado de `NpcEvent::Quest` — el routing por jugador ya ocurrió en la
 /// tarea del canal.
@@ -347,5 +446,40 @@ mod tests {
         assert!(out.suspended);
         let out = e.answer(&mut rt, 0, 5, 41, 0, &items, &mut rng);
         assert_eq!(out.script.as_deref(), Some("mas[ENTER]"), "{:?}", out.script);
+    }
+
+    /// El parseo del texto del CG_QUEST_INPUT_STRING (30): C-string de 65 B
+    /// (hasta el primer NUL — parity strlcpy); malformado (< 2 B) → None.
+    #[test]
+    fn quest_input_string_parses_c_string() {
+        // "hola\0..." en un paquete de 66 B.
+        let mut pkt = vec![0u8; 66];
+        pkt[0] = 30;
+        pkt[1..5].copy_from_slice(b"hola");
+        assert_eq!(parse_input_string(&pkt).as_deref(), Some("hola"));
+        // Sin NUL: se toma todo el buffer (65 B máx — el framer lo limita).
+        let mut pkt = vec![0u8; 66];
+        pkt[0] = 30;
+        pkt[1..].copy_from_slice(&[b'a'; 65]);
+        assert_eq!(parse_input_string(&pkt).unwrap().len(), 65);
+        // Malformado.
+        assert_eq!(parse_input_string(&[30]), None);
+        assert_eq!(parse_input_string(&[]), None);
+    }
+
+    /// El idx del CG_SCRIPT_BUTTON (66) y el answer/requestPID del
+    /// CG_QUEST_CONFIRM (31) se leen LE byte-exacto (Packet.h:665-669,
+    /// 1008-1013).
+    #[test]
+    fn quest_button_and_confirm_wire_fields() {
+        // Button: header + idx DWORD LE.
+        let pkt = [66, 0x78, 0x56, 0x34, 0x12];
+        let idx = u32::from_le_bytes([pkt[1], pkt[2], pkt[3], pkt[4]]);
+        assert_eq!(idx, 0x1234_5678);
+        // Confirm: header + answer + requestPID DWORD LE.
+        let pkt = [31, 1, 0x44, 0x33, 0x22, 0x11];
+        assert_eq!(pkt[1], 1, "answer");
+        let request_pid = u32::from_le_bytes([pkt[2], pkt[3], pkt[4], pkt[5]]);
+        assert_eq!(request_pid, 0x1122_3344, "requestPID LE");
     }
 }
