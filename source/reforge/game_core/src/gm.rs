@@ -60,6 +60,21 @@ pub enum GmCommand {
     /// gPlayerMaxLevel))). El recálculo de stat/skill points del ResetPoint
     /// queda fuera (GAP documentado).
     SetLevel { level: i32 },
+    /// Comandos GM_PLAYER (nivel 0 — accesibles a TODOS los jugadores, sin
+    /// gmlist; parity cmd.cpp:340-347): el diálogo de muerte manda
+    /// `/restart_here`/`/restart_town` (uirestart.py:56-59) y el menú
+    /// `/logout`/`/phase_select`/`/quit` (PythonNetworkStream.cpp:203-240).
+    /// El C++ los despacha en do_restart/do_cmd (cmd_general.cpp:323-360,
+    /// 402-570) — el canal traduce a revive / cierre de conexión.
+    RestartHere,
+    RestartTown,
+    /// `/logout` → cierre de conexión (do_cmd SCMD_LOGOUT → PHASE_CLOSE).
+    Logout,
+    /// `/quit` → cierre de conexión (do_cmd SCMD_QUIT → quit + disconnect).
+    Quit,
+    /// `/phase_select` → GC_PHASE(SELECT) + cierre (vuelta al selector de
+    /// personajes; el cliente reconecta al channel).
+    PhaseSelect,
 }
 
 /// Parseo del texto tras el '/': `parse_command("warp 100 200")` →
@@ -96,18 +111,29 @@ pub fn parse_command(cmd: &str) -> Option<GmCommand> {
             let level: i32 = it.next()?.parse().ok()?;
             Some(GmCommand::SetLevel { level: level.clamp(1, PLAYER_MAX_LEVEL) })
         }
+        // GM_PLAYER (nivel 0) — sin argumentos (parity cmd.cpp:340-347).
+        "restart_here" => Some(GmCommand::RestartHere),
+        "restart_town" => Some(GmCommand::RestartTown),
+        "logout" => Some(GmCommand::Logout),
+        "quit" => Some(GmCommand::Quit),
+        "phase_select" => Some(GmCommand::PhaseSelect),
         _ => None,
     }
 }
 
 /// El nivel GM mínimo del comando (columna `gm_level` del `cmd_info[]` —
 /// cmd.cpp:281 warp LOW_WIZARD, 283 notice HIGH_WIZARD, 297 level
-/// LOW_WIZARD, 301 item GOD).
+/// LOW_WIZARD, 301 item GOD; los de jugador 340-347 GM_PLAYER=0).
 pub fn required_level(cmd: &GmCommand) -> i16 {
     match cmd {
         GmCommand::Warp { .. } | GmCommand::SetLevel { .. } => gm_level::LOW_WIZARD,
         GmCommand::GiveItem { .. } => gm_level::GOD,
         GmCommand::Notice { .. } => gm_level::HIGH_WIZARD,
+        GmCommand::RestartHere
+        | GmCommand::RestartTown
+        | GmCommand::Logout
+        | GmCommand::Quit
+        | GmCommand::PhaseSelect => gm_level::PLAYER,
     }
 }
 
@@ -204,6 +230,31 @@ mod tests {
         assert_eq!(parse_command("teleport 1 2"), None, "comando desconocido");
         assert_eq!(parse_command("mob 101"), None, "mob: fuera del subset (GAP)");
         assert_eq!(parse_command("kill alguien"), None, "kill: fuera del subset (GAP)");
+    }
+
+    /// Fix bug 4 (2026-08-15): los comandos del diálogo de muerte y del menú
+    /// del cliente (`/restart_here`, `/restart_town`, `/logout`, `/quit`,
+    /// `/phase_select` — uirestart.py:56-59, PythonNetworkStream.cpp:203-240)
+    /// ahora se parsean; antes → "No such command". GM_PLAYER (nivel 0).
+    #[test]
+    fn parse_player_commands_gm_player() {
+        assert_eq!(parse_command("restart_here"), Some(GmCommand::RestartHere));
+        assert_eq!(parse_command("restart_town"), Some(GmCommand::RestartTown));
+        assert_eq!(parse_command("logout"), Some(GmCommand::Logout));
+        assert_eq!(parse_command("quit"), Some(GmCommand::Quit));
+        assert_eq!(parse_command("phase_select"), Some(GmCommand::PhaseSelect));
+        // Argumentos extra se ignoran (parity: do_restart/do_cmd NO leen el
+        // argumento para SCMD_RESTART_*/LOGOUT/QUIT/PHASE_SELECT).
+        assert_eq!(parse_command("restart_here x"), Some(GmCommand::RestartHere));
+        assert_eq!(parse_command("logout ahora"), Some(GmCommand::Logout));
+        // Nivel 0 — accesibles a todos los jugadores sin gmlist.
+        assert_eq!(required_level(&GmCommand::RestartHere), gm_level::PLAYER);
+        assert_eq!(required_level(&GmCommand::RestartTown), gm_level::PLAYER);
+        assert_eq!(required_level(&GmCommand::Logout), gm_level::PLAYER);
+        assert_eq!(required_level(&GmCommand::Quit), gm_level::PLAYER);
+        assert_eq!(required_level(&GmCommand::PhaseSelect), gm_level::PLAYER);
+        // Cualquier jugador (nivel 0) tiene permitido.
+        assert!(is_allowed(gm_level::PLAYER, required_level(&GmCommand::RestartHere)));
     }
 
     #[test]
