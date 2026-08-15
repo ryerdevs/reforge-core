@@ -54,7 +54,9 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
 /// ventana de muerte; sin él los botones se quedan).
 ///
 /// `answer == 1` → revive EN LA CIUDAD (GC_WARP — el cliente reconecta con
-/// DirectEnter; parity `WarpSet` de SCMD_RESTART_TOWN). Cualquier otro →
+/// DirectEnter; parity `WarpSet` de SCMD_RESTART_TOWN) y PERSISTE la
+/// posición del village (el DirectEnter recarga la posición guardada).
+/// Cualquier otro →
 /// RestartAtSamePos (remove + insert en el mismo punto; parity
 /// `ch->RestartAtSamePos()` + `PointChange(HP, 50-hp)` — el subset restaura
 /// a los máximos, divergencia documentada). Restaura hp/mp a los máximos,
@@ -99,6 +101,19 @@ pub async fn revive(session: &mut Session, answer: u8) -> Result<(), String> {
         // exit_x/exit_y (valen 960640,263099 — el punto de entrada, no el
         // village; el runtime actual tiene un solo mapa con village fijo).
         let (wx, wy) = (969_600, 278_400); // village c1 del mapa 41
+        // BUG C26: el revive en la ciudad NO persistía el destino — el
+        // `save()` copia el x/y desde el motion (session.rs:592-608), así
+        // que el row guardaba la posición de la MUERTE y el DirectEnter del
+        // GC_WARP recargaba donde murió. Parity C++: `WarpSet(x, y)` mueve
+        // al personaje ANTES de persistir (char.cpp:5236-5238) — aquí se
+        // actualiza row + motion y se guarda ANTES del GC_WARP.
+        {
+            let row = session.row_mut();
+            row.x = wx;
+            row.y = wy;
+        }
+        session.motion = Some(game_core::movement::initial(wx, wy));
+        session.save();
         let (ip, port) = parse_listen(&session.config.listen)?;
         let addr = packets::ip_to_inet_addr(&ip)?;
         session
@@ -344,6 +359,13 @@ mod tests {
             278_400,
             "y = village c1 mapa 41 (no exit_y 263099)"
         );
+        // BUG C26: la posición del row quedó en el village (el DirectEnter
+        // del GC_WARP recarga la posición GUARDADA — el save del revive
+        // debe persistir el destino, no la muerte).
+        assert_eq!(s.row().x, 969_600, "row.x persistido = village c1");
+        assert_eq!(s.row().y, 278_400, "row.y persistido = village c1");
+        assert_eq!(s.motion().x, 969_600, "motion.x = village (el save copia del motion)");
+        assert_eq!(s.motion().y, 278_400, "motion.y = village (el save copia del motion)");
     }
 
     /// BUG 1 (answer 0 — RestartAtSamePos): el GC_CHAT "CloseRestartWindow"
