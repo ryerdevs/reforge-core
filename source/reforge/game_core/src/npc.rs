@@ -859,6 +859,8 @@ mod tests {
             damage_max: 8,
             // F5.3: aggro proactivo del mob 101 (mob_proto.aggressive_sight).
             aggressive_sight: 400,
+            // C32: rank del mob 101 (0 = PAWN — cambia de posición).
+            rank: 0,
         }
     }
 
