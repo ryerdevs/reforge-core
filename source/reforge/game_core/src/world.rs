@@ -132,7 +132,14 @@ impl WorldStore {
     pub async fn create_character(&self, c: &PlayerCreate, slot: u8) -> Result<i64, String> {
         let pid = self.player.create(c).await?;
         if let Err(e) = self.player.set_slot(c.account_id, slot, pid).await {
-            let _ = self.player.delete(c.account_id, slot, pid).await; // rollback best-effort
+            // Rollback: la fila recién insertada se borra SIN el gate del
+            // índice (parity `ClientManagerPlayer.cpp:901-907` — el C++ hace
+            // `DELETE FROM player WHERE id=%d` incondicionalmente cuando el
+            // UPDATE del slot falla). `delete()` no sirve aquí: su gate
+            // matchearía 0 filas (el slot nunca apuntó al pid nuevo) → Err
+            // antes del DELETE → fila huérfana + nombre bloqueado para
+            // siempre (verifier E-2).
+            let _ = self.player.delete_row(pid).await; // rollback best-effort
             return Err(e);
         }
         Ok(pid)

@@ -386,6 +386,25 @@ $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26) RETURNING id",
             .map_err(|e| pg_err("PLAYER_DELETE affects", &e))?;
         Ok(())
     }
+
+    /// Borra la fila del player por id SIN tocar el índice — rollback del
+    /// create (parity `ClientManagerPlayer.cpp:901-907`: el C++ hace
+    /// `DELETE FROM player WHERE id=%d` INCONDICIONALMENTE cuando el UPDATE
+    /// del slot falla). `delete()` no sirve para el rollback: su gate
+    /// (`pidN = 0 WHERE pidN = $2`) matchearía 0 filas — el slot nunca apuntó
+    /// al pid nuevo — y devolvería `Err` ANTES del DELETE, dejando la fila
+    /// insertada huérfana (nombre bloqueado para siempre por `name_exists`).
+    pub async fn delete_row(&self, player_id: i64) -> Result<(), String> {
+        let client = self.connect().await?;
+        client
+            .execute(
+                "DELETE FROM player.player WHERE id = $1",
+                &[&player_id],
+            )
+            .await
+            .map_err(|e| pg_err("PLAYER_DELETE", &e))?;
+        Ok(())
+    }
 }
 
 /// Nombres de columna del índice por slot (parity `ClientManagerPlayer.cpp:794`

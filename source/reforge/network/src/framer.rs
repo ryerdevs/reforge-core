@@ -14,8 +14,9 @@ use std::io;
 
 use protocol::header;
 use protocol::{
-    TPacketCGHandshake, TPacketCGLogin, TPacketCGLogin2, TPacketCGLogin3,
-    TPacketCGPlayerCreate, TPacketCGPlayerDelete, TPacketCGPlayerSelect,
+    TPacketCGChangeName, TPacketCGEmpire, TPacketCGHandshake, TPacketCGLogin,
+    TPacketCGLogin2, TPacketCGLogin3, TPacketCGPlayerCreate,
+    TPacketCGPlayerDelete, TPacketCGPlayerSelect,
 };
 use tokio::io::{AsyncRead, AsyncReadExt};
 
@@ -109,6 +110,12 @@ pub fn packet_size(role: ConnectionRole, header: u8) -> Option<usize> {
 /// → CIERRE de conexión; ahora el framer los acepta con su tamaño exacto y
 /// caen en el 'other' del dispatch (ignorados sin desconectar).
 ///
+/// gap-lane E (2026-08-15): añadidos `CG_EMPIRE` (90, 2 B) y `CG_CHANGE_NAME`
+/// (106, 27 B) — los manda el cliente en la fase select (elegir imperio /
+/// renombrar, `introselect.py`); sin ellos el select loop cerraba la
+/// conexión (UnknownHeader → `entry.rs:211-217`) y el rename nunca ocurría
+/// (`packet_info.cpp:208/223`).
+///
 /// Headers fuera de la tabla → `None` → el caller cierra la conexión
 /// (parity `input.cpp:77-84`). En el rol Auth esta tabla NO existe: cualquier
 /// header de juego es `UnknownHeader` (ver [`packet_size`]).
@@ -155,8 +162,10 @@ fn game_phase_size(header: u8) -> Option<usize> {
         header::CG_ANSWER_MAKE_GUILD => 14, // 81, header+guild_name[13] (GUILD_NAME_MAX_LEN=12) (Packet.h:929-933)
         header::CG_FISHING => 2,            // 82, header+dir (packet.h:1800-1804)
         header::CG_ITEM_GIVE => 9,          // 83, header+dwTargetVID+TItemPos+byItemCount (Packet.h:935-941)
+        header::CG_EMPIRE => TPacketCGEmpire::SIZE, // 90, header+bEmpire (Packet.h:2100-2105, packet_info.cpp:208) — elegir imperio en la fase select (lane E)
         header::CG_REFINE => 3,             // 96, header+pos+type (Packet.h:976-982)
         header::CG_HACK => 257,             // 105, header+szBuf[256] (Packet.h:943-947)
+        header::CG_CHANGE_NAME => TPacketCGChangeName::SIZE, // 106, header+index+name[25] (Packet.h:980-984, packet_info.cpp:223) — renombrar en la fase select (lane E)
         header::CG_SCRIPT_SELECT_ITEM => 5, // 114, header+selection (Packet.h:1031-1035)
         header::CG_DRAGON_SOUL_REFINE => 47, // 205, header+bSubType+TItemPos[15] (DS_REFINE_WINDOW_MAX_NUM=15 — GameType.h:191) (Packet.h:2715-2722)
         header::CG_ACCE => 23,              // 211, header+subheader+bWindow+dwPrice+bPos+tPos+dwItemVnum+dwMinAbs+dwMaxAbs (Packet.h:2765-2776)
@@ -544,6 +553,85 @@ mod tests {
             assert_eq!(out[off].len(), size);
             off += 1;
         }
+    }
+
+    // ------------------------------------------------------------------
+    // gap-lane E (2026-08-15): CG_EMPIRE (90) y CG_CHANGE_NAME (106) — los
+    // manda el cliente en la fase select (elegir imperio / renombrar,
+    // `introselect.py`); el framer los rechazaba (UnknownHeader → CIERRE) y
+    // el rename nunca ocurría (verifier E-1). Tamaño EXACTO del struct
+    // packed del Packet.h del cliente (packet_info.cpp:208/223): el rol Auth
+    // los rechaza (fase de juego = solo canal).
+    // ------------------------------------------------------------------
+
+    /// (header, tamaño total) de los 2 del lane E — verificado contra
+    /// packet_info.cpp:208/223 (`sizeof(TPacketCGEmpire)` = 2,
+    /// `sizeof(TPacketCGChangeName)` = 27) y el Packet.h del cliente packed.
+    const GAP_LANE_E: &[(u8, usize)] = &[
+        (header::CG_EMPIRE, 2), // 90, TPacketCGEmpire = header + bEmpire (Packet.h:2100-2105)
+        (header::CG_CHANGE_NAME, 27), // 106, TPacketCGChangeName = header + index + name[25] (Packet.h:980-984)
+    ];
+
+    #[test]
+    fn gap_lane_e_headers_have_exact_sizes() {
+        for &(hdr, size) in GAP_LANE_E {
+            assert_eq!(
+                packet_size(ConnectionRole::Channel, hdr),
+                Some(size),
+                "header 0x{hdr:02x}: tamaño del struct del Packet.h del cliente (packet_info.cpp:208/223)"
+            );
+        }
+    }
+
+    #[test]
+    fn gap_lane_e_headers_rejected_on_auth() {
+        // El rol Auth solo habla el flujo de login: fase de juego → None →
+        // UnknownHeader → cierre (parity input.cpp:77-84).
+        for &(hdr, _) in GAP_LANE_E {
+            assert_eq!(
+                packet_size(ConnectionRole::Auth, hdr),
+                None,
+                "header 0x{hdr:02x}: el auth NO conoce la fase de juego"
+            );
+        }
+    }
+
+    #[test]
+    fn gap_lane_e_packets_flow_on_channel_close_on_auth() {
+        // CG_EMPIRE (90, 2 B): header + bEmpire.
+        let empire = [header::CG_EMPIRE, 3];
+        let out = Framer::new(ConnectionRole::Channel).push(&empire).unwrap();
+        assert_eq!(out, vec![empire.to_vec()]);
+        assert!(matches!(
+            Framer::new(ConnectionRole::Auth).push(&empire),
+            Err(FramingError::UnknownHeader { header: header::CG_EMPIRE })
+        ));
+        // CG_CHANGE_NAME (106, 27 B): header + index + name[25] — el paquete
+        // real del rename (introselect.py SendChangeNamePacket).
+        let mut change = vec![header::CG_CHANGE_NAME, 0];
+        change.resize(27, b'a');
+        let out = Framer::new(ConnectionRole::Channel).push(&change).unwrap();
+        assert_eq!(out, vec![change.clone()]);
+        assert!(matches!(
+            Framer::new(ConnectionRole::Auth).push(&change),
+            Err(FramingError::UnknownHeader { header: header::CG_CHANGE_NAME })
+        ));
+    }
+
+    #[test]
+    fn gap_lane_e_concatenated_in_one_push() {
+        // Empire + change name concatenados (secuencia real del select:
+        // imperio primero, luego rename) → 2 paquetes en orden.
+        let mut data = Vec::new();
+        data.extend_from_slice(&[header::CG_EMPIRE, 3]);
+        let mut change = vec![header::CG_CHANGE_NAME, 0];
+        change.resize(27, b'b');
+        data.extend_from_slice(&change);
+        let out = Framer::new(ConnectionRole::Channel).push(&data).unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0], vec![header::CG_EMPIRE, 3]);
+        assert_eq!(out[1], change);
+        assert_eq!(Framer::new(ConnectionRole::Channel).buffered(), 0);
     }
 
     // ------------------------------------------------------------------
