@@ -30,11 +30,12 @@ use game_core::ecs::{Intent, MoveIntent};
 use crate::channel::session::{Outcome, Session};
 use crate::channel::now32;
 
-/// `POSITION_GENERAL = 0`, `POSITION_SITTING_CHAIR = 1`,
-/// `POSITION_SITTING_GROUND = 2` (length.h:291-295) — posturas del wire.
+/// `POSITION_GENERAL = 0`, `POSITION_SITTING_CHAIR = 3`,
+/// `POSITION_SITTING_GROUND = 4` (length.h:288-296: GENERAL=0, BATTLE=1,
+/// DYING=2, SITTING_CHAIR=3, SITTING_GROUND=4) — posturas del wire.
 const POSITION_GENERAL: u8 = 0;
-const POSITION_SITTING_CHAIR: u8 = 1;
-const POSITION_SITTING_GROUND: u8 = 2;
+const POSITION_SITTING_CHAIR: u8 = 3;
+const POSITION_SITTING_GROUND: u8 = 4;
 
 /// Postura del wire (parity Position input_main.cpp:1276-1295):
 /// `None` = posición desconocida (rechazo); `Some((sentado, wire_pos))` con
@@ -90,10 +91,11 @@ pub async fn handle_position(session: &mut Session, pkt: &[u8]) -> Result<Outcom
         return Ok(Outcome::Continue);
     };
     session.sitting = sitting;
-    // TPacketGCPosition (28, 6 B: header + vid + position — packet.h:1238-
-    // 1243; el cliente lo recibe en RecvCharacterPositionPacket).
+    // TPacketGCPosition (HEADER_GC_CHARACTER_POSITION = 43, 6 B: header +
+    // vid + position — packet.h:159, packet.h:1238-1243; el cliente lo
+    // recibe en RecvCharacterPositionPacket).
     let vid = session.player_vid();
-    let reply = [28, vid as u8, (vid >> 8) as u8, (vid >> 16) as u8, (vid >> 24) as u8, wire_pos];
+    let reply = [43, vid as u8, (vid >> 8) as u8, (vid >> 16) as u8, (vid >> 24) as u8, wire_pos];
     session
         .send(&reply)
         .await
@@ -270,23 +272,25 @@ mod tests {
     #[test]
     fn posture_matches_cpp_position_switch() {
         assert_eq!(posture(0), Some((false, 0)), "GENERAL → Standup");
-        assert_eq!(posture(1), Some((true, 2)), "SITTING_CHAIR → Sitdown (wire GROUND)");
-        assert_eq!(posture(2), Some((true, 2)), "SITTING_GROUND → Sitdown");
-        assert_eq!(posture(3), None, "valor desconocido → rechazo");
+        assert_eq!(posture(3), Some((true, 4)), "SITTING_CHAIR → Sitdown (wire GROUND)");
+        assert_eq!(posture(4), Some((true, 4)), "SITTING_GROUND → Sitdown");
+        assert_eq!(posture(1), None, "BATTLE → rechazo (sin case en Position)");
+        assert_eq!(posture(2), None, "DYING → rechazo (sin case en Position)");
+        assert_eq!(posture(5), None, "POSITION_INTRO → rechazo");
         assert_eq!(posture(0xFF), None);
-        // Constantes del length.h:291-295.
+        // Constantes del length.h:288-296.
         assert_eq!(POSITION_GENERAL, 0);
-        assert_eq!(POSITION_SITTING_CHAIR, 1);
-        assert_eq!(POSITION_SITTING_GROUND, 2);
+        assert_eq!(POSITION_SITTING_CHAIR, 3);
+        assert_eq!(POSITION_SITTING_GROUND, 4);
     }
 
-    /// El wire del GC_CHARACTER_POSITION (28, 6 B: header + vid LE + pos) —
+    /// El wire del GC_CHARACTER_POSITION (43, 6 B: header + vid LE + pos) —
     /// shape verificado contra `packet_position` (packet.h:1238-1243).
     #[test]
     fn position_reply_wire_shape() {
         let vid: u32 = 0x1122_3344;
         let reply = [
-            28,
+            43,
             vid as u8,
             (vid >> 8) as u8,
             (vid >> 16) as u8,
@@ -294,8 +298,8 @@ mod tests {
             POSITION_SITTING_GROUND,
         ];
         assert_eq!(reply.len(), 6);
-        assert_eq!(reply[0], 28, "header GC_CHARACTER_POSITION");
+        assert_eq!(reply[0], 43, "header GC_CHARACTER_POSITION");
         assert_eq!(&reply[1..5], &[0x44, 0x33, 0x22, 0x11], "vid LE");
-        assert_eq!(reply[5], 2, "position");
+        assert_eq!(reply[5], 4, "position SITTING_GROUND");
     }
 }

@@ -30,14 +30,16 @@ use crate::channel::INVENTORY_MAX_NUM;
 
 /// `QUICKSLOT_MAX_NUM = 36` (length.h:60) — slots de la barra.
 pub const QUICKSLOT_MAX_NUM: usize = 36;
-/// `QUICKSLOT_TYPE_ITEM = 0` (length.h:241) — slot de item.
-pub const QUICKSLOT_TYPE_ITEM: u8 = 0;
-/// `QUICKSLOT_TYPE_SKILL = 1` (length.h:242) — slot de skill.
-pub const QUICKSLOT_TYPE_SKILL: u8 = 1;
-/// `QUICKSLOT_TYPE_COMMAND = 2` (length.h:243) — slot de comando.
-pub const QUICKSLOT_TYPE_COMMAND: u8 = 2;
-/// `QUICKSLOT_TYPE_MAX_NUM = 3` (length.h:244) — gate del tipo.
-const QUICKSLOT_TYPE_MAX_NUM: u8 = 3;
+/// `QUICKSLOT_TYPE_NONE = 0` (length.h:240) — slot vacío.
+pub const QUICKSLOT_TYPE_NONE: u8 = 0;
+/// `QUICKSLOT_TYPE_ITEM = 1` (length.h:241) — slot de item.
+pub const QUICKSLOT_TYPE_ITEM: u8 = 1;
+/// `QUICKSLOT_TYPE_SKILL = 2` (length.h:242) — slot de skill.
+pub const QUICKSLOT_TYPE_SKILL: u8 = 2;
+/// `QUICKSLOT_TYPE_COMMAND = 3` (length.h:243) — slot de comando.
+pub const QUICKSLOT_TYPE_COMMAND: u8 = 3;
+/// `QUICKSLOT_TYPE_MAX_NUM = 4` (length.h:244) — gate del tipo.
+const QUICKSLOT_TYPE_MAX_NUM: u8 = 4;
 /// `SKILL_MAX_NUM = 255` (length.h:60) — gate del pos de skill.
 const SKILL_MAX_NUM: u8 = 255;
 
@@ -114,9 +116,18 @@ pub async fn handle_add(session: &mut Session, pkt: &[u8]) -> Result<Outcome, St
         );
         return Ok(Outcome::Continue);
     }
-    // Gates por tipo (parity char_quickslot.cpp:72-88): ITEM → celda del
-    // inventario; SKILL → < SKILL_MAX_NUM; COMMAND → sin gate.
+    // Gates por tipo (parity char_quickslot.cpp:74-88): NONE → rechazo (el
+    // `default: return false` del switch); ITEM → celda del inventario;
+    // SKILL → < SKILL_MAX_NUM; COMMAND → sin gate.
     match add.slot.slot_type {
+        QUICKSLOT_TYPE_NONE => {
+            eprintln!(
+                "server_realms: channel conn {}: quickslot add con type NONE \
+                 — rechazado (parity default del switch)",
+                session.conn_id
+            );
+            return Ok(Outcome::Continue);
+        }
         QUICKSLOT_TYPE_ITEM if add.slot.pos as u16 >= INVENTORY_MAX_NUM => {
             eprintln!(
                 "server_realms: channel conn {}: quickslot ITEM a celda {} — \
@@ -135,12 +146,16 @@ pub async fn handle_add(session: &mut Session, pkt: &[u8]) -> Result<Outcome, St
         }
         // QUICKSLOT_TYPE_COMMAND: sin gate (parity char_quickslot.cpp:83-85).
         QUICKSLOT_TYPE_COMMAND => {}
+        // Inalcanzable: el gate de QUICKSLOT_TYPE_MAX_NUM (arriba) ya
+        // rechazó 4+ — el brazo existe solo por exhaustividad del match.
         _ => {}
     }
     let mut b = blob(session.row());
     // Dedupe (parity SetQuickslot char_quickslot.cpp:60-68): otro slot con el
-    // MISMO (type, pos) se borra — el GC_DEL sale por cada uno.
-    if add.slot.slot_type != QUICKSLOT_TYPE_ITEM || add.slot.pos != 0 {
+    // MISMO (type, pos) se borra — el GC_DEL sale por cada uno. El C++ lo
+    // saltea solo para type NONE (`if (rSlot.type == 0) continue;`) — aquí
+    // NONE ya se rechazó arriba, así que el dedupe corre siempre.
+    if add.slot.slot_type != QUICKSLOT_TYPE_NONE {
         for i in 0..QUICKSLOT_MAX_NUM {
             if i == add.pos as usize {
                 continue;
@@ -363,13 +378,14 @@ mod tests {
         // pos 36+ → rechazado.
         assert!(slot_at(&vec![0; 72], 36).is_none(), "pos 36 fuera");
         assert!(slot_at(&vec![0; 72], 35).is_some(), "pos 35 último válido");
-        // type 3 (QUICKSLOT_TYPE_MAX_NUM) → rechazado por el gate del C++.
+        // type 4 (QUICKSLOT_TYPE_MAX_NUM) → rechazado por el gate del C++.
         assert!(QUICKSLOT_TYPE_MAX_NUM > QUICKSLOT_TYPE_COMMAND);
         assert!(QUICKSLOT_TYPE_COMMAND < QUICKSLOT_TYPE_MAX_NUM);
-        // Los tipos del length.h: ITEM=0, SKILL=1, COMMAND=2.
-        assert_eq!(QUICKSLOT_TYPE_ITEM, 0);
-        assert_eq!(QUICKSLOT_TYPE_SKILL, 1);
-        assert_eq!(QUICKSLOT_TYPE_COMMAND, 2);
+        // Los tipos del length.h: NONE=0, ITEM=1, SKILL=2, COMMAND=3.
+        assert_eq!(QUICKSLOT_TYPE_NONE, 0);
+        assert_eq!(QUICKSLOT_TYPE_ITEM, 1);
+        assert_eq!(QUICKSLOT_TYPE_SKILL, 2);
+        assert_eq!(QUICKSLOT_TYPE_COMMAND, 3);
         // El gate del inventario: ITEM cell >= 180 → rechazado.
         let inv_ok = QUICKSLOT_TYPE_ITEM;
         assert!((inv_ok as u16) < INVENTORY_MAX_NUM, "type ITEM < 180");
