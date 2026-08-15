@@ -28,10 +28,11 @@ const PATROL_MAX_SENDS: usize = 20;
 ///    dentro del radio del spawn. Solo los VISIBLES para algún jugador de su
 ///    mapa, con tope de paquetes por tick (multi-jugador: el GC_MOVE se
 ///    difunde a todos los que lo ven).
+#[allow(clippy::type_complexity)] // firma de sistema bevy (ParamSet con 2 queries)
 pub(crate) fn patrol_system(
     mut mobs: ParamSet<(
         // Posiciones de TODOS los mobs (C28 — separación; read-only).
-        Query<(&Vid, &Position), Without<Player>>,
+        Query<(&Vid, &Position, &Map), Without<Player>>,
         Query<(&Vid, &Mob, &Aggro, &Map, &mut Position), Without<Player>>,
     )>,
     players: Query<(&Player, &Map, &Position), Without<Mob>>,
@@ -43,13 +44,14 @@ pub(crate) fn patrol_system(
     for (p, map, pos) in &players {
         by_map.entry(map.map_index).or_default().push((p.vid, pos.x, pos.y));
     }
-    // C28: snapshot de las posiciones de los mobs (la separación consulta
-    // a los OTROS mobs — el ParamSet evita el conflicto de queries).
-    let others: Vec<(u32, i32, i32)> = mobs
-        .p0()
-        .iter()
-        .map(|(v, p)| (v.vid, p.x, p.y))
-        .collect();
+    // C28: snapshot de las posiciones de los mobs AGRUPADO POR MAPA (la
+    // separación consulta a los OTROS mobs del MISMO mapa — el ParamSet
+    // evita el conflicto de queries; F1: los mobs de otros mapas con coords
+    // coincidentes NO deben bloquear el paso de patrulla).
+    let mut others_by_map: HashMap<u32, Vec<(u32, i32, i32)>> = HashMap::new();
+    for (v, p, m) in &mobs.p0() {
+        others_by_map.entry(m.map_index).or_default().push((v.vid, p.x, p.y));
+    }
     let mut sent = 0usize;
     for (vid, mob, aggro, map, mut pos) in &mut mobs.p1() {
         if aggro.target.is_some() || mob.nomove {
@@ -84,8 +86,15 @@ pub(crate) fn patrol_system(
             continue;
         }
         // C28 (separación): el destino del paso de PATRULLA debe quedar
-        // libre de otros mobs — si está ocupado, probar flancos o no moverse.
-        let Some((nx, ny)) = separate_landing(&others, vid.vid, (pos.x, pos.y), sx, sy) else {
+        // libre de otros mobs del MISMO mapa — si está ocupado, probar
+        // flancos o no moverse (F1: los mobs de otros mapas no bloquean).
+        let Some((nx, ny)) = separate_landing(
+            others_by_map.get(&map.map_index).map(Vec::as_slice).unwrap_or(&[]),
+            vid.vid,
+            (pos.x, pos.y),
+            sx,
+            sy,
+        ) else {
             continue; // otro mob bloquea — no moverse este tick
         };
         let rot = rotation_5deg(pos.x, pos.y, nx, ny);

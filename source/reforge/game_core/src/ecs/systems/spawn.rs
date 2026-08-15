@@ -69,31 +69,21 @@ pub(crate) fn spawn_despawn_system(
     // --- SPAWN: materializar entradas sin entidad a ≤ SPAWN_VIEW de algún
     // jugador (la EMISIÓN del ADD es por jugador — pase B para las ya
     // materializadas) ---
-    let materialized: HashSet<(u32, usize)> = spawn_refs.iter().map(|r| (r.map, r.index)).collect();
+    // C23/F3: copias VIVAS por entrada — el top-up del respawn las cuenta
+    // (parity `regen_spawn`: `num = max_count - count`, regen.cpp:325).
+    let mut alive_count: HashMap<(u32, usize), u32> = HashMap::new();
+    for r in &spawn_refs {
+        *alive_count.entry((r.map, r.index)).or_insert(0) += 1;
+    }
     for (map_index, entries) in &table.maps {
         let Some(viewers) = players_by_map.get(map_index) else {
             continue; // nadie en este mapa — nada que materializar
         };
         for (index, se) in entries.iter().enumerate() {
-            if materialized.contains(&(*map_index, index)) {
-                continue; // ya tiene entidades — el ADD de nuevos espectadores
-                          // lo emite el pase B (REGRESIÓN bench 2026-08-13)
-            }
             if !matches!(se.entry.kind, SpawnKind::Mob | SpawnKind::Anywhere) {
                 continue; // TRAP grupos (parity entry_spawns — vnums de grupo)
             }
-            // C23 (respawn por tiempo): la entrada con mobs muertos pendientes
-            // NO se re-materializa hasta el deadline (parity regen_event — el
-            // C++ respawnea cada `time` segundos; aquí el delay empieza en la
-            // muerte). Al vencer: materializar SOLO las copias pendientes.
-            let spawn_count = match respawns.0.get(&(*map_index, index)).copied() {
-                Some((due, _)) if due > now.0 => continue, // aún no toca
-                Some((_, copies)) => {
-                    respawns.0.remove(&(*map_index, index));
-                    copies.min(se.entry.count)
-                }
-                None => se.entry.count,
-            };
+            let alive = alive_count.get(&(*map_index, index)).copied().unwrap_or(0);
             let near: Vec<u32> = viewers
                 .iter()
                 .filter(|(_, x, y)| {
@@ -102,6 +92,32 @@ pub(crate) fn spawn_despawn_system(
                 .map(|(pv, _, _)| *pv)
                 .collect();
             if near.is_empty() {
+                continue; // nadie cerca — tampoco se consume el respawn
+            }
+            // C23 (respawn por tiempo): la entrada con mobs muertos
+            // pendientes NO se re-materializa hasta el deadline (parity
+            // regen_event — el C++ respawnea cada `time` segundos; aquí el
+            // delay empieza en la muerte). Al vencer: TOP-UP de las copias
+            // que faltan hasta `max_count` (parity `regen_spawn`),
+            // INDEPENDIENTE de que la entrada siga materializada con
+            // hermanas vivas (F3: kill parcial de un entry count>1 — la
+            // copia muerta reaparece en SU deadline aunque queden vivas).
+            let spawn_count = match respawns.0.get(&(*map_index, index)).copied() {
+                Some((due, _)) if due > now.0 => continue, // aún no toca
+                Some((_, _)) => {
+                    respawns.0.remove(&(*map_index, index));
+                    se.entry.count.saturating_sub(alive)
+                }
+                None => {
+                    if alive > 0 {
+                        continue; // ya tiene copias — el ADD de nuevos
+                                  // espectadores lo emite el pase B
+                                  // (REGRESIÓN bench 2026-08-13)
+                    }
+                    se.entry.count
+                }
+            };
+            if spawn_count == 0 {
                 continue;
             }
             // Materializar las copias con vids FRESCOS del allocador. C28
@@ -189,7 +205,7 @@ pub(crate) fn spawn_despawn_system(
 
     // --- DESPAWN: intactos (hp lleno, sin aggro) a > DESPAWN_RADIUS de
     // TODOS los jugadores de su mapa (o sin jugadores en el mapa) ---
-    for (e, vid, map, pos, hp, aggro, spawn_ref) in &mobs_state {
+    for (e, vid, map, pos, hp, aggro, _spawn_ref) in &mobs_state {
         if hp.hp != hp.max_hp || aggro.target.is_some() {
             continue; // en combate: se queda (parity sectree + sin reset de HP)
         }
@@ -203,11 +219,13 @@ pub(crate) fn spawn_despawn_system(
         if !far {
             continue;
         }
-        // C23: el despawn por DISTANCIA no es una muerte — la entrada queda
-        // libre para re-materializar en cuanto un jugador se acerque (si un
-        // mob muerto de la misma entrada tiene un respawn pendiente, se
-        // cancela: ocultar copias VIVAS hasta el deadline sería peor).
-        respawns.0.remove(&(map.map_index, spawn_ref.index));
+        // C23/F3: el despawn por DISTANCIA no es una muerte — la entrada
+        // queda libre para re-materializar en cuanto un jugador se acerque.
+        // El respawn PENDIENTE (copias muertas esperando su deadline) NO se
+        // cancela (parity: la copia muerta del C++ respawnea en SU deadline
+        // — `regen_spawn` top-up `max_count - count`; cancelarlo adelantaba
+        // el respawn). Si toda la entrada quedó desmaterializada, vuelve
+        // completa al vencer el deadline (el spawn hace el top-up).
         commands.entity(e).despawn();
         npc_index.0.remove(&vid.vid);
         metrics.mobs_despawned += 1;
@@ -330,6 +348,46 @@ mod tests {
         assert_eq!(&spawned[0][1][1..5], &10_001u32.to_le_bytes());
         assert_eq!(&spawned[0][2][1..5], &10_002u32.to_le_bytes());
         assert_eq!(w.npc_count(), 3);
+    }
+
+    /// C23/F3 (kill parcial de un entry multi-copia): matar 1 copia de 3
+    /// NO bloquea el respawn de la copia muerta mientras las hermanas
+    /// viven — la entrada sigue materializada, pero al vencer el deadline
+    /// el spawn hace el TOP-UP (parity `regen_spawn`: `num = max_count -
+    /// count`, regen.cpp:325 — la copia muerta reaparece en SU deadline
+    /// aunque queden 2 vivas).
+    #[test]
+    fn killed_copy_respawns_while_sisters_alive() {
+        use crate::npc::SpawnEntry;
+        let mut w = world_with(42);
+        let mut row = mob_row(101);
+        row.max_hp = 10; // un golpe (46+) mata
+        row.ai_flag = Some("NOMOVE".into()); // las hermanas no se mueven (determinista)
+        let e = SpawnEntry { time: 2, ..entry(101, 0, 0, 3) }; // 3 copias, intervalo 2 s
+        load(&mut w, vec![(e, row)]);
+        join(&mut w);
+        assert_eq!(w.npc_count(), 3);
+        // Matar UNA copia (la 10_000): quedan 2 hermanas vivas.
+        w.process_intent(
+            CombatIntent::Attack { player_vid: 2, victim_vid: 10_000, b_type: 0, weapon: None }.into(),
+            1_000,
+        );
+        assert_eq!(w.npc_count(), 2, "2 hermanas vivas");
+        // La copia muerta NO reaparece antes del deadline (t+0.5..1.5 s).
+        for _ in 0..3 {
+            let events = w.update(500);
+            assert!(
+                !events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))),
+                "aún pendiente: {events:?}"
+            );
+        }
+        assert_eq!(w.npc_count(), 2);
+        // t+2.0 s: vence el deadline → top-up: la copia muerta reaparece
+        // con vid FRESCO aunque la entrada siga materializada (2 hermanas).
+        let events = w.update(500);
+        assert!(events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))), "respawn parcial: {events:?}");
+        assert_eq!(w.npc_count(), 3, "las 3 copias de vuelta");
+        assert!(w.npc_view(10_003).is_some(), "vid fresco 10_003 (la 10_000 murió)");
     }
 
     /// REGRESIÓN (bench 2026-08-13 — "solo el primer jugador veía los mobs"):
