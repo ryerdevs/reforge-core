@@ -43,7 +43,8 @@
 //! - `skillup` sin skill_proto: el C++ valida CanUseSkill/level-limit/
 //!   pre-skill/learnability y aplica saltos master por RNG (17→20/30/40 —
 //!   char_skill.cpp:745-777); el subset solo gasta el punto y sube +1
-//!   (cap 40).
+//!   (cap 40, con el bMasterType del nivel nuevo — parity SetSkillLevel
+//!   char_skill.cpp:207-217).
 //! - Lote 2 sin sistema (INFO 'not implemented'): party (grupos +
 //!   broadcast), horse (packets HORSE_* + proto), emociones (GC emoticon a
 //!   los cercanos), view_equip (equip de OTRO vid), observer (modo
@@ -328,15 +329,56 @@ async fn set_walk_mode(session: &mut Session, walk: bool) -> Result<(), String> 
     Ok(())
 }
 
+/// El bMasterType del nivel nuevo (parity SetSkillLevel
+/// char_skill.cpp:207-217 + length.h:628-631: SKILL_NORMAL=0,
+/// SKILL_MASTER=1, SKILL_GRAND_MASTER=2, SKILL_PERFECT_MASTER=3 — el C++
+/// compara el nivel SIN cap (`bLev`); el del subset ya viene capado a
+/// SKILL_LEVEL_MAX y 40 ≥ 40 → PERFECT, equivalente a bLev 41 → PERFECT).
+fn master_type_for_level(level: u8) -> u8 {
+    if level >= 40 {
+        3 // SKILL_PERFECT_MASTER
+    } else if level >= 30 {
+        2 // SKILL_GRAND_MASTER
+    } else if level >= 20 {
+        1 // SKILL_MASTER
+    } else {
+        0 // SKILL_NORMAL
+    }
+}
+
+/// Aplica el skillup al blob de `skill_level` (255 × TPlayerSkill de 6 B —
+/// tables.h:351-356): +1 nivel (cap SKILL_LEVEL_MAX) en bLevel (byte +1 de
+/// la entrada) y el bMasterType del nivel nuevo en el byte 0 (parity
+/// SetSkillLevel char_skill.cpp:207-217 — el C++ lo escribe en CADA
+/// subida). vnum 0 → None (NO-OP: parity CanUseSkill char_skill.cpp:3572
+/// `if (0 == dwSkillVnum) return false;` — el switch del do_skillup no
+/// matchea 0). Invariantes del caller: blob completo (1530 B) y
+/// vnum < SKILL_MAX_NUM.
+fn skillup_apply(blob: &mut [u8], vnum: u32) -> Option<u8> {
+    if vnum == 0 {
+        return None; // NO-OP: ni nivel ni master se tocan
+    }
+    let off = vnum as usize * TPlayerSkill::SIZE;
+    let new_level = blob[off + 1].saturating_add(1).min(SKILL_LEVEL_MAX);
+    blob[off + 1] = new_level;
+    blob[off] = master_type_for_level(new_level);
+    Some(new_level)
+}
+
 /// `/skillup <vnum>` — sube un skill gastando 1 skill_point del ROW (parity
 /// do_skillup cmd_general.cpp:754-793 → SkillLevelUp char_skill.cpp:641-760:
 /// `GetPoint(idx) < 1 → return; PointChange(idx, -1)`): skill_point −1,
-/// +1 nivel con cap 40 (SetSkillLevel MIN(40, bLev) char_skill.cpp:207),
+/// +1 nivel con cap 40 (SetSkillLevel MIN(40, bLev) char_skill.cpp:207) y
+/// el bMasterType del nivel nuevo en el byte 0 de la entrada (parity
+/// SetSkillLevel char_skill.cpp:207-217 — el cliente deriva el nivel
+/// mostrado del grado, PythonPlayer.cpp:970-985),
 /// GC_POINTS + GC_SKILL_LEVEL (orden parity: PointChange antes que
 /// SkillLevelPacket) + save. El bytea `player.skill_level` ES la serie de
-/// 255 × TPlayerSkill (6 B — tables.h:351-356); el b_level va en el byte +1
-/// de la entrada. GAPs: sin skill_proto en reforge → sin CanUseSkill/
-/// level-limit/pre-skill/learnability, sin el chequeo del tipo del skill
+/// 255 × TPlayerSkill (6 B — tables.h:351-356); bMasterType en el byte 0,
+/// b_level en el byte +1 de la entrada. `/skillup 0` → NO-OP silencioso
+/// (parity CanUseSkill char_skill.cpp:3572 + el switch del do_skillup).
+/// GAPs: sin skill_proto en reforge → sin CanUseSkill/level-limit/
+/// pre-skill/learnability, sin el chequeo del tipo del skill
 /// (POINT_SUB_SKILL/POINT_HORSE_SKILL — el subset siempre POINT_SKILL) y sin
 /// los saltos master por RNG (17→20/30/40, char_skill.cpp:745-777).
 async fn skillup(session: &mut Session, vnum: Option<u32>) -> Result<(), String> {
@@ -368,15 +410,21 @@ async fn skillup(session: &mut Session, vnum: Option<u32>) -> Result<(), String>
         );
         return Ok(());
     }
-    let off = vnum as usize * TPlayerSkill::SIZE;
     // None/corto → cero (defensivo, mismo criterio que skill_level_packet).
     let mut blob = match session.row().skill_level.clone() {
         Some(b) if b.len() == TPacketGCSkillLevel::SKILL_MAX_NUM * TPlayerSkill::SIZE => b,
         _ => vec![0; TPacketGCSkillLevel::SKILL_MAX_NUM * TPlayerSkill::SIZE],
     };
-    let level = blob[off + 1];
-    let new_level = level.saturating_add(1).min(SKILL_LEVEL_MAX);
-    blob[off + 1] = new_level;
+    // vnum 0 → None → NO-OP silencioso: ni blob mutado ni punto gastado
+    // (el None corta ANTES de `skill_point -= 1` — parity CanUseSkill
+    // char_skill.cpp:3572, defecto 1 verifier 2026-08-15).
+    let Some(new_level) = skillup_apply(&mut blob, vnum) else {
+        eprintln!(
+            "server_realms: channel conn {}: /skillup 0 — no-op (parity)",
+            session.conn_id
+        );
+        return Ok(());
+    };
     session.row_mut().skill_level = Some(blob);
     session.row_mut().skill_point -= 1;
     // Orden parity: PointChange (GC_POINTS) → SkillLevelPacket (GC_SKILL_LEVEL).
@@ -554,5 +602,57 @@ mod tests {
     fn handle_receives_text_after_slash() {
         assert_eq!(gm::parse_command("warp 1 2"), Some(GmCommand::Warp { x: 1, y: 2 }));
         assert_eq!(gm::parse_command("/warp 1 2"), None, "la '/' no llega aquí");
+    }
+
+    /// Defecto 1 (verifier 2026-08-15): `/skillup 0` → NO-OP silencioso
+    /// SIEMPRE — parity CanUseSkill char_skill.cpp:3572 (`if (0 ==
+    /// dwSkillVnum) return false;`) + el switch del do_skillup
+    /// (cmd_general.cpp:766-791) no matchea 0. El None corta antes de
+    /// `skill_point -= 1` en el handler → tampoco gasta el punto.
+    #[test]
+    fn skillup_vnum_zero_is_noop() {
+        let mut blob = vec![0u8; 255 * TPlayerSkill::SIZE];
+        blob[1 * TPlayerSkill::SIZE] = 1; // skill 1: MASTER
+        blob[1 * TPlayerSkill::SIZE + 1] = 20;
+        let original = blob.clone();
+        assert_eq!(skillup_apply(&mut blob, 0), None, "vnum 0 → no-op");
+        assert_eq!(blob, original, "el blob NO se muta");
+        assert_eq!(skillup_apply(&mut blob, 1), Some(21), "los demás vnums sí suben");
+    }
+
+    /// Defecto 2 (verifier 2026-08-15): bMasterType se escribe en CADA
+    /// subida en el byte 0 de la entrada (tables.h:351-356 — bMasterType,
+    /// bLevel, tNextRead), parity SetSkillLevel char_skill.cpp:207-217 con
+    /// los thresholds 20/30/40 (length.h:628-631: SKILL_NORMAL=0,
+    /// SKILL_MASTER=1, SKILL_GRAND_MASTER=2, SKILL_PERFECT_MASTER=3). El
+    /// cliente deriva el nivel mostrado del grado (PythonPlayer.cpp:970-985:
+    /// grade 1 → level−20+1, etc.).
+    #[test]
+    fn skillup_writes_master_type_on_threshold_cross() {
+        let mut blob = vec![0u8; 255 * TPlayerSkill::SIZE];
+        // 19 → 20: cruza a MASTER(1)
+        blob[1 * TPlayerSkill::SIZE + 1] = 19;
+        assert_eq!(skillup_apply(&mut blob, 1), Some(20));
+        assert_eq!(blob[1 * TPlayerSkill::SIZE + 1], 20);
+        assert_eq!(blob[1 * TPlayerSkill::SIZE], 1, "20..29 → SKILL_MASTER(1)");
+        // 29 → 30: GRAND_MASTER(2)
+        blob[1 * TPlayerSkill::SIZE + 1] = 29;
+        blob[1 * TPlayerSkill::SIZE] = 1;
+        assert_eq!(skillup_apply(&mut blob, 1), Some(30));
+        assert_eq!(blob[1 * TPlayerSkill::SIZE], 2, "30..39 → SKILL_GRAND_MASTER(2)");
+        // 39 → 40: PERFECT_MASTER(3)
+        blob[1 * TPlayerSkill::SIZE + 1] = 39;
+        blob[1 * TPlayerSkill::SIZE] = 2;
+        assert_eq!(skillup_apply(&mut blob, 1), Some(40));
+        assert_eq!(blob[1 * TPlayerSkill::SIZE], 3, "40+ → SKILL_PERFECT_MASTER(3)");
+        // Cap MIN(40, bLev): ya PERFECT no sube más (C++ bLev 41 → PERFECT).
+        assert_eq!(skillup_apply(&mut blob, 1), Some(40));
+        assert_eq!(blob[1 * TPlayerSkill::SIZE + 1], 40, "cap 40");
+        assert_eq!(blob[1 * TPlayerSkill::SIZE], 3);
+        // 5 → 6: NORMAL(0) se mantiene.
+        blob[1 * TPlayerSkill::SIZE + 1] = 5;
+        blob[1 * TPlayerSkill::SIZE] = 0;
+        assert_eq!(skillup_apply(&mut blob, 1), Some(6));
+        assert_eq!(blob[1 * TPlayerSkill::SIZE], 0, "0..19 → SKILL_NORMAL(0)");
     }
 }
