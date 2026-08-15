@@ -120,7 +120,23 @@ impl WorldSim {
                 if self.trades.contains_key(&player_vid) {
                     return Vec::new(); // PREVENT_TRADE_WINDOW
                 }
-                let Some(shop) = self.shop_by_npc(npc_vid) else { return Vec::new() };
+                let Some(shop) = self.shop_by_npc(npc_vid) else {
+                    // Fix diag 2026-08-15: loguear el vnum del NPC clicado
+                    // sin shop (el silencio parity impide saber cuál es).
+                    let vnum = self
+                        .world
+                        .resource::<NpcIndex>()
+                        .0
+                        .get(&npc_vid)
+                        .and_then(|e| self.world.get_entity(*e).ok())
+                        .and_then(|ent| ent.get::<Mob>().map(|m| m.vnum));
+                    eprintln!(
+                        "world: shop Open vid {npc_vid} — NPC vnum {:?} SIN shop \
+                         en la tabla (silence parity)",
+                        vnum
+                    );
+                    return Vec::new();
+                };
                 let Some((px, py)) = self.player_pos(player_vid) else { return Vec::new() };
                 let Some((nx, ny)) = self.entity_pos(npc_vid) else { return Vec::new() };
                 if distance_approx(px - nx, py - ny) >= SHOP_MAX_DISTANCE as i32 {
@@ -743,5 +759,4 @@ mod tests {
         );
     }
 }
-
 

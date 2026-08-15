@@ -83,9 +83,21 @@ pub async fn handle_use(session: &mut Session, pkt: &[u8]) -> Result<Outcome, St
             return Ok(Outcome::Continue);
         }
     };
-    // Buscar el item en el inventario por (window, cell).
+    // Buscar el item en INVENTORY o EQUIPMENT por (window, cell). El
+    // doble-click en un item equipado manda el cell del equip (180+wear con
+    // window INVENTORY o EQUIPMENT — parity `GetItem(Cell)` acepta ambos,
+    // char_item.cpp:5246) y es un TOGGLE: si está equipado → desequipa
+    // (fix 2026-08-15 — antes "uso de celda 182 sin item").
+    let equip_window = is_equip_position(item_use.pos);
     let Some(idx) = session.inventory.iter().position(|i| {
-        i.window == "INVENTORY" && i.pos as u16 == item_use.pos.cell
+        let matches_win = if equip_window {
+            // El cell 180+wear del cliente puede venir con window INVENTORY
+            // o EQUIPMENT — aceptar ambos (parity IsEquipPosition).
+            i.window == "EQUIPMENT" || i.window == "INVENTORY"
+        } else {
+            i.window == "INVENTORY"
+        };
+        matches_win && i.pos as u16 == item_use.pos.cell
     }) else {
         eprintln!(
             "server_realms: channel conn {}: uso de celda {} sin item",
@@ -104,6 +116,39 @@ pub async fn handle_use(session: &mut Session, pkt: &[u8]) -> Result<Outcome, St
         );
         return Ok(Outcome::Continue);
     };
+    // TOGGLE del doble-click (parity UseItemEx char_item.cpp:1874-1938: si
+    // el item está EQUIPADO → UnequipItem, si está en INVENTORY →
+    // EquipItem). Fix 2026-08-15: antes el doble-click en equipado daba
+    // "uso de celda 182 sin item".
+    if equip_window && session.inventory[idx].window == "EQUIPMENT" {
+        // Desequipar: EQUIPMENT → INVENTORY con el cell del cliente
+        // (180+wear). Se reutiliza el path del CG_ITEM_MOVE (desequipar —
+        // validación + wire + parts + persistencia).
+        let synthesized = protocol::world::TPacketCGItemMove {
+            header: protocol::world::TPacketCGItemMove::HEADER,
+            pos: TItemPos {
+                window: TItemPos::WINDOW_EQUIPMENT,
+                cell: item_use.pos.cell,
+            },
+            change_pos: TItemPos {
+                window: TItemPos::WINDOW_INVENTORY,
+                cell: (0..INVENTORY_MAX_NUM)
+                    .find(|c| {
+                        !session.inventory.iter().any(|i| {
+                            i.window == "INVENTORY" && i.pos as u16 == *c
+                        })
+                    })
+                    .unwrap_or(0),
+            },
+            num: 0,
+        };
+        eprintln!(
+            "server_realms: channel conn {}: doble-click item vnum {} → \
+             DESEQUIPAR (toggle, celda {})",
+            session.conn_id, session.inventory[idx].vnum, item_use.pos.cell
+        );
+        return handle_move(session, &synthesized.to_bytes()).await;
+    }
     // EQUIPAR por doble-click (FIX 2026-08-14 — "no puedo usar las dagas ni
     // las botas"): parity `UseItemEx` → `EquipItem` (char_item.cpp:1874-1938 —
     // el switch por tipo EQUIPA armas/armaduras/costume; el consumo es SOLO
