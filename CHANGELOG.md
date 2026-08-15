@@ -7,6 +7,153 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-15] (47th part) — "Base jugable": 5 bugs gameplay fixeados (equip drag, GC_ITEM_DEL, CG_SHOP framer, comandos GM_PLAYER, barra de vida del mob)
+
+> Sl session (pi-loop-mode `/loop`). Los 5 bugs del plan "Base jugable" con causa raíz confirmada se arreglaron, cada uno con tests + `cargo test --workspace` + commit. El servidor C++ quedó FROZEN (solo parity, nunca se reconstruyó). Workspace **584 passed / 0 failed** (+20 desde los 564 del último wave).
+
+### Bug 1 — Equipar por arrastre (drag) rechazado
+
+- El drag-equip del cliente llega como `CG_ITEM_MOVE` con `window=INVENTORY` y cell destino `180+wear`; el handler solo reconocía `EQUIPMENT` → el drag se rechazaba en silencio (solo funcionaba el doble-click).
+- **FIX**: `is_equip_position()` replicando `SItemPos::IsEquipPosition` (length.h:825-830): window ∈ {INVENTORY, EQUIPMENT} Y cell ∈ [180, 212). Extraída a nivel de módulo + test. (items.rs)
+
+### Bug 2 — Items duplicados en el inventario (GC_ITEM_DEL con vnum real)
+
+- `GC_ITEM_DEL` (20) se mandaba con el vnum real en los 8 call sites (use/equip/desequip/stack/move + shop venta + trade entrega + quest remover); el cliente `RecvItemSetPacket` interpreta vnum≠0 como "set" y PINTA el item en vez de borrarlo → duplicados.
+- **FIX**: vnum=0 y count=0 en todos los call sites (parity char_item.cpp:433-443). (items/shop/trade/quest.rs)
+
+### Bug 3 — Tiendas NPC: cierre de conexión en el primer BUY/SELL/END
+
+- El header `CG_SHOP` (50) no estaba en la tabla del framer → UnknownHeader → cierre. `TPacketCGShop` (2 B) es de tamaño VARIABLE según subheader (END 2, BUY 4, SELL 3, SELL2 4) — el framer lo resuelve por subheader como CG_CHAT (parity input_main.cpp:1054-1088 + iExtraLen).
+- **FIX**: `header::CG_SHOP = 50` + caso variable en el framer + test (fragmentado/concatenado/rol Auth rechaza). (protocol/lib.rs, network/framer.rs)
+
+### Bug 4 — Comandos del diálogo de muerte y del menú → "No such command"
+
+- `/restart_here`, `/restart_town` (uirestart.py) y `/logout`, `/phase_select`, `/quit` (menú) se parseaban como desconocidos (solo existían warp/item/notice/level).
+- **FIX**: variantes GM_PLAYER (nivel 0 — SIN gmlist, parity cmd.cpp:340-347) en `GmCommand` + parseo (argumentos extra ignorados, parity do_cmd). `handle_player_command`: revive vía `script::revive` extraída (RestartHere=mismo punto, RestartTown=ciudad vía GC_WARP), Logout/Quit=cierre de conexión, PhaseSelect=GC_PHASE(SELECT)+cierre. (game_core/gm.rs, channel/gm.rs, channel/script.rs)
+
+### Bug 5 — Sin barra de vida del mob
+
+- El cliente dibuja la barra vía `GC_TARGET` (63); el dispatch no tenía arm del `CG_TARGET` (61) y el daño al mob no se difundía (solo GC_DAMAGE_INFO — número sin barra).
+- **FIX**: `TPacketGCTarget` (6 B: header+vid+bHPPercent) + `CombatIntent::Target` → `process_target` (npc_view) → `TargetResult` → GC_TARGET; y en `AttackResult` (KillInfo ya traía hp/max_hp) se emite GC_TARGET con el pct nuevo tras el golpe (broadcast parity BroadcastTargetPacket, char.cpp:5048-5143). (protocol/world.rs, ecs/events.rs, ecs/world.rs, ecs/systems/combat.rs, channel/events.rs, channel/game.rs)
+
+### Commits (5, uno por bug)
+
+- `a761b79` fix(items): equipar por arrastre acepta INVENTORY con cell 180+wear
+- `11c6093` fix(items): GC_ITEM_DEL con vnum=0 en los 8 call sites
+- `0e3e52a` fix(shop): CG_SHOP (50) en el framer — tamaño variable por subheader
+- `8fb962c` fix(commands): comandos GM_PLAYER /restart_here /restart_town /logout /phase_select /quit
+- `8d7c59c` fix(combat): barra de vida del mob — CG_TARGET(61)->GC_TARGET(63) + broadcast
+
+### Siguiente (fuera del loop actual)
+
+- Redeploy del binario a `source\deploy\win` (los 5 fixes están en source, el runtime aún corre el binario del wave 46) + verificación con cliente real.
+- Pendiente para el 100%: party/guild, safebox+messenger, SPLASH/PARTY/HORSE, refine/blend/cube/DS/belt, quests restantes, GM expandido, PvP/eventos/raids, data channel F3.
+
+## [2026-08-14] (46th part) — Wave 46 (dawn): quest-boot A/B fix (background corpus), handshake leniency, close panic fix, channel.inf, shop/quest diagnosis
+
+> Dawn session (orchestrator + coder lane). All verified with real-client sessions and real outputs. Deploys: 01:50 `941F1B54` (boot async), 02:05 `2E9CC162` (leniency), **02:11 `015FB634` (panic fix) — current stack auth.021225/channel.021225**.
+
+### Root cause of the post-quests "no connect" ISOLATED with A/B
+
+- The quest wiring loaded the corpus (194 files, ~2 s) **synchronously before the accept loop** → the client connected into the kernel backlog, exceeded its timeout and closed. A/B: with `quest_path` empty the client connects; with the synchronous corpus load it does not.
+- **FIX: corpus load in BACKGROUND** (`tokio::spawn`, channel/mod.rs:132-147) — accept starts instantly; the quests arrive ~2 s later (fail-open without them).
+
+### Handshake leniency
+
+- After 32 retries (~17.6 s) the channel NO LONGER closes — it sends `GC_PHASE(LOGIN)` and waits for the LOGIN3 up to **45 s** (slow client — its phase machine prepares late). Test: `channel_slow_client_login3_after_retries_exhausted` (channel_smoke.rs:174).
+
+### Close panic fix
+
+- `session.rs save()` accessed `motion()` (expect) on connections closed BEFORE ENTERGAME → worker panic ("motion: seteado en la fase select"). **FIX**: position sync only when the motion is set (session.rs:449-457).
+
+### channel.inf (client)
+
+- The saved channel index "1" (from the 4-channel era) vs the current 1-channel dict → KeyError → no channel connection; **corrected to 0**. Finding documented: the client UI needs a fallback (pack).
+
+### Shops + quest texts — data linked, runtime IN DIAGNOSIS
+
+- Shop data: `player.shop` 1–6 → visible NPCs (20002/20006/20023/20025 blacksmiths, 20029/20030 ponies), 9 → 20042 (Vendedor Ambulante), 1002 → 20341 (blacksmith), 1003 → 20343 (archer). **Shop opening: IN DIAGNOSIS (coder lane)**.
+- Quest dialog: the engine sends raw keys ("gameforge.map_warp._20_sayTitle") — **text resolution: IN DIAGNOSIS (coder lane)**.
+
+### Verified live (stack 02:11)
+
+- Stable entry (the 3 handshake fixes), position persisted (the player crossed the map and reconnected at his position), movements accepted (331 lines — map crossing), quests 194 loaded in background, **0 panics** after the fix.
+- Workspace **573 tests** (with the leniency test) → **573 after the panic fix** (616 test attributes).
+
+### Ops
+
+- dot-source (`. scripts\start_win.ps1`) — no nested powershell — stops/starts return instantly (previously hung the tool 120 s). `-HsDebug` switch added to start_win.ps1.
+
+### Pending
+
+- Shop opening (coder, in diagnosis); quest text resolution (coder, in diagnosis); channel.inf client fallback (pack); skills GAPs (SPLASH/PARTY/HORSE, buffs); GM mob spawn; quest converter completion (~88); ladder 250/500/1000; per-tick CPU; ECS parallelism decision (ADR-0010 §1).
+
+## [2026-08-13] (45th part) — Wave 45 (night): real-client session COMPLETE — subtype/walkability/envelope fixes + content gaps
+
+> Night session (orchestrator direct + coder lane). All verified with real-client sessions and real outputs. **Deploys: 19:38 `1B4420E2` (subtype), 20:38 `271EDEBE` (walkability), 21:40 `19DD1724` (envelope client-Δt), 22:06 `2A71E57E` (tuning) — current stack auth.220608/channel.220608.**
+
+### Real-client session now COMPLETE (entry → world → cross-map movement → dynamic spawns)
+
+- **`subtype` column fix** — `database/src/item.rs:179`: the item query used the legacy `sub_type` vs PG `subtype` → 42703 ejected players entering with equipped items. Deploy 19:38 (`1B4420E2…`).
+- **Walkability re-scope** — the `server_attr` parse was CORRECT; the village source cells are legitimate ATTR_BLOCK, so the pre-move gate froze the player. The gate moved to **anti-teleport reinforcement**: normal steps accepted, jumps onto blocked terrain rejected (channel movement). Deploy 20:38 (`271EDEBE…`).
+- **Envelope fix (client Δt)** — server-only Δt rejected legitimate walking: the client sends MOVEs in bursts → **Δt = max(client clock, server clock)** (movement.rs). Plus tuning: tolerance 1.2→**1.5** (`ENVELOPE_TOLERANCE` movement.rs:95), lag 100→**250 ms** (`ENVELOPE_LAG_MS` movement.rs:96-97) — the real client pattern fits with margin; **anti-cheat intact** (2500 cap + C++ timers; sustained speedhack >450 u/s still bounded). Deploys 21:40 (`19DD1724…`) + 22:06 (**`2A71E57E…`** — current).
+- **Verified live**: the player enters, CROSSES the map (~9k units), mobs/NPCs materialize around (dynamic spawn with the real client: tanacas in the village, Uriel/Capitán at the second plaza). Wave-44 benchmarks re-confirmed in vivo (20 bots: login_ms median 797 vs 4,894, sel 203 vs 2,905, world_ms 1,052 vs 7,829, spawns 11/bot on ALL; 100 bots: 100/100 OK, world_ms 2,742, tick <1 ms — `logs/bench-run-2026-08-13-wave44.md`).
+
+### Spawns restored to the ORIGINAL data (user directive)
+
+- The village population (dogs/wolves etc. inserted in `world.spawns`) was **REVERTED** — the village area is identical again (5001×1 + 5004×10 + 20354).
+- **NEW RULE: no game-data modifications without explicit user confirmation.**
+
+### Content findings (real gaps, NOT regressions)
+
+- **Shops inaccessible in practice**: `player.shop`/`player.shop_item` exist and the wave-7 shop code works, but the vendors (npc_vnum 9001–9009) are on the map with `folder=''` (INVISIBLE client-side — only 9006/9008 blacksmiths visible) and the visible city NPCs (20000 series) have no shop linked. Fix future: link shops to visible NPCs (20002/20006/20023/20025) or add models.
+- **Quests not wired**: the quest corpus (qc → DSL) is NOT hooked server-side (converter IN PROGRESS — roadmap) → NPCs have no quests.
+- **Intermittent silent handshake**: the client sends LOGIN3 before the echo; the server discarded it — **FIX IN PROGRESS (coder lane: `HandshakeError::LoginEarly`)**; `MT2_HS_DEBUG=1` instrumentation added in `network/src/handshake.rs` (env-gated, logs handshake packets, :306-309).
+- Workspace **566 passed** (2026-08-13 night; 609 test attributes).
+
+### Night follow-up (deploys 23:31 `FE6BDE06` + 00:15 `8C335FAA` — current) — quests wired, shops linked, vision/speed/mob tuning
+
+- **Spawns — tanacas removed (user directive)**: the village tanacas (5001/5004 at 969600/278400 — "they're annoying, shouldn't appear in city 1") deleted from `world.spawns`; the village area now holds only 20354 (psql-verified). Confirms the wave-45 rule: no game-data edits without explicit user confirmation.
+- **Vision enlarged (user: "make it even bigger")**: `SPAWN_VIEW` 5000→**8000**, `DESPAWN_RADIUS` 7000→**10000** (`game_core/src/ecs/systems/spawn.rs:24,28`); tests adjusted (spawn.rs:212).
+- **Movement**: `DEFAULT_MOVE_SPEED` 300→**500** (envelope base — the client's run; 1.8× margin = 900 u/s), `MAX_DIST_NO_RIDING` 4000→**6000** (`game_core/src/movement.rs:81,94`).
+- **Shops linked to VISIBLE NPCs**: `player.shop` 1–6 → **20002/20006/20023/20025/20029/20030** (the 9001–9009 vendors are invisible `folder=''` in the pack); 7/8 (gold_bar/firework) left unlinked (still point at invisible 9005/9004). Data-only — the wave-7 shop code already existed.
+- **Quests WIRED (coder lane)**: the corpus loads at channel boot (default `germany/quest` — the runtime's `spain/quest` is empty) via `quest_dsl::convert::convert_corpus` (channel/mod.rs:403-416); **194/194 convert, 106 with Chat triggers (346 triggers)**; `QuestIntent::NpcClick` (channel/shop.rs:67 — CG_ON_CLICK) → `QuestTrigger::Chat(vnum)` → GC_SCRIPT dialog; `quest_path` in config.rs (:59,109,170); `QuestRepo::load` + `QuestIntent::Init` in entry.rs. Tests: `npc_click_offers_quest_dialog`, `quest_corpus_loads_into_engine`. Workspace **572 passed / 0 failed** (615 test attributes).
+- **Mob movement duration**: `move_duration_ms(dx, dy, move_speed)` (`game_core/src/ai.rs:41` — parity `CHARACTER::CalculateMoveDuration` char.cpp:2765-2768; C++ truncation `(int) fDist/motionSpeed×1000`, tests :298-302); mobs animate with real duration (was fixed 500 ms/tick → "they move too fast").
+- **Ops**: the nested `powershell -File scripts\start_win.ps1` pattern hung the tool up to 120 s → replaced with direct dot-source (`. scripts\start_win.ps1`) — no nesting, no waits.
+- **Deploys**: 23:31 (vision 8000 / speed 500 — SHA256 `FE6BDE0637615EFDA5F395B6DA32FBEB1E727DC5CB408E95E42A87610C8EB435`), 00:15 of the 14th (quests + shops + mob speed — SHA256 `8C335FAACDF591C65F0FA667719CA958DB715924A7228113ED19D3650C30E806`, 4,941,312 B — channel 001531, current).
+
+### Pending
+
+- Handshake `LoginEarly` fix (in progress); quest converter completion for the remaining ~88 quests without Chat dialogs + `pc.setqf` unblocking; shops 7/8 relink or models; user validation of quests/shops/mobs; skills GAPs (SPLASH/PARTY/HORSE, buff numeric application); GM mob spawn; ladder 250/500/1000; per-tick CPU; ECS parallelism decision (ADR-0010 §1).
+
+## [2026-08-13] (44th part) — Wave 44: connection pool + shared Batcher + metrics + benchmark ladder step 1
+
+> Pool lane (coder) + deploy + bench runs (orchestrator). All verified by the orchestrator with real outputs. **Deploy DONE: the waves-6/7 + pool binary is live since 18:01:39** (the "redeploy pending" state of parts 42–43 is closed).
+
+### Connection pool EXECUTED (ADR-0008 clause)
+
+- **`deadpool-postgres 0.14.1`** added (pairing verified: depends on tokio-postgres 0.7.9 = the same workspace driver — no driver change, exactly what ADR-0008 Decision 3 promised).
+- **NEW `database/src/pool.rs`** (`PgPool`); ~13 repos of `database/src` moved from per-call `pg_conn` + `connect()` to `pool.get()`.
+- **`PgMutationSink::new(pool)`** (wal.rs) — no more reconnect-per-batch; **`WorldStore::new(pool, Arc<Batcher>)`** (game_core/src/world.rs; channel/entry.rs:153) — **ONE `Batcher` per channel** (Arc, flush 100 ms), was one per player.
+- `config.rs pool_max_size` default 10 (config.rs:110); direct SQL in `channel/shop.rs` absorbed by `ItemRepo::load_sell_proto` (ADR-0008 §2 "no direct-sql backend" restored — shop.rs:407-411).
+- `WorldMetrics.last_tick_ms` + `record_metrics` → `tick_ms.csv` via bench_capture (bench_capture.rs:155-170); `replay_wal` fail-open at boot (documented decision).
+- **Verified**: workspace **565 passed / 0 failed / 35 ignored**; clippy identical to baseline; release built 17:57.
+
+### Deploy DONE + verified (18:01:39)
+
+- Binary **4,509,184 B**, SHA256 `77D8ACD292EA52A4D4396E04E1DF07F3065976D47C015D61B50E87E16323C732`; stack up 18:01:39 (auth.180138/channel.180138 logs).
+- `start_win.ps1` gains **`-BenchCapture <rel>`** (passes `--bench-capture` to the channel; daily behavior unchanged without the flag).
+
+### Benchmark — spawn-concurrency fix confirmed + ladder step 1 (report `logs/bench-run-2026-08-13-wave44.md`)
+
+- **20 bots** (vs the 06:11 baseline in parentheses): 20/20 OK; channel_login_ms median **797** (4,894); sel_ms **203** (2,905); world_ms **1,052** (7,829); **spawns 11/11 on ALL 20 bots** (baseline 19/20 with 0); 0 panics — oracle criteria PASS. The 41st-part spawn-concurrency finding is **RESOLVED**.
+- **100 bots (ladder step 1)**: **100/100 OK**; auth 857 / sel 1,008 / world_ms **2,742** medians; **spawns 1,100 = 11/bot**; AI-tick window <1 ms (0 at CSV integer resolution) — <500 ms criterion PASS with huge margin; 0 panics (10 × 10053 teardown expected); `--cleanup-accounts` → 0.
+
+### Pending
+
+- Ladder steps 250/500/1000 bots; per-tick CPU measurement; real-client smoke pending; ECS parallelism decision open (ADR-0010 §1).
+- Unchanged chain: quest pending actions, auction/unified trade, GM extensions, data channel 162/163, locale wire slice, manifest/hot reload, auto-ban.
+
 ## [2026-08-13] (43rd part) — Wave 7: NPC shops + player trade · quest runtime engine · GM commands · dw_arrow (quiver gate)
 
 > Wave 7 complete (social lane cod-3, cod-1, fix-4, orchestrator direct). All verified by the orchestrator with real outputs. **Deploy note: the servers still run the pre-wave-7 binary (3,935,232 B, 07:23 build) — redeploy pending the orchestrator.**
@@ -49,6 +196,14 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 - **Redeploy** the wave-7 binary (servers still on the 07:23 build).
 - Quest pending actions (say_reward, send_letter, set_quest_state, target_vid, affect_*, input_number); GM mob spawn (new intent) + GM locale; auction/unified trade.
 - Benchmark full ladder (WorldSim::metrics, sharded-region, 100→1000 bots); spawn-concurrency fix; family extraction; skill GAPs (SPLASH/PARTY/HORSE, `skill_power.txt`, buff numeric application); data channel 162/163; locale wire slice; manifest/hot reload; auto-ban.
+
+### Docs audit (librarian, 2026-08-13)
+
+- `docs/CURRENT.md` refreshed: snapshot date/commit `9f2e82e` (HEAD = origin/main, 0 ahead/behind — 37th–43rd parts pushed), waves 6–7 (42nd/43rd parts) added to the snapshot, deploy of the 42nd+43rd-part binary noted IN PROGRESS (3,964,928 B staged, restart ~11:37, verification pending — no asserted deployment), ECS executor correction, stale `ecs.rs:449`/`ecs.rs:337-340` citations → `ecs/systems/spawn.rs:22,26` / `ecs/events.rs:303-307`.
+- `docs/decisions/0008-data-layer.md`: the pool deferral (Decision 3 clause) marked EXECUTING 2026-08-13 — deadpool-postgres, channel-level `PgPool`, one `Batcher` per channel (trigger: the ADR's own "If a pool is later measured to be needed..." clause; code lane in flight — not yet in Cargo.lock at audit time).
+- `docs/decisions/0010-domain-boundaries-and-data-ownership.md`: `multi_threaded` "one-line toggle" claim corrected — verified against bevy_ecs 0.19.1 source: `["std"]` only (Cargo.toml:18, no `multi_threaded` feature) → `Schedule::default()` = `SingleThreadedExecutor` (bevy_ecs `schedule.rs:410`, `executor/mod.rs:49-64`); 5 systems `.chain()`ed (game_core/src/ecs/world.rs:83-93); parallel ECS = pending decision; "World per-connection" deviation updated to the channel-level shared World (spawn dinámico, `Intent::Join` mpsc — ecs/events.rs:303-307, channel/mod.rs:97).
+- `ROADMAP.md`: the two "redeploy pending" notes (waves 6+7, parts 42+43) consolidated into one; NEXT lines updated (redeploy → pool → benchmark ladder).
+- Deploy-state observation (read-only, not asserted as verified): `deploy\win\server_realms.exe` = 3,964,928 B (08:01 build); processes restarted 11:37:52 from `deploy\win` (ports 30001/30003 listening, PG Running); an 08:02 session with the new binary logged in `logs/chan8.err.log` (login → world entry → moves).
 
 ## [2026-08-13] (42nd part) — Structural refactor: `realm` → `game_core` rename + channel/ecs splits + PG migrations + quest similarity engine
 
@@ -314,6 +469,8 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 - **Restart opencode** to load everything accumulated: coder "The Reforger" + routing, MCPs for all agents, skill adjustments, oracle v4-pro.
 - After restart: slice 18 spec review with the oracle on v4-pro, then the bevy_ecs adoption.
 
+
+
 > User: "solo crea la del coder que todavía no tiene personalidad — ¿omo-slim trae un .md prompt ya enriquecido del cual podamos usar?" Answer: NO — coder does not exist in the harness pantheon (it is our custom agent replacing `build`); the harness ships agent prompts as `.ts` template strings (functional Role/Behavior/Constraints, no narrative — "The Last Builder" etc. is README marketing only, verified in `fixer.ts`); the `.md` mechanism is for USER overrides, not pre-made prompts. So the personality was created modeled on the harness style + our project rules.
 
 ### Changed — coder personality and config (local/gitignored, requires restart)
@@ -327,6 +484,8 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 - **Restart opencode** to load: coder personality (The Reforger), coder routing, MCPs for all agents, explorer/fixer skills, oracle v4-pro.
 - After restart: slice 18 spec review with the oracle on v4-pro, then the bevy_ecs adoption.
+
+
 
 > User direction: "las skills que ya tienen están perfecto — lo que quiero es que cada agente tenga habilidades enfocadas en su laburo: los MCPs que tenemos para todos, explorer con skills para explorar código a gran escala, librarian con skills de documentación, fixer con skills de debug/arreglar, coder con clean code". Deep analysis of the harness done first (lib-2: README completo + 7 docs + schema + los 8 prompts fuente de src/agents/*.ts).
 
@@ -351,6 +510,8 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 - **Restart opencode** para cargar: MCPs de todos los agentes + skills nuevas de explorer/fixer (oráculo v4-pro sigue pendiente también).
 - Después: revisión de la spec del slice 18 (World compartido por canal) y el desarrollo de personalidades restante (routing de @coder, Council, prompt layering por proyecto) si el usuario lo aprueba.
 
+
+
 > The 31st part claimed (a) the GitHub repo "is not on GitHub yet" and (b) `context7`/`gh_grep` were "never registered — dead refs". **Both claims were WRONG** (user correction, verified empirically). This entry corrects the record; the 31st part stays as history.
 
 ### Corrected facts (verified 2026-08-12)
@@ -373,6 +534,8 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 - **Restart opencode** to load all config changes (oracle v4-pro, fixer 13 skills, coder/librarian graphify MCP, designer brainstorming, restored MCPs).
 - After restart: **slice 18 spec review with the oracle on v4-pro** before Coder starts the bevy_ecs adoption.
 
+
+
 > User questions: "¿para qué sirven los MCPs? ¿no es mejor un GitHub MCP que el CLI? ¿no deberíamos añadir skills a los agentes sin skills?" — answered with verified facts, applied the fixes.
 
 ### Answered (verified)
@@ -392,6 +555,8 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 - **Restart opencode** to load all config changes (oracle v4-pro, fixer 13 skills, coder/librarian graphify MCP, designer brainstorming, MCP cleanup).
 - After restart: **slice 18 spec review with the oracle on v4-pro** before Coder starts the bevy_ecs adoption.
 
+
+
 > Config: `~/.config/opencode/oh-my-opencode-slim.json` (preset `opencode-go` + `agents.coder`) + `.opencode/agents/*.md` (local, gitignored). Docs: `docs/explanation/agent-organization.md`. All changes require an opencode restart (guardrail rule 7 — verified empirically with a fresh-oracle probe: the new model does NOT load hot).
 
 ### Changed — agent team config
@@ -407,6 +572,8 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 - **Restart opencode** to load: oracle v4-pro + fixer/librarian/coder skill-MCP changes.
 - After restart: **slice 18 spec review with the oracle on v4-pro** (fresh session) before Coder starts the bevy_ecs adoption (World compartido por canal, 5 pasos — spec de ora-1 aprobada).
+
+
 
 > User decision after the strategic review: "Metin2 es un juego de farmeo — el lag con muchos mobs es el problema core; con ECS mejoraría muchísimo el rendimiento. Y para el cliente futuro, bevy (no wgpu desde cero)." Documented in ADR-0010 §2 (amended) + ADR-0007 (amended) + plan/ROADMAP.
 
@@ -425,6 +592,8 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 - `docs/decisions/0007` amended: new client = bevy + Slint (decided 2026-08-12).
 - `source/reforge/README.md`: realm row → bevy_ecs World adoptado (ADR-0010 §2).
 - **Next slice**: ECS adoption implementation — `MobCache` → World components/systems with the 371 existing tests staying green (ADR-0010 Consequences).
+
+
 
 > User-requested full-project review ("are we only transcribing, not innovating?"). Three recon lanes (explorer inventory, librarian plan digest, oracle verdict) + two doc lanes (librarian staleness sweep x2). No code changed.
 
@@ -454,6 +623,8 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 - **ADR-0010 — Domain boundaries and data ownership**: ratifies the real realm architecture (pure functions + per-connection state + WorldStore, NOT the plan's ECS); ECS entry criterion = F5 benchmark failing 1,000+/instance with ≥2–5x CPU headroom or AI-tick >500ms; data ownership volatile/durable/derived; **translator-vs-core governing boundary** (user principle codified); wire debt inventory D1–D6 with F7 removal plan.
 - **ADR-0011 — Anti-hack model**: invariant server-authoritative zero client trust; ratifies implemented controls (timer speedhack always-on, anti-teleport, 0x00→close, DB fail-fast, idle timeout, server-clock cooldowns); **decides signed clock wrap** → modular difference with tolerance (kick stays as policy); pending controls with phase (speed envelope, walkability from PG, floods, god-mode, dupe completion, farm bots); attack-class table.
+
+
 
 > Team model change (user-directed, defined before implementation). Config: `~/.config/opencode/oh-my-opencode-slim.json` + `.opencode/agents/*.md` (local, gitignored). Docs: this repo.
 
@@ -1214,6 +1385,7 @@ The client reached the select screen early, but world entry failed silently (cle
 
 - **El selector de banderas causó pantalla NEGRA al abrir el login** (primera versión 18:04): `btn.SetEvent(ui.__mem_func__(self.__OnClickLanguageFlag(...)))` envolvía una **closure** con `__mem_func__` (wrapper pensado para métodos bound estilo `self.__OnClickLoginButton`) → excepción en `__CreateLanguageSelector` durante `LoginWindow.Open()` → el login no se construye → negro. **Fix:** `SetEvent` directo con la closure (igual que las lambdas del teclado virtual, `key_space.SetEvent(lambda ...)`) + **try/except blindado** en `__CreateLanguageSelector` (`print` del error, el login se muestra igual aunque el selector falle). Repack 538368 B 18:12, desplegado a `client\pack` y verificado por desempaquetado (línea 379 sin `__mem_func__`, 32 banderas dentro del epk).
 - **Verificado el `.rar` del sistema completo** (`systems\Language System 1.2.6.rar`, UnRAR l): contenido idéntico a la carpeta extraída, **sin ninguna imagen de bandera de país** y sin lógica de selector de login. Los 8 `02. Client\root\*.py` del mod son parches del coliseo PVP (dependen de `__LANGUAGE_SYSTEM__` en el C++ del cliente, no integrado) — **copiarlos rompería el login** (ImportError `uiLanguageSystem`, AttributeError `app.LANGUAGE_SYSTEM`, `player.IsLanguageSystem()` inexistente). Confirmada la decisión #8 del doc de estado (no integrar ese root).
+
 
 ## [2026-08-09] (3ª sesión, 2ª parte) — Crash de entrada al mundo: diagnóstico en curso + auditoría del Language System
 
