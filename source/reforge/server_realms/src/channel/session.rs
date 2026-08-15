@@ -174,6 +174,12 @@ pub struct Session {
     pub framer: Framer,
     /// Config del canal (clonada por conexión — `run` la clona al aceptar).
     pub config: Config,
+    /// Pool COMPARTIDO de conexiones PG del canal (los repos lo usan — NINGÚN
+    /// camino abre conexión propia por llamada, fix 2026-08-13).
+    pub pool: database::pool::PgPool,
+    /// Batcher ÚNICO del canal (WAL durable + audit — el WorldStore lo usa
+    /// para los saves/exchange; un solo loop de flush por canal).
+    pub batcher: std::sync::Arc<database::wal::Batcher>,
     /// Caché COMPARTIDA de walkability (F5.4 — `game_core::map::MapStore`).
     pub map_store: Arc<Mutex<game_core::map::MapStore>>,
     /// Emisor de intents hacia el MUNDO COMPARTIDO del canal.
@@ -200,10 +206,22 @@ pub struct Session {
     pub row: Option<PlayerRow>,
     /// Estado de movimiento anti-speedhack — None hasta el select.
     pub motion: Option<game_core::movement::PlayerMotion>,
+    /// Modo de movimiento del personaje (parity m_bIsWalking/m_bNowWalking
+    /// del CHARACTER C++ — do_set_walk_mode/do_set_run_mode
+    /// cmd_general.cpp:927-937). El C++ NO lo persiste en DB (la row de 42
+    /// columnas no tiene columna walking — parity): vive en el CHARACTER;
+    /// aquí en la sesión (por conexión). Lo consume `channel/gm.rs`
+    /// (set_walk_mode → GC_WALK_MODE).
+    pub walking: bool,
     /// NEXT_EXP del nivel actual (mutable — el level-up del kill lo recarga).
     pub next_exp: i64,
     /// Inventario del player (mutable — pickup/uso/move).
     pub inventory: Vec<ItemRow>,
+    /// Battle points CACHEADOS (ComputeBattlePoints — el entry los computa
+    /// con los protos y el equip/unequip los re-computa; `points_packet` los
+    /// lee en TODOS los caminos — la ventana del cliente muestra ataque
+    /// (daño del arma) y defensa (level+HT+armor) desde aquí).
+    pub battle: game_core::packets::BattlePoints,
     /// Afectos del player (solo el entry los consume).
     pub affects: Vec<AffectRow>,
     /// Pickups en curso: el CG_ITEM_PICKUP manda el intent y el resultado
@@ -235,6 +253,16 @@ pub struct Session {
     /// la cola consumen 1 flecha en vez de 2 (el mismo skill lo rechaza el
     /// cooldown del mundo).
     pub pending_arrow_shot: bool,
+    /// Flag PvP del jugador (CG_PVP 41 — lane D). Solo en MEMORIA: la tabla
+    /// `player.player` de esta variante NO tiene columna de pvp (parity: el
+    /// TPlayerTable del C++ tampoco — el modo PvP del Metin2 completo es
+    /// efímero de sesión). El cliente de esta variante nunca envía CG_PVP
+    /// (header definido, sin sender — Packet.h:53); el handler es defensivo.
+    pub pvp_mode: bool,
+    /// Postura sentado del jugador (CG_CHARACTER_POSITION 28 — lane D):
+    /// Sitdown/Standup. En memoria (parity: `m_pointsInstant.position` del
+    /// C++ — no se persiste).
+    pub sitting: bool,
 }
 
 impl Session {
@@ -247,6 +275,8 @@ impl Session {
         conn_id: u32,
         intent_tx: UnboundedSender<Intent>,
         map_store: Arc<Mutex<game_core::map::MapStore>>,
+        pool: database::pool::PgPool,
+        batcher: std::sync::Arc<database::wal::Batcher>,
     ) -> Self {
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
         let ping_timer = tokio::time::interval_at(
@@ -258,6 +288,8 @@ impl Session {
             conn_id,
             framer: Framer::new(ConnectionRole::Channel),
             config,
+            pool,
+            batcher,
             map_store,
             intent_tx,
             event_tx,
@@ -269,8 +301,10 @@ impl Session {
             empire: 0,
             row: None,
             motion: None,
+            walking: false,
             next_exp: 0,
             inventory: Vec::new(),
+            battle: game_core::packets::BattlePoints::default(),
             affects: Vec::new(),
             pending_pickups: std::collections::HashSet::new(),
             last_packet: tokio::time::Instant::now(),
@@ -278,6 +312,8 @@ impl Session {
             ping_timer,
             account_login: String::new(),
             pending_arrow_shot: false,
+            pvp_mode: false,
+            sitting: false,
         }
     }
 
@@ -377,7 +413,7 @@ impl Session {
             row.level = level;
             leveled = true;
             self.next_exp =
-                CommonRepo::new(&self.config.pg_conn).next_exp(level).await.unwrap_or(0);
+                CommonRepo::new(self.pool.clone()).next_exp(level).await.unwrap_or(0);
         }
         if leveled {
             // El nivel del mundo COMPARTIDO (la DEF del ataque del mob lo usa).
@@ -387,10 +423,10 @@ impl Session {
             }))?;
         }
         // GC_POINTS actualizado (el cliente muestra exp/gold/nivel) + persistencia.
-        self.send(&game_core::packets::points_packet(self.row(), self.next_exp).to_bytes())
+        self.send(&game_core::packets::points_packet(self.row(), self.next_exp, &self.battle).to_bytes())
             .await
             .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
-        self.store().save_character(self.row());
+        self.save();
         // F5.3: DROP del mob — el drop primario (`mob_proto.drop_item`), con
         // la probabilidad del `drop_rate` del config. (El C++ además usa
         // etc_drop_item.txt por nombre — TRAP AGENTS.md §17 — el subset base
@@ -417,6 +453,113 @@ impl Session {
             self.row().level
         );
         Ok(())
+    }
+
+    /// Snapshot de counts del inventario (las condiciones `count_item` del
+    /// engine de quests): vnum -> count total (suma de stacks del window
+    /// INVENTORY).
+    pub fn inventory_counts(&self) -> std::collections::HashMap<u32, i64> {
+        let mut counts = std::collections::HashMap::new();
+        for i in &self.inventory {
+            if i.window == "INVENTORY" {
+                *counts.entry(i.vnum as u32).or_insert(0) += i.count;
+            }
+        }
+        counts
+    }
+
+    /// PESO básico (lane D — parity de la fórmula clásica del Metin2,
+    /// `char.cpp GetMaxWeight`: `(30 + level + ST×2) × 10`; el C++ de esta
+    /// variante no tiene peso — el gate es solo server-side, el cliente no
+    /// muestra la barra). Divergencia documentada: sin bonus de montura ni
+    /// `POINT_HT` (el subset base).
+    pub fn max_weight(&self) -> i64 {
+        let row = self.row();
+        (30 + i64::from(row.level) + 2 * i64::from(row.st)) * 10
+    }
+
+    /// Peso ACTUAL del inventario (lane D): `Σ count × item_proto.weight`
+    /// para los stacks del window INVENTORY, dividido por 10 (unidades del
+    /// item_proto crudas → la escala del `GetWeight` del C++ clásico). Sin
+    /// fila de proto → el vnum pesa 0 (fail-open: un proto roto no congela
+    /// el inventario; se loguea).
+    pub async fn inventory_weight(&self) -> Result<i64, String> {
+        let mut total = 0i64;
+        let mut seen = std::collections::HashSet::new();
+        for i in &self.inventory {
+            if i.window != "INVENTORY" || !seen.insert(i.vnum) {
+                continue;
+            }
+            let weight = match ItemRepo::new(self.pool.clone())
+                .load_proto_use_values(i.vnum)
+                .await?
+            {
+                Some(p) => p.weight,
+                None => {
+                    eprintln!(
+                        "server_realms: channel conn {}: item vnum {} sin \
+                         item_proto — pesa 0 (fail-open)",
+                        self.conn_id, i.vnum
+                    );
+                    0
+                }
+            };
+            total += weight
+                * self
+                    .inventory
+                    .iter()
+                    .filter(|x| x.window == "INVENTORY" && x.vnum == i.vnum)
+                    .map(|x| x.count)
+                    .sum::<i64>();
+        }
+        Ok(total / 10)
+    }
+
+    /// Save durable de la sesión: sincroniza la posición del MOVIMIENTO (la
+    /// fuente de verdad del x/y — el cliente la actualiza con cada MOVE) en
+    /// la fila del player y la persiste vía el Batcher del canal (100 ms,
+    /// WAL + audit). Fix 2026-08-13: los saves anteriores persistían la fila
+    /// CARGADA AL ENTRAR (x/y ANTIGUOS — el movimiento vive en `motion` y
+    /// nunca se sincronizaba) → la posición se perdía al reconectar. El save
+    /// es fire-and-forget e idempotente (el WAL cubre el replay).
+    /// Fix 2026-08-14 (panic del cierre): el motion SOLO está seteado tras el
+    /// ENTERGAME — una conexión que se corta durante la carga (antes del
+    /// ENTERGAME) NO tiene motion → el sync se omite (la fila conserva su
+    /// posición cargada) y el save sigue persistiendo el resto de campos.
+    /// Save durable de la sesión — DEFENSIVO (fix 2026-08-14: panic en el
+    /// cierre por RST — `store()` con expect; el save al cierre corre en
+    /// TODOS los caminos, incluidos los de sesión SIN store/row: login
+    /// fallido (NOID/NOTAVAIL retorna Ok del entry -> game::run -> cierre por
+    /// EOF), guild mark, slot vacío). Sin store/row/motion -> save omitido
+    /// (no hay estado que persistir).
+    pub fn save(&mut self) {
+        let Some(store) = self.store.as_ref() else { return };
+        if let Some(m) = self.motion.as_ref()
+            && let Some(row) = self.row.as_mut()
+        {
+            // P0-B (2026-08-14): NO persistir posiciones fuera del mapa (un
+            // row con coords inválidas crashea el CLIENTE con 0xC0000374 en
+            // el próximo load — probado 2×). El movimiento ya valida
+            // walkability por MOVE (el x/y del motion es válido); el check
+            // aquí es el seguro del borde de ESCRITURA (warps/GM). Leniente:
+            // solo out-of-bounds; mapa no cargable → fail-open (se persiste).
+            let in_bounds = {
+                let mut mstore = self.map_store.lock().unwrap();
+                match mstore.load(&self.config.map_path, row.map_index) {
+                    Ok(()) => mstore
+                        .get(row.map_index)
+                        .map(|map| map.attr(m.x, m.y).is_some())
+                        .unwrap_or(true),
+                    Err(_) => true, // fail-open (parity del movimiento)
+                }
+            };
+            if in_bounds {
+                row.x = m.x;
+                row.y = m.y;
+            }
+        }
+        let Some(row) = self.row.as_ref() else { return };
+        store.save_character(row);
     }
 }
 
