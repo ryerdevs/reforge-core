@@ -1,0 +1,19 @@
+# Config de typos (typos-lsp del pi-lens) — el codigo/comentarios del
+# proyecto estan documentados en espanol; typos usa diccionario ingles y los
+# marca como falsos positivos. Se declaran como palabras validas del repo.
+# Schema: https://github.com/crate-ci/typos (extend-words: map palabra->palabra).
+[default]
+extend-words = [
+    # Palabras espanolas frecuentes en comentarios/doc-comments del repo
+    "columnas", "transaccion", "materiales", "funcion", "variante",
+    "variantes", "inventario", "importante", "momento", "doble", "hace",
+    "Materiales", "desequipar", "equipar", "sino", "entrega", "recibido",
+    "atacante", "objetivo", "victima", "golpe", "danio", "mata", "muere",
+    "revive", "spawn", "despawn", "entrada", "salida", "sesion", "celda",
+    "tienda", "compra", "venta", "oro", "experiencia", "nivel", "mapa",
+    "cuenta", "personaje", "jugador", "desconocido", "usuario", "servidor",
+    # (wal.rs y resto del workspace)
+    "integracion", "dependencias", "produccion", "avance", "persistente",
+    "recuperacion", "reintento", "fallo", "exitoso", "pendiente", "procesa",
+    "cambios", "archivo", "fila", "registro", "consulta", "clave", "valor",
+]
