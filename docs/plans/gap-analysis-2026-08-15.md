@@ -92,16 +92,25 @@ re-asignaron a los vendedores del pueblo (20002/20006/20023) y **los vnums legac
 
 | NPC clicado | Shop legacy | Shop PG hoy | ¿Abre? |
 | --- | --- | --- | --- |
-| 9003 | shop 3 (armaduras) | — | ❌ |
-| 20016 | — | — | ❌ |
-| 20002 | — | shop 1 (23 items) | ✅ |
-| 20006 | — | shop 2 (7 items) | ✅ |
-| 20023 | — | shop 3 (24 items) | ✅ |
+| 9003 | shop 3 (armaduras) | shop 3 (9003) | ✅ |
+| 20016 | — | — | ❌ (no es vendedor) |
+| 20002 | — | shop 1002 (20002) | ✅ |
+| 20006 | — | shop 1003 (20006) | ✅ |
+| 20023 | — | shop 1004 (20023) | ✅ |
 
-**Fix propuesto** (requiere confirmación del usuario — regla "no game-data edits without
-explicit confirmation"): re-asignar npc_vnum de los 33 shops para cubrir los vendedores
-visibles del mapa c1 (9001-9009 + 20002/20006/20023/20042...). Los 15 shops con
-npc_vnum=0 (all_*) no tienen vendedor asignado en el legacy tampoco.
+**FIX EJECUTADO (2026-08-15, autorizado por el usuario):**
+- **Paso 1** (lane F): shops 1-10 y 1001/1007 restaurados a su npc_vnum legacy EXACTO
+  (9001/9009/9003/9002/9007/9008/9005/9004/20042/20015 + 20086/20087) — verificado
+  fila a fila contra el dump (33/33). Backup: `shops_backup_antes.sql`.
+- **Paso 2** (fix del verifier, orquestador directo): los 3 vendedores del pueblo
+  VISIBLES que el paso 1 había dejado sin shop se reasignaron a las filas all_* libres:
+  `20002 Aranyo → 1002 (all_dualhand_sword, 13 items)`, `20006 Mirine → 1003 (all_bow,
+  15 items)`, `20023 Soon → 1004 (all_twohand_sword, 13 items)`. SQL:
+  `UPDATE player.shop SET npc_vnum=20002 WHERE vnum=1002;` (idem 20006/1003, 20023/1004).
+- **Cobertura final del mapa c1**: 13 vendedores con shop (9001-9009, 20002/20006/20023,
+  20086/20087). Los NPCs sin shop (20001, 20003, 20016...) no son vendedores (el legacy
+  tampoco les daba shop).
+- El reinicio del canal para recargar la ShopTable lo hace el operador.
 
 ## 4. Cobertura por dominio (estimación)
 
