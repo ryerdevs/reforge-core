@@ -174,6 +174,60 @@ pub fn patrol_step(
     Some((tx, ty))
 }
 
+/// C32 (change-attack-position — parity `Follow` + `IsChangeAttackPosition`,
+/// char.cpp:5436-5462, 5869-5881): el destino LATERAL del mob en persecución
+/// — un punto a `fMinDistance` de la VÍCTIMA en un ángulo aleatorio. Si el
+/// mob está CERCA de la víctima (< 500 u) el ángulo es la dirección hacia la
+/// víctima ± 2 tiradas `number(-90,90)` (≈ ±180° — el C++ las suma; la
+/// dirección la da `GetDegreeFromPositionXY(x,y,GetX(),GetY())` sobre el
+/// vector víctima→mob); si está LEJOS (≥ 500) el ángulo es `number(0,359)`
+/// (completamente aleatorio, char.cpp:5444-5448). `fMinDistance` = rango×0.9
+/// melee / rango×0.8 RANGE/MAGIC (`__CHARACTER_GotoNearTarget`, char_state.cpp:
+/// 694-714). El C++ valida ATTR_BLOCK|ATTR_OBJECT con 16 retries — la
+/// walkability del AI queda pendiente (GAP documentado); aquí el retry solo
+/// repite el ángulo (sin mapa). Devuelve el destino en coords del mundo.
+pub fn change_attack_dest(
+    mob_x: i32,
+    mob_y: i32,
+    victim_x: i32,
+    victim_y: i32,
+    battle_type: u8,
+    attack_range: u32,
+    roll: &mut dyn FnMut(i32, i32) -> i32,
+) -> (i32, i32) {
+    let dist = ((mob_x - victim_x).pow(2) as f64 + (mob_y - victim_y).pow(2) as f64).sqrt();
+    let f_min = if matches!(battle_type, crate::combat::BATTLE_TYPE_RANGE | crate::combat::BATTLE_TYPE_MAGIC) {
+        attack_range as f64 * 0.8
+    } else {
+        attack_range as f64 * 0.9
+    };
+    // Dirección víctima→mob (parity GetDegreeFromPositionXY — 0° = +Y
+    // horario; GetDeltaByDegree usa sin/cos igual que aquí).
+    let deg = if dist < 500.0 {
+        let dx = (mob_x - victim_x) as f64;
+        let dy = (mob_y - victim_y) as f64;
+        let base = if dx.abs() < f64::EPSILON && dy.abs() < f64::EPSILON {
+            0.0
+        } else {
+            let d = dx.hypot(dy);
+            let mut deg = (dy / d).acos().to_degrees();
+            if dx < 0.0 {
+                deg = 360.0 - deg;
+            }
+            deg
+        };
+        // (rot + number(-90,90) + number(-90,90)) % 360 — char.cpp:5443
+        let a = roll(-90, 90) as f64;
+        let b = roll(-90, 90) as f64;
+        (base + a + b).rem_euclid(360.0)
+    } else {
+        roll(0, 359) as f64
+    };
+    let rad = deg.to_radians();
+    let (fx, fy) = (f_min * rad.sin(), f_min * rad.cos());
+    (victim_x + fx.round() as i32, victim_y + fy.round() as i32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -374,5 +428,33 @@ mod tests {
         // CalculateDuration(0, 10000): i=200 → 20000 → 300×10000/20000 = 150
         assert_eq!(mob_move_speed(0), 150, "factor 0 no congela (parity)");
         assert_eq!(mob_move_speed(1), 150, "factor 1 ≈ 150 u/s (parity)");
+    }
+
+    /// C32: el destino del change-attack-position (char.cpp:5436-5462) — un
+    /// punto a `fMinDistance` (rango×0.9 melee / ×0.8 rango) de la víctima en
+    /// ángulo aleatorio (±180° alrededor de la dirección a la víctima si
+    /// cerca; 0..359 si lejos).
+    #[test]
+    fn change_attack_dest_lands_on_the_ring() {
+        use crate::combat::{BATTLE_TYPE_MAGIC, BATTLE_TYPE_MELEE, BATTLE_TYPE_RANGE};
+        // Mob cerca (100 u < 500): dirección hacia la víctima ± 2×number(-90,90).
+        // roll fijo 0 → ángulo base exacto: mob (100,0) sobre víctima (0,0) →
+        // dx=100, dy=0 → acos(0)=90°; x>0 → 90°. Con roll 0: 90+0+0 = 90°.
+        // GetDeltaByDegree(90°, 157.5) = (157.5×sin90, 157.5×cos90) = (157.5, 0)
+        // → destino (157, 0). (fMin melee = 175×0.9 = 157.5 → round 158.)
+        let (x, y) = change_attack_dest(100, 0, 0, 0, BATTLE_TYPE_MELEE, 175, &mut |lo, hi| {
+            assert!((-90..=90).contains(&lo) || (0..=359).contains(&lo), "roll({lo},{hi})");
+            0 // desvío 0
+        });
+        assert_eq!((x, y), (158, 0), "a 157.5 u de la víctima en la dirección del mob");
+        // RANGE: fMin = 175×0.8 = 140.
+        let (x, y) = change_attack_dest(100, 0, 0, 0, BATTLE_TYPE_RANGE, 175, &mut |lo, hi| 0);
+        assert_eq!((x, y), (140, 0), "fMin rango = ×0.8");
+        // Lejos (600 > 500): ángulo completamente aleatorio (roll 90 → 90°).
+        let (x, y) = change_attack_dest(600, 0, 0, 0, BATTLE_TYPE_MAGIC, 175, &mut |lo, hi| {
+            assert_eq!((lo, hi), (0, 359), "lejos: número(0,359)");
+            90
+        });
+        assert_eq!((x, y), (140, 0), "(0,0)+140×(sin90,cos90) = (140, 0)");
     }
 }

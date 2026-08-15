@@ -50,6 +50,21 @@ pub struct LastAttack {
     pub at_ms: u64,
 }
 
+/// C32 (change attack position — parity `Follow`/`IsChangeAttackPosition`,
+/// char.cpp:5436-5462, 5869-5881): el mob en persecución se REPOSICIONA
+/// alrededor de la víctima — cada `AI_CHANGE_ATTACK_POISITION_TIME_NEAR`
+/// (10 s) cerca, o `TIME_FAR` (1 s) a > 100+rango (char.h:72-74) — hacia un
+/// punto ALEATORIO a `fMinDistance` (rango×0.9 melee / ×0.8 rango) de la
+/// víctima. Es lo que reparte a los mobs legacy alrededor del jugador (no se
+/// amontonan en el punto más cercano). `dest` = el destino lateral activo
+/// (None = ir directo a la víctima); se resetea al llegar. `rank` < BOSS(4)
+/// excluido (`GetMobRank() < MOB_RANK_BOSS`, char.cpp:5437).
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AttackPos {
+    pub last_change_ms: u64,
+    pub dest: Option<(i32, i32)>,
+}
+
 /// Stats ESTÁTICAS del mob (una copia por entidad, del `mob_proto` vía
 /// `Mob::from_row`) — lo que los sistemas y el combate leen.
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
@@ -88,6 +103,10 @@ pub struct Mob {
     pub battle_type: u8,
     /// `attack_range` (UNITS, p.ej. mob 101 = 175).
     pub attack_range: u32,
+    /// `rank` del mob_proto (0=PAWN..5=KING; `MOB_RANK_BOSS` = 4).
+    /// C32: solo `rank < BOSS` hace change-attack-position
+    /// (`GetMobRank() < MOB_RANK_BOSS`, char.cpp:5437).
+    pub rank: i32,
 }
 
 impl Mob {
@@ -117,6 +136,7 @@ impl Mob {
             wdef: row.def,
             battle_type: row.battle_type as u8,
             attack_range: row.attack_range as u32,
+            rank: row.rank,
         }
     }
 }

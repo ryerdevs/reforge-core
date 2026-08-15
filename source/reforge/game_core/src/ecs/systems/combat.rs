@@ -7,13 +7,13 @@ use std::collections::HashMap;
 
 use bevy_ecs::prelude::*;
 
-use crate::ai::{attack_damage, mob_move_speed, move_duration_ms, rotation_5deg, step_toward};
+use crate::ai::{attack_damage, change_attack_dest, mob_move_speed, move_duration_ms, rotation_5deg, step_toward};
 use crate::combat::{
     attack_speed_for_weapon, distance_approx, handle_attack,
     mob_attack_max_range, player_def_grade, CombatState, NpcState, PlayerState,
 };
 use crate::ecs::components::{
-    Affects, Aggro, Combat, Hp, LastAttack, Map, Mob, Mp, Player, Position, SpawnRef, Vid,
+    Affects, Aggro, AttackPos, Combat, Hp, LastAttack, Map, Mob, Mp, Player, Position, SpawnRef, Vid,
 };
 use crate::ecs::events::{CombatEvent, KillInfo, MoveEvent, NpcEvent};
 use crate::ecs::resources::{
@@ -33,6 +33,21 @@ const DE_AGGRO_FLOOR: i32 = 2_000;
 /// en su rango de ataque; el rewrite spawnea en el centro y el check
 /// conserva la separación cuando convergen al mismo jugador).
 pub(crate) const SEP_MOBS: i32 = 60;
+
+/// C32: `AI_CHANGE_ATTACK_POISITION_TIME_NEAR` = 10000 ms / `TIME_FAR` =
+/// 1000 ms (char.h:72-74) — el intervalo del change-attack-position del mob
+/// en persecución (10 s cerca de la víctima, 1 s lejos).
+const CHANGE_ATTACK_POS_TIME_NEAR: u64 = 10_000;
+const CHANGE_ATTACK_POS_TIME_FAR: u64 = 1_000;
+
+/// C32: `MOB_RANK_BOSS` = 4 (length.h:317) — los bosses NO se reposicionan
+/// (`GetMobRank() < MOB_RANK_BOSS`, char.cpp:5437).
+const MOB_RANK_BOSS: i32 = 4;
+
+/// C32: distancia (units) bajo la cual el mob considera que ya LLEGÓ a su
+/// destino lateral (resetea el change-attack-position y vuelve a la
+/// víctima).
+const MOB_REACH_EPSILON: i32 = 60;
 
 /// ¿Hay OTRO mob (vid distinto) dentro de `radius` de (x, y)? (C28).
 fn mob_near(others: &[(u32, i32, i32)], self_vid: u32, x: i32, y: i32, radius: i32) -> bool {
@@ -100,7 +115,7 @@ pub(crate) fn chase_attack_system(
     mut mobs: ParamSet<(
         // Posiciones de TODOS los mobs (C28 — separación; read-only).
         Query<(&Vid, &Position, &Map), Without<Player>>,
-        Query<(&Vid, &Mob, &Map, &mut Aggro, &mut Position, &mut LastAttack), Without<Player>>,
+        Query<(&Vid, &Mob, &Map, &mut Aggro, &mut Position, &mut LastAttack, &mut AttackPos), Without<Player>>,
     )>,
     mut players: Query<(Entity, &Player, &Position, &mut Hp, &Affects), Without<Mob>>,
     tick: Res<Tick>,
@@ -117,7 +132,7 @@ pub(crate) fn chase_attack_system(
     for (v, p, m) in &mobs.p0() {
         others_by_map.entry(m.map_index).or_default().push((v.vid, p.x, p.y));
     }
-    for (vid, mob, map, mut aggro, mut pos, mut last_attack) in &mut mobs.p1() {
+    for (vid, mob, map, mut aggro, mut pos, mut last_attack, mut attack_pos) in &mut mobs.p1() {
         let Some(target) = aggro.target else {
             continue;
         };
@@ -173,12 +188,40 @@ pub(crate) fn chase_attack_system(
             }.into());
             continue;
         }
-        // Persecución: paso hacia el jugador a `move_speed` (parity
-        // `step_toward` — el canal difundía el GC_MOVE FUNC_MOVE).
-        let (sx, sy) = step_toward(pos.x, pos.y, ppos.x, ppos.y, mob_move_speed(mob.move_speed) as i32, tick.dt_ms);
-        if (sx, sy) == (pos.x, pos.y) {
-            continue; // ya en el jugador (o speed 0)
+        // Persecución: C32 (change-attack-position) — el mob NO persigue
+        // directo a la víctima todo el tiempo: cada
+        // AI_CHANGE_ATTACK_POISITION_TIME_NEAR (10 s) cerca, o TIME_FAR
+        // (1 s) a > 100+rango (char.h:72-74), elige un punto ALEATORIO a
+        // fMinDistance (rango×0.9/0.8) alrededor de la víctima y camina
+        // HACIA ÉL — es lo que reparte a los mobs legacy (no se amontonan en
+        // el punto más cercano). Solo `rank < MOB_RANK_BOSS` (char.cpp:5437).
+        // Al llegar al destino lateral (o vencer el timer sin destino)
+        // vuelve a perseguir a la víctima.
+        let is_far = dist > 100 + mob.attack_range as i32;
+        let change_time = if is_far { CHANGE_ATTACK_POS_TIME_FAR } else { CHANGE_ATTACK_POS_TIME_NEAR };
+        let mut dest = attack_pos.dest;
+        if mob.rank < MOB_RANK_BOSS && now.0.saturating_sub(attack_pos.last_change_ms) >= change_time {
+            // Timer expirado: nuevo destino lateral (parity Follow — el C++
+            // resetea el timer al reponer el destino, char.cpp:5440).
+            dest = Some(change_attack_dest(
+                pos.x, pos.y, ppos.x, ppos.y, mob.battle_type, mob.attack_range,
+                &mut |lo, hi| rng.roll(lo, hi),
+            ));
+            attack_pos.last_change_ms = now.0;
         }
+        // ¿Llegó al destino lateral? → volver a perseguir a la víctima.
+        if let Some((dx, dy)) = dest
+            && distance_approx(pos.x - dx, pos.y - dy) <= MOB_REACH_EPSILON {
+                attack_pos.dest = None;
+                dest = None;
+            }
+        let target = dest.unwrap_or((ppos.x, ppos.y));
+        // Paso hacia el destino (víctima o punto lateral) a `move_speed`.
+        let (sx, sy) = step_toward(pos.x, pos.y, target.0, target.1, mob_move_speed(mob.move_speed) as i32, tick.dt_ms);
+        if (sx, sy) == (pos.x, pos.y) {
+            continue; // ya en el destino (o speed 0)
+        }
+        attack_pos.dest = dest; // recordar el destino lateral activo
         // C28 (separación): el destino del paso debe quedar libre de otros
         // mobs del MISMO mapa — si está ocupado, probar flancos o no
         // moverse este tick (F1: los mobs de otros mapas no bloquean).
@@ -644,6 +687,9 @@ mod tests {
         let mut w = world_with(42);
         let mut row = mob_row(101);
         row.ai_flag = Some("AGGR".into());
+        // C32: rank BOSS (4) — los bosses NO hacen change-attack-position
+        // (char.cpp:5437); este test aísla la persecución DIRECTA.
+        row.rank = 4;
         load(&mut w, vec![(entry(101, 400, 0, 1), row)]);
         join(&mut w); // spawn + AggroOn (dist 384 ≤ sight 400)
         let events = w.update(500);
@@ -820,6 +866,9 @@ mod tests {
         let mut w = world_with(42);
         let mut row = mob_row(101);
         row.ai_flag = Some("AGGR".into()); // persigue al jugador del mapa 41
+        // C32: rank BOSS (4) — sin change-attack-position: el paso es RECTO
+        // (el test aísla la separación POR MAPA, no el reposicionamiento).
+        row.rank = 4;
         // C30: el paso real es 150 u (300 u/s × 0.5 s) — el mob spawnea a
         // 600 para que el update (tras el join del jugador 3) PISE las
         // coords del mob 2101 (300,0) exactamente; sight ampliado a 700
@@ -887,6 +936,9 @@ mod tests {
         let mut w = world_with(42);
         let mut row = mob_row(101);
         row.ai_flag = Some("AGGR".into());
+        // C32: rank BOSS — persecución directa determinista (el test aísla
+        // la SEPARACIÓN entre copias, no el reposicionamiento lateral).
+        row.rank = 4;
         // 2 copias, rect ±2 celdas (200 u) alrededor de (0,0) — AMBOS caen
         // dentro del sight de aggro (400) y persiguen de verdad (un rect de
         // ±500 dejaría una copia a 455 > sight → patrulla sin target y el
@@ -916,6 +968,42 @@ mod tests {
         let d1 = crate::combat::distance_approx(x1, y1);
         assert!(d0 <= 300, "mob A en rango: {d0}");
         assert!(d1 <= 300, "mob B en rango: {d1}");
+    }
+
+    /// C32: el change-attack-position — un mob rank < BOSS en persecución,
+    /// con el timer vencido, se desvía del camino DIRECTO a la víctima hacia
+    /// un punto lateral a `fMinDistance` (parity char.cpp:5436-5462); el
+    /// test verifica que la posición final NO está en el eje directo
+    /// (mismo x, y ≈ 0) y que la distancia a la víctima es ~fMinDistance.
+    #[test]
+    fn mob_repositions_laterally_when_pursuing() {
+        let mut w = world_with(42);
+        let mut row = mob_row(101);
+        row.ai_flag = Some("AGGR".into());
+        row.rank = 0; // PAWN — reposiciona
+        // Sight ampliado: el aggro proactivo alcanza al mob a 600.
+        row.aggressive_sight = 700;
+        // Mob a 600 u del jugador: primer tick del join → 450 (step 150).
+        load(&mut w, vec![(entry(101, 600, 0, 1), row)]);
+        join(&mut w); // spawn + AggroOn (600 ≤ sight 700)
+        // Un tick más: el mob se mueve hacia el jugador. Luego, el timer FAR
+        // (1 s a > 100+rango) expira y el mob elige un destino lateral.
+        for _ in 0..4 {
+            w.update(500);
+        }
+        let (x, y) = {
+            let v = w.npc_view(10_000).expect("mob vivo");
+            (v.state.x, v.state.y)
+        };
+        // Después de 2 s (4 ticks) de persecución a 300 u/s desde ~600,
+        // el mob está cerca del jugador — la clave: NO en el eje x directo
+        // (|y| > 0 significa el desvío lateral del change-attack-position).
+        // El rng determinista con seed 42 da un ángulo no-trivial.
+        assert!(y.abs() > 20, "el mob se desvió del eje directo (C32): ({x},{y})");
+        // Y está a ≤ rango de ataque del jugador (o muy cerca — persiguiendo
+        // el punto lateral que queda a fMinDistance ≈ 158 de la víctima).
+        let d = crate::combat::distance_approx(x, y);
+        assert!(d <= 300, "cerca del jugador: {d}");
     }
 
     /// C23 (respawn por tiempo — F2, caso `time > 0`): el mob MUERTO no

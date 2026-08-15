@@ -41,6 +41,7 @@ pub fn mob_row(vnum: i64) -> MobRow {
         damage_min: 3,
         damage_max: 8,
         aggressive_sight: 400,
+        rank: 0,
     }
 }
 

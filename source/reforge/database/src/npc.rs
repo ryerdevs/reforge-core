@@ -107,6 +107,11 @@ pub struct MobRow {
     /// iniciativa propia (`FindVictim(wAggressiveSight)`, char_state.cpp:893);
     /// 0 = nunca ataca proactivamente. También es el rango de de-aggro.
     pub aggressive_sight: i32,
+    // ---- C32: el rank del mob (change-attack-position solo rank < BOSS). ----
+    /// `rank` (smallint, 0=PAWN..5=KING) — `MOB_RANK_BOSS` = 4
+    /// (length.h:313-318); los bosses NO se reposicionan en combate
+    /// (`GetMobRank() < MOB_RANK_BOSS`, char.cpp:5437).
+    pub rank: i32,
 }
 
 /// Load del subset por vnum (`SELECT ... FROM player.mob_proto WHERE vnum = $1`).
@@ -114,7 +119,7 @@ pub struct MobRow {
 const LOAD_SQL: &str = "\
 SELECT vnum, name, locale_name, type, battle_type, level, size, ai_flag, folder, \
 ht, def, max_hp, attack_range, exp, gold_min, gold_max, drop_item, move_speed, \
-attack_speed, damage_min, damage_max, aggressive_sight \
+attack_speed, damage_min, damage_max, aggressive_sight, rank \
 FROM player.mob_proto WHERE vnum = $1";
 
 /// Load por LOTE de vnums (la misma SELECT, `WHERE vnum = ANY($1::int8[])` —
@@ -123,7 +128,7 @@ FROM player.mob_proto WHERE vnum = $1";
 const LOAD_BATCH_SQL: &str = "\
 SELECT vnum, name, locale_name, type, battle_type, level, size, ai_flag, folder, \
 ht, def, max_hp, attack_range, exp, gold_min, gold_max, drop_item, move_speed, \
-attack_speed, damage_min, damage_max, aggressive_sight \
+attack_speed, damage_min, damage_max, aggressive_sight, rank \
 FROM player.mob_proto WHERE vnum = ANY($1::int8[])";
 
 /// Repositorio del dominio world (mob_proto). Conexion por llamada (ADR-0008).
@@ -197,6 +202,7 @@ fn mob_row_from_row(r: &Row) -> Result<MobRow, String> {
         damage_min: r.try_get(19).map_err(|e| format!("mob_proto.damage_min: {e}"))?,
         damage_max: r.try_get(20).map_err(|e| format!("mob_proto.damage_max: {e}"))?,
         aggressive_sight: r.try_get(21).map_err(|e| format!("mob_proto.aggressive_sight: {e}"))?,
+        rank: r.try_get(22).map_err(|e| format!("mob_proto.rank: {e}"))?,
     })
 }
 
@@ -225,14 +231,14 @@ mod tests {
             LOAD_SQL,
             "SELECT vnum, name, locale_name, type, battle_type, level, size, ai_flag, folder, \
 ht, def, max_hp, attack_range, exp, gold_min, gold_max, drop_item, move_speed, \
-attack_speed, damage_min, damage_max, aggressive_sight \
+attack_speed, damage_min, damage_max, aggressive_sight, rank \
 FROM player.mob_proto WHERE vnum = $1"
         );
         assert_eq!(
             LOAD_BATCH_SQL,
             "SELECT vnum, name, locale_name, type, battle_type, level, size, ai_flag, folder, \
 ht, def, max_hp, attack_range, exp, gold_min, gold_max, drop_item, move_speed, \
-attack_speed, damage_min, damage_max, aggressive_sight \
+attack_speed, damage_min, damage_max, aggressive_sight, rank \
 FROM player.mob_proto WHERE vnum = ANY($1::int8[])"
         );
     }
