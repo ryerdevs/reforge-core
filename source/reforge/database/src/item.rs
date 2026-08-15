@@ -193,12 +193,16 @@ impl ItemRepo {
         for (i, slot) in values.iter_mut().enumerate() {
             *slot = r.try_get(2 + i).map_err(|e| format!("item_proto.value{i}: {e}"))?;
         }
+        // weight es smallint (int2) en el esquema — cast DESPUÉS (patrón
+        // del fix shop.rs:284-289: leer el tipo real, cast a i64 después;
+        // leer int2 como i64 daba "error deserializing column 9").
+        let weight: i16 = r.try_get(9).map_err(|e| format!("item_proto.weight: {e}"))?;
         Ok(Some(ProtoItem {
             b_type: r.try_get(0).map_err(|e| format!("item_proto.type: {e}"))?,
             b_sub_type: r.try_get(1).map_err(|e| format!("item_proto.sub_type: {e}"))?,
             values,
             wear_flag: r.try_get(8).map_err(|e| format!("item_proto.wearflag: {e}"))?,
-            weight: r.try_get(9).map_err(|e| format!("item_proto.weight: {e}"))?,
+            weight: i64::from(weight),
         }))
     }
 
