@@ -13,7 +13,7 @@ use crate::combat::{
     player_def_grade, CombatState, NpcState, PlayerState,
 };
 use crate::ecs::components::{
-    Affects, Aggro, Combat, Hp, Map, Mob, Mp, Player, Position, SpawnRef, Vid,
+    Affects, Aggro, Combat, Hp, LastAttack, Map, Mob, Mp, Player, Position, SpawnRef, Vid,
 };
 use crate::ecs::events::{CombatEvent, KillInfo, MoveEvent, NpcEvent};
 use crate::ecs::resources::{
@@ -100,10 +100,11 @@ pub(crate) fn chase_attack_system(
     mut mobs: ParamSet<(
         // Posiciones de TODOS los mobs (C28 — separación; read-only).
         Query<(&Vid, &Position, &Map), Without<Player>>,
-        Query<(&Vid, &Mob, &Map, &mut Aggro, &mut Position), Without<Player>>,
+        Query<(&Vid, &Mob, &Map, &mut Aggro, &mut Position, &mut LastAttack), Without<Player>>,
     )>,
     mut players: Query<(Entity, &Player, &Position, &mut Hp, &Affects), Without<Mob>>,
     tick: Res<Tick>,
+    now: Res<WorldClock>,
     mut rng: ResMut<Rand>,
     mut outbox: ResMut<NpcOutbox>,
 ) {
@@ -116,7 +117,7 @@ pub(crate) fn chase_attack_system(
     for (v, p, m) in &mobs.p0() {
         others_by_map.entry(m.map_index).or_default().push((v.vid, p.x, p.y));
     }
-    for (vid, mob, map, mut aggro, mut pos) in &mut mobs.p1() {
+    for (vid, mob, map, mut aggro, mut pos, mut last_attack) in &mut mobs.p1() {
         let Some(target) = aggro.target else {
             continue;
         };
@@ -135,6 +136,17 @@ pub(crate) fn chase_attack_system(
         }
         let state = npc_state(vid.vid, &pos, mob);
         if dist <= melee_max_range(&state) {
+            // C29: COOLDOWN del golpe del mob — parity `CalculateDuration`
+            // (utils.cpp:201-210) con `POINT_ATT_SPEED = attack_speed` y
+            // `iDur = 2000` (char_state.cpp:1005-1012). El rewrite atacaba
+            // CADA TICK (250 ms); el legacy golpea cada ~2 s (att_speed
+            // 100) — 8× más rápido. El `last_attack` se actualiza SOLO al
+            // golpear (parity `m_dwLastAttackTime` en `OnMove(true)` tras un
+            // ataque exitoso — char.cpp:4828-4834).
+            let cooldown = crate::ai::mob_attack_cooldown_ms(mob.attack_speed);
+            if now.0.saturating_sub(last_attack.at_ms) < cooldown {
+                continue; // aún en cooldown — no atacar este tick
+            }
             // EN RANGO: ataque del mob — daño = atk del mob_proto − DEF del
             // jugador (parity char.cpp:2114 + items ARMOR —
             // `player_def_grade`; + el bonus de DEF_GRADE de los buffs —
@@ -145,6 +157,7 @@ pub(crate) fn chase_attack_system(
                 player_def_grade(p.level, p.ht, p.armor) + paff.def_grade_bonus(),
                 &mut |lo, hi| rng.roll(lo, hi),
             );
+            last_attack.at_ms = now.0;
             php.hp = (php.hp - damage).max(0);
             outbox.0.push(CombatEvent::MobAttack {
                 player_vid: p.vid,
@@ -604,7 +617,9 @@ mod tests {
         load(&mut w, vec![(entry(101, 0, 0, 1), row)]);
         let events = join(&mut w); // el primer tick: spawn + detect → AggroOn
         assert!(events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::AggroOn { .. }))), "{events:?}");
-        let events = w.update(500);
+        // C29: el cooldown del golpe es 2000 ms (attack_speed 100) — un tick
+        // de 2000 ms lo satisface (el mob está EN RANGO, no se mueve).
+        let events = w.update(2_000);
         let attack = events.iter().find_map(|e| match e {
             NpcEvent::Combat(CombatEvent::MobAttack { vid, damage, player_vid, .. }) => {
                 Some((*vid, *damage, *player_vid))
@@ -689,7 +704,7 @@ mod tests {
             dx: 30,
             iq: 30,
         });
-        let events = w.update(500);
+        let events = w.update(2_000); // C29: cooldown 2000 ms — el mob ataca
         let attack = events.iter().find_map(|e| match e {
             NpcEvent::Combat(CombatEvent::MobAttack { damage, .. }) => Some(*damage),
             _ => None,
@@ -713,7 +728,7 @@ mod tests {
             "el jugador 2 es el más cercano: {join2:?}"
         );
         join_at(&mut w, 3, 5_000, 0); // lejos del mob (4800 > sight 400)
-        let events = w.update(500);
+        let events = w.update(2_000); // C29: cooldown 2000 ms — el mob ataca
         let attack = events.iter().find_map(|e| match e {
             NpcEvent::Combat(CombatEvent::MobAttack { player_vid, .. }) => Some(*player_vid),
             _ => None,
@@ -860,8 +875,11 @@ mod tests {
         let mut w = world_with(42);
         let mut row = mob_row(101);
         row.ai_flag = Some("AGGR".into());
-        // 2 copias, rect ±5 celdas (500 u) alrededor de (0,0).
-        let e = SpawnEntry { w_x: 5, w_y: 5, ..entry(101, 0, 0, 2) };
+        // 2 copias, rect ±2 celdas (200 u) alrededor de (0,0) — AMBOS caen
+        // dentro del sight de aggro (400) y persiguen de verdad (un rect de
+        // ±500 dejaría una copia a 455 > sight → patrulla sin target y el
+        // test no prueba la separación en persecución).
+        let e = SpawnEntry { w_x: 2, w_y: 2, ..entry(101, 0, 0, 2) };
         load(&mut w, vec![(e, row)]);
         join(&mut w); // spawn con jitter + AggroOn de ambos
         assert_eq!(w.npc_count(), 2);

@@ -779,7 +779,11 @@ fn character_add_packets(entry: &SpawnEntry, mob: &MobRow, vid: u32, b_type: u8)
             // wire BYTE, truncación igual que el cast (BYTE) del C++). El
             // cliente lo usa para la animación del paso (SetMoveSpeed(x/100)).
             mob.move_speed as u8,
-            0, // b_attack_speed: columna attack_speed NO seleccionada aún (GAP — mismo bug de animación que el PC; F5)
+            // C29: b_attack_speed = attack_speed de la tabla (parity
+            // char.cpp:2245-2246 — `SetPoint(POINT_ATT_SPEED, sAttackSpeed)`;
+            // el cliente lo usa para la animación del golpe). Era 0 fijo
+            // (GAP cerrado con la selección de la columna).
+            mob.attack_speed as u8,
             0, // b_state_flag (runtime F5)
             [0, 0], // dw_affect_flag (runtime F5)
         )
@@ -848,6 +852,8 @@ mod tests {
             drop_item: 101,
             // F5.3: velocidad del mob (mob_proto.move_speed — UNITS/seg).
             move_speed: 100,
+            // C29: velocidad de ataque del mob 101 (mob_proto.attack_speed).
+            attack_speed: 100,
             // F5.3: daño del ataque del mob 101 (mob_proto.damage_min/max).
             damage_min: 3,
             damage_max: 8,

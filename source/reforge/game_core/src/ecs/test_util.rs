@@ -37,6 +37,7 @@ pub fn mob_row(vnum: i64) -> MobRow {
         gold_max: 45,
         drop_item: 101,
         move_speed: 100,
+        attack_speed: 100,
         damage_min: 3,
         damage_max: 8,
         aggressive_sight: 400,

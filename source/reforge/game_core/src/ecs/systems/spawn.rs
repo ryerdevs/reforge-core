@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use bevy_ecs::prelude::*;
 
 use crate::combat::distance_approx;
-use crate::ecs::components::{Aggro, Hp, Map, Mob, Player, Position, SpawnRef, SpawnSeen, Vid};
+use crate::ecs::components::{Aggro, Hp, LastAttack, Map, Mob, Player, Position, SpawnRef, SpawnSeen, Vid};
 use crate::ecs::events::CombatEvent;
 use crate::ecs::resources::{
     NpcIndex, NpcOutbox, Rand, RespawnQueue, SpawnCache, SpawnTable, VidAlloc, WorldClock,
@@ -145,6 +145,7 @@ pub(crate) fn spawn_despawn_system(
                         Position { x: copy.x, y: copy.y },
                         Hp { hp: se.mob.max_hp as i32, max_hp: se.mob.max_hp as i32 },
                         Aggro { target: None },
+                        LastAttack { at_ms: 0 },
                         Mob::from_row(&copy, &se.mob),
                         SpawnRef { map: *map_index, index },
                     ))
