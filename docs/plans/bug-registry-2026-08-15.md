@@ -252,3 +252,23 @@
 
 - No hay collision/separacion entre mobs — todos persiguen al jugador en linea recta y se superponen. El C++ tiene distancia minima entre mobs.
 - Fix: no perseguir si hay otro mob en el radio (~50-100 u) + separacion en el patrol.
+
+### C29. [ABIERTO — NUEVO, CRITICO] Mobs atacan ~8x mas rapido que el legacy (sin cooldown)
+
+- El legacy golpea cada CalculateDuration(POINT_ATT_SPEED, 2000) ~= 2 s (char_state.cpp:1005-1012). El rewrite ataca cada tick de AI (250 ms) sin cooldown (combat.rs:118-148). Los mobs pegan ~8x mas rapido.
+- Referencia completa: docs/plans/mob-legacy-behavior.md §8.1.
+
+### C30. [ABIERTO — NUEVO, CRITICO] Velocidad de mob motion-based (se mueven raro)
+
+- El legacy deriva la velocidad de la ANIMACION (GetMoveMotionSpeed char.cpp:2726-2749, ~300 u/s) no de la columna; el rewrite usa move_speed del mob_proto como u/s reales (ai.rs:16-58) → mobs ~3x mas lentos + dw_duration del GC_MOVE ~3x mayor → "se mueven raro".
+- Referencia: mob-legacy-behavior.md §7.
+
+### C31. [ABIERTO — NUEVO, ALTO] Rango de ataque del mob equivocado
+
+- Legacy: persigue a range*1.15, para en range*0.9/0.8 (char_state.cpp:991, 694-714). Rewrite: MAX(300, range*1.15) solo MELEE (combat.rs:290-298) → RANGE/MAGIC atacan a 300 y mobs con range<261 golpean desde 300 en vez de ~157-201.
+- Referencia: mob-legacy-behavior.md §8.3.
+
+### C32. [ABIERTO — NUEVO] Mobs se juntan: falta change attack position
+
+- El legacy reparte a los mobs alrededor del jugador con reposicionamiento aleatorio cada 10 s/1 s (char.cpp:5436-5462, 5869-5881). El rewrite tiene separate_landing (parche) pero no el change attack position → convergen al rango y se quedan pegados.
+- Referencia: mob-legacy-behavior.md §8.12.
