@@ -7,6 +7,44 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-15] (50th part) — Mob combat parity: attack cooldown/speed/range/reposition (C29-C32)
+
+> The 4 CRITICAL mob behaviors from the legacy analysis (mob-legacy-behavior.md) —
+> "mobs don't feel like the original". All committed, workspace **652 passed / 0 failed**,
+> deployed (binary 5,297,664 B, hash 357d8620; stack up auth :30001 / channel :30003).
+
+- **C29 — Mob attack cooldown (CRITICAL)** (`10d5092`): the mob attacked EVERY AI tick
+  (250 ms); the legacy hits every `CalculateDuration(POINT_ATT_SPEED, 2000)` ~= 2 s
+  (char_state.cpp:1005-1012) — mobs hit ~8× faster. NEW `ai::mob_attack_cooldown_ms`
+  (parity utils.cpp:201-210) + `LastAttack` component (last hit instant, updated only
+  on a successful hit — parity `m_dwLastAttackTime`) + `attack_speed` column selected
+  (mob_proto, position 18) + `b_attack_speed` in GC_CHARACTER_ADD wired (was hardcoded 0).
+- **C30 — Mob speed is motion-based (CRITICAL)** (`9e55397`): the rewrite used the
+  mob_proto `move_speed` column directly as u/s — the legacy derives speed from the RUN
+  animation (~300 u/s) with the column as the POINT_MOV_SPEED factor
+  (`GetMoveMotionSpeed × 10000/CalculateDuration(factor, 10000)`, char.cpp:2726-2754).
+  NEW `ai::mob_move_speed` — factor 100 → 300 u/s; the 308 mobs with factor 0/1 now
+  move at ~150 u/s instead of being FROZEN. Chase and patrol both use it.
+- **C31 — Exact mob attack range (HIGH)** (`3e05d3c`): mob→PC range is ONLY
+  `GetMobAttackRange() × 1.15` with NO 300 floor (battle.cpp:147-152); RANGE/MAGIC add
+  POINT_BOW_DISTANCE (char.cpp:2010-2020). NEW `combat::mob_attack_max_range` — mobs
+  with range < 261 no longer hit from 300; `melee_max_range` stays for the PC→mob path.
+- **C32 — Change attack position (MEDIUM-HIGH)** (`9a0b618`): pursuing mobs converged
+  and clumped — the legacy repositions each mob randomly around the victim every
+  `AI_CHANGE_ATTACK_POISITION_TIME_NEAR` (10 s) near / `TIME_FAR` (1 s) far
+  (char.cpp:5436-5462, 5869-5881). NEW `ai::change_attack_dest` (fMinDistance = range×
+  0.9/0.8, angle = direction ± 2×number(-90,90) near / number(0,359) far) + `AttackPos`
+  component + `Mob.rank` (MOB_RANK_BOSS = 4 excluded).
+- **Full server-side gap analysis** (`server-side-gap-2026-08-15.md`): 2 exploration
+  lanes (module surface + per-domain depth) — 146 C++ .cpp (~104.7k LOC) vs 46 Rust
+  .rs (~23k) = 4.5× less code, ~40% coverage; ranked 28 missing behaviors (CRITICAL:
+  refine, stat_points, party, PvP; HIGH: safebox, numeric buffs, skill families, gold
+  pickup, exp level-delta, item attributes, mob AIFLAGs, death penalty). **NEXT block:**
+  stat points → party → refine → gold pickup → numeric buffs → safebox → exp curve
+  → AIFLAGs (BERSERK/COWARD/GODSPEED/STONESKIN).
+- **Commit convention adopted** (`1d0f28c`): Conventional Commits in English as
+  AGENTS.md rule 17 (atomicity + no rewriting published history).
+
 ## [2026-08-15] (49th part) — Base jugable fixes: revive city/boots/mobs + full legacy-mob analysis
 
 > Sl session continuation (loop "Base jugable"). The 5 original plan bugs (drag-equip

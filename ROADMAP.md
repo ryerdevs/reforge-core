@@ -7,6 +7,29 @@
 
 ## Current state (2026-08-15)
 
+- **50th part (2026-08-15) — MOB COMBAT PARITY (C29-C32):** the 4 CRITICAL mob behaviors
+  from the legacy analysis, all committed + deployed (binary 5,297,664 B; stack up
+  auth :30001 / channel :30003; workspace **652 passed / 0 failed**). **(1) C29 attack
+  cooldown** (`10d5092`): `mob_attack_cooldown_ms` = `CalculateDuration(ATT_SPEED, 2000)`
+  parity (utils.cpp:201-210) — mobs hit every ~2 s instead of every 250 ms tick (8×
+  faster before); `LastAttack` component; `attack_speed` column selected + `b_attack_speed`
+  wired in the ADD. **(2) C30 motion-based speed** (`9e55397`): `mob_move_speed` =
+  `motion(300) × 10000/CalculateDuration(factor, 10000)` (char.cpp:2726-2754) — the
+  column was used as raw u/s (3× slower); the 308 mobs with factor 0/1 no longer frozen.
+  **(3) C31 exact range** (`3e05d3c`): `mob_attack_max_range` = `range×1.15` WITHOUT the
+  300 floor + POINT_BOW_DISTANCE for RANGE/MAGIC (battle.cpp:147-152, char.cpp:2010-2020).
+  **(4) C32 change attack position** (`9a0b618`): `change_attack_dest` + `AttackPos` —
+  pursuing mobs reposition laterally every 10 s/1 s (char.cpp:5436-5462) and stop
+  clumping; `Mob.rank` (BOSS=4 excluded). **Full server-side gap analysis** written
+  (`docs/plans/server-side-gap-2026-08-15.md`): 2 exploration lanes — 146 C++ .cpp
+  (~104.7k LOC) vs 46 Rust .rs (~23k) = 4.5× less code, ~40% coverage; 28 ranked missing
+  behaviors. **CRITICAL: refine (CG_ITEM_USE_TO_ITEM + CG_REFINE sin dispatch),
+  stat_points (no handler — progression blocked), party, PvP. HIGH: safebox, numeric
+  buffs, skill families (SPLASH/PARTY/HORSE), gold pickup (vnum 1 → inventory), exp
+  level-delta + cap 10%, item attributes/sockets, mob AIFLAGs (BERSERK/COWARD/GODSPEED/
+  STONESKIN), death penalty. NEXT block: stat points → party → refine → gold pickup →
+  numeric buffs → safebox → exp curve → AIFLAGs.**
+
 - **49th part (2026-08-15) — BASE JUGABLE FIXES + FULL LEGACY-MOB ANALYSIS:** the 5 original loop bugs (drag-equip INVENTORY, GC_ITEM_DEL vnum=0, CG_SHOP header 50, player commands + revive, CG_TARGET 61→GC_TARGET 63) were fixed/verified in earlier loop iterations (ASSUMPTIONS.md). This part added the real-feel fixes: **(1) Revive-city (C26)** — city revive now teleports to the village (969600/278400) + HP/MP restore (`4f00706`). **(2) Boots speed (C27)** — `APPLY_MOV_SPEED` boots wired to the envelope, cap 200 (`41a244f`). **(3) Mobs separation (C28)** — per-map snapshot + SEP_MOBS 60 u + flank ±90° + spawn jitter (`41a244f`+`261d0c7`). **(4) Mobs respawn (C23)** — `time==0` never respawns (sentinel), top-up = max_count−alive, despawn no longer cancels pending (`41a244f`+`261d0c7`). **Verifier mobs v2: PASS** (3 mutation tests discriminate each fix; 3× `cargo test --workspace` = 647 passed / 0 failed). Redeployed — stack up (auth :30001 + channel :30003), binary hash 0953602509f8809c06bf718c681fc4d7. **(5) NEW `docs/plans/mob-legacy-behavior.md` (`841101a`)** — the COMPLETE C++ mob AI captured with file:line (state machine, FindVictim, attack cooldown ~2 s vs 250 ms — C29, motion-based speed ~300 u/s vs column — C30, exact range ×1.15/×0.9 — C31, change-attack-position that prevents clumping — C32, **the "knockdown" does NOT exist server-side — AIFLAG_FALL is dead code; client animation only**). 21 missing behaviors, C29–C32 in the bug-registry (`af0be90`). **(6) Backlog committed** — 59 files from waves 44–46 that were documented but never committed (`d2c0831`; clean tree). **NEXT (block): C29 mob attack cooldown + C30 motion-based speed + C31 exact range + C32 change-attack-position.**
 
 - **WAVE 46 (DAWN) — QUEST-BOOT A/B FIX + HANDSHAKE LENIENCY + PANIC FIX (2026-08-14, 46th part):** **(1) Root cause of the post-quests "no connect" ISOLATED with A/B** — the corpus load (194 files, ~2 s) ran SYNCHRONOUSLY before the accept loop → the client hit the kernel backlog and closed (A/B: `quest_path` empty → connects). **FIX: background load** (`tokio::spawn` — accept instant, quests ~2 s later, fail-open; channel/mod.rs:132-147). **(2) Handshake leniency** — after 32 retries (~17.6 s) the channel NO LONGER closes: sends `GC_PHASE(LOGIN)` and waits for the LOGIN3 up to **45 s** (test `channel_slow_client_login3_after_retries_exhausted`, channel_smoke.rs:174). **(3) Close panic fix** — `session.rs save()` expected `motion()` on pre-ENTERGAME closed connections → worker panic; position sync only when motion is set (session.rs:449-457). **(4) channel.inf** — saved index "1" (4-channel era) vs the 1-channel dict → KeyError → corrected to 0; client UI fallback finding (pack). **(5) Shops data linked** — `player.shop` 1–6 → 20002/20006/20023/20025/20029/20030 (visible NPCs), 9 → 20042, 1002 → 20341, 1003 → 20343; **shop opening IN DIAGNOSIS (coder)**. **(6) Quest dialog** — engine sends raw keys ("gameforge.map_warp._20_sayTitle"); **text resolution IN DIAGNOSIS (coder)**. **Verified live**: stable entry (3 handshake fixes), position persisted across reconnects, 331 movement lines (map crossing), 194 quests in background, 0 panics. Deploys 01:50 `941F1B54` / 02:05 `2E9CC162` / **02:11 `015FB634` (current stack auth.021225/channel.021225)**; **573 tests** (616 attrs); ops dot-source + `-HsDebug`. **NEXT: shop opening (coder) → quest text resolution (coder) → skills GAPs (SPLASH/PARTY/HORSE, buffs) → GM mob spawn → quest converter completion (~88) → ladder 250/500/1000 → per-tick CPU → ECS parallelism decision (ADR-0010 §1).**
