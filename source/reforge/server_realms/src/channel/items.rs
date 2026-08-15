@@ -695,23 +695,24 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
         ItemRepo::new(session.pool.clone())
             .upsert(&session.inventory[src], session.row().id)
             .await?;
-        // El ADDITIONAL_INFO (parts) se reenvía con los parts COMPUTADOS de
-        // los items equipados (ComputeParts F5.3 — el personaje muestra el
-        // arma/armadura; el part = vnum del item).
+        // El CHARACTER_UPDATE (header 19) con los parts COMPUTADOS (parity
+        // `UpdatePacket` — char.cpp:1017-1052; el C++ lo manda en el EquipTo,
+        // item.cpp:1004-1005): el cliente recalcula el daño del arma
+        // (ATT_MIN/ATT_MAX — `__SetWeaponPower` lee value3/value4 del item
+        // por el part del arma) y refresca la ventana
+        // (`__RecvCharacterUpdatePacket` → `__SetWeaponPower` +
+        // `__RefreshStatus`). El ADDITIONAL_INFO (136) NO vale aquí: es el
+        // paquete de la secuencia de ENTRADA (el cliente lo aplica solo si el
+        // VID coincide con el `s_kNetActorData` pendiente —
+        // PythonNetworkStreamPhaseGameActor.cpp:153,165).
         let parts = packets::equipped_parts(session.row(), &session.inventory);
         let arrows = super::equipped_arrow_index(&session.inventory)
             .map(|i| session.inventory[i].count as u32)
             .unwrap_or(0);
         session
-            .send(&packets::character_additional_info_with_parts(
-                session.row(),
-                session.empire,
-                &parts,
-                arrows,
-            )
-            .to_bytes())
+            .send(&packets::character_update_with_parts(session.row(), &parts, arrows).to_bytes())
             .await
-            .map_err(|e| format!("enviando GC_CHARACTER_ADDITIONAL_INFO: {e}"))?;
+            .map_err(|e| format!("enviando GC_CHARACTER_UPDATE (equip): {e}"))?;
         // El iArmor del mundo COMPARTIDO (el ataque del mob usa
         // `player_def_grade` con la armadura del equipo — solo cambia al
         // equipar/desequipar).
@@ -784,22 +785,17 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
         ItemRepo::new(session.pool.clone())
             .upsert(&session.inventory[src], session.row().id)
             .await?;
-        // ADDITIONAL_INFO con los parts COMPUTADOS (el arma/armadura ya no
-        // está — el part se quita).
+        // CHARACTER_UPDATE con los parts COMPUTADOS (el arma/armadura ya no
+        // está — el part se quita; parity del C++: `CItem::Unequip` →
+        // ComputeBattlePoints + UpdatePacket, item.cpp).
         let parts = packets::equipped_parts(session.row(), &session.inventory);
         let arrows = super::equipped_arrow_index(&session.inventory)
             .map(|i| session.inventory[i].count as u32)
             .unwrap_or(0);
         session
-            .send(&packets::character_additional_info_with_parts(
-                session.row(),
-                session.empire,
-                &parts,
-                arrows,
-            )
-            .to_bytes())
+            .send(&packets::character_update_with_parts(session.row(), &parts, arrows).to_bytes())
             .await
-            .map_err(|e| format!("enviando GC_CHARACTER_ADDITIONAL_INFO: {e}"))?;
+            .map_err(|e| format!("enviando GC_CHARACTER_UPDATE (desequip): {e}"))?;
         // El iArmor del mundo COMPARTIDO baja con el item quitado.
         let armor = equipped_armor(&session.inventory, &session.pool).await?;
         session.intent(Intent::Combat(CombatIntent::SetArmor {

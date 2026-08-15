@@ -16,4 +16,6 @@ extend-words = [
     "integracion", "dependencias", "produccion", "avance", "persistente",
     "recuperacion", "reintento", "fallo", "exitoso", "pendiente", "procesa",
     "cambios", "archivo", "fila", "registro", "consulta", "clave", "valor",
+    "cliente", "daño", "nivel", "arma", "ventana", "puntos", "ciclo",
+    "estacionario", "pre-incremento",
 ]
