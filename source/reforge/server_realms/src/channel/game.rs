@@ -23,6 +23,26 @@ use crate::channel::{chat, combat, events, items, movement, script, shop, skills
 /// 1-7 las hizo `entry::run`). `Err` = cierre con razón (fatal o protocolario
 /// — speedhack vía `Outcome::Close`).
 pub async fn run(session: &mut Session) -> Result<(), String> {
+    // Guard de sesión LLENA (fix 2026-08-14): el entry retorna Ok(()) para
+    // los cierres limpios del protocolo (login fallido — GC_LOGIN_FAILURE,
+    // guild mark, slot vacío) — sin fila NO hay game loop (el cliente ya
+    // recibió su respuesta o nada; los handlers usarían row()/store() con
+    // expect y el cierre por EOF panickearía en el save).
+    if session.row.is_none() {
+        return Ok(());
+    }
+    // Save al CIERRE de conexión (fix 2026-08-13): la posición del jugador
+    // se persiste ANTES de soltar la sesión — el LeaveGuard (Drop, sync y
+    // sin la sesión) no puede. En TODOS los caminos (Ok y Err — cierre por
+    // timeout/speedhack/EOF): el save es fire-and-forget → Batcher del canal
+    // (100 ms, WAL) — el batch se aplica aunque la conexión ya se cerró.
+    let result = game_loop(session).await;
+    session.save();
+    result
+}
+
+/// El loop de juego puro (extraído para el save al cierre en `run`).
+async fn game_loop(session: &mut Session) -> Result<(), String> {
     // 8. Loop de juego: la conexión se mantiene viva.
     loop {
         let idle_deadline = session.last_packet + session.config.timeout;
@@ -93,9 +113,10 @@ pub async fn run(session: &mut Session) -> Result<(), String> {
                     }
                     // F6 social: click en NPC (26, 5 B: header + vid — el
                     // mundo resuelve el shop del NPC) + CG_SHOP (50) +
-                    // CG_EXCHANGE (27). El header CG_SHOP no existe en el
-                    // protocol crate (GAP del lane protocol — literal con
-                    // parity Packet.h:62).
+                    // CG_EXCHANGE (27). CG_SHOP es variable (2-4 B según
+                    // subheader) — el framer lo resuelve (fix bug 3,
+                    // 2026-08-15; antes UnknownHeader -> cierre en el primer
+                    // BUY/SELL/END de la tienda).
                     header::CG_ON_CLICK => shop::click(session, &pkt).await?.into_result()?,
                     50 /* CG_SHOP — Packet.h:62 */ => {
                         shop::handle(session, &pkt).await?.into_result()?;

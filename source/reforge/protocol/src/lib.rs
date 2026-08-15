@@ -83,6 +83,10 @@ pub mod header {
     pub const CG_QUEST_INPUT_STRING: u8 = 30;
     pub const CG_QUEST_CONFIRM: u8 = 31;
     pub const CG_PVP: u8 = 41;
+    /// Tienda NPC (`Packet.h:641-645` TPacketCGShop): variable (2 B base +
+    /// payload según subheader END/BUY/SELL/SELL2) — el framer lo resuelve
+    /// por subheader (parity `input_main.cpp:1054-1088`).
+    pub const CG_SHOP: u8 = 50;
     pub const CG_FLY_TARGETING: u8 = 51;
     pub const CG_USE_SKILL: u8 = 52;
     pub const CG_SHOOT: u8 = 54;
@@ -97,6 +101,13 @@ pub mod header {
     /// Login del guild mark (`packet.h:78`) — el cliente lo manda al entrar
     /// al mundo; el canal lo ignora (marks = F5).
     pub const CG_MARK_LOGIN: u8 = 100;
+    /// Índice de marks del guild mark downloader (`packet.h:116` —
+    /// `HEADER_CG_MARK_IDXLIST`): con el canal SIN handshake el downloader
+    /// recibe GC_PHASE(LOGIN) directo y manda 0x68 como PRIMER paquete
+    /// (`GuildMarkDownloader.cpp` `__LoginState_RecvPhase` → TODO_RECV_MARK
+    /// → `__SendMarkIDXList`). El canal normal lo cierra sin responder
+    /// (parity `input.cpp:560-566` — sin mark server).
+    pub const CG_MARK_IDXLIST: u8 = 104;
     /// Version del cliente al terminar la carga (`Packet.h:135` — 0xf1,
     /// `TPacketCGClientVersion2` 67 B): el canal lo ignora sin validar
     /// (parity `input.cpp:205-213`).
@@ -158,6 +169,12 @@ pub mod header {
     /// F1 (locale, aditivo — ADR-0009): `GC_LOCALE` chunked variable-length
     /// (el bundle reensamblado son ~1-2 MB — excede u16, por eso va chunked).
     pub const GC_LOCALE: u8 = 140;
+    /// `HEADER_GC_RESPOND_CHANNELSTATUS` (cliente `Packet.h:312` — 210): la
+    /// respuesta al CG_STATE_CHECKER del selector de canales — `[0xd2][nSize
+    /// i32][n× TChannelStatus port u16+status u8][bSuccess 0x01]` (parity
+    /// `input_db.cpp:2433-2461`). El cliente matchea por puerto
+    /// (`ServerStateChecker::Update`).
+    pub const GC_RESPOND_CHANNELSTATUS: u8 = 210;
 }
 
 /// `LOGIN_MAX_LEN` = 30 → buffers `[31]`.

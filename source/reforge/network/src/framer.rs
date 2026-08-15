@@ -257,6 +257,29 @@ impl Framer {
             }
             return Ok(Some(self.buf.drain(..total).collect()));
         }
+        // CG_SHOP (50): paquete de tamaño VARIABLE del C++ — `TPacketCGShop`
+        // (2 B: header + subheader, Packet.h:641-645) + payload según el
+        // subheader: END=0 (0 extra), BUY=1 (+count,pos = 2), SELL=2 (+cell
+        // = 1), SELL2=3 (+cell,count = 2) (input_main.cpp:1054-1088). El
+        // header NO está en la tabla fija (parity: `Set(HEADER_CG_SHOP,
+        // sizeof(TPacketCGShop), ...)` + `iExtraLen` del C++); se resuelve
+        // aquí como CG_CHAT — el dispatch `game.rs` ya tiene el arm.
+        if hdr == header::CG_SHOP && self.role == ConnectionRole::Channel {
+            if self.buf.len() < 2 {
+                return Ok(None); // falta el subheader
+            }
+            let total = match self.buf[1] {
+                0 => 2, // END — TPacketCGShop base
+                1 => 4, // BUY — + count, pos
+                2 => 3, // SELL — + cell
+                3 => 4, // SELL2 — + cell, count
+                _ => 2, // subheader desconocido — el handler lo descarta
+            };
+            if self.buf.len() < total {
+                return Ok(None);
+            }
+            return Ok(Some(self.buf.drain(..total).collect()));
+        }
         let Some((min, max)) = packet_range(self.role, hdr) else {
             return Err(FramingError::UnknownHeader { header: hdr });
         };
@@ -498,6 +521,65 @@ mod tests {
         assert!(matches!(
             f.push(&pkt),
             Err(FramingError::UnknownHeader { header: header::CG_CHAT })
+        ));
+    }
+
+    /// CG_SHOP (50) — paquete de tamaño VARIABLE (fix bug 3, 2026-08-15):
+    /// `TPacketCGShop` (2 B: header + subheader, Packet.h:641-645) + payload
+    /// según subheader — END=0 (2 B), BUY=1 (+count,pos = 4 B), SELL=2
+    /// (+cell = 3 B), SELL2=3 (+cell,count = 4 B) (input_main.cpp:1054-1088).
+    /// El header NO está en la tabla fija (el C++ lo registra con
+    /// `sizeof(TPacketCGShop)` + `iExtraLen`); el framer resuelve por
+    /// subheader. Antes: UnknownHeader -> la conexión se cerraba en el primer
+    /// BUY/SELL/END de la tienda.
+    #[test]
+    fn cg_shop_variable_size() {
+        // END: 2 B.
+        let end = [header::CG_SHOP, 0];
+        let mut f = Framer::new(ConnectionRole::Channel);
+        let out = f.push(&end).unwrap();
+        assert_eq!(out, vec![end.to_vec()]);
+
+        // BUY: 4 B (header + sub + count + pos).
+        let buy = [header::CG_SHOP, 1, 1, 7];
+        let mut f = Framer::new(ConnectionRole::Channel);
+        assert_eq!(f.push(&buy).unwrap(), vec![buy.to_vec()]);
+
+        // SELL: 3 B (header + sub + cell).
+        let sell = [header::CG_SHOP, 2, 9];
+        let mut f = Framer::new(ConnectionRole::Channel);
+        assert_eq!(f.push(&sell).unwrap(), vec![sell.to_vec()]);
+
+        // SELL2: 4 B (header + sub + cell + count).
+        let sell2 = [header::CG_SHOP, 3, 9, 5];
+        let mut f = Framer::new(ConnectionRole::Channel);
+        assert_eq!(f.push(&sell2).unwrap(), vec![sell2.to_vec()]);
+
+        // Fragmentado byte a byte -> completo solo al final (BUY).
+        let mut f = Framer::new(ConnectionRole::Channel);
+        for (i, b) in buy.iter().enumerate() {
+            let out = f.push(&[*b]).unwrap();
+            if i + 1 < buy.len() {
+                assert!(out.is_empty(), "emitido antes en byte {i}");
+            } else {
+                assert_eq!(out, vec![buy.to_vec()]);
+            }
+        }
+
+        // BUY + END concatenados en un solo read -> 2 paquetes.
+        let mut two = buy.to_vec();
+        two.extend_from_slice(&end);
+        let mut f = Framer::new(ConnectionRole::Channel);
+        let out = f.push(&two).unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0], buy.to_vec());
+        assert_eq!(out[1], end.to_vec());
+
+        // El rol Auth NO lo acepta (flujo corto).
+        let mut f = Framer::new(ConnectionRole::Auth);
+        assert!(matches!(
+            f.push(&buy),
+            Err(FramingError::UnknownHeader { header: header::CG_SHOP })
         ));
     }
 
