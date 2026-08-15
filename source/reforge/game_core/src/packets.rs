@@ -98,7 +98,7 @@ pub mod wearable {
 /// `None` = no equipable (wearflag 0, o solo bits fuera del subset: HAIR,
 /// PENDANT, GLOVE — el C++ los gestiona por otros paths).
 pub fn find_equip_cell(proto: &database::item::ProtoItem) -> Option<u16> {
-    let w = proto.wear_flag;
+    let w = proto.wear_flag as u32;
     if w == 0 {
         return None; // item.cpp:511-519 — sin wearflag no es equipable
     }
@@ -358,11 +358,26 @@ const POINT_IQ: usize = 15;
 const POINT_ATT_SPEED: usize = 17;
 const POINT_MOV_SPEED: usize = 19;
 const POINT_CASTING_SPEED: usize = 21;
-const POINT_LEVEL_STEP: usize = 25;
-const POINT_STAT: usize = 26;
-const POINT_SUB_SKILL: usize = 27;
-const POINT_SKILL: usize = 28;
-const POINT_PLAYTIME: usize = 31;
+    const POINT_LEVEL_STEP: usize = 25;
+    const POINT_STAT: usize = 26;
+    const POINT_SUB_SKILL: usize = 27;
+    const POINT_SKILL: usize = 28;
+    const POINT_PLAYTIME: usize = 31;
+
+    // Battle points — índices del enum del SERVIDOR C++ (`char.h:152-166`).
+    // El CLIENTE S3ll lee por sus propios índices: su DEF_GRADE (20) = el
+    // CLIENT_DEF_GRADE del server (el "show def" — INTERNATIONAL_VERSION,
+    // char.cpp:2147 — la ventana del personaje muestra level+HT+armor) y su
+    // ataque = ATT_MIN/ATT_MAX (29/30 = WEAPON_MIN/MAX del server — el daño
+    // del arma; el C++ NUNCA los llena — la ventana mostraba 0 — el rewrite
+    // sí los llena). Los grades 16/18 alimentan el combate.
+    const POINT_DEF_GRADE: usize = 16; // char.h:152 (el DEF real — combate)
+    const POINT_ATT_GRADE: usize = 18; // char.h:154 (el ATK base — combate)
+    const POINT_CLIENT_DEF_GRADE: usize = 20; // char.h:156 (el show def — ventana)
+    const POINT_MAGIC_ATT_GRADE: usize = 22; // char.h:158
+    const POINT_MAGIC_DEF_GRADE: usize = 23; // char.h:159
+    const POINT_WEAPON_MIN: usize = 29; // char.h:165 (daño min del arma — ventana)
+    const POINT_WEAPON_MAX: usize = 30; // char.h:166 (daño max del arma — ventana)
 
 /// Tabla `JobInitialPoints[JOB_MAX_NUM]` del C++ (`constants.cpp:18-24` —
 /// por JOB: st, ht, dx, iq, max_hp, max_sp, hp_per_ht, sp_per_iq, ...,
@@ -419,18 +434,88 @@ pub fn compute_max_points(row: &PlayerRow) -> Result<[i32; 3], String> {
     Ok([max_hp, max_sp, max_stamina])
 }
 
+/// Battle points del jugador (parity `ComputeBattlePoints`, char.cpp:2051-2152
+/// — subset PC sin montura/bonos): ataque = level×2 + stat del job (el arma
+/// NO entra — su daño va en `weapon_min/max` para la ventana); defensa =
+/// level + HT/1.25 + armadura; grades mágicos. El caller los computa con los
+/// protos cargados (async) y la sesión los CACHEA (`Session::battle` — el
+/// `points_packet` los lee en todos los caminos sin reload).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BattlePoints {
+    /// POINT_ATT_GRADE (18) — el ATK base (combate).
+    pub attack_grade: i32,
+    /// POINT_DEF_GRADE (16) — el DEF real (combate).
+    pub def_grade: i32,
+    /// POINT_CLIENT_DEF_GRADE (20) — el "show def" (level + HT + armor) —
+    /// lo que la ventana del personaje del cliente muestra (DEF_GRADE S3ll).
+    pub client_def_grade: i32,
+    /// POINT_MAGIC_ATT_GRADE (22).
+    pub magic_att_grade: i32,
+    /// POINT_MAGIC_DEF_GRADE (23).
+    pub magic_def_grade: i32,
+    /// POINT_WEAPON_MIN (29) — daño min del arma (la ventana: ATT_MIN).
+    pub weapon_min: i32,
+    /// POINT_WEAPON_MAX (30) — daño max del arma (la ventana: ATT_MAX).
+    pub weapon_max: i32,
+}
+
+/// `ComputeBattlePoints` PC (char.cpp:2051-2152, sin montura/bonos — los
+/// bonus y la montura son F5):
+/// - ataque: `level*2 + iStatAtk` (WARRIOR/SURA 2×ST; ASSASSIN
+///   `(4×ST+2×DX)/3`; SHAMAN `(4×ST+2×IQ)/3` — char.cpp:2064-2092).
+/// - defensa: `level + (int)(HT/1.25)` + `iArmor` (la suma value1+2×value5
+///   de los ARMOR BODY/HEAD/FOOTS/SHIELD — `equipped_armor` del canal,
+///   char.cpp:2119-2127); `client_def` = `(level+HT+armor) - def` (el show
+///   def de la ventana — char.cpp:2146-2147).
+/// - mágicos: `level*2 + IQ*2` / `level + (IQ*3+HT)/3 + armor/2`
+///   (char.cpp:2150-2151).
+/// - `weapon_min/max` = value0/value1 del arma equipada (el C++ NO los llena
+///   — POINT_WEAPON_MIN/MAX quedaban 0 — el rewrite los llena para la
+///   ventana del cliente, que lee ATT_MIN/ATT_MAX en 29/30).
+pub fn compute_battle_points(
+    row: &PlayerRow,
+    weapon: Option<&database::item::ProtoItem>,
+    armor_sum: i32,
+) -> BattlePoints {
+    let st = i32::from(row.st);
+    let dx = i32::from(row.dx);
+    let iq = i32::from(row.iq);
+    let ht = i32::from(row.ht);
+    let level = i32::from(row.level);
+    let stat_atk = match race_to_job(row.job).unwrap_or(0) {
+        1 => (4 * st + 2 * dx) / 3, // ASSASSIN (char.cpp:2071-2073)
+        3 => (4 * st + 2 * iq) / 3, // SHAMAN (char.cpp:2075-2077)
+        _ => 2 * st,                // WARRIOR/SURA/default (char.cpp:2066-2069)
+    };
+    let attack_grade = level * 2 + stat_atk;
+    let def_real = level + (ht * 4) / 5; // (int)(HT / 1.25) — char.cpp:2114
+    let def_grade = def_real + armor_sum;
+    let client_def_grade = level + ht + armor_sum - def_grade; // char.cpp:2147
+    let magic_att_grade = level * 2 + iq * 2; // char.cpp:2150
+    let magic_def_grade = level + (iq * 3 + ht) / 3 + armor_sum / 2; // char.cpp:2151
+    let weapon_min = weapon.map(|w| w.values[0]).unwrap_or(0);
+    let weapon_max = weapon.map(|w| w.values[1]).unwrap_or(0);
+    BattlePoints {
+        attack_grade,
+        def_grade,
+        client_def_grade,
+        magic_att_grade,
+        magic_def_grade,
+        weapon_min,
+        weapon_max,
+    }
+}
+
 /// `PlayerRow` -> `TPacketGCPoints` (1021 B, header 16).
 ///
 /// Parity `char.cpp:1553-1581` (PointsPacket): los puntos DIRECTOS del row
 /// (level/exp/hp/sp/stamina/gold/st/ht/dx/iq/level_step/stat/skill points/
 /// playtime) + `POINT_VOICE` + los MAXIMOS y speeds del subset
 /// `ComputePoints` (`compute_max_points`, char.cpp:2228-2248) + `NEXT_EXP`
-/// (del caller — `exp_table[level]`, char.cpp:7190).
-///
-/// GAP documentado: el resto de derivados (def_grade, regens, resistencias,
-/// ataque/defensa — `ComputeBattlePoints` y los items) van a 0; los
-/// alimentan los subsistemas de F5.
-pub fn points_packet(row: &PlayerRow, next_exp: i64) -> TPacketGCPoints {
+/// (del caller — `exp_table[level]`, char.cpp:7190) + los `BattlePoints`
+/// (ComputeBattlePoints — la sesión los cachea al entry/equip/unequip; el
+/// resto de derivados — regens/resistencias/bonos — siguen a 0, F5).
+pub fn points_packet(row: &PlayerRow, next_exp: i64, battle: &BattlePoints) -> TPacketGCPoints {
     let mut p = TPacketGCPoints { header: TPacketGCPoints::HEADER, points: [0; 255] };
     p.points[POINT_LEVEL] = i32::from(row.level);
     p.points[POINT_VOICE] = i32::from(row.voice);
@@ -452,6 +537,14 @@ pub fn points_packet(row: &PlayerRow, next_exp: i64) -> TPacketGCPoints {
     p.points[POINT_SUB_SKILL] = i32::from(row.sub_skill_point);
     p.points[POINT_SKILL] = i32::from(row.skill_point);
     p.points[POINT_PLAYTIME] = row.playtime;
+    // Battle points (ComputeBattlePoints — la sesión los cachea).
+    p.points[POINT_ATT_GRADE] = battle.attack_grade;
+    p.points[POINT_DEF_GRADE] = battle.def_grade;
+    p.points[POINT_CLIENT_DEF_GRADE] = battle.client_def_grade;
+    p.points[POINT_MAGIC_ATT_GRADE] = battle.magic_att_grade;
+    p.points[POINT_MAGIC_DEF_GRADE] = battle.magic_def_grade;
+    p.points[POINT_WEAPON_MIN] = battle.weapon_min;
+    p.points[POINT_WEAPON_MAX] = battle.weapon_max;
     // Máximos del ComputePoints subset (char.cpp:2228-2232). Si el race es
     // inválido los puntos quedan en 0 (defensivo — el row viene del PG).
     if let Ok([max_hp, max_sp, max_stamina]) = compute_max_points(row) {
@@ -474,8 +567,8 @@ pub fn skill_level_packet(skill_level: Option<&Vec<u8>>) -> TPacketGCSkillLevel 
         header: TPacketGCSkillLevel::HEADER,
         skills: [TPlayerSkill { b_master_type: 0, b_level: 0, t_next_read: 0 }; 255],
     };
-    if let Some(blob) = skill_level {
-        if blob.len() == 255 * TPlayerSkill::SIZE {
+    if let Some(blob) = skill_level
+        && blob.len() == 255 * TPlayerSkill::SIZE {
             for (i, s) in p.skills.iter_mut().enumerate() {
                 let Ok(skill) = TPlayerSkill::from_bytes(&blob[i * 6..(i + 1) * 6]) else {
                     break;
@@ -483,7 +576,6 @@ pub fn skill_level_packet(skill_level: Option<&Vec<u8>>) -> TPacketGCSkillLevel 
                 *s = skill;
             }
         }
-    }
     p
 }
 
@@ -904,7 +996,8 @@ mod tests {
             b_type: 1,
             b_sub_type: 0,
             values: [0; 6],
-            wear_flag,
+            wear_flag: i64::from(wear_flag),
+            weight: 0,
         };
         // Bits individuales -> slots (length.h:99-119).
         assert_eq!(find_equip_cell(&p(wearable::BODY)), Some(0), "WEAR_BODY");
@@ -942,10 +1035,11 @@ mod tests {
     // ---------------------------------------------------------- slice 3: entry
 
     /// points_packet: 1021 B, los puntos del row + los MÁXIMOS del subset
-    /// ComputePoints (parity char.cpp:1553-1581 + 2228-2248).
+    /// ComputePoints + los BattlePoints (parity char.cpp:1553-1581 +
+    /// 2228-2248 + 2051-2152).
     #[test]
     fn points_packet_fields_and_size() {
-        let p = points_packet(&row(), 300);
+        let p = points_packet(&row(), 300, &BattlePoints::default());
         let b = p.to_bytes();
         assert_eq!(b.len(), TPacketGCPoints::SIZE, "1021 B");
         assert_eq!(b[0], TPacketGCPoints::HEADER, "header 16");
@@ -968,6 +1062,48 @@ mod tests {
         assert_eq!(&b[5..9], &5i32.to_le_bytes());
         assert_eq!(&b[21..25], &100i32.to_le_bytes());
         assert_eq!(&b[25..29], &1850i32.to_le_bytes());
+    }
+
+    /// `compute_battle_points` — parity `ComputeBattlePoints` (char.cpp:2051-
+    /// 2152, PC sin montura/bonos): ataque = level×2 + stat del job
+    /// (ASSASSIN `(4×ST+2×DX)/3`); defensa = level + (int)(HT/1.25) + armor;
+    /// client_def (el show de la ventana) = (level+HT+armor) − def; mágicos;
+    /// la ventana del cliente (WEAPON_MIN/MAX) = el daño del arma.
+    #[test]
+    fn compute_battle_points_parity() {
+        let mut r = row();
+        r.job = 5; // ASSASSIN_M -> race_to_job 1 (ASSASSIN)
+        r.level = 5;
+        r.st = 30;
+        r.dx = 30;
+        r.ht = 30;
+        r.iq = 30;
+        let weapon = database::item::ProtoItem {
+            b_type: 1,
+            b_sub_type: 0,
+            values: [12, 15, 0, 0, 0, 0],
+            wear_flag: 16,
+            weight: 0,
+        };
+        let b = compute_battle_points(&r, Some(&weapon), 25);
+        // Ataque: 5×2 + (4×30+2×30)/3 = 10 + 60 (char.cpp:2061-2092).
+        assert_eq!(b.attack_grade, 70, "level×2 + stat del job");
+        // Defensa: 5 + (int)(30/1.25) + 25 = 5 + 24 + 25 (char.cpp:2113-2146).
+        assert_eq!(b.def_grade, 54, "level + HT/1.25 + armor");
+        // Show def (la ventana): (5 + 30 + 25) − 54 (char.cpp:2146-2147).
+        assert_eq!(b.client_def_grade, 6, "show def de la ventana");
+        // Mágicos (char.cpp:2150-2151).
+        assert_eq!(b.magic_att_grade, 70, "level×2 + IQ×2");
+        assert_eq!(b.magic_def_grade, 57, "level + (IQ×3+HT)/3 + armor/2");
+        // La ventana del cliente: el daño del arma (value0/value1).
+        assert_eq!((b.weapon_min, b.weapon_max), (12, 15));
+        // Sin arma: 0/0 (manos vacías).
+        let bare = compute_battle_points(&r, None, 0);
+        assert_eq!((bare.weapon_min, bare.weapon_max), (0, 0));
+        // El GUERRERO (job 0): stat del job = 2×ST.
+        r.job = 0;
+        let w = compute_battle_points(&r, None, 0);
+        assert_eq!(w.attack_grade, 5 * 2 + 2 * 30, "WARRIOR 2×ST");
     }
 
     /// ComputePoints subset — vectores REALES del runtime (4 personajes):
@@ -1169,7 +1305,7 @@ mod tests {
         let pkts = affect_add_packets(&affects);
         assert_eq!(pkts.len(), 1);
         assert_eq!(pkts[0].len(), 22, "TPacketGCAffectAdd::SIZE");
-        assert_eq!(pkts[0][0], 126, "header GC_AFFECT_ADD");
+        assert_eq!(pkts[0][0], TPacketGCAffectAdd::HEADER, "header GC_AFFECT_ADD");
         assert_eq!(&pkts[0][1..5], &5u32.to_le_bytes(), "dwType = b_type");
         assert_eq!(pkts[0][5], 2, "bApplyOn");
         assert_eq!(&pkts[0][6..10], &100i32.to_le_bytes(), "lApplyValue");

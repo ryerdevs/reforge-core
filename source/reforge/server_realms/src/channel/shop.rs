@@ -27,12 +27,11 @@ use game_core::shop::{self, BuyReceipt, ShopItem};
 use crate::channel::session::{Outcome, Session};
 use crate::channel::{INVENTORY_MAX_NUM, ITEM_COUNT_LIMIT};
 use database::item::{ItemExchange, ItemRepo, ItemRow};
+use protocol::header;
 use protocol::world::{
     TItemPos, TPacketGCItemDelDeprecated, TPacketGCItemSet, TPacketGCItemUpdate,
 };
 
-/// `HEADER_GC_SHOP` (Packet.h:183).
-const GC_SHOP: u8 = 38;
 /// `SHOP_HOST_ITEM_MAX_NUM` (Packet.h:345) — items del wire.
 const SHOP_HOST_ITEM_MAX_NUM: usize = 40;
 
@@ -156,7 +155,7 @@ pub(super) async fn emit(session: &mut Session, e: ShopEvent) -> Result<(), Stri
             // GC_SHOP(START): TPacketGCShop{38, size, 0} + owner_vid + 40
             // items de 47 B (los vacíos en 0 — parity AddGuest llena 40).
             let mut out = Vec::with_capacity(4 + 4 + SHOP_HOST_ITEM_MAX_NUM * 47);
-            out.push(GC_SHOP);
+            out.push(header::GC_SHOP);
             out.extend_from_slice(&((4 + 4 + SHOP_HOST_ITEM_MAX_NUM * 47) as u16).to_le_bytes());
             out.push(SHOP_SUBHEADER_GC_START);
             out.extend_from_slice(&npc_vid.to_le_bytes());
@@ -192,7 +191,7 @@ pub(super) async fn emit(session: &mut Session, e: ShopEvent) -> Result<(), Stri
 
 /// `TPacketGCShop` (4 B) con el subheader — errores y END.
 fn gc_shop(subheader: u8) -> Vec<u8> {
-    vec![GC_SHOP, 4, 0, subheader]
+    vec![header::GC_SHOP, 4, 0, subheader]
 }
 
 /// Un `packet_shop_item` de 47 B (parity `GameType.h:348-359` con cheque).
@@ -465,7 +464,7 @@ mod tests {
     /// Locale_inc.h:110); START = 4 + owner_vid 4 + 40×47 = 1888 B.
     #[test]
     fn shop_wire_sizes_parity() {
-        assert_eq!(GC_SHOP, 38, "HEADER_GC_SHOP (Packet.h:183)");
+        assert_eq!(header::GC_SHOP, 38, "HEADER_GC_SHOP (Packet.h:183)");
         // HEADER_CG_SHOP = 50 (Packet.h:62) — literal del dispatch en
         // game.rs (el protocol crate no lo define — GAP del lane protocol).
         let mut item = Vec::new();
@@ -475,7 +474,7 @@ mod tests {
         let start_len = 4 + 4 + SHOP_HOST_ITEM_MAX_NUM * 47;
         assert_eq!(start_len, 1888, "START: TPacketGCShop + owner_vid + 40 items");
         let mut out = Vec::new();
-        out.push(GC_SHOP);
+        out.push(header::GC_SHOP);
         out.extend_from_slice(&(start_len as u16).to_le_bytes());
         out.push(SHOP_SUBHEADER_GC_START);
         out.extend_from_slice(&7u32.to_le_bytes());

@@ -37,8 +37,9 @@ pub enum ConnectionRole {
 /// sequence OFF): los de tamaño fijo — ver `packet_size` para la lista
 /// completa con sus Packet.h del cliente. Los de tamaño VARIABLE del C++
 /// (CG_CHAT 3, CG_WHISPER 19, CG_SYNC_POSITION 8, CG_SHOP 50, CG_TEXT... —
-/// su `iExtraLen` depende del contenido) NO están en la tabla: recibirlos
-/// cierra la conexión (seguro por defecto, documentado).
+/// su `iExtraLen` depende del contenido) NO están en la tabla fija: se
+/// resuelven en `try_extract` (CG_CHAT/CG_WHISPER/CG_SHOP) o cierran la
+/// conexión si no tienen arm (seguro por defecto, documentado).
 ///
 /// Matices verificados contra el C++:
 /// - `0x00` NO se acepta. El C++ lo consume como no-op de 1 byte ANTES del
@@ -61,10 +62,15 @@ pub enum ConnectionRole {
 /// - Sin idle timeout: el C++ tampoco lo tiene (una conexión muda queda abierta
 ///   hasta que el SO la cierre). **F2 debe añadir un timeout explícito.**
 ///
-/// Los paquetes de tamaño variable del C++ (CG_CHAT, CG_TEXT, ...) NO están en
-/// la tabla: su `iExtraLen` depende del contenido y quedan fuera de alcance
-/// hasta la fase de juego — recibirlos cierra la conexión (mismo
-/// comportamiento que un header desconocido, seguro por defecto).
+/// Los paquetes de tamaño variable del C++ (CG_CHAT, CG_TEXT, ...) NO están
+/// en la tabla fija: los que tienen arm en `try_extract` (CG_CHAT 3,
+/// CG_WHISPER 19, CG_SHOP 50) se resuelven por su length/subheader; los
+/// demás cierran la conexión (mismo comportamiento que un header
+/// desconocido, seguro por defecto).
+///
+/// La tabla de la FASE DE JUEGO (tamaños fijos) está en [`game_phase_size`] y
+/// es SOLO canal: el rol Auth la rechaza entera (flujo corto — un cliente del
+/// auth nunca envía paquetes de juego; cierre como header desconocido).
 pub fn packet_size(role: ConnectionRole, header: u8) -> Option<usize> {
     Some(match header {
         header::CG_HANDSHAKE => TPacketCGHandshake::SIZE, // 0xff, 13
@@ -84,12 +90,30 @@ pub fn packet_size(role: ConnectionRole, header: u8) -> Option<usize> {
         header::CG_CLIENT_VERSION2 => 67, // 0xf1, TPacketCGClientVersion2 = 1 + 33 + 33 (Packet.h:974-979)
         header::CG_STATE_CHECKER => 1, // 206, sizeof(BYTE) — ping selector de canales (packet_info.cpp:232)
         header::CG_LOCALE_REQUEST => protocol::locale::CgLocaleRequest::SIZE, // 132, 4 (F1 locale — aditivo, ADR-0009)
-        // ---------------------------------------------------------------
-        // Fase de juego (la tabla C→S completa de tamaños fijos del
-        // `CPacketInfoCG` — packet_info.cpp:158-235; los tamaños son los
-        // structs del PACKET.H DEL CLIENTE, packed — la entrada al mundo no
-        // puede cerrar por un paquete de juego legítimo):
-        // ---------------------------------------------------------------
+        // Fase de juego (tabla C→S de tamaños fijos): SOLO canal — el rol
+        // Auth los rechaza (flujo corto; un cliente del auth nunca los envía).
+        _ if role == ConnectionRole::Channel => game_phase_size(header)?,
+        _ => return None,
+    })
+}
+
+/// Tamaño fijo de los paquetes de la FASE DE JUEGO (solo canal) — la tabla
+/// C→S de tamaños fijos del `CPacketInfoCG` (packet_info.cpp:158-235; los
+/// tamaños son los structs del PACKET.H DEL CLIENTE, packed — la entrada al
+/// mundo no puede cerrar por un paquete de juego legítimo).
+///
+/// gap-lane A (2026-08-15): añadidos los 21 headers que el C++ conoce y el
+/// Rust no (safebox, party, guild, refine, dragon soul, fishing, acce, mall,
+/// item give, fly targeting, hack, script select item —
+/// `packet_info.cpp:191-234`). Antes caían como [`FramingError::UnknownHeader`]
+/// → CIERRE de conexión; ahora el framer los acepta con su tamaño exacto y
+/// caen en el 'other' del dispatch (ignorados sin desconectar).
+///
+/// Headers fuera de la tabla → `None` → el caller cierra la conexión
+/// (parity `input.cpp:77-84`). En el rol Auth esta tabla NO existe: cualquier
+/// header de juego es `UnknownHeader` (ver [`packet_size`]).
+fn game_phase_size(header: u8) -> Option<usize> {
+    Some(match header {
         header::CG_ATTACK => 8,             // 2, header+bType+vid+2 CRC (Packet.h:509-516)
         header::CG_MOVE => 16,              // 7, header+func+arg+rot+lx+ly+time (Packet.h:677-686)
         header::CG_ITEM_USE => 4, // 11, header + TItemPos (Packet.h:559-563 + packet.h:618-622) — el tamaño CORRECTO C→S (el 16 B era el GC_ITEM_USE S→C, bug latente corregido)
@@ -109,12 +133,33 @@ pub fn packet_size(role: ConnectionRole, header: u8) -> Option<usize> {
         header::CG_PVP => 10,               // 41, header+src+dst+mode (Packet.h:2014-2020)
         header::CG_FLY_TARGETING => 17,     // 51, header+shooter+target+x+y (Packet.h:709-716)
         header::CG_USE_SKILL => 9,          // 52, header+vnum+target (Packet.h:833-838)
+        header::CG_ADD_FLY_TARGETING => 13, // 53, header+dwTargetVID+x+y (Packet.h:717-723)
         header::CG_SHOOT => 2,              // 54 (Packet.h:718-722)
         header::CG_MYSHOP => 35,            // 55, header+szSign[33]+count (SHOP_SIGN_MAX_LEN=32) (Packet.h:953-958)
         header::CG_ITEM_USE_TO_ITEM => 7,   // 60, header+source+target (Packet.h:549-554)
         header::CG_TARGET => 5,             // 61, header+vid (Packet.h:671-675)
         header::CG_WARP => 15,              // 65, header+x+y+addr+port (Packet.h:2028-2035)
         header::CG_SCRIPT_BUTTON => 5,      // 66, header+idx (Packet.h:665-669)
+        header::CG_MESSENGER => 2,          // 67, header+subheader (Packet.h:801-805)
+        header::CG_MALL_CHECKOUT => 5,      // 69, header+bMallPos+TItemPos (Packet.h:839-845)
+        header::CG_SAFEBOX_CHECKIN => 5,    // 70, header+bSafePos+TItemPos (Packet.h:832-838)
+        header::CG_SAFEBOX_CHECKOUT => 5,   // 71, header+bSafePos+TItemPos (Packet.h:825-831)
+        header::CG_PARTY_INVITE => 5,       // 72, header+vid (Packet.h:856-860)
+        header::CG_PARTY_INVITE_ANSWER => 6, // 73, header+leader_pid+accept (Packet.h:862-867)
+        header::CG_PARTY_REMOVE => 5,       // 74, header+pid (Packet.h:869-873)
+        header::CG_PARTY_SET_STATE => 7,    // 75, header+dwVID+byState+byFlag (Packet.h:875-881)
+        header::CG_PARTY_USE_SKILL => 6,    // 76, header+bySkillIndex+dwTargetVID (Packet.h:897-902)
+        header::CG_SAFEBOX_ITEM_MOVE => 8,  // 77, header+pos+change_pos+num — mismo shape que CG_ITEM_MOVE (Packet.h:593-599)
+        header::CG_PARTY_PARAMETER => 2,    // 78, header+bDistributeMode (Packet.h:1012-1016)
+        header::CG_GUILD => 2,              // 80, header+subheader (Packet.h:923-927)
+        header::CG_ANSWER_MAKE_GUILD => 14, // 81, header+guild_name[13] (GUILD_NAME_MAX_LEN=12) (Packet.h:929-933)
+        header::CG_FISHING => 2,            // 82, header+dir (packet.h:1800-1804)
+        header::CG_ITEM_GIVE => 9,          // 83, header+dwTargetVID+TItemPos+byItemCount (Packet.h:935-941)
+        header::CG_REFINE => 3,             // 96, header+pos+type (Packet.h:976-982)
+        header::CG_HACK => 257,             // 105, header+szBuf[256] (Packet.h:943-947)
+        header::CG_SCRIPT_SELECT_ITEM => 5, // 114, header+selection (Packet.h:1031-1035)
+        header::CG_DRAGON_SOUL_REFINE => 47, // 205, header+bSubType+TItemPos[15] (DS_REFINE_WINDOW_MAX_NUM=15 — GameType.h:191) (Packet.h:2715-2722)
+        header::CG_ACCE => 23,              // 211, header+subheader+bWindow+dwPrice+bPos+tPos+dwItemVnum+dwMinAbs+dwMaxAbs (Packet.h:2765-2776)
         _ => return None,
     })
 }
@@ -257,6 +302,25 @@ impl Framer {
             }
             return Ok(Some(self.buf.drain(..total).collect()));
         }
+        // CG_WHISPER (19): paquete de tamaño VARIABLE del C++ — el WORD LE
+        // en [1..3] es el tamaño TOTAL (header 28 B fijos — TPacketCGWhisper
+        // BYTE+WORD+szNameTo[25] — + mensaje; parity `Packet.h:540-546` +
+        // `input_main.cpp:273-286` donde `iExtraLen = wSize - sizeof`).
+        // Fuera de la tabla fija por diseño; se resuelve aquí como CG_CHAT.
+        if hdr == header::CG_WHISPER && self.role == ConnectionRole::Channel {
+            if self.buf.len() < protocol::chat::CG_WHISPER_FIXED {
+                return Ok(None); // aún no está el header completo
+            }
+            let total = u16::from_le_bytes([self.buf[1], self.buf[2]]) as usize;
+            if total < protocol::chat::CG_WHISPER_FIXED {
+                // length inválido — parity PHASE_CLOSE del C++ (input_main.cpp:282-286).
+                return Err(FramingError::UnknownHeader { header: hdr });
+            }
+            if self.buf.len() < total {
+                return Ok(None);
+            }
+            return Ok(Some(self.buf.drain(..total).collect()));
+        }
         // CG_SHOP (50): paquete de tamaño VARIABLE del C++ — `TPacketCGShop`
         // (2 B: header + subheader, Packet.h:641-645) + payload según el
         // subheader: END=0 (0 extra), BUY=1 (+count,pos = 2), SELL=2 (+cell
@@ -347,7 +411,8 @@ mod tests {
         assert_eq!(packet_size(ConnectionRole::Channel, header::CG_MYSHOP), Some(35));
         assert_eq!(packet_size(ConnectionRole::Channel, header::CG_WARP), Some(15));
         assert_eq!(packet_size(ConnectionRole::Channel, header::CG_ITEM_DROP), Some(8), "cheque OFF en el cliente");
-        // Los variables del C++ siguen fuera (cierre documentado).
+        // Los variables del C++ siguen fuera de la tabla fija (se resuelven
+        // en try_extract — CG_CHAT/CG_WHISPER/CG_SHOP — o cierran).
         assert_eq!(packet_size(ConnectionRole::Channel, header::CG_CHAT), None);
         assert_eq!(packet_size(ConnectionRole::Channel, header::CG_WHISPER), None);
         // LOGIN3: 65 canal / 68 auth (sufijo szLanguage[3])
@@ -369,6 +434,116 @@ mod tests {
         // GC_PHASE (0xfd) es servidor→cliente: no está en la tabla C→S
         assert_eq!(packet_size(ConnectionRole::Auth, 0xfd), None);
         assert_eq!(packet_size(ConnectionRole::Channel, 0x99), None);
+    }
+
+    // ------------------------------------------------------------------
+    // gap-lane A (2026-08-15): los 21 headers C→S que el C++ conoce
+    // (packet_info.cpp:191-234) y el Rust no — safebox, party, guild,
+    // refine, dragon soul, fishing, acce, mall, item give, fly targeting,
+    // hack, script select item. Tamaño EXACTO del struct packed del
+    // Packet.h del cliente; antes: UnknownHeader → CIERRE de conexión.
+    // ------------------------------------------------------------------
+
+    /// (header, tamaño total) de los 21 — verificado contra packet_info.cpp
+    /// (sizeof del struct del server) y Packet.h del cliente (packed, pack(1)).
+    const GAP_LANE_A: &[(u8, usize)] = &[
+        (header::CG_ADD_FLY_TARGETING, 13), // 53, TPacketCGFlyTargeting (Packet.h:717-723)
+        (header::CG_MESSENGER, 2), // 67, TPacketCGMessenger (Packet.h:801-805)
+        (header::CG_MALL_CHECKOUT, 5), // 69, TPacketCGMallCheckout (Packet.h:839-845)
+        (header::CG_SAFEBOX_CHECKIN, 5), // 70, TPacketCGSafeboxCheckin (Packet.h:832-838)
+        (header::CG_SAFEBOX_CHECKOUT, 5), // 71, TPacketCGSafeboxCheckout (Packet.h:825-831)
+        (header::CG_PARTY_INVITE, 5), // 72, TPacketCGPartyInvite (Packet.h:856-860)
+        (header::CG_PARTY_INVITE_ANSWER, 6), // 73, TPacketCGPartyInviteAnswer (Packet.h:862-867)
+        (header::CG_PARTY_REMOVE, 5), // 74, TPacketCGPartyRemove (Packet.h:869-873)
+        (header::CG_PARTY_SET_STATE, 7), // 75, TPacketCGPartySetState (Packet.h:875-881)
+        (header::CG_PARTY_USE_SKILL, 6), // 76, TPacketCGPartyUseSkill (Packet.h:897-902)
+        (header::CG_SAFEBOX_ITEM_MOVE, 8), // 77, TPacketCGItemMove (Packet.h:593-599)
+        (header::CG_PARTY_PARAMETER, 2), // 78, TPacketCGPartyParameter (Packet.h:1012-1016)
+        (header::CG_GUILD, 2), // 80, TPacketCGGuild (Packet.h:923-927)
+        (header::CG_ANSWER_MAKE_GUILD, 14), // 81, TPacketCGAnswerMakeGuild (Packet.h:929-933)
+        (header::CG_FISHING, 2), // 82, TPacketCGFishing (packet.h:1800-1804)
+        (header::CG_ITEM_GIVE, 9), // 83, TPacketCGGiveItem (Packet.h:935-941)
+        (header::CG_REFINE, 3), // 96, TPacketCGRefine (Packet.h:976-982)
+        (header::CG_HACK, 257), // 105, TPacketCGHack (Packet.h:943-947)
+        (header::CG_SCRIPT_SELECT_ITEM, 5), // 114, TPacketCGScriptSelectItem (Packet.h:1031-1035)
+        (header::CG_DRAGON_SOUL_REFINE, 47), // 205, TPacketCGDragonSoulRefine (Packet.h:2715-2722)
+        (header::CG_ACCE, 23), // 211, SPacketAcce (Packet.h:2765-2776)
+    ];
+
+    #[test]
+    fn gap_lane_a_headers_have_exact_sizes() {
+        // El framer del canal conoce los 21 headers con el tamaño EXACTO del
+        // struct packed del Packet.h del cliente (packet_info.cpp Set(...)).
+        for &(hdr, size) in GAP_LANE_A {
+            assert_eq!(
+                packet_size(ConnectionRole::Channel, hdr),
+                Some(size),
+                "header 0x{hdr:02x}: tamaño del struct del Packet.h del cliente"
+            );
+        }
+    }
+
+    #[test]
+    fn gap_lane_a_headers_rejected_on_auth() {
+        // El rol Auth solo habla el flujo de login: cualquier header de la
+        // fase de juego (los 21 del gap incluidos) → None → UnknownHeader →
+        // cierre (parity input.cpp:77-84).
+        for &(hdr, _) in GAP_LANE_A {
+            assert_eq!(
+                packet_size(ConnectionRole::Auth, hdr),
+                None,
+                "header 0x{hdr:02x}: el auth NO conoce la fase de juego"
+            );
+        }
+    }
+
+    #[test]
+    fn gap_lane_a_packets_flow_on_channel_close_on_auth() {
+        // Un paquete de cada familia (payload de relleno del tamaño exacto)
+        // fluye por el framer del canal → cae en el 'other' del dispatch
+        // (ignorado sin desconectar); el auth los rechaza cerrando.
+        let samples: &[(u8, usize)] = &[
+            (header::CG_GUILD, 2),
+            (header::CG_SAFEBOX_CHECKIN, 5),
+            (header::CG_PARTY_SET_STATE, 7),
+            (header::CG_ANSWER_MAKE_GUILD, 14),
+            (header::CG_DRAGON_SOUL_REFINE, 47),
+            (header::CG_ACCE, 23),
+            (header::CG_HACK, 257),
+        ];
+        for &(hdr, size) in samples {
+            let mut pkt = vec![hdr];
+            pkt.resize(size, 0xAA);
+            let out = Framer::new(ConnectionRole::Channel).push(&pkt).unwrap();
+            assert_eq!(out, vec![pkt.clone()], "header 0x{hdr:02x} en canal");
+            assert!(
+                matches!(
+                    Framer::new(ConnectionRole::Auth).push(&pkt),
+                    Err(FramingError::UnknownHeader { header: h }) if h == hdr
+                ),
+                "header 0x{hdr:02x} en auth → UnknownHeader"
+            );
+        }
+    }
+
+    /// Los 21 del gap concatenados en un solo read → 21 paquetes en orden
+    /// (los tamaños no se pisan entre sí).
+    #[test]
+    fn gap_lane_a_concatenated_in_one_push() {
+        let mut data = Vec::new();
+        for &(hdr, size) in GAP_LANE_A {
+            let mut pkt = vec![hdr];
+            pkt.resize(size, 0x55);
+            data.extend_from_slice(&pkt);
+        }
+        let out = Framer::new(ConnectionRole::Channel).push(&data).unwrap();
+        assert_eq!(out.len(), GAP_LANE_A.len());
+        let mut off = 0;
+        for &(hdr, size) in GAP_LANE_A {
+            assert_eq!(out[off][0], hdr, "orden del header 0x{hdr:02x}");
+            assert_eq!(out[off].len(), size);
+            off += 1;
+        }
     }
 
     // ------------------------------------------------------------------
@@ -521,6 +696,67 @@ mod tests {
         assert!(matches!(
             f.push(&pkt),
             Err(FramingError::UnknownHeader { header: header::CG_CHAT })
+        ));
+    }
+
+    /// CG_WHISPER (19) — paquete de tamaño VARIABLE (gap-lane-C): el WORD LE
+    /// en [1..3] es el tamaño TOTAL (header 28 B fijos — TPacketCGWhisper
+    /// BYTE+WORD+szNameTo[25] — + mensaje; `Packet.h:540-546` +
+    /// `input_main.cpp:273-286`). El framer lo entrega completo, fragmentado
+    /// o concatenado; wSize < 28 -> cierre (parity PHASE_CLOSE).
+    #[test]
+    fn cg_whisper_variable_size() {
+        // "hola bob" + NUL: wSize = 28 + 9 = 37 (parity `sizeof + iTextLen`).
+        let mut pkt = vec![header::CG_WHISPER];
+        pkt.extend_from_slice(&37u16.to_le_bytes());
+        let mut name = [0u8; protocol::chat::NAME_BYTES];
+        name[..3].copy_from_slice(b"Bob");
+        pkt.extend_from_slice(&name);
+        pkt.extend_from_slice(b"hola bob\0");
+        assert_eq!(pkt.len(), 37);
+
+        // completo en un push.
+        let mut f = Framer::new(ConnectionRole::Channel);
+        let out = f.push(&pkt).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0], pkt);
+        assert_eq!(f.buffered(), 0);
+
+        // fragmentado byte a byte -> completo solo al final.
+        let mut f = Framer::new(ConnectionRole::Channel);
+        for (i, b) in pkt.iter().enumerate() {
+            let out = f.push(&[*b]).unwrap();
+            if i + 1 < pkt.len() {
+                assert!(out.is_empty(), "emitido antes en byte {i}");
+            } else {
+                assert_eq!(out, vec![pkt.clone()]);
+            }
+        }
+
+        // dos whispers concatenados en un solo read -> 2 paquetes.
+        let mut two = pkt.clone();
+        two.extend_from_slice(&pkt);
+        let mut f = Framer::new(ConnectionRole::Channel);
+        let out = f.push(&two).unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0], pkt);
+        assert_eq!(out[1], pkt);
+
+        // wSize inválido (< 28) -> cierre (parity PHASE_CLOSE).
+        let mut bad = vec![header::CG_WHISPER];
+        bad.extend_from_slice(&27u16.to_le_bytes());
+        bad.extend_from_slice(&[0u8; 25]);
+        let mut f = Framer::new(ConnectionRole::Channel);
+        assert!(matches!(
+            f.push(&bad),
+            Err(FramingError::UnknownHeader { header: header::CG_WHISPER })
+        ));
+
+        // el rol Auth NO lo acepta (flujo corto — tabla común).
+        let mut f = Framer::new(ConnectionRole::Auth);
+        assert!(matches!(
+            f.push(&pkt),
+            Err(FramingError::UnknownHeader { header: header::CG_WHISPER })
         ));
     }
 

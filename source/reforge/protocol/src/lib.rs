@@ -1,4 +1,4 @@
-﻿//! # `protocol` — paquetes byte-exactos del wire de Metin2 (cliente↔servidor).
+//! # `protocol` — paquetes byte-exactos del wire de Metin2 (cliente↔servidor).
 //!
 //! Contrato: `docs/reference/protocol/login-flow.md` §1–§3 (spec canónico;
 //! el draft anterior `docs/superpowers/specs/2026-08-08-wire-protocol-login-flow.md`
@@ -28,13 +28,13 @@
 // Constantes (spec §1 + packet.h verificado)
 // ============================================================================
 
+pub mod combat;
 /// Paquetes legacy-client-only (ADR-0006): PanamaPack 151 + hybrid-crypt
 /// 152/153 — el auth C++ los envía en login exitoso antes de `GC_AUTH_SUCCESS`
 /// (`input_db.cpp:1710-1716`). Boundary aislado y borrable en bloque en F7.
 pub mod legacy;
 pub mod movement;
 pub mod world;
-pub mod combat;
 
 /// Canal de datos aditivo pull-based (F3 §5.6): `CG_QUERY` (162) /
 /// `GC_RESPONSE` (163) — manifest versionado + delta (server = única fuente
@@ -46,6 +46,34 @@ pub mod datachannel;
 /// `GC_LOCALE` (140) — el bundle de texto del cliente por idioma, chunked.
 /// Aditivo (patrón datachannel); spec `docs/plans/locale-redesign.md` §Wire.
 pub mod locale;
+
+/// Chat y whisper (parity `packet.h` — `TPacketCGWhisper`/`TPacketGCWhisper`,
+/// `length.h:19` `CHARACTER_NAME_MAX_LEN = 24`): los tamaños FIJOS del wire
+/// (packed, LE) y las constantes de tipo.
+///
+/// - `TPacketCGWhisper` (C→S, 19) = BYTE header + WORD wSize + char
+///   szNameTo[25] → **28 B**; `wSize` es el tamaño TOTAL (28 + mensaje),
+///   parity `input_main.cpp:273-286` (`iExtraLen = wSize - sizeof`).
+/// - `TPacketGCWhisper` (S→C, 34) = BYTE header + WORD wSize + BYTE bType +
+///   char szNameFrom[25] → **29 B**; el mensaje viaja DESPUÉS (sin NUL — el
+///   C++ lo corta con `strlen`, input_main.cpp:432-450).
+pub mod chat {
+    /// Tamaño fijo de `TPacketCGWhisper` (19): header + wSize + szNameTo[25].
+    pub const CG_WHISPER_FIXED: usize = 28;
+    /// Tamaño fijo de `TPacketGCWhisper` (34): header + wSize + bType + szNameFrom[25].
+    pub const GC_WHISPER_FIXED: usize = 29;
+    /// Bytes del campo nombre (`CHARACTER_NAME_MAX_LEN = 24` + NUL).
+    pub const NAME_BYTES: usize = 25;
+    /// `EChatType` (length.h:258-274): TALKING — el broadcast en rango.
+    pub const TYPE_TALKING: u8 = 0;
+    /// `EChatType` (length.h:258-274): SHOUT — el broadcast de mapa.
+    pub const TYPE_SHOUT: u8 = 6;
+    /// `EWhisperType` (packet.h): whisper normal (el cliente lo pinta).
+    pub const WHISPER_CHAT: u8 = 0;
+    /// `EWhisperType` (packet.h): el destino no existe (parity
+    /// input_main.cpp:322-335 — sin mensaje).
+    pub const WHISPER_NOT_EXIST: u8 = 1;
+}
 
 pub mod header {
     //! Headers de paquete (verificados contra `game/src/packet.h`).
@@ -89,12 +117,92 @@ pub mod header {
     pub const CG_SHOP: u8 = 50;
     pub const CG_FLY_TARGETING: u8 = 51;
     pub const CG_USE_SKILL: u8 = 52;
+    /// `HEADER_CG_ADD_FLY_TARGETING` (Packet.h:65 — 53): añadir un fly
+    /// targeting (flecha/área de hechizo) — `TPacketCGFlyTargeting` 13 B
+    /// (header+dwTargetVID+x+y; Packet.h:717-723). Distinto de
+    /// `CG_FLY_TARGETING` (51, con shooter).
+    pub const CG_ADD_FLY_TARGETING: u8 = 53;
     pub const CG_SHOOT: u8 = 54;
     pub const CG_MYSHOP: u8 = 55;
     pub const CG_ITEM_USE_TO_ITEM: u8 = 60;
     pub const CG_TARGET: u8 = 61;
     pub const CG_WARP: u8 = 65;
     pub const CG_SCRIPT_BUTTON: u8 = 66;
+    /// `HEADER_CG_MESSENGER` (Packet.h:79 — 67): messenger (amigos) —
+    /// `TPacketCGMessenger` 2 B (header+subheader; Packet.h:801-805).
+    pub const CG_MESSENGER: u8 = 67;
+    /// `HEADER_CG_MALL_CHECKOUT` (Packet.h:81 — 69): compra en la tienda
+    /// (mall) — `TPacketCGMallCheckout` 5 B (header+bMallPos+TItemPos;
+    /// Packet.h:839-845).
+    pub const CG_MALL_CHECKOUT: u8 = 69;
+    /// `HEADER_CG_SAFEBOX_CHECKIN` (Packet.h:82 — 70): meter un item en la
+    /// safebox — `TPacketCGSafeboxCheckin` 5 B (header+bSafePos+TItemPos;
+    /// Packet.h:832-838).
+    pub const CG_SAFEBOX_CHECKIN: u8 = 70;
+    /// `HEADER_CG_SAFEBOX_CHECKOUT` (Packet.h:83 — 71): sacar un item de la
+    /// safebox — `TPacketCGSafeboxCheckout` 5 B (header+bSafePos+TItemPos;
+    /// Packet.h:825-831).
+    pub const CG_SAFEBOX_CHECKOUT: u8 = 71;
+    /// `HEADER_CG_PARTY_INVITE` (Packet.h:84 — 72) — `TPacketCGPartyInvite`
+    /// 5 B (header+vid; Packet.h:856-860).
+    pub const CG_PARTY_INVITE: u8 = 72;
+    /// `HEADER_CG_PARTY_INVITE_ANSWER` (Packet.h:85 — 73) —
+    /// `TPacketCGPartyInviteAnswer` 6 B (header+leader_pid+accept;
+    /// Packet.h:862-867).
+    pub const CG_PARTY_INVITE_ANSWER: u8 = 73;
+    /// `HEADER_CG_PARTY_REMOVE` (Packet.h:86 — 74) — `TPacketCGPartyRemove`
+    /// 5 B (header+pid; Packet.h:869-873).
+    pub const CG_PARTY_REMOVE: u8 = 74;
+    /// `HEADER_CG_PARTY_SET_STATE` (Packet.h:87 — 75) —
+    /// `TPacketCGPartySetState` 7 B (header+dwVID+byState+byFlag;
+    /// Packet.h:875-881).
+    pub const CG_PARTY_SET_STATE: u8 = 75;
+    /// `HEADER_CG_PARTY_USE_SKILL` (Packet.h:88 — 76) —
+    /// `TPacketCGPartyUseSkill` 6 B (header+bySkillIndex+dwTargetVID;
+    /// Packet.h:897-902).
+    pub const CG_PARTY_USE_SKILL: u8 = 76;
+    /// `HEADER_CG_SAFEBOX_ITEM_MOVE` (Packet.h:89 — 77): mover un item
+    /// dentro de la safebox — `TPacketCGItemMove` 8 B (mismo shape que
+    /// `CG_ITEM_MOVE` 13; Packet.h:593-599).
+    pub const CG_SAFEBOX_ITEM_MOVE: u8 = 77;
+    /// `HEADER_CG_PARTY_PARAMETER` (Packet.h:90 — 78) —
+    /// `TPacketCGPartyParameter` 2 B (header+bDistributeMode;
+    /// Packet.h:1012-1016).
+    pub const CG_PARTY_PARAMETER: u8 = 78;
+    /// `HEADER_CG_GUILD` (Packet.h:92 — 80): guild — `TPacketCGGuild` 2 B
+    /// (header+subheader; Packet.h:923-927).
+    pub const CG_GUILD: u8 = 80;
+    /// `HEADER_CG_ANSWER_MAKE_GUILD` (Packet.h:93 — 81): respuesta a la
+    /// oferta de crear guild — `TPacketCGAnswerMakeGuild` 14 B
+    /// (header+guild_name[13]; `GUILD_NAME_MAX_LEN`=12; Packet.h:929-933).
+    pub const CG_ANSWER_MAKE_GUILD: u8 = 81;
+    /// `HEADER_CG_FISHING` (Packet.h:94 — 82): pescar — `TPacketCGFishing`
+    /// 2 B (header+dir; `packet.h:1800-1804` del server — el Packet.h del
+    /// cliente solo define el GC).
+    pub const CG_FISHING: u8 = 82;
+    /// `HEADER_CG_ITEM_GIVE` (`packet.h:72` — 83; el Packet.h del cliente no
+    /// lo define): dar un item a otro jugador — `TPacketCGGiveItem` 9 B
+    /// (header+dwTargetVID+TItemPos+byItemCount; Packet.h:935-941).
+    pub const CG_ITEM_GIVE: u8 = 83;
+    /// `HEADER_CG_REFINE` (Packet.h:108 — 96): refinar item —
+    /// `TPacketCGRefine` 3 B (header+pos+type; Packet.h:976-982).
+    pub const CG_REFINE: u8 = 96;
+    /// `HEADER_CG_HACK` (Packet.h:120 — 105): reporte de cheat del cliente —
+    /// `TPacketCGHack` 257 B (header+szBuf[256]; Packet.h:943-947).
+    pub const CG_HACK: u8 = 105;
+    /// `HEADER_CG_SCRIPT_SELECT_ITEM` (Packet.h:126 — 114): selección de un
+    /// item en un script — `TPacketCGScriptSelectItem` 5 B
+    /// (header+selection; Packet.h:1031-1035).
+    pub const CG_SCRIPT_SELECT_ITEM: u8 = 114;
+    /// `HEADER_CG_DRAGON_SOUL_REFINE` (Packet.h:134 — 205): refinar dragon
+    /// soul — `TPacketCGDragonSoulRefine` 47 B (header+bSubType+
+    /// TItemPos[15]; `DS_REFINE_WINDOW_MAX_NUM`=15 — GameType.h:191;
+    /// Packet.h:2715-2722).
+    pub const CG_DRAGON_SOUL_REFINE: u8 = 205;
+    /// `HEADER_CG_ACCE` (Packet.h:2752 — 211): acce (costume) — `SPacketAcce`
+    /// 23 B (header+subheader+bWindow+dwPrice+bPos+tPos+dwItemVnum+
+    /// dwMinAbs+dwMaxAbs; Packet.h:2765-2776).
+    pub const CG_ACCE: u8 = 211;
     /// Ping del selector de canales (`ServerStateChecker.cpp:60`, `packet.h:97`);
     /// 1 byte (solo header). Lo usa la tabla de framing de `network`.
     pub const CG_STATE_CHECKER: u8 = 206;
@@ -143,6 +251,10 @@ pub mod header {
     /// `HEADER_GC_CHAT` (cliente `Packet.h:148`; server `packet.h` — 9 B +
     /// mensaje variable: `TPacketGCChat` header+size+type+dwVID+bEmpire).
     pub const GC_CHAT: u8 = 4;
+    /// `HEADER_GC_WHISPER` (cliente `Packet.h:178`, server `packet.h:148` —
+    /// 29 B fijos + mensaje variable: `TPacketGCWhisper`
+    /// header+wSize+bType+szNameFrom[25]).
+    pub const GC_WHISPER: u8 = 34;
     /// `HEADER_GC_ITEM_GROUND_ADD` (cliente `Packet.h:170`, server
     /// `packet.h:139` — 26): un item EN EL SUELO (drop).
     pub const GC_ITEM_GROUND_ADD: u8 = 26;
@@ -168,6 +280,17 @@ pub mod header {
     /// bHPPercent). Parity `SetTarget`/`BroadcastTargetPacket`
     /// (char.cpp:5048-5143).
     pub const GC_TARGET: u8 = 63;
+    /// `HEADER_GC_SHOP` (cliente `Packet.h:183`, server `packet.h:153` —
+    /// 38): la tienda NPC (`TPacketGCShop` 4 B: header+WORD size+subheader;
+    /// START payload items — ver `server_realms/channel/shop.rs`).
+    pub const GC_SHOP: u8 = 38;
+    /// `HEADER_GC_EXCHANGE` (cliente `Packet.h:188`, server `packet.h:158` —
+    /// 42): el intercambio jugador↔jugador (`TPacketGCExchange` 47 B —
+    /// `server_realms/channel/trade.rs`).
+    pub const GC_EXCHANGE: u8 = 42;
+    /// `HEADER_GC_AFFECT_ADD` (cliente `Packet.h:267`, server `packet.h:228`
+    /// — 126): un affect activo (`TPacketGCAffectAdd` 22 B).
+    pub const GC_AFFECT_ADD: u8 = 126;
     /// LoginSuccess "new slot" = 0x20 (server `HEADER_GC_LOGIN_SUCCESS_NEWSLOT`,
     /// cliente `HEADER_GC_LOGIN_SUCCESS4`).
     pub const GC_LOGIN_SUCCESS_NEWSLOT: u8 = 32;
@@ -322,12 +445,20 @@ impl TPacketCGHandshake {
     pub const HEADER: u8 = header::CG_HANDSHAKE;
 
     pub fn new(dw_handshake: u32, dw_time: u32, l_delta: i32) -> Self {
-        Self { header: Self::HEADER, dw_handshake, dw_time, l_delta }
+        Self {
+            header: Self::HEADER,
+            dw_handshake,
+            dw_time,
+            l_delta,
+        }
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
         Ok(Self {
             header: data[0],
@@ -362,14 +493,25 @@ impl TPacketCGLogin {
     pub const HEADER: u8 = header::CG_LOGIN;
 
     pub fn new(login: &str, passwd: &str) -> Self {
-        Self { header: Self::HEADER, login: from_cstr(login), passwd: from_cstr(passwd) }
+        Self {
+            header: Self::HEADER,
+            login: from_cstr(login),
+            passwd: from_cstr(passwd),
+        }
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
-        Ok(Self { header: data[0], login: rd_arr(data, 1), passwd: rd_arr(data, 32) })
+        Ok(Self {
+            header: data[0],
+            login: rd_arr(data, 1),
+            passwd: rd_arr(data, 32),
+        })
     }
 
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
@@ -397,12 +539,20 @@ impl TPacketCGLogin2 {
     pub const HEADER: u8 = header::CG_LOGIN2;
 
     pub fn new(login: &str, dw_login_key: u32, adw_client_key: [u32; 4]) -> Self {
-        Self { header: Self::HEADER, login: from_cstr(login), dw_login_key, adw_client_key }
+        Self {
+            header: Self::HEADER,
+            login: from_cstr(login),
+            dw_login_key,
+            adw_client_key,
+        }
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
         Ok(Self {
             header: data[0],
@@ -600,14 +750,23 @@ impl TPacketCGPlayerSelect {
     pub const HEADER: u8 = header::CG_CHARACTER_SELECT;
 
     pub fn new(index: u8) -> Self {
-        Self { header: Self::HEADER, index }
+        Self {
+            header: Self::HEADER,
+            index,
+        }
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
-        Ok(Self { header: data[0], index: data[1] })
+        Ok(Self {
+            header: data[0],
+            index: data[1],
+        })
     }
 
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
@@ -630,14 +789,25 @@ impl TPacketCGPlayerDelete {
     pub const HEADER: u8 = header::CG_CHARACTER_DELETE;
 
     pub fn new(index: u8, private_code: &str) -> Self {
-        Self { header: Self::HEADER, index, private_code: from_cstr(private_code) }
+        Self {
+            header: Self::HEADER,
+            index,
+            private_code: from_cstr(private_code),
+        }
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
-        Ok(Self { header: data[0], index: data[1], private_code: rd_arr(data, 2) })
+        Ok(Self {
+            header: data[0],
+            index: data[1],
+            private_code: rd_arr(data, 2),
+        })
     }
 
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
@@ -686,7 +856,10 @@ impl TPacketCGPlayerCreate {
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
         Ok(Self {
             header: data[0],
@@ -736,12 +909,20 @@ impl TPacketGCHandshake {
     pub const HEADER: u8 = header::GC_HANDSHAKE;
 
     pub fn new(dw_handshake: u32, dw_time: u32, l_delta: i32) -> Self {
-        Self { header: Self::HEADER, dw_handshake, dw_time, l_delta }
+        Self {
+            header: Self::HEADER,
+            dw_handshake,
+            dw_time,
+            l_delta,
+        }
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
         Ok(Self {
             header: data[0],
@@ -775,14 +956,23 @@ impl TPacketGCLoginKey {
     pub const HEADER: u8 = header::GC_LOGIN_KEY;
 
     pub fn new(dw_login_key: u32) -> Self {
-        Self { header: Self::HEADER, dw_login_key }
+        Self {
+            header: Self::HEADER,
+            dw_login_key,
+        }
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
-        Ok(Self { header: data[0], dw_login_key: rd_u32(data, 1) })
+        Ok(Self {
+            header: data[0],
+            dw_login_key: rd_u32(data, 1),
+        })
     }
 
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
@@ -807,14 +997,23 @@ impl TPacketGCPhase {
     pub const HEADER: u8 = header::GC_PHASE;
 
     pub fn new(phase: u8) -> Self {
-        Self { header: Self::HEADER, phase }
+        Self {
+            header: Self::HEADER,
+            phase,
+        }
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
-        Ok(Self { header: data[0], phase: data[1] })
+        Ok(Self {
+            header: data[0],
+            phase: data[1],
+        })
     }
 
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
@@ -837,14 +1036,25 @@ impl TPacketGCAuthSuccess {
     pub const HEADER: u8 = header::GC_AUTH_SUCCESS;
 
     pub fn new(dw_login_key: u32, b_result: u8) -> Self {
-        Self { header: Self::HEADER, dw_login_key, b_result }
+        Self {
+            header: Self::HEADER,
+            dw_login_key,
+            b_result,
+        }
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
-        Ok(Self { header: data[0], dw_login_key: rd_u32(data, 1), b_result: data[5] })
+        Ok(Self {
+            header: data[0],
+            dw_login_key: rd_u32(data, 1),
+            b_result: data[5],
+        })
     }
 
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
@@ -872,14 +1082,23 @@ impl TPacketGCLoginFailure {
     pub const HEADER: u8 = header::GC_LOGIN_FAILURE;
 
     pub fn new(status: &str) -> Self {
-        Self { header: Self::HEADER, sz_status: from_cstr(status) }
+        Self {
+            header: Self::HEADER,
+            sz_status: from_cstr(status),
+        }
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
-        Ok(Self { header: data[0], sz_status: rd_arr(data, 1) })
+        Ok(Self {
+            header: data[0],
+            sz_status: rd_arr(data, 1),
+        })
     }
 
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
@@ -909,14 +1128,23 @@ impl TPacketGCEmpire {
     pub const HEADER: u8 = header::GC_EMPIRE;
 
     pub fn new(b_empire: u8) -> Self {
-        Self { header: Self::HEADER, b_empire }
+        Self {
+            header: Self::HEADER,
+            b_empire,
+        }
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
-        Ok(Self { header: data[0], b_empire: data[1] })
+        Ok(Self {
+            header: data[0],
+            b_empire: data[1],
+        })
     }
 
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
@@ -969,7 +1197,10 @@ impl TSimplePlayer {
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
         Ok(Self {
             dw_id: rd_u32(data, 0),
@@ -1062,7 +1293,10 @@ impl TPacketGCLoginSuccess {
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
         let mut players = [TSimplePlayer {
             dw_id: 0,
@@ -1086,7 +1320,9 @@ impl TPacketGCLoginSuccess {
             skill_group: 0,
         }; PLAYER_PER_ACCOUNT];
         for (i, p) in players.iter_mut().enumerate() {
-            *p = TSimplePlayer::from_bytes(&data[Self::PLAYERS_OFFSET + i * 71..Self::PLAYERS_OFFSET + (i + 1) * 71])?;
+            *p = TSimplePlayer::from_bytes(
+                &data[Self::PLAYERS_OFFSET + i * 71..Self::PLAYERS_OFFSET + (i + 1) * 71],
+            )?;
         }
         let mut guild_id = [0u32; PLAYER_PER_ACCOUNT];
         for (i, g) in guild_id.iter_mut().enumerate() {
@@ -1182,7 +1418,10 @@ impl TPacketGCCharacterAdd {
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
         Ok(Self {
             header: data[0],
@@ -1245,7 +1484,10 @@ impl TPacketGCCharacterAdditionalInfo {
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
         let mut aw_part = [0u32; CHR_EQUIPPART_NUM];
         for (i, p) in aw_part.iter_mut().enumerate() {
@@ -1351,8 +1593,16 @@ mod tests {
         assert_eq!(TPacketGCCharacterAdd::SIZE, 37);
         assert_eq!(TPacketGCCharacterAdditionalInfo::SIZE, 70);
         // Desviación documentada respecto al spec (474/76): el wire real es packed.
-        assert_eq!(TSimplePlayer::SIZE, 71, "spec dice 76 (natural); wire real = 71 (packed)");
-        assert_eq!(TPacketGCLoginSuccess::SIZE, 449, "spec dice 474; wire real = 449 (packed)");
+        assert_eq!(
+            TSimplePlayer::SIZE,
+            71,
+            "spec dice 76 (natural); wire real = 71 (packed)"
+        );
+        assert_eq!(
+            TPacketGCLoginSuccess::SIZE,
+            449,
+            "spec dice 474; wire real = 449 (packed)"
+        );
     }
 
     #[test]
@@ -1363,7 +1613,10 @@ mod tests {
         assert_eq!(TPacketGCLoginSuccess::PLAYERS_OFFSET, 1);
         assert_eq!(TPacketGCLoginSuccess::GUILD_ID_OFFSET, 1 + 5 * 71);
         assert_eq!(TPacketGCLoginSuccess::GUILD_NAME_OFFSET, 1 + 5 * 71 + 5 * 4);
-        assert_eq!(TPacketGCLoginSuccess::HANDLE_OFFSET, 1 + 5 * 71 + 5 * 4 + 5 * 13);
+        assert_eq!(
+            TPacketGCLoginSuccess::HANDLE_OFFSET,
+            1 + 5 * 71 + 5 * 4 + 5 * 13
+        );
         assert_eq!(TPacketGCLoginSuccess::RANDOM_KEY_OFFSET, 449 - 4);
         // El spec afirma estos offsets para TSimplePlayer de 76 B: si algún día se
         // cambia a natural alignment, estos asserts saltarán.
@@ -1436,7 +1689,9 @@ mod tests {
     fn roundtrip_cg_login3_auth_extended() {
         let hwid = [0x11u8; 16];
         // 72 B: version sin hwid.
-        let mut b72 = TPacketCGLogin3::new_auth("test", "1234", [1, 2, 3, 4], "es").to_bytes_auth().to_vec();
+        let mut b72 = TPacketCGLogin3::new_auth("test", "1234", [1, 2, 3, 4], "es")
+            .to_bytes_auth()
+            .to_vec();
         b72.extend(40999u32.to_le_bytes());
         assert_eq!(b72.len(), 72);
         let p72 = TPacketCGLogin3::from_bytes(&b72).unwrap();
@@ -1454,7 +1709,8 @@ mod tests {
         assert_eq!(p.to_bytes_auth_with(None, None).len(), 68);
         assert_eq!(p.to_bytes_auth_with(Some(40999), None).len(), 72);
         assert_eq!(p.to_bytes_auth_with(Some(40999), Some(hwid)).len(), 88);
-        let round = TPacketCGLogin3::from_bytes(&p.to_bytes_auth_with(Some(40999), Some(hwid))).unwrap();
+        let round =
+            TPacketCGLogin3::from_bytes(&p.to_bytes_auth_with(Some(40999), Some(hwid))).unwrap();
         assert_eq!(round, p88);
     }
 
@@ -1466,7 +1722,10 @@ mod tests {
             if !b.is_empty() {
                 b[0] = header::CG_LOGIN3;
             }
-            assert!(TPacketCGLogin3::from_bytes(&b).is_err(), "len {len} debe fallar");
+            assert!(
+                TPacketCGLogin3::from_bytes(&b).is_err(),
+                "len {len} debe fallar"
+            );
         }
     }
 
@@ -1539,7 +1798,9 @@ mod tests {
 
     #[test]
     fn roundtrip_gc_login_failure() {
-        for s in ["NOID", "WRONGPWD", "ALREADY", "NOTAVAIL", "BLKLOGIN", "VERSION", "FULL", "SHUTDOWN"] {
+        for s in [
+            "NOID", "WRONGPWD", "ALREADY", "NOTAVAIL", "BLKLOGIN", "VERSION", "FULL", "SHUTDOWN",
+        ] {
             let p = TPacketGCLoginFailure::new(s);
             let b = p.to_bytes();
             let p2 = TPacketGCLoginFailure::from_bytes(&b).unwrap();
@@ -1629,7 +1890,8 @@ mod tests {
 
     #[test]
     fn roundtrip_gc_character_add() {
-        let p = TPacketGCCharacterAdd::new(0x1000, 1.5, 1000, -2000, 300, 2, 101, 80, 90, 0, [1, 2]);
+        let p =
+            TPacketGCCharacterAdd::new(0x1000, 1.5, 1000, -2000, 300, 2, 101, 80, 90, 0, [1, 2]);
         let b = p.to_bytes();
         let p2 = TPacketGCCharacterAdd::from_bytes(&b).unwrap();
         assert_eq!(p, p2);
@@ -1822,7 +2084,15 @@ mod tests {
         assert_eq!(p.players[0].name(), "Hercules");
         assert_eq!(p.players[0].by_level, 42);
         assert_eq!(p.players[0].dw_play_minutes, 3600);
-        assert_eq!((p.players[0].by_st, p.players[0].by_ht, p.players[0].by_dx, p.players[0].by_iq), (90, 80, 70, 60));
+        assert_eq!(
+            (
+                p.players[0].by_st,
+                p.players[0].by_ht,
+                p.players[0].by_dx,
+                p.players[0].by_iq
+            ),
+            (90, 80, 70, 60)
+        );
         assert_eq!(p.players[0].w_main_part, 0xAABB_CCDD);
         assert_eq!(p.players[0].w_hair_part, 0x1122_3344);
         assert_eq!(p.players[0].w_acce_part, 0x5566_7788);
@@ -1870,7 +2140,10 @@ mod tests {
         assert_eq!((p.x, p.y, p.z), (1000, -2000, 300));
         assert_eq!(p.b_type, 2);
         assert_eq!(p.w_race_num, 101);
-        assert_eq!((p.b_moving_speed, p.b_attack_speed, p.b_state_flag), (80, 90, 0));
+        assert_eq!(
+            (p.b_moving_speed, p.b_attack_speed, p.b_state_flag),
+            (80, 90, 0)
+        );
         assert_eq!(p.dw_affect_flag, [1, 2]);
         assert_eq!(p.to_bytes(), exp);
     }
@@ -1886,7 +2159,7 @@ mod tests {
         exp[0] = 0x88;
         exp[1..5].copy_from_slice(&0x1234u32.to_le_bytes()); // dwVID
         exp[5..5 + 10].copy_from_slice(b"NPC_Farmer"); // name (resto a cero)
-        // awPart[5] @30..50 (ARMOR, WEAPON, HEAD, HAIR, ACCE)
+                                                       // awPart[5] @30..50 (ARMOR, WEAPON, HEAD, HAIR, ACCE)
         exp[30..34].copy_from_slice(&0x1001u32.to_le_bytes());
         exp[34..38].copy_from_slice(&0x1002u32.to_le_bytes());
         exp[38..42].copy_from_slice(&0x1003u32.to_le_bytes());
@@ -1947,7 +2220,10 @@ mod tests {
         assert!(TSimplePlayer::from_bytes(&[0u8; 70]).is_err());
         assert!(TSimplePlayer::from_bytes(&[0u8; 72]).is_err());
         assert!(TPacketGCLoginSuccess::from_bytes(&[0u8; 448]).is_err());
-        assert!(TPacketGCLoginSuccess::from_bytes(&[0u8; 474]).is_err(), "spec dice 474, wire real 449");
+        assert!(
+            TPacketGCLoginSuccess::from_bytes(&[0u8; 474]).is_err(),
+            "spec dice 474, wire real 449"
+        );
         assert!(TPacketGCCharacterAdd::from_bytes(&[0u8; 36]).is_err());
         assert!(TPacketGCCharacterAdditionalInfo::from_bytes(&[0u8; 69]).is_err());
     }
@@ -1960,7 +2236,7 @@ mod tests {
         assert_eq!(cstr_bytes(&a).len(), 30);
         assert_eq!(from_cstr::<3>("es"), *b"es\0");
         assert_eq!(from_cstr::<3>("esp"), *b"es\0"); // truncado a 2 + NUL
-        // N=0: antes hacía overflow en `N - 1` (panic); ahora buffer vacío.
+                                                     // N=0: antes hacía overflow en `N - 1` (panic); ahora buffer vacío.
         assert_eq!(from_cstr::<0>("x"), [0u8; 0]);
         assert_eq!(from_cstr::<1>("abc"), [0u8; 1]); // 0 bytes + NUL implícito
     }

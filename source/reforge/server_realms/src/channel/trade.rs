@@ -22,13 +22,11 @@ use database::item::{ItemRepo, ItemRow};
 use database::player::PlayerRepo;
 use game_core::ecs::{TradeEvent, TradeIntent};
 use game_core::trade::{self, TradeCommitPlan};
+use protocol::header;
 use protocol::world::{TItemPos, TPacketGCItemDelDeprecated, TPacketGCItemSet};
 
 use crate::channel::session::{Outcome, Session};
 use crate::channel::INVENTORY_MAX_NUM;
-
-/// `HEADER_GC_EXCHANGE` (Packet.h:188) — el protocol crate no lo define.
-const GC_EXCHANGE: u8 = 42;
 
 /// Subheaders GC_EXCHANGE (Packet.h:1842-1852 — alineados con el server).
 const EXCHANGE_SUBHEADER_GC_START: u8 = 0;
@@ -204,7 +202,7 @@ fn gc_exchange(
     attrs: [(i16, i16); 7],
 ) -> Vec<u8> {
     let mut out = Vec::with_capacity(47);
-    out.push(GC_EXCHANGE);
+    out.push(header::GC_EXCHANGE);
     out.push(subheader);
     out.push(is_me);
     out.extend_from_slice(&arg1.to_le_bytes());
@@ -404,7 +402,7 @@ mod tests {
     /// alineados (packet.h:1222-1236 = Packet.h:1842-1852).
     #[test]
     fn exchange_wire_sizes_parity() {
-        assert_eq!(GC_EXCHANGE, 42, "HEADER_GC_EXCHANGE (Packet.h:188)");
+        assert_eq!(header::GC_EXCHANGE, 42, "HEADER_GC_EXCHANGE (Packet.h:188)");
         let pkt = gc_exchange(
             EXCHANGE_SUBHEADER_GC_ITEM_ADD,
             1,
