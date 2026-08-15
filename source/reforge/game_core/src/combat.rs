@@ -182,6 +182,14 @@ pub mod job {
 /// `BATTLE_TYPE_MELEE` = 0 (`battle.h:6`).
 pub const BATTLE_TYPE_MELEE: u8 = 0;
 
+/// `BATTLE_TYPE_RANGE` = 1 / `BATTLE_TYPE_MAGIC` = 2 (`battle.h:7-8`).
+pub const BATTLE_TYPE_RANGE: u8 = 1;
+pub const BATTLE_TYPE_MAGIC: u8 = 2;
+
+/// `POINT_BOW_DISTANCE` default = 300 (`char.cpp:2010-2020` — GetMobAttackRange
+/// suma este bonus al rango de los mobs RANGE/MAGIC).
+pub const BOW_DISTANCE_DEFAULT: i32 = 300;
+
 /// Rango base melee del atacante PC: 300 UNITS = 3 m (`battle.cpp:148`).
 pub const MELEE_RANGE_UNITS: i32 = 300;
 
@@ -284,15 +292,33 @@ pub fn distance_approx(dx: i32, dy: i32) -> i32 {
         >> 8
 }
 
-/// El rango máximo del ataque melee (`battle.cpp:144-167`): el PC ataca a
-/// 300 UNITS; si la víctima es un mob MELEE con más alcance, se usa el suyo
-/// (`MAX(300, (int)(wAttackRange * 1.15f))` — `:156-158`).
+/// El rango máximo del ataque melee del PC (`battle.cpp:144-167`): el PC
+/// ataca a 300 UNITS; si la víctima es un mob MELEE con más alcance, se usa
+/// el suyo (`MAX(300, (int)(wAttackRange * 1.15f))` — `:156-158`).
 pub fn melee_max_range(victim: &NpcState) -> i32 {
     let mut max = MELEE_RANGE_UNITS;
     if victim.battle_type == BATTLE_TYPE_MELEE {
         max = max.max((victim.attack_range as f32 * 1.15) as i32);
     }
     max
+}
+
+/// El rango máximo del ataque del MOB contra el PC (`battle.cpp:147-152`):
+/// un atacante NO-PC usa SOLO su `GetMobAttackRange() * 1.15f` — SIN el
+/// floor de 300 del PC. C31: el rewrite usaba `melee_max_range` (con floor
+/// 300) → los mobs con `attack_range < 261` atacaban desde 300 en vez de su
+/// rango real (mob 101 con range 175 → golpea desde ~201), y los mobs
+/// RANGE/MAGIC atacaban a 300 en vez de `(wAttackRange + BOW_DISTANCE)*1.15`
+/// (char.cpp:2010-2020 — GetMobAttackRange añade POINT_BOW_DISTANCE).
+pub fn mob_attack_max_range(mob: &NpcState) -> i32 {
+    // GetMobAttackRange (char.cpp:2010-2020): RANGE/MAGIC suman
+    // POINT_BOW_DISTANCE (300 default); el resto usa wAttackRange.
+    let base = if matches!(mob.battle_type, BATTLE_TYPE_RANGE | BATTLE_TYPE_MAGIC) {
+        mob.attack_range as i32 + BOW_DISTANCE_DEFAULT
+    } else {
+        mob.attack_range as i32
+    };
+    (base as f32 * 1.15) as i32
 }
 
 /// El `iAtk` del melee — la parte de ATAQUE de `melee_damage` SIN la DEF
@@ -760,6 +786,28 @@ mod tests {
         let far_big = NpcState { vid: 104, x: a.x + 1200, y: a.y, ..big };
         let r = handle_attack(&mut combat, &atk(far_big.vid), &a, Some(&far_big), None, 4000, &mut roll);
         assert_eq!(r, CombatResult::empty(), "1200 > 1150");
+    }
+
+    /// C31: el rango del ataque del MOB (battle.cpp:147-152) — SIN el floor
+    /// 300 del PC: mob 101 (range 175 MELEE) golpea desde ~201, no 300;
+    /// RANGE/MAGIC suman POINT_BOW_DISTANCE (300) al rango
+    /// (char.cpp:2010-2020 — GetMobAttackRange).
+    #[test]
+    fn mob_attack_range_uses_own_no_floor() {
+        let a = ninja();
+        let m = mob101();
+        // MELEE con range 175 → (int)(175×1.15) = 201 — NO 300.
+        let mob = NpcState { vid: 101, x: a.x + 200, y: a.y, battle_type: BATTLE_TYPE_MELEE, attack_range: 175, ..m };
+        assert_eq!(mob_attack_max_range(&mob), 201, "(int)(175×1.15) — sin floor");
+        // MELEE con range 1000 → 1150 (igual que el PC→mob, aquí sin MAX).
+        let big = NpcState { vid: 102, x: a.x, y: a.y, battle_type: BATTLE_TYPE_MELEE, attack_range: 1000, ..m };
+        assert_eq!(mob_attack_max_range(&big), 1150, "(int)(1000×1.15)");
+        // RANGE (1) con range 175 → (175 + 300 BOW) × 1.15 = 546.
+        let bow = NpcState { vid: 103, x: a.x, y: a.y, battle_type: BATTLE_TYPE_RANGE, attack_range: 175, ..m };
+        assert_eq!(mob_attack_max_range(&bow), 546, "(175+300)×1.15 — POINT_BOW_DISTANCE");
+        // MAGIC (2) — mismo bonus.
+        let mage = NpcState { vid: 104, x: a.x, y: a.y, battle_type: BATTLE_TYPE_MAGIC, attack_range: 175, ..m };
+        assert_eq!(mob_attack_max_range(&mage), 546, "MAGIC igual que RANGE");
     }
 
     /// Sin objetivo (`None` — el mundo aún vacío) → resultado vacío; bType > 0

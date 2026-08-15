@@ -9,8 +9,8 @@ use bevy_ecs::prelude::*;
 
 use crate::ai::{attack_damage, mob_move_speed, move_duration_ms, rotation_5deg, step_toward};
 use crate::combat::{
-    attack_speed_for_weapon, distance_approx, handle_attack, melee_max_range,
-    player_def_grade, CombatState, NpcState, PlayerState,
+    attack_speed_for_weapon, distance_approx, handle_attack,
+    mob_attack_max_range, player_def_grade, CombatState, NpcState, PlayerState,
 };
 use crate::ecs::components::{
     Affects, Aggro, Combat, Hp, LastAttack, Map, Mob, Mp, Player, Position, SpawnRef, Vid,
@@ -135,7 +135,11 @@ pub(crate) fn chase_attack_system(
             continue;
         }
         let state = npc_state(vid.vid, &pos, mob);
-        if dist <= melee_max_range(&state) {
+        // C31: el rango del ataque del MOB (mob→PC) es SOLO su
+        // `GetMobAttackRange() * 1.15` — sin el floor 300 del PC
+        // (battle.cpp:147-152). `melee_max_range` (con floor) se queda para
+        // el ataque del PC→mob de `handle_attack`.
+        if dist <= mob_attack_max_range(&state) {
             // C29: COOLDOWN del golpe del mob — parity `CalculateDuration`
             // (utils.cpp:201-210) con `POINT_ATT_SPEED = attack_speed` y
             // `iDur = 2000` (char_state.cpp:1005-1012). El rewrite atacaba
