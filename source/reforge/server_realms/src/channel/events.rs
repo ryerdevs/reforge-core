@@ -224,6 +224,33 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                 );
                 return Ok(());
             }
+            // C22: ORO del suelo (vnum 1, type ITEM_ELK = 9 — parity
+            // `PickupItem`, char_item.cpp:5919-5926: `GetType() == ITEM_ELK`
+            // → `GiveGold(count)` + `RemoveFromGround`). El oro NO entra al
+            // inventario: suma al monedero (`row.gold`) + GC_POINTS + save.
+            // El cliente pinta el oro en el suelo con vnum 1 (el kill-drop
+            // y el drop manual usan vnum 1 — parity DropGold).
+            if gi.vnum == 1 {
+                let row = session.row_mut();
+                row.gold = row.gold.saturating_add(gi.count as i32);
+                session
+                    .send(&packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
+                    .await
+                    .map_err(|e| format!("enviando GC_POINTS (oro): {e}"))?;
+                session.save();
+                session
+                    .send(&TPacketGCItemGroundDel::new(item_vid).to_bytes())
+                    .await
+                    .map_err(|e| format!("enviando GC_ITEM_GROUND_DEL (oro): {e}"))?;
+                session.intent(Intent::Item(ItemIntent::RemoveItem { item_vid }))?;
+                eprintln!(
+                    "server_realms: channel conn {}: {} recogió {}$ oro (vid {item_vid})",
+                    session.conn_id,
+                    session.row().name,
+                    gi.count
+                );
+                return Ok(());
+            }
             // PESO básico (lane D): el pickup se rechaza si el item excede
             // el peso máximo (parity GetMaxWeight/GetWeight del Metin2
             // clásico — el C++ de esta variante no tiene el sistema; gate
