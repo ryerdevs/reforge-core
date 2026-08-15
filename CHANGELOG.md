@@ -7,6 +7,66 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-15] (49th part) — Base jugable fixes: revive city/boots/mobs + full legacy-mob analysis
+
+> Sl session continuation (loop "Base jugable"). The 5 original plan bugs (drag-equip
+> INVENTORY, GC_ITEM_DEL vnum=0, CG_SHOP header 50, player commands + revive, CG_TARGET
+> 61→GC_TARGET 63) were fixed and verified in earlier loop iterations (see ASSUMPTIONS.md).
+> This part: the 3 real-client-feel fixes (revive city, boots speed, mobs separation/
+> respawn) + the complete C++ legacy-mob behavior analysis that explains "mobs don't
+> work like the original".
+
+### Fixes (all committed, all verified)
+
+- **Revive city (C26)** — city-revive now restores HP/MP + teleports to the village
+  (969600, 278400) instead of reviving in place; `RestartTown` parity. Verified by
+  verifier (sólido). (`4f00706`)
+- **Boots speed (C27)** — `APPLY_MOV_SPEED` (boots) now actually raises movement speed
+  (was applied but not wired to the envelope); capped at 200 (`game_core/src/movement.rs`).
+  Verified byte-exact against the C++ apply model. (`41a244f`)
+- **Mobs separation (C28)** — SEP_MOBS distance (60 u) + flank ±90° landing, per-map
+  snapshot (mobs on different maps never block each other), spawn jitter so copies
+  don't stack. (`41a244f` + `261d0c7`)
+- **Mobs respawn (C23)** — `time==0` entries never respawn (sentinel `u64::MAX`),
+  top-up = `max_count - alive` on deadline (multi-copy entries respawn while sisters
+  alive), despawn-by-distance no longer cancels pending respawns. (`41a244f` + `261d0c7`)
+- **Verifier mobs v2: PASS** — 3 mutation tests (each fix reverted → its test fails),
+  3 full `cargo test --workspace` runs (647 passed / 0 failed), scoping clean
+  (3 files touched).
+- **Redeploy**: release build + copy + `start_win.ps1` — server running (auth :30001 +
+  channel :30003), hashes identical (0953602509f8809c06bf718c681fc4d7).
+
+### Full legacy-mob analysis (new doc: `docs/plans/mob-legacy-behavior.md`, `841101a`)
+
+Explorer lane captured the COMPLETE C++ mob AI (char_state.cpp, char_battle.cpp,
+char.cpp, trigger.cpp, regen.cpp, length.h) with file:line evidence. Findings:
+
+- **CRITICAL: mob attack cooldown** — legacy hits every `CalculateDuration(ATT_SPEED, 2000)`
+  ≈ 2 s (char_state.cpp:1005-1012); the rewrite attacks every 250 ms tick → ~8× faster.
+  (bug-registry C29)
+- **CRITICAL: mob speed is motion-based** — legacy derives speed from the RUN animation
+  (GetMoveMotionSpeed, char.cpp:2726-2749, ~300 u/s), not the mob_proto column; the
+  rewrite treats the column as real u/s → mobs ~3× slower + wrong GC_MOVE duration
+  ("mobs move weird"). (C30)
+- **HIGH: attack range exact** — legacy chases at `range*1.15`, stops at `range*0.9/0.8`;
+  rewrite uses `MAX(300, range*1.15)` only for MELEE → RANGE/MAGIC mobs attack at 300. (C31)
+- **MEDIUM: change attack position** — legacy repositions mobs randomly around the
+  victim every 10 s/1 s (char.cpp:5436-5462) — the real reason legacy mobs "don't clump";
+  the rewrite's `separate_landing` is a patch. (C32)
+- **The "knockdown" does NOT exist server-side** — `AIFLAG_FALL` (length.h:545) is dead
+  code (0 uses in source/server); no stagger/interruption on damage. The hit reaction
+  is 100% client-side animation — the server only needs correct FUNC_ATTACK
+  dw_time/dwDuration sync.
+- 21 missing behaviors total, prioritized (C29–C32 registered in bug-registry).
+
+### Pending (next block, documented in bug-registry + next-block-plan)
+
+- C29 cooldown de ataque, C30 velocidad motion, C31 rango exacto, C32 change attack
+  position (mobs juntos). Then: berserk, aggro completo, leash, KILL_AND_GO, COWARD,
+  STONESKIN, GODSPEED, interceptación, walkability, REVIVE party, mob skills.
+- Committed the 44–46 backlog (pool/handshake/client C++ code, 59 files) that was
+  documented but never committed — `d2c0831`. Workspace clean, 647 passed / 0 failed.
+
 ## [2026-08-15] (48th part) — Real-client session fixes + full gap analysis
 
 > Sl session (continuation). Despliegue del wave de los 5 bugs (build release 04:10,
@@ -67,7 +127,7 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 - **B — Comandos GM_PLAYER** (`5e20dcf` + `c24fe70`): 30 comandos parseados
   (safebox/mount/party/pvp/emociones/walk/skillup); set_walk_mode + skillup reales con
   persistencia. Verifier: FAIL -> 2 fixes parity: `/skillup 0` no-op (char_skill.cpp:3572)
-  + bMasterType escrito (char_skill.cpp:207-217, thresholds 20/30/40).
+  - bMasterType escrito (char_skill.cpp:207-217, thresholds 20/30/40).
 - **C — Chat broadcast + whisper** (`088c8c1` + `70379f1`): broadcast a todo el mapa
   (rango view 5500), SHOUT canal completo id=0 + cooldown 15s, whisper case-insensitive,
   payload "Name : msg". Verifier: FAIL -> 6 fixes: **NUL de cola rompia los comandos '/'
@@ -569,8 +629,6 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 - **Restart opencode** to load everything accumulated: coder "The Reforger" + routing, MCPs for all agents, skill adjustments, oracle v4-pro.
 - After restart: slice 18 spec review with the oracle on v4-pro, then the bevy_ecs adoption.
 
-
-
 > User: "solo crea la del coder que todavía no tiene personalidad — ¿omo-slim trae un .md prompt ya enriquecido del cual podamos usar?" Answer: NO — coder does not exist in the harness pantheon (it is our custom agent replacing `build`); the harness ships agent prompts as `.ts` template strings (functional Role/Behavior/Constraints, no narrative — "The Last Builder" etc. is README marketing only, verified in `fixer.ts`); the `.md` mechanism is for USER overrides, not pre-made prompts. So the personality was created modeled on the harness style + our project rules.
 
 ### Changed — coder personality and config (local/gitignored, requires restart)
@@ -584,8 +642,6 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 - **Restart opencode** to load: coder personality (The Reforger), coder routing, MCPs for all agents, explorer/fixer skills, oracle v4-pro.
 - After restart: slice 18 spec review with the oracle on v4-pro, then the bevy_ecs adoption.
-
-
 
 > User direction: "las skills que ya tienen están perfecto — lo que quiero es que cada agente tenga habilidades enfocadas en su laburo: los MCPs que tenemos para todos, explorer con skills para explorar código a gran escala, librarian con skills de documentación, fixer con skills de debug/arreglar, coder con clean code". Deep analysis of the harness done first (lib-2: README completo + 7 docs + schema + los 8 prompts fuente de src/agents/*.ts).
 
@@ -610,8 +666,6 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 - **Restart opencode** para cargar: MCPs de todos los agentes + skills nuevas de explorer/fixer (oráculo v4-pro sigue pendiente también).
 - Después: revisión de la spec del slice 18 (World compartido por canal) y el desarrollo de personalidades restante (routing de @coder, Council, prompt layering por proyecto) si el usuario lo aprueba.
 
-
-
 > The 31st part claimed (a) the GitHub repo "is not on GitHub yet" and (b) `context7`/`gh_grep` were "never registered — dead refs". **Both claims were WRONG** (user correction, verified empirically). This entry corrects the record; the 31st part stays as history.
 
 ### Corrected facts (verified 2026-08-12)
@@ -634,8 +688,6 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 - **Restart opencode** to load all config changes (oracle v4-pro, fixer 13 skills, coder/librarian graphify MCP, designer brainstorming, restored MCPs).
 - After restart: **slice 18 spec review with the oracle on v4-pro** before Coder starts the bevy_ecs adoption.
 
-
-
 > User questions: "¿para qué sirven los MCPs? ¿no es mejor un GitHub MCP que el CLI? ¿no deberíamos añadir skills a los agentes sin skills?" — answered with verified facts, applied the fixes.
 
 ### Answered (verified)
@@ -655,8 +707,6 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 - **Restart opencode** to load all config changes (oracle v4-pro, fixer 13 skills, coder/librarian graphify MCP, designer brainstorming, MCP cleanup).
 - After restart: **slice 18 spec review with the oracle on v4-pro** before Coder starts the bevy_ecs adoption.
 
-
-
 > Config: `~/.config/opencode/oh-my-opencode-slim.json` (preset `opencode-go` + `agents.coder`) + `.opencode/agents/*.md` (local, gitignored). Docs: `docs/explanation/agent-organization.md`. All changes require an opencode restart (guardrail rule 7 — verified empirically with a fresh-oracle probe: the new model does NOT load hot).
 
 ### Changed — agent team config
@@ -672,8 +722,6 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 - **Restart opencode** to load: oracle v4-pro + fixer/librarian/coder skill-MCP changes.
 - After restart: **slice 18 spec review with the oracle on v4-pro** (fresh session) before Coder starts the bevy_ecs adoption (World compartido por canal, 5 pasos — spec de ora-1 aprobada).
-
-
 
 > User decision after the strategic review: "Metin2 es un juego de farmeo — el lag con muchos mobs es el problema core; con ECS mejoraría muchísimo el rendimiento. Y para el cliente futuro, bevy (no wgpu desde cero)." Documented in ADR-0010 §2 (amended) + ADR-0007 (amended) + plan/ROADMAP.
 
@@ -692,8 +740,6 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 - `docs/decisions/0007` amended: new client = bevy + Slint (decided 2026-08-12).
 - `source/reforge/README.md`: realm row → bevy_ecs World adoptado (ADR-0010 §2).
 - **Next slice**: ECS adoption implementation — `MobCache` → World components/systems with the 371 existing tests staying green (ADR-0010 Consequences).
-
-
 
 > User-requested full-project review ("are we only transcribing, not innovating?"). Three recon lanes (explorer inventory, librarian plan digest, oracle verdict) + two doc lanes (librarian staleness sweep x2). No code changed.
 
@@ -723,8 +769,6 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 - **ADR-0010 — Domain boundaries and data ownership**: ratifies the real realm architecture (pure functions + per-connection state + WorldStore, NOT the plan's ECS); ECS entry criterion = F5 benchmark failing 1,000+/instance with ≥2–5x CPU headroom or AI-tick >500ms; data ownership volatile/durable/derived; **translator-vs-core governing boundary** (user principle codified); wire debt inventory D1–D6 with F7 removal plan.
 - **ADR-0011 — Anti-hack model**: invariant server-authoritative zero client trust; ratifies implemented controls (timer speedhack always-on, anti-teleport, 0x00→close, DB fail-fast, idle timeout, server-clock cooldowns); **decides signed clock wrap** → modular difference with tolerance (kick stays as policy); pending controls with phase (speed envelope, walkability from PG, floods, god-mode, dupe completion, farm bots); attack-class table.
-
-
 
 > Team model change (user-directed, defined before implementation). Config: `~/.config/opencode/oh-my-opencode-slim.json` + `.opencode/agents/*.md` (local, gitignored). Docs: this repo.
 
@@ -1453,7 +1497,7 @@ The client reached the select screen early, but world entry failed silently (cle
 ### Resuelto
 
 - **CRASH DE ENTRADA AL MUNDO — CERRADO (prueba de campo 2/2):** los personajes viejos del mapa 41 (lkjsnlfknlsk, ninja) tenían coordenadas basura `(957500,258241)`/`(959878,242236)` (fueron escritas por harness de sesiones anteriores). `UPDATE player SET x=969600, y=278400` (aldea c1, unidades) → **entradas 2/2 seguidas** con el cliente. Los 3 dumps WER de 18:49-18:50 (0xC0000374, confirmado con cdb) eran SIEMPRE con lkjsnlfknlsk — **no el idioma TR** (el servidor aceptó `lang 'tr' -> 15` + `LoginSuccess` correctamente).
-- **Selector de idioma con banderas — FUNCIONANDO end-to-end** (login → `locale.cfg` → reinicio → LOGIN3 con el idioma → servidor): 
+- **Selector de idioma con banderas — FUNCIONANDO end-to-end** (login → `locale.cfg` → reinicio → LOGIN3 con el idioma → servidor):
   - Fix del header TGA generado (struct.pack con 6 H's en vez de 4 → width/height=0 → `Cannot GetImageInfo from texture` en syserr.txt del cliente). Header corregido a `20 00 18 00 20 08` (32×24, bpp32, desc 0x08) idéntico al `choise_close.tga` del pack.
   - Fix pantalla negra: `ui.__mem_func__` sobre closure rompía `LoginWindow.Open()` → SetEvent directo (como las lambdas del VK) + try/except blindado.
   - Posición final: anclada al **SaveAccountBoard** (`y = saveAccountBoard.y - 30`), no al LoginBoard — el SAB está más arriba.
@@ -1485,7 +1529,6 @@ The client reached the select screen early, but world entry failed silently (cle
 
 - **El selector de banderas causó pantalla NEGRA al abrir el login** (primera versión 18:04): `btn.SetEvent(ui.__mem_func__(self.__OnClickLanguageFlag(...)))` envolvía una **closure** con `__mem_func__` (wrapper pensado para métodos bound estilo `self.__OnClickLoginButton`) → excepción en `__CreateLanguageSelector` durante `LoginWindow.Open()` → el login no se construye → negro. **Fix:** `SetEvent` directo con la closure (igual que las lambdas del teclado virtual, `key_space.SetEvent(lambda ...)`) + **try/except blindado** en `__CreateLanguageSelector` (`print` del error, el login se muestra igual aunque el selector falle). Repack 538368 B 18:12, desplegado a `client\pack` y verificado por desempaquetado (línea 379 sin `__mem_func__`, 32 banderas dentro del epk).
 - **Verificado el `.rar` del sistema completo** (`systems\Language System 1.2.6.rar`, UnRAR l): contenido idéntico a la carpeta extraída, **sin ninguna imagen de bandera de país** y sin lógica de selector de login. Los 8 `02. Client\root\*.py` del mod son parches del coliseo PVP (dependen de `__LANGUAGE_SYSTEM__` en el C++ del cliente, no integrado) — **copiarlos rompería el login** (ImportError `uiLanguageSystem`, AttributeError `app.LANGUAGE_SYSTEM`, `player.IsLanguageSystem()` inexistente). Confirmada la decisión #8 del doc de estado (no integrar ese root).
-
 
 ## [2026-08-09] (3ª sesión, 2ª parte) — Crash de entrada al mundo: diagnóstico en curso + auditoría del Language System
 
