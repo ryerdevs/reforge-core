@@ -139,6 +139,9 @@ El plan "Base jugable" de 5 bugs fue un PRIMER BLOQUE, no la totalidad.
 | **Peso/carga** | Sin sistema de weight | El inventario no limita por peso |
 | **Oro en el suelo** | Sin recogida de oro (solo items) | Menor |
 | **POINT_* (stats/buffs)** | C++ gestiona **165 puntos**; el Rust conoce **32** (19%) | Buffs/skills incompletos |
+| **Crear/borrar personaje** | El entry solo acepta CG_CHARACTER_SELECT — CG_CHARACTER_CREATE/DELETE (en el framer con tamaño) → "header inesperado" → cierre | No se puede crear ni borrar personaje |
+| **CG_EMPIRE (elegir imperio)** | Sin handler en el entry | El selector de imperio no funciona |
+| **Guild marks** | CG_MARK_CRCLIST/UPLOAD, CG_GUILD_SYMBOL_UPLOAD sin handler | Marks de clan no cargan |
 
 ## 5. Prioridades propuestas (siguiente loop)
 
