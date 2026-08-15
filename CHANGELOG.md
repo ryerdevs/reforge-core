@@ -50,6 +50,63 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 - `46517a8` fix(items+shop): doble-click en equipado desequipa (toggle) + diag shop
 - `58cad3a` fix(movement): tick del mundo 500->250ms — mobs a saltos rapidos
 
+## [2026-08-15] (49th part) — Gap loop: 6 lanes paralelos + verifier adversarial + oracle director
+
+> Sl session multi-agente (pi-subagents, background). Los 6 lanes del gap analysis
+> se implementaron EN PARALELO (2 concurrentes), cada uno con un VERIFICADOR
+> ADVERSARIO (que intenta probar que está malo) y reparación de hallazgos. Todos los
+> verifiers dieron FAIL con bugs reales — todos reparados. El oracle director hizo la
+> revision global final. Workspace **634 passed / 0 failed**.
+
+### Lanes (6, archivos disjuntos)
+
+- **A — Framer 21 headers CG + GC centralizado** (`e6ca209`): 21 headers C->S añadidos
+  con tamaños exactos (packet_info.cpp); GC_SHOP=38/GC_EXCHANGE=42/GC_AFFECT_ADD=126
+  centralizados en protocol::header. Verifier: FAIL (entry.rs:457 no compilaba con la
+  firma nueva de points_packet — ya resuelto en `3bcaf26`).
+- **B — Comandos GM_PLAYER** (`5e20dcf` + `c24fe70`): 30 comandos parseados
+  (safebox/mount/party/pvp/emociones/walk/skillup); set_walk_mode + skillup reales con
+  persistencia. Verifier: FAIL -> 2 fixes parity: `/skillup 0` no-op (char_skill.cpp:3572)
+  + bMasterType escrito (char_skill.cpp:207-217, thresholds 20/30/40).
+- **C — Chat broadcast + whisper** (`088c8c1` + `70379f1`): broadcast a todo el mapa
+  (rango view 5500), SHOUT canal completo id=0 + cooldown 15s, whisper case-insensitive,
+  payload "Name : msg". Verifier: FAIL -> 6 fixes: **NUL de cola rompia los comandos '/'
+  (CRITICO — "No such command" para todo)**, caps de longitud (DoS del cliente legacy),
+  rango TALKING, SHOUT, prefijo, case.
+- **D — Dispatch gameplay** (`2064c65` + `18dc92f`): drop item/oro, quickslots
+  persistentes (bytea 72B), script/quest intents, PvP, Standup/Sitdown, peso.
+  Verifier: FAIL -> 3 fixes wire: header GC_CHARACTER_POSITION 28->43 (desync),
+  posturas 3/4 (length.h), quickslot ITEM=1/SKILL=2/COMMAND=3.
+- **E — Crear/borrar personaje + empire + rename** (`3bcaf26` + `073ee93`):
+  CG_CHARACTER_CREATE/DELETE/EMPIRE/CHANGE_NAME con parity completa (JobInitialPoints,
+  social_id últimos-7, UNITS 969600/278400). Verifier: FAIL -> 2 fixes: CG_EMPIRE(90)/
+  CG_CHANGE_NAME(106) al framer (el rename desconectaba), rollback del create sin gate.
+- **F — Tiendas datos PG** (SQL + `83f2481`): 17 filas restauradas al legacy EXACTO
+  (9001-9009) + los 3 vendedores del pueblo (20002/20006/20023) reasignados a las filas
+  all_* libres. Verifier: FAIL (regresion: los vendedores del pueblo quedaron sin shop).
+  Cobertura final mapa c1: 13 vendedores con shop. Backups: shops_backup_antes.sql +
+  shops_backup_fix2.csv.
+
+### Oracle director (revision global) — FAIL -> 3 fixes
+
+- realm_pg.rs: nombre de 25 chars > varchar(24) -> 'e2e_rok_' (18 chars).
+- player.rs delete(): DELETE de quest/affect usaba dw_pid pero el esquema es dwPID
+  (sqlstate 42703) — bug real del borrado de personaje (realm_pg 6/6 con PG real).
+- pool.rs (untracked) commiteado — los tests PG lo requieren (HEAD autocontenido).
+
+### Resultado
+
+- Workspace **634 passed / 0 failed** (33 bins).
+- **10+ commits** de la fase (6 lanes + 6 reparaciones + 1 fix oracle).
+- El ciclo completo: 6 verifiers -> 6 FAIL con bugs reales -> todos reparados con parity
+  del C++ verificada. El diseño adversarial funciono como se pidio.
+
+### Pendiente del operador
+
+- Reiniciar el canal (redeploy del binario) para que load_shops recargue la ShopTable
+  con los vendedores 20002/20006/20023 (cache unica al boot, mod.rs:226).
+- El WIP de otro proceso (client-rewrite/movement, ~1185 inserciones) queda en el arbol.
+
 ## [2026-08-15] (47th part) — "Base jugable": 5 bugs gameplay fixeados (equip drag, GC_ITEM_DEL, CG_SHOP framer, comandos GM_PLAYER, barra de vida del mob)
 
 > Sl session (pi-loop-mode `/loop`). Los 5 bugs del plan "Base jugable" con causa raíz confirmada se arreglaron, cada uno con tests + `cargo test --workspace` + commit. El servidor C++ quedó FROZEN (solo parity, nunca se reconstruyó). Workspace **584 passed / 0 failed** (+20 desde los 564 del último wave).
