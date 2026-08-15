@@ -125,6 +125,16 @@ npc_vnum=0 (all_*) no tienen vendedor asignado en el legacy tampoco.
 **Estimación global: ~35-40% de la base jugable completa** (no el 90%).
 El plan "Base jugable" de 5 bugs fue un PRIMER BLOQUE, no la totalidad.
 
+## 6. Multijugador / funcionalidad dormida (hallazgos del análisis profundo)
+
+| Área | Hallazgo | Impacto |
+| --- | --- | --- |
+| **Chat broadcast** | `chat.rs` hace solo **eco al emisor** — sin broadcast a los demás (el C++ `PacketToVisibleSet` difunde a todos en rango) | En multi, nadie ve los mensajes de otro |
+| **Safebox/Messenger repos dormidos** | `database/src/{safebox,messenger}.rs` tienen 4+3 fns pero **cero callers** — sin handlers, sin framer, sin dispatch | Código escrito e inaccesible |
+| **CG_ITEM_DROP (soltar item)** | Sin handler (el kill-drop y pickup sí existen) | El jugador no puede soltar items del inventario |
+| **Headers GC ad-hoc** | `GC_EXCHANGE=42` en trade.rs, `GC_AFFECT_ADD=126` en packets.rs... — sin tabla central | Deuda estructural del wire S→C |
+| **CG_CHARACTER_POSITION (28)** | Sin handler (sync de posición del C++) | Menor |
+
 ## 5. Prioridades propuestas (siguiente loop)
 
 1. **Tiendas**: re-asignar npc_vnum en PG (datos) + confirmar apertura (bug activo).
