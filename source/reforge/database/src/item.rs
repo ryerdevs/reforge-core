@@ -10,13 +10,13 @@
 //! | QID_ITEM_AWARD_LOAD (18) / TAKEN (19) | `ItemAwardManager.cpp:59-69` / `:166-168` | `load_pending_awards` / `take_award` | 23 columnas (`id, login, vnum, count, socket0..2, attrtype0..attrvalue6, mall, why`), `WHERE taken_time IS NULL AND id > $1`; taken = `UPDATE ... SET taken_time = NOW() WHERE id = $1 AND taken_time IS NULL` (idempotente). E2E Q6 `scripts/gpg/e2e_db.sh:148`. |
 //! | ITEM_ID_RANGE | `ItemIDRangeManager.cpp:93` (BuildRange) y `:121` | `max_id_in_range` | `SELECT MAX(id) FROM player.item WHERE id >= $1 AND id <= $2` — el rango 100M-200M lo sondea el E2E Q8; `cs_dwMinimumRemainCount` (`:110`) es decision del game. |
 //! | item_proto (uso+combate) | `TItemTable` (`type`/`sub_type`/`alValues`/`wearflag`) | `load_proto_use_values` | Subset del `player.item_proto` por vnum (9 columnas) — el equivalente moderno de `PROTO_FROM_DB` (ver lib.rs). |
-//! | Unidad ACID (materiales → resultado → oro, una tx) | ROADMAP.md:172, ADR-0011 (dupe completion F5) | `exchange_mutated` / `exchange_mutations` | Skeleton: valores ABSOLUTOS (parity del save legacy) + guard de estado previo (`= $pre`) que hace el replay del WAL un no-op exacto (0 filas) y da anti doble-gasto. |
+//! | Unidad ACID (materials → resultado → oro, una tx) | ROADMAP.md:172, ADR-0011 (dupe completion F5) | `exchange_mutated` / `exchange_mutations` | Skeleton: valores ABSOLUTOS (parity del save legacy) + guard de estado previo (`= $pre`) que hace el replay del WAL un no-op exacto (0 filas) y da anti doble-gasto. |
 //!
 //! Tipos PG reales (verificados en el esquema): id bigint identity BY DEFAULT,
 //! owner_id bigint, window text (check de los 7 windows), pos integer,
 //! count/vnum/socket* bigint, attr*/attrvalue* smallint.
 
-use tokio_postgres::{Client, NoTls};
+use crate::pool::{Client, PgPool};
 
 use crate::account::pg_err;
 use crate::wal::{Batcher, Mutation, Param};
@@ -95,7 +95,7 @@ const DELETE_SQL: &str = "DELETE FROM player.item WHERE id = $1";
 
 /// Repositorio del dominio world (item). Conexion por llamada (ADR-0008).
 pub struct ItemRepo {
-    pg_conn: String,
+    pool: PgPool,
 }
 
 /// Fila del item_proto (subset uso+combate): `type`/`sub_type` (el
@@ -110,22 +110,16 @@ pub struct ProtoItem {
     pub b_type: i16,
     pub b_sub_type: i16,
     pub values: [i32; 6],
-    pub wear_flag: u32,
+    pub wear_flag: i64,
 }
 
 impl ItemRepo {
-    pub fn new(pg_conn: impl Into<String>) -> Self {
-        Self { pg_conn: pg_conn.into() }
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
     }
 
     async fn connect(&self) -> Result<Client, String> {
-        let (client, connection) = tokio_postgres::connect(&self.pg_conn, NoTls)
-            .await
-            .map_err(|e| format!("PG connect: {e}"))?;
-        tokio::spawn(async move {
-            let _ = connection.await;
-        });
-        Ok(client)
+        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
     }
 
     /// Load del QID_ITEM: los items de los 4 windows del personaje.
@@ -182,7 +176,7 @@ impl ItemRepo {
         let client = self.connect().await?;
         let rows = client
             .query(
-                "SELECT type, sub_type, value0, value1, value2, value3, value4, value5, wearflag \
+                "SELECT type, subtype, value0, value1, value2, value3, value4, value5, wearflag \
                  FROM player.item_proto WHERE vnum = $1",
                 &[&vnum],
             )
@@ -201,6 +195,25 @@ impl ItemRepo {
             values,
             wear_flag: r.try_get(8).map_err(|e| format!("item_proto.wearflag: {e}"))?,
         }))
+    }
+
+    /// Datos de la VENTA al shop (shop_buy_price + lag del item_proto -
+    /// parity shop_manager.cpp:297-319): el SellProto del lane social.
+    /// SQL directo que vivia en server_realms::channel::shop (violaba
+    /// ADR-0008 2 - acceso SOLO via repos); enrutado al crate database
+    /// (mismo pool compartido). Devuelve (shop_buy_price, flag).
+    pub async fn load_sell_proto(&self, vnum: i64) -> Result<(i64, i64), String> {
+        let client = self.connect().await?;
+        let row = client
+            .query_one(
+                "SELECT shop_buy_price, flag FROM player.item_proto WHERE vnum = $1",
+                &[&vnum],
+            )
+            .await
+            .map_err(|e| pg_err("ITEM_PROTO_SELL", &e))?;
+        let shop_buy_price = row.try_get(0).map_err(|e| format!("shop_buy_price: {e}"))?;
+        let flag = row.try_get(1).map_err(|e| format!("flag: {e}"))?;
+        Ok((shop_buy_price, flag))
     }
 
     /// Probe del rango de ids (`ItemIDRangeManager.cpp:93,121` — E2E Q8):
@@ -387,11 +400,11 @@ pub(crate) fn upsert_mutation(row: &ItemRow, owner_id: i64) -> Mutation {
 }
 
 /// Unidad ACID (skeleton para los slices de trade/refine — ROADMAP.md:172):
-/// materiales → resultado → oro en UNA transaccion.
+/// materials → resultado → oro en UNA transaccion.
 ///
 /// Todos los valores son ABSOLUTOS (parity del save legacy: el cache flush
 /// escribe la fila completa — `Cache.cpp:82`), con guard de estado previo:
-/// - materiales: `UPDATE ... SET count = $post WHERE id = $1 AND count = $pre`
+/// - materials: `UPDATE ... SET count = $post WHERE id = $1 AND count = $pre`
 ///   (o `DELETE ... WHERE id = $1 AND count = $pre` si `post == 0`).
 /// - resultado: `upsert_mutation` (ON CONFLICT (id) — idempotente por
 ///   naturaleza; si el resultado stackea sobre un item existente, el caller
@@ -409,14 +422,14 @@ pub(crate) fn upsert_mutation(row: &ItemRow, owner_id: i64) -> Mutation {
 /// el batch commit igual). Bajo single-writer-per-region (ADR-0011 — un solo
 /// canal escribe los items de un player) no existe writer concurrente, asi
 /// que el guard solo puede dispararse en replay — donde el no-op es correcto.
-/// La validacion de negocio ("tienes suficientes materiales") es del slice:
+/// La validacion de negocio ("tienes suficientes materials") es del slice:
 /// parity C++ — el game comprueba `count >= need` EN MEMORIA antes de
 /// construir la unidad. Si un futuro topologia multi-writer necesita rechazo
 /// estricto, el slice debe usar una transaccion sincrona con chequeo de
 /// filas afectadas (client.transaction) en vez del Batcher.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ItemExchange {
-    /// Owner de los materiales y del resultado (player.item.owner_id).
+    /// Owner de los materials y del resultado (player.item.owner_id).
     pub owner_id: i64,
     /// Materiales a consumir: `(item_id, count_pre, count_post)`.
     /// `count_post == 0` -> DELETE (stack vacio), si no UPDATE absoluto.
@@ -538,7 +551,7 @@ mod tests {
         assert_eq!(m.params[0], Param::Int(7), "$1 = owner");
     }
 
-    /// Unidad ACID — materiales: UPDATE absoluto con guard `count = $pre`
+    /// Unidad ACID — materials: UPDATE absoluto con guard `count = $pre`
     /// (replay no-op) o DELETE con el mismo guard cuando el stack se vacia.
     #[test]
     fn exchange_mutations_consume_materials_with_guards() {
@@ -549,7 +562,7 @@ mod tests {
             gold: None,
         };
         let ms = exchange_mutations(&ex);
-        assert_eq!(ms.len(), 2, "2 materiales");
+        assert_eq!(ms.len(), 2, "2 materials");
         // (100, 5, 2): UPDATE absoluto con guard pre.
         assert_eq!(
             ms[0].sql,
@@ -594,7 +607,7 @@ mod tests {
     #[test]
     fn exchange_mutations_empty_unit_is_empty() {
         let ex = ItemExchange { owner_id: 7, materials: vec![], result: None, gold: None };
-        assert!(exchange_mutations(&ex).is_empty(), "sin materiales/resultado/oro");
+        assert!(exchange_mutations(&ex).is_empty(), "sin materials/resultado/oro");
     }
 
     /// Wiring del Batcher: `exchange_mutated` pushea TODAS las mutations y
@@ -617,7 +630,7 @@ mod tests {
 
         let sink = CountingSink::default();
         let batcher = Batcher::spawn(std::time::Duration::from_millis(1000), 64, sink.clone());
-        let repo = ItemRepo::new("host=noop");
+        let repo = ItemRepo::new(crate::pool::new_pool("host=127.0.0.1 port=1 user=x password=x dbname=x", 2).expect("pool"));
         let ex = ItemExchange {
             owner_id: 7,
             materials: vec![(100, 5, 2), (200, 3, 0)],
@@ -627,7 +640,7 @@ mod tests {
         repo.exchange_mutated(&batcher, &ex).await.expect("flush ok");
         let batches = sink.0.lock().unwrap();
         assert_eq!(batches.len(), 1, "la unidad entera en UN batch");
-        assert_eq!(batches[0].len(), 4, "2 materiales + resultado + oro");
+        assert_eq!(batches[0].len(), 4, "2 materials + resultado + oro");
         // El id es uuidv7 propio de cada push — comparamos sql+params.
         let expected = exchange_mutations(&ex);
         for (got, want) in batches[0].iter().zip(&expected) {
