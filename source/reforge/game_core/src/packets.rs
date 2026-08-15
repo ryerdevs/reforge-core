@@ -26,8 +26,8 @@ use protocol::world::{
     TPacketAffectElement, TItemPos, TPlayerSkill, TQuickslot,
 };
 use protocol::{
-    from_cstr, TPacketGCCharacterAdd, TPacketGCCharacterAdditionalInfo, TPacketGCLoginSuccess,
-    TSimplePlayer, PLAYER_PER_ACCOUNT,
+    from_cstr, TPacketGCCharacterAdd, TPacketGCCharacterAdditionalInfo, TPacketGCCharacterUpdate,
+    TPacketGCLoginSuccess, TSimplePlayer, PLAYER_PER_ACCOUNT,
 };
 
 /// `CHAR_TYPE_PC` — `length.h:330` (enum ECharType: MONSTER=0, NPC=1, STONE=2,
@@ -334,6 +334,42 @@ pub fn character_additional_info_with_parts(
     }
 }
 
+/// `TPacketGCCharacterUpdate` (header 19, 51 B) — el update del personaje
+/// YA EN el mundo (parity `UpdatePacket` char.cpp:1017-1052): el C++ lo manda
+/// al equipar/desequipar (`CItem::EquipTo` item.cpp:1004-1005 y
+/// `CItem::Unequip`) para que el cliente recalcule el arma (ATT_MIN/ATT_MAX —
+/// `__SetWeaponPower` lee value3/value4 del item por el part del arma,
+/// PythonNetworkStreamPhaseGameActor.cpp:38-73) y refresque la ventana
+/// (`__RecvCharacterUpdatePacket` → `__SetWeaponPower` + `__RefreshStatus`).
+/// El ADDITIONAL_INFO (136) NO sirve en runtime: es el paquete de la
+/// secuencia de ENTRADA (el cliente lo aplica solo si el VID coincide con el
+/// `s_kNetActorData` pendiente — PythonNetworkStreamPhaseGameActor.cpp:153,
+/// 165). Speeds = 100 (GetLimitPoint — char.cpp:1025-1026); flags/guild/
+/// montura a 0 (sin affects/mount — F5); `s_alignment` = row.alignment/10
+/// (char.cpp:1034); `dw_arrow` = count de flechas equipadas (QUIVER).
+pub fn character_update_with_parts(
+    row: &PlayerRow,
+    parts: &[u32; 5],
+    arrow_count: u32,
+) -> TPacketGCCharacterUpdate {
+    let mut aw_part = [0u32; 5];
+    aw_part.copy_from_slice(parts);
+    TPacketGCCharacterUpdate {
+        header: TPacketGCCharacterUpdate::HEADER,
+        dw_vid: row.id as u32,
+        aw_part,
+        b_moving_speed: 100,
+        b_attack_speed: 100,
+        b_state_flag: 0,
+        dw_affect_flag: [0, 0],
+        dw_guild_id: 0,
+        s_alignment: (row.alignment / 10) as i16,
+        b_pk_mode: 0,
+        dw_mount_vnum: 0,
+        dw_arrow: arrow_count,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // F4 slice 3: paquetes del world entry (fase Loading/Game)
 // ---------------------------------------------------------------------------
@@ -453,9 +489,11 @@ pub struct BattlePoints {
     pub magic_att_grade: i32,
     /// POINT_MAGIC_DEF_GRADE (23).
     pub magic_def_grade: i32,
-    /// POINT_WEAPON_MIN (29) — daño min del arma (la ventana: ATT_MIN).
+    /// POINT_WEAPON_MIN (29) — daño min del arma (`value3` del item —
+    /// `GetValue(3)`, battle.cpp:460).
     pub weapon_min: i32,
-    /// POINT_WEAPON_MAX (30) — daño max del arma (la ventana: ATT_MAX).
+    /// POINT_WEAPON_MAX (30) — daño max del arma (`value4` del item —
+    /// `GetValue(4)`, battle.cpp:461).
     pub weapon_max: i32,
 }
 
@@ -469,9 +507,13 @@ pub struct BattlePoints {
 ///   def de la ventana — char.cpp:2146-2147).
 /// - mágicos: `level*2 + IQ*2` / `level + (IQ*3+HT)/3 + armor/2`
 ///   (char.cpp:2150-2151).
-/// - `weapon_min/max` = value0/value1 del arma equipada (el C++ NO los llena
-///   — POINT_WEAPON_MIN/MAX quedaban 0 — el rewrite los llena para la
-///   ventana del cliente, que lee ATT_MIN/ATT_MAX en 29/30).
+/// - `weapon_min/max` = value3/value4 del arma equipada (el daño físico del
+///   arma — `GetValue(3)/GetValue(4)`, battle.cpp:460-461; el cliente lee los
+///   mismos values en `__SetWeaponPower`, PythonNetworkStreamPhaseGameActor.
+///   cpp:50-51). El C++ NO los llena (POINT_WEAPON_MIN/MAX quedan 0 —
+///   char.h:165-166): el ATT_MIN/ATT_MAX visible del cliente se calcula
+///   LOCALMENTE desde el part del arma del GC_CHARACTER_UPDATE, así que el
+///   rewrite los llena solo como información del GC_POINTS.
 pub fn compute_battle_points(
     row: &PlayerRow,
     weapon: Option<&database::item::ProtoItem>,
@@ -493,8 +535,8 @@ pub fn compute_battle_points(
     let client_def_grade = level + ht + armor_sum - def_grade; // char.cpp:2147
     let magic_att_grade = level * 2 + iq * 2; // char.cpp:2150
     let magic_def_grade = level + (iq * 3 + ht) / 3 + armor_sum / 2; // char.cpp:2151
-    let weapon_min = weapon.map(|w| w.values[0]).unwrap_or(0);
-    let weapon_max = weapon.map(|w| w.values[1]).unwrap_or(0);
+    let weapon_min = weapon.map(|w| w.values[3]).unwrap_or(0);
+    let weapon_max = weapon.map(|w| w.values[4]).unwrap_or(0);
     BattlePoints {
         attack_grade,
         def_grade,
@@ -1081,7 +1123,10 @@ mod tests {
         let weapon = database::item::ProtoItem {
             b_type: 1,
             b_sub_type: 0,
-            values: [12, 15, 0, 0, 0, 0],
+            // El daño del arma vive en value3/value4 (GetValue(3)/(4) —
+            // battle.cpp:460-461; el cliente lee los mismos en
+            // `__SetWeaponPower`, PythonNetworkStreamPhaseGameActor.cpp:50-51).
+            values: [0, 0, 0, 12, 15, 0],
             wear_flag: 16,
             weight: 0,
         };
@@ -1095,7 +1140,7 @@ mod tests {
         // Mágicos (char.cpp:2150-2151).
         assert_eq!(b.magic_att_grade, 70, "level×2 + IQ×2");
         assert_eq!(b.magic_def_grade, 57, "level + (IQ×3+HT)/3 + armor/2");
-        // La ventana del cliente: el daño del arma (value0/value1).
+        // La ventana del cliente: el daño del arma (value3/value4).
         assert_eq!((b.weapon_min, b.weapon_max), (12, 15));
         // Sin arma: 0/0 (manos vacías).
         let bare = compute_battle_points(&r, None, 0);
@@ -1104,6 +1149,35 @@ mod tests {
         r.job = 0;
         let w = compute_battle_points(&r, None, 0);
         assert_eq!(w.attack_grade, 5 * 2 + 2 * 30, "WARRIOR 2×ST");
+    }
+
+    /// `character_update_with_parts` — el paquete que el C++ manda al
+    /// equipar/desequipar (`UpdatePacket` char.cpp:1017-1052 — el cliente
+    /// recalcula ATT_MIN/ATT_MAX y refresca la ventana): 51 B, parts del
+    /// equipo, speeds 100 y los campos del row (vid/alignment).
+    #[test]
+    fn character_update_with_parts_fields_and_size() {
+        let mut r = row();
+        r.alignment = 1234;
+        let parts = [0x1001, 0x1002, 0x1003, 0x1004, 0x1005];
+        let p = character_update_with_parts(&r, &parts, 42);
+        let b = p.to_bytes();
+        assert_eq!(b.len(), TPacketGCCharacterUpdate::SIZE, "51 B");
+        assert_eq!(b[0], TPacketGCCharacterUpdate::HEADER, "header 19");
+        assert_eq!(p.dw_vid, r.id as u32);
+        assert_eq!(p.aw_part, parts, "parts del equipo (el arma en WEAPON)");
+        assert_eq!((p.b_moving_speed, p.b_attack_speed), (100, 100), "GetLimitPoint — char.cpp:1025-1026");
+        assert_eq!(p.b_state_flag, 0);
+        assert_eq!(p.dw_affect_flag, [0, 0], "sin affects (F5)");
+        assert_eq!(p.dw_guild_id, 0);
+        assert_eq!(p.s_alignment, 123, "row.alignment / 10 — char.cpp:1034");
+        assert_eq!(p.b_pk_mode, 0);
+        assert_eq!(p.dw_mount_vnum, 0);
+        assert_eq!(p.dw_arrow, 42, "flechas equipadas (QUIVER)");
+        // Wire spot: vid@1, weapon part@9 (1+4+4), arrow@47.
+        assert_eq!(&b[1..5], &(r.id as u32).to_le_bytes());
+        assert_eq!(&b[9..13], &0x1002u32.to_le_bytes());
+        assert_eq!(&b[47..51], &42u32.to_le_bytes());
     }
 
     /// ComputePoints subset — vectores REALES del runtime (4 personajes):

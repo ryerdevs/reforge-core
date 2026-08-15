@@ -292,6 +292,30 @@ pub struct Session {
     pub sitting: bool,
 }
 
+/// `g_iStatusPointGetLevelLimit` (config.cpp:47 — 90): el nivel hasta el que
+/// cada subida da POINT_STAT (parity char.cpp:3110-3112).
+const STATUS_POINT_GET_LEVEL_LIMIT: i16 = 90;
+
+/// Un nivel subido (parity char.cpp:3064-3136 — el POINT_EXP y el ciclo del
+/// POINT_LEVEL_STEP): `exp -= next_exp`, `level += 1`, y los POINT_STAT del
+/// ciclo. El C++ avanza el level_step 0→4 DENTRO de cada nivel (el
+/// `for (4 - iLevStep)` de char.cpp:3075-3077): los cases 1/2/3 dan +1
+/// POINT_STAT cada uno (char.cpp:3110-3112) mientras GetLevel() — el nivel
+/// PRE-incremento, el nivel sube en el case 4 (char.cpp:3130) — sea <= 90;
+/// el case 4 resetea el step a 0 (char.cpp:3136), así que el estado
+/// estacionario son 3 puntos por nivel (ResetPoint lo confirma:
+/// `MINMAX(1, iLv, 90) * 3` — char.cpp:5857). Devuelve el nivel NUEVO (el
+/// caller recarga el next_exp de la tabla).
+fn level_up_step(row: &mut PlayerRow, next_exp: i64) -> i16 {
+    let prev_level = row.level;
+    row.exp = (i64::from(row.exp) - next_exp) as i32;
+    row.level = prev_level.saturating_add(1);
+    if prev_level <= STATUS_POINT_GET_LEVEL_LIMIT {
+        row.stat_point += 3;
+    }
+    row.level
+}
+
 impl Session {
     /// Sesión nueva de una conexión aceptada: wire + guards + canales S→C.
     /// El resto de campos se llenan en las fases de `entry` (login/select/
@@ -441,11 +465,7 @@ impl Session {
         let mut leveled = false;
         while self.next_exp > 0 && i64::from(self.row().exp) >= self.next_exp {
             let next = self.next_exp;
-            let exp = (i64::from(self.row().exp) - next) as i32;
-            let level = self.row().level.saturating_add(1);
-            let row = self.row_mut();
-            row.exp = exp;
-            row.level = level;
+            let level = level_up_step(self.row_mut(), next);
             leveled = true;
             self.next_exp =
                 CommonRepo::new(self.pool.clone()).next_exp(level).await.unwrap_or(0);
@@ -644,5 +664,91 @@ mod tests {
             err.is_err() && err.unwrap_err().contains("inactividad"),
             "el silencio > timeout dispara el cierre"
         );
+    }
+
+    /// El level-up da POINT_STAT (bug 3 — parity char.cpp:3064-3136): por
+    /// CADA nivel subido `stat_point` sube 3 — el ciclo LEVEL_STEP 0→4 del
+    /// C++ (el `for (4 - iLevStep)` por nivel, char.cpp:3075-3077: los cases
+    /// 1/2/3 dan +1 cada uno, 3110-3112; el case 4 sube el nivel y resetea el
+    /// step, 3130/3136). Sin PG: se simula el row y el while de apply_kill
+    /// (el next_exp se avanza a mano).
+    #[test]
+    fn level_up_grants_stat_points() {
+        fn row(level: i16, exp: i32) -> PlayerRow {
+            PlayerRow {
+                id: 2,
+                name: "ninja".into(),
+                job: 1,
+                voice: 0,
+                dir: 0,
+                x: 969600,
+                y: 278400,
+                z: 0,
+                map_index: 41,
+                exit_x: 0,
+                exit_y: 0,
+                exit_map_index: 0,
+                hp: 100,
+                mp: 100,
+                stamina: 100,
+                random_hp: 0,
+                random_sp: 0,
+                playtime: 0,
+                gold: 0,
+                level,
+                level_step: 0,
+                st: 30,
+                ht: 30,
+                dx: 30,
+                iq: 30,
+                exp,
+                stat_point: 0,
+                skill_point: 0,
+                sub_skill_point: 0,
+                stat_reset_count: 0,
+                part_base: 0,
+                part_hair: 0,
+                part_main: 0,
+                skill_level: None,
+                quickslot: None,
+                skill_group: 3,
+                alignment: 0,
+                horse_level: 0,
+                horse_riding: 0,
+                horse_hp: 0,
+                horse_hp_droptime: 0,
+                horse_stamina: 0,
+                logoff_interval: 0.0,
+                horse_skill_point: 0,
+            }
+        }
+
+        // Un nivel (5→6 con exp justo): +3 puntos, exp sobrante 0.
+        let mut r = row(5, 1000);
+        assert_eq!(level_up_step(&mut r, 1000), 6, "nivel nuevo");
+        assert_eq!(r.exp, 0, "exp sobrante");
+        assert_eq!(r.stat_point, 3, "ciclo LEVEL_STEP 0→4: cases 1/2/3 → +1 cada uno");
+
+        // Multi-nivel (el while de apply_kill): 5→7 con exp de sobra → +6.
+        let mut r = row(5, 5000);
+        let mut next_exp = 1000i64;
+        let mut levels = 0;
+        while next_exp > 0 && i64::from(r.exp) >= next_exp {
+            let level = level_up_step(&mut r, next_exp);
+            next_exp = i64::from(level) * i64::from(level) * 100; // tabla simulada
+            levels += 1;
+        }
+        assert_eq!(levels, 2, "5→6 y 6→7 (el tercer next ya no alcanza)");
+        assert_eq!(r.level, 7);
+        assert_eq!(r.stat_point, 6, "2 niveles × 3 puntos");
+
+        // El límite (g_iStatusPointGetLevelLimit = 90 — config.cpp:47): la
+        // transición 90→91 aún da (el check del C++ usa el nivel
+        // PRE-incremento — el nivel sube en el case 4), la 91→92 ya no.
+        let mut r = row(90, 1000);
+        level_up_step(&mut r, 1000);
+        assert_eq!(r.stat_point, 3, "90→91: GetLevel()=90 <= 90 → da");
+        level_up_step(&mut r, 1000);
+        assert_eq!(r.stat_point, 3, "91→92: GetLevel()=91 > 90 → no da");
     }
 }

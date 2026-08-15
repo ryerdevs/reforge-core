@@ -365,14 +365,15 @@ const WEAR_MAX_NUM: u16 = 32;
 /// wire = INVENTORY_MAX_NUM + wear, length.h:827).
 const WEAR_ARROW: u16 = 9;
 /// `WEAR_WEAPON = 4` (length.h:104) — el slot del arma (el cell del wire =
-/// INVENTORY_MAX_NUM + wear). El daño del arma (value0/value1) alimenta los
-/// `POINT_WEAPON_MIN/MAX` de la ventana del personaje (BattlePoints).
+/// INVENTORY_MAX_NUM + wear). El daño del arma (value3/value4 —
+/// `GetValue(3)/(4)`, battle.cpp:460-461) alimenta los `POINT_WEAPON_MIN/MAX`
+/// del GC_POINTS (BattlePoints).
 const WEAR_WEAPON: u16 = 4;
 
 /// El proto del ARMA equipada (WEAR_WEAPON — cell INVENTORY_MAX_NUM + 4):
-/// `value0/value1` = el daño min/max que la ventana del cliente muestra como
-/// ataque (POINT_WEAPON_MIN/MAX — `uicharacter.py` ATT_MIN/ATT_MAX). `None` =
-/// sin arma (manos vacías).
+/// `value3/value4` = el daño min/max del arma (parity `GetValue(3)/(4)` —
+/// battle.cpp:460-461; el cliente lee los mismos values en `__SetWeaponPower`
+/// para su ATT_MIN/ATT_MAX local). `None` = sin arma (manos vacías).
 async fn equipped_weapon_proto(
     pool: &database::pool::PgPool,
     inventory: &[database::item::ItemRow],

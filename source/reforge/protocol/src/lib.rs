@@ -234,6 +234,13 @@ pub mod header {
 
     // S→C
     pub const GC_CHARACTER_ADD: u8 = 1;
+    /// `HEADER_GC_CHARACTER_UPDATE` (packet.h:164 — 19): update de un
+    /// personaje YA EN el mundo — el C++ lo manda al equipar/desequipar
+    /// (`UpdatePacket` char.cpp:1017-1052, `CItem::EquipTo` item.cpp:1004-1005
+    /// y `CItem::Unequip`). El cliente recalcula el arma (ATT_MIN/ATT_MAX) y
+    /// refresca la ventana desde este paquete (no desde el ADDITIONAL_INFO,
+    /// que es de la secuencia de ENTRADA).
+    pub const GC_CHARACTER_UPDATE: u8 = 19;
     /// LoginSuccess clásico (header 6, `HEADER_GC_LOGIN_SUCCESS`; cliente
     /// `HEADER_GC_LOGIN_SUCCESS3` = 3 jugadores). El desplegado es
     /// `GC_LOGIN_SUCCESS_NEWSLOT` (0x20, 5 jugadores).
@@ -1817,6 +1824,80 @@ impl TPacketGCCharacterAdditionalInfo {
     }
 }
 
+/// `TPacketGCCharacterUpdate` (51 B, `header::GC_CHARACTER_UPDATE` = 19).
+/// Layout: `BYTE header; DWORD dwVID; DWORD awPart[5]; BYTE bMovingSpeed;
+/// BYTE bAttackSpeed; BYTE bStateFlag; DWORD dwAffectFlag[2]; DWORD dwGuildID;
+/// short sAlignment; BYTE bPKMode; DWORD dwMountVnum; DWORD dwArrow`
+/// (QUIVER ON — packet.h:1284-1304; `UpdatePacket`, char.cpp:1017-1052).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketGCCharacterUpdate {
+    pub header: u8,
+    pub dw_vid: u32,
+    pub aw_part: [u32; CHR_EQUIPPART_NUM],
+    pub b_moving_speed: u8,
+    pub b_attack_speed: u8,
+    pub b_state_flag: u8,
+    pub dw_affect_flag: [u32; 2],
+    pub dw_guild_id: u32,
+    pub s_alignment: i16,
+    pub b_pk_mode: u8,
+    pub dw_mount_vnum: u32,
+    pub dw_arrow: u32,
+}
+
+impl TPacketGCCharacterUpdate {
+    pub const SIZE: usize = 51;
+    pub const HEADER: u8 = header::GC_CHARACTER_UPDATE;
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        let mut aw_part = [0u32; CHR_EQUIPPART_NUM];
+        for (i, p) in aw_part.iter_mut().enumerate() {
+            *p = rd_u32(data, 5 + i * 4);
+        }
+        Ok(Self {
+            header: data[0],
+            dw_vid: rd_u32(data, 1),
+            aw_part,
+            b_moving_speed: data[25],
+            b_attack_speed: data[26],
+            b_state_flag: data[27],
+            dw_affect_flag: [rd_u32(data, 28), rd_u32(data, 32)],
+            dw_guild_id: rd_u32(data, 36),
+            s_alignment: i16::from_le_bytes([data[40], data[41]]),
+            b_pk_mode: data[42],
+            dw_mount_vnum: rd_u32(data, 43),
+            dw_arrow: rd_u32(data, 47),
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        wr_u32(&mut b, 1, self.dw_vid);
+        for (i, p) in self.aw_part.iter().enumerate() {
+            wr_u32(&mut b, 5 + i * 4, *p);
+        }
+        b[25] = self.b_moving_speed;
+        b[26] = self.b_attack_speed;
+        b[27] = self.b_state_flag;
+        wr_u32(&mut b, 28, self.dw_affect_flag[0]);
+        wr_u32(&mut b, 32, self.dw_affect_flag[1]);
+        wr_u32(&mut b, 36, self.dw_guild_id);
+        b[40..42].copy_from_slice(&self.s_alignment.to_le_bytes());
+        b[42] = self.b_pk_mode;
+        wr_u32(&mut b, 43, self.dw_mount_vnum);
+        wr_u32(&mut b, 47, self.dw_arrow);
+        b
+    }
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -1855,6 +1936,7 @@ mod tests {
     size_asserts!(TPacketGCLoginSuccess);
     size_asserts!(TPacketGCCharacterAdd);
     size_asserts!(TPacketGCCharacterAdditionalInfo);
+    size_asserts!(TPacketGCCharacterUpdate);
     // Login3 no tiene `SIZE` único (65 canal / 68 auth); el struct Rust con lang = 68.
     const _: () = assert!(core::mem::size_of::<TPacketCGLogin3>() >= TPacketCGLogin3::SIZE_AUTH);
 
@@ -1877,6 +1959,7 @@ mod tests {
         assert_eq!(TPacketGCEmpire::SIZE, 2);
         assert_eq!(TPacketGCCharacterAdd::SIZE, 37);
         assert_eq!(TPacketGCCharacterAdditionalInfo::SIZE, 70);
+        assert_eq!(TPacketGCCharacterUpdate::SIZE, 51);
         // Desviación documentada respecto al spec (474/76): el wire real es packed.
         assert_eq!(
             TSimplePlayer::SIZE,
@@ -2617,6 +2700,50 @@ mod tests {
         assert_eq!(p.to_bytes(), exp);
     }
 
+    #[test]
+    fn golden_gc_character_update_51b() {
+        // Layout (packet.h:1284-1304, packed, QUIVER ON — UpdatePacket
+        // char.cpp:1017-1052): header(0x13=19) @0 | dwVID @1 | awPart[5] @5
+        // bMovingSpeed @25 | bAttackSpeed @26 | bStateFlag @27 |
+        // dwAffectFlag[2] @28 | dwGuildID @36 | sAlignment(i16) @40 |
+        // bPKMode @42 | dwMountVnum @43 | dwArrow @47 — total 51.
+        // Verificación de la suma: 1+4+20+1+1+1+8+4+2+1+4+4 = 51.
+        let mut exp = [0u8; 51];
+        exp[0] = 0x13;
+        exp[1..5].copy_from_slice(&0x4321u32.to_le_bytes()); // dwVID
+                                                             // awPart[5] @5..25 (ARMOR, WEAPON, HEAD, HAIR, ACCE)
+        exp[5..9].copy_from_slice(&0x2001u32.to_le_bytes());
+        exp[9..13].copy_from_slice(&0x2002u32.to_le_bytes());
+        exp[13..17].copy_from_slice(&0x2003u32.to_le_bytes());
+        exp[17..21].copy_from_slice(&0x2004u32.to_le_bytes());
+        exp[21..25].copy_from_slice(&0x2005u32.to_le_bytes());
+        exp[25] = 100; // bMovingSpeed
+        exp[26] = 100; // bAttackSpeed
+        exp[27] = 0; // bStateFlag
+        exp[28..32].copy_from_slice(&0x1111_2222u32.to_le_bytes()); // affect[0]
+        exp[32..36].copy_from_slice(&0x3333_4444u32.to_le_bytes()); // affect[1]
+        exp[36..40].copy_from_slice(&500u32.to_le_bytes()); // dwGuildID
+        exp[40..42].copy_from_slice(&(-30i16).to_le_bytes()); // sAlignment
+        exp[42] = 0; // bPKMode
+        exp[43..47].copy_from_slice(&0x3000u32.to_le_bytes()); // dwMountVnum
+        exp[47..51].copy_from_slice(&99u32.to_le_bytes()); // dwArrow
+
+        let p = TPacketGCCharacterUpdate::from_bytes(&exp).unwrap();
+        assert_eq!(p.header, 19);
+        assert_eq!(p.dw_vid, 0x4321);
+        assert_eq!(p.aw_part, [0x2001, 0x2002, 0x2003, 0x2004, 0x2005]);
+        assert_eq!((p.b_moving_speed, p.b_attack_speed), (100, 100));
+        assert_eq!(p.b_state_flag, 0);
+        assert_eq!(p.dw_affect_flag, [0x1111_2222, 0x3333_4444]);
+        assert_eq!(p.dw_guild_id, 500);
+        assert_eq!(p.s_alignment, -30);
+        assert_eq!(p.b_pk_mode, 0);
+        assert_eq!(p.dw_mount_vnum, 0x3000);
+        assert_eq!(p.dw_arrow, 99);
+        // serialize → bytes idénticos byte a byte
+        assert_eq!(p.to_bytes(), exp);
+    }
+
     // ------------------------------------------------------------------
     // Parseo seguro: longitudes incorrectas → Err, sin panics
     // ------------------------------------------------------------------
@@ -2654,6 +2781,8 @@ mod tests {
         );
         assert!(TPacketGCCharacterAdd::from_bytes(&[0u8; 36]).is_err());
         assert!(TPacketGCCharacterAdditionalInfo::from_bytes(&[0u8; 69]).is_err());
+        assert!(TPacketGCCharacterUpdate::from_bytes(&[0u8; 50]).is_err());
+        assert!(TPacketGCCharacterUpdate::from_bytes(&[0u8; 52]).is_err());
     }
 
     #[test]
