@@ -204,9 +204,9 @@
 
 ### C19. [ABIERTO — NUEVO, alto impacto] Envelope rechaza movimientos SIN ack al cliente
 
-- **Sintoma (log 120851, 56 veces)**: el jugador manda MOVE a 962247,275617 y el server responde "fuera del envelope (speed 500) — rechazado" 6 veces seguidas; el jugador queda CLAVADO (el cliente no recibe la correccion).
-- **Causa**: el rechazo del envelope (movement.rs:199) solo hace log + Continue. El C++ en el caso de distancia hace Show()+Stop() (sincroniza la posicion del cliente, input_main.cpp:1463-1482); el Rust no envia ninguna correccion -> el cliente mantiene su posicion local y sigue reenviando el mismo MOVE.
-- **Fix propuesto**: al rechazar por envelope/distancia, enviar una sincronizacion de posicion al cliente (TPacketGCMove de vuelta a la posicion actual, o el equivalente del Show+Stop del C++). REVISAR tambien la tolerancia (1.5x/250ms) que parece muy estricta para el patron real de MOVEs en rafagas.
+- **Sintoma (CONFIRMADO EN VIVO 2026-08-15, log 144800 — 74 rechazos)**: el jugador manda MOVEs que el server rechaza "fuera del envelope" 4-6 veces seguidas; el jugador queda CLAVADO.
+- **Causa**: (1) el rechazo (movement.rs:199) solo hace log + Continue — el C++ hace Show()+Stop() (sincroniza, input_main.cpp:1463-1482); (2) la tolerancia permite 2925 u (500×3.25×1.8) pero los MOVEs en rafaga del cliente exceden o el anchor se acumula mal.
+- **Fix propuesto**: enviar sincronizacion de posicion al rechazar + revisar el calculo del anchor/envelope para el patron real de MOVEs.
 
 ### C20. [CANDIDATO — NUEVO] Quickslot clippy error (WIP de otro proceso)
 
