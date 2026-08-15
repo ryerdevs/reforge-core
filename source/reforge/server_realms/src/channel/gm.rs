@@ -81,9 +81,20 @@ pub async fn handle(session: &mut Session, cmd: &str) -> Result<Outcome, String>
         gm_info(session, "No such command").await?;
         return Ok(Outcome::Continue);
     };
+    // GM_PLAYER (nivel 0): comandos de jugador — SIN gmlist (parity
+    // cmd.cpp:340-347; accesibles a todos). El C++ los despacha directo en
+    // do_restart/do_cmd; el revive solo aplica muerto (POS_DEAD) y los de
+    // cierre mandan su paquete y cierran la conexión.
+    if matches!(
+        command,
+        GmCommand::RestartHere | GmCommand::RestartTown | GmCommand::Logout
+            | GmCommand::Quit | GmCommand::PhaseSelect
+    ) {
+        return handle_player_command(session, command).await;
+    }
     // Permisos RE-CHECK en DB por comando (ADR-0011): `common.gmlist` —
     // (mName = personaje, mAccount = cuenta). Sin fila → no es GM.
-    let Some(auth) = CommonRepo::new(&session.config.pg_conn)
+    let Some(auth) = CommonRepo::new(session.pool.clone())
         .gm_authority(&session.row().name, &session.account_login)
         .await?
     else {
@@ -119,8 +130,78 @@ pub async fn handle(session: &mut Session, cmd: &str) -> Result<Outcome, String>
         GmCommand::GiveItem { vnum, count } => give_item(session, vnum, count).await?,
         GmCommand::Notice { text } => self_notice(session, &text).await?,
         GmCommand::SetLevel { level } => set_level(session, level).await?,
+        // Inalcanzable: las variantes de jugador van por `handle_player_command`.
+        GmCommand::RestartHere
+        | GmCommand::RestartTown
+        | GmCommand::Logout
+        | GmCommand::Quit
+        | GmCommand::PhaseSelect => {}
     }
     Ok(Outcome::Continue)
+}
+
+/// Comandos GM_PLAYER (nivel 0, cmd.cpp:340-347) — el diálogo de muerte y el
+/// menú del cliente. Parity do_restart/do_cmd (cmd_general.cpp):
+///
+/// - `/restart_here` (SCMD_RESTART_HERE, POS_DEAD): revive en el MISMO
+///   punto — RestartAtSamePos (remove + insert del personaje).
+/// - `/restart_town` (SCMD_RESTART_TOWN, POS_DEAD): revive EN LA CIUDAD —
+///   WarpSet(exit_x/y) → GC_WARP, el cliente reconecta con DirectEnter.
+/// - `/logout` (SCMD_LOGOUT): cierra la conexión (PHASE_CLOSE).
+/// - `/quit` (SCMD_QUIT): cierra la conexión.
+/// - `/phase_select` (SCMD_PHASE_SELECT): GC_PHASE(SELECT) + cierre — el
+///   cliente vuelve al selector de personajes y reconecta.
+///
+/// El revive reutiliza el path del CG_SCRIPT_ANSWER (`script::handle` — el
+/// C++ los trata igual: el diálogo de muerte y el comando comparten el flujo
+/// de RestartAtSamePos/WarpSet). Subset: sin evento de muerte (m_pkDeadEvent)
+/// el C++ rechaza (CloseRestartWindow) — aquí si no está muerto se ignora.
+async fn handle_player_command(
+    session: &mut Session,
+    command: GmCommand,
+) -> Result<Outcome, String> {
+    match command {
+        GmCommand::RestartHere | GmCommand::RestartTown => {
+            // Solo muerto (POS_DEAD — parity `ch->IsDead()` cmd_general.cpp:404).
+            if session.row().hp > 0 {
+                eprintln!(
+                    "server_realms: channel conn {}: {} mandó /restart VIVO — \
+                     ignorado (parity CloseRestartWindow)",
+                    session.conn_id, session.row().name
+                );
+                return Ok(Outcome::Continue);
+            }
+            // Syntetiza el CG_SCRIPT_ANSWER (answer 1 = ciudad, 0 = mismo
+            // punto) — el path de revive ya existe y reenvía ADDITIONAL_INFO +
+            // GC_CHARACTER_DEL + GC_WARP + persistencia.
+            let answer = if matches!(command, GmCommand::RestartTown) { 1 } else { 0 };
+            crate::channel::script::revive(session, answer).await?;
+            Ok(Outcome::Continue)
+        }
+        GmCommand::Logout | GmCommand::Quit => {
+            eprintln!(
+                "server_realms: channel conn {}: {} — cierre por /{:?}",
+                session.conn_id, session.row().name, command
+            );
+            Ok(Outcome::Close(format!("comando /{:?} — cierre de conexión", command)))
+        }
+        GmCommand::PhaseSelect => {
+            eprintln!(
+                "server_realms: channel conn {}: {} — vuelta al selector \
+                 (/phase_select)",
+                session.conn_id, session.row().name
+            );
+            // GC_PHASE(SELECT) → el cliente cambia al selector de personajes
+            // (parity `d->SetPhase(PHASE_SELECT)` desc.cpp:585-597) y luego
+            // se cierra la conexión (el cliente reconecta al channel).
+            session
+                .send(&protocol::TPacketGCPhase::new(protocol::phase::SELECT).to_bytes())
+                .await
+                .map_err(|e| format!("enviando GC_PHASE(SELECT): {e}"))?;
+            Ok(Outcome::Close("comando /phase_select — reconexión al selector".into()))
+        }
+        _ => Ok(Outcome::Continue),
+    }
 }
 
 /// `warp <x metros> <y metros>` → `GC_WARP` (parity do_warp cmd_gm.cpp:
@@ -148,7 +229,7 @@ async fn warp(session: &mut Session, x: i32, y: i32) -> Result<(), String> {
 /// existe). count clamp 1..200 en el parseo.
 async fn give_item(session: &mut Session, vnum: u32, count: u32) -> Result<(), String> {
     // El item debe existir en el proto (parity CreateItem → nullptr → INFO).
-    if ItemRepo::new(&session.config.pg_conn)
+    if ItemRepo::new(session.pool.clone())
         .load_proto_use_values(i64::from(vnum))
         .await?
         .is_none()
@@ -173,7 +254,7 @@ async fn give_item(session: &mut Session, vnum: u32, count: u32) -> Result<(), S
         return Ok(());
     };
     // id del rango ITEM_ID_RANGE (parity ItemIDRangeManager.cpp:93,121).
-    let id = ItemRepo::new(&session.config.pg_conn)
+    let id = ItemRepo::new(session.pool.clone())
         .max_id_in_range(100_000_000, 200_000_000)
         .await?
         .map(|m| m + 1)
@@ -202,7 +283,7 @@ async fn give_item(session: &mut Session, vnum: u32, count: u32) -> Result<(), S
         .send(&set.to_bytes())
         .await
         .map_err(|e| format!("enviando GC_ITEM_SET (GM item): {e}"))?;
-    ItemRepo::new(&session.config.pg_conn)
+    ItemRepo::new(session.pool.clone())
         .upsert(&item, session.row().id)
         .await?;
     session.inventory.push(item);
@@ -247,7 +328,7 @@ async fn self_notice(session: &mut Session, text: &str) -> Result<(), String> {
 async fn set_level(session: &mut Session, level: i32) -> Result<(), String> {
     session.row_mut().level = level as i16;
     // NEXT_EXP del nivel nuevo (el level-up del kill lo recarga igual).
-    session.next_exp = CommonRepo::new(&session.config.pg_conn)
+    session.next_exp = CommonRepo::new(session.pool.clone())
         .next_exp(level as i16)
         .await
         .unwrap_or(0);
@@ -256,10 +337,10 @@ async fn set_level(session: &mut Session, level: i32) -> Result<(), String> {
         level,
     }))?;
     session
-        .send(&packets::points_packet(session.row(), session.next_exp).to_bytes())
+        .send(&packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
         .await
         .map_err(|e| format!("enviando GC_POINTS (GM level): {e}"))?;
-    session.store().save_character(session.row());
+    session.save();
     eprintln!(
         "server_realms: channel conn {}: GM {} puso nivel {level}",
         session.conn_id, session.row().name
