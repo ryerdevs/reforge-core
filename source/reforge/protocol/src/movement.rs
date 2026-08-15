@@ -10,7 +10,7 @@
 //! observadores (`PacketAround(&pack, ..., ch)` — el `ch` queda EXCLUIDO,
 //! `input_main.cpp:1576-1588`); el cliente mueve su personaje localmente.
 
-use crate::{rd_u32, Result, ProtocolError};
+use crate::{rd_u32, ProtocolError, Result};
 
 /// `TPacketCGMove` (16 B, header 7).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -43,7 +43,10 @@ impl TPacketCGMove {
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
         Ok(Self {
             header: data[0],
@@ -111,7 +114,10 @@ impl TPacketGCMove {
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
         Ok(Self {
             header: data[0],
@@ -167,7 +173,10 @@ mod tests {
     #[test]
     fn bad_lengths_error() {
         for len in [0usize, 4, 15, 17, 32] {
-            assert!(TPacketCGMove::from_bytes(&vec![0u8; len]).is_err(), "len {len}");
+            assert!(
+                TPacketCGMove::from_bytes(&vec![0u8; len]).is_err(),
+                "len {len}"
+            );
         }
     }
 
@@ -200,7 +209,10 @@ mod tests {
     #[test]
     fn gc_move_bad_lengths_error() {
         for len in [0usize, 3, 23, 25] {
-            assert!(TPacketGCMove::from_bytes(&vec![0u8; len]).is_err(), "len {len}");
+            assert!(
+                TPacketGCMove::from_bytes(&vec![0u8; len]).is_err(),
+                "len {len}"
+            );
         }
     }
 }

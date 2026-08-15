@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "graphify": {
+      "command": "python",
+      "args": [
+        "-m",
+        "graphify.serve",
+        "--graph",
+        "C:\\projects\\Metin2\\graphify-out\\graph.json"
+      ],
+      "lifecycle": "lazy"
+    },
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"],
+      "lifecycle": "lazy"
+    }
+  }
+}

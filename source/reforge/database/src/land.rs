@@ -10,7 +10,7 @@
 //! Tipos PG reales: id/map_index/x/y/width/height/guild_id bigint (el wire
 //! del paquete los trunca a DWORD/long — `TLandPacketElement`, 24 B).
 
-use tokio_postgres::{Client, NoTls};
+use crate::pool::{Client, PgPool};
 
 use crate::account::pg_err;
 
@@ -35,22 +35,16 @@ FROM player.land WHERE enable = 'YES' AND map_index = $1 ORDER BY id";
 
 /// Repositorio del dominio world (land). Conexion por llamada (ADR-0008).
 pub struct LandRepo {
-    pg_conn: String,
+    pool: PgPool,
 }
 
 impl LandRepo {
-    pub fn new(pg_conn: impl Into<String>) -> Self {
-        Self { pg_conn: pg_conn.into() }
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
     }
 
     async fn connect(&self) -> Result<Client, String> {
-        let (client, connection) = tokio_postgres::connect(&self.pg_conn, NoTls)
-            .await
-            .map_err(|e| format!("PG connect: {e}"))?;
-        tokio::spawn(async move {
-            let _ = connection.await;
-        });
-        Ok(client)
+        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
     }
 
     /// Lands del mapa (orden por id — parity del boot). Vec vacío = el mapa

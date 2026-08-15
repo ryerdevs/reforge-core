@@ -41,7 +41,7 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
         i.window == "EQUIPMENT"
             && i.pos as u16 == INVENTORY_MAX_NUM + 4
     }) {
-        ItemRepo::new(&session.config.pg_conn)
+        ItemRepo::new(session.pool.clone())
             .load_proto_use_values(w.vnum)
             .await?
     } else {

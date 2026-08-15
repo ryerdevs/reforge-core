@@ -33,11 +33,17 @@
 //!
 //! El C++ **NO valida walkability en `CInputMain::Move`** (`input_main.cpp:
 //! 1437-1599` — solo timer speedhack activo; el check de distancia está
-//! comentado). Este módulo es un control NUEVO server-authoritative
-//! (plan §5.7: el server es dueño de la posición): el canal rechaza los MOVE
-//! cuyo destino no sea movible. Fallo de carga del mapa → el canal loguea y
-//! OMITE el chequeo (fail-open; el envelope anti-speedhack sigue activo) —
-//! un mapa roto no congela a los jugadores.
+//! comentado). Este módulo es la lectura del `server_attr` que el canal usa
+//! como control de ADR-0011: la walkability es un refuerzo del anti-teleport
+//! (un salto fuera del envelope no puede aterrizar en terreno bloqueado; los
+//! pasos normales se aceptan como el C++ — el cliente valida su propia
+//! colisión, píxel a píxel). Diagnóstico 2026-08-13: la FUENTE del pueblo
+//! (celdas locales 62-63 del tile 7,11) es ATTR_BLOCK **real** del archivo —
+//! el parse era correcto; el gate previo del canal atascaba al jugador en su
+//! borde (el cliente permite posiciones dentro de la celda que el modelo no
+//! ocupa). Fallo de carga del mapa → el canal loguea y OMITE el chequeo
+//! (fail-open; el envelope anti-speedhack sigue activo) — un mapa roto no
+//! congela a los jugadores.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -163,6 +169,24 @@ impl MapData {
             Some(a) => a & ATTR_MOVABLE_MASK == 0,
             None => false,
         }
+    }
+
+    /// Primera celda MOVIBLE del mapa (fallback del `GetValidLocation` —
+    /// P0-B 2026-08-14): barrido row-major de la grid (parity del layout
+    /// `[y][x]` row-major de `attr`). Devuelve el CENTRO de la celda en
+    /// UNITS. Cualquier mapa con terreno tiene al menos una celda movible.
+    pub fn first_movable(&self) -> Option<(i32, i32)> {
+        let cols = self.tiles_w * TILE_CELLS;
+        for (i, cell) in self.cells.iter().enumerate() {
+            if cell & ATTR_MOVABLE_MASK == 0 {
+                let row = i / cols;
+                let col = i % cols;
+                let x = self.setting.base_x + (col as i32) * CELL_SIZE + CELL_SIZE / 2;
+                let y = self.setting.base_y + (row as i32) * CELL_SIZE + CELL_SIZE / 2;
+                return Some((x, y));
+            }
+        }
+        None
     }
 }
 
@@ -568,6 +592,44 @@ mod tests {
         eprintln!("mapa 41: {blocked} celdas bloqueadas / {water} agua (primeros 4M celdas)");
     }
 
+    /// Celdas REALES del server_attr del mapa 41 (fijadas 2026-08-13 — el
+    /// diagnóstico del bug de walkability): el parse es parity-correcto —
+    /// la plaza del pueblo es movible, la FUENTE (bloque 2x2 junto al spawn)
+    /// está marcada ATTR_BLOCK por el archivo, el agua NO bloquea y una
+    /// montaña sí. Estas celdas fijan el contrato del parse (bits + layout).
+    #[test]
+    fn server_attr_map41_known_cells() {
+        let map_path = "../../deploy/main/srv1/share/locale/spain/map";
+        let attr = Path::new(map_path).join("metin2_map_c1").join("server_attr");
+        if !attr.exists() {
+            eprintln!("SKIP server_attr_map41_known_cells: runtime sin deploy");
+            return;
+        }
+        let bytes = std::fs::read(&attr).expect("server_attr legible");
+        let (tw, th, cells) = parse_attr_grid(&bytes, 41).expect("grid");
+        let m = MapData { setting: map_41_setting(), tiles_w: tw, tiles_h: th, cells };
+
+        // Spawn del jugador (Town.txt -> base + (480,736)*100): movible.
+        assert!(m.is_movable(969_600, 278_400), "spawn movible");
+
+        // LA FUENTE del pueblo: celdas locales (62-63, 62-63) del tile (7,11)
+        // — el primer MOVE del jugador hacia el norte (969595,278398) cae en
+        // ella. ATTR_BLOCK REAL del archivo (el C++ la veria igual:
+        // sectree_manager.cpp:760) — el bug 2026-08-13 NO era el parse.
+        assert!(!m.is_movable(969_575, 278_375), "fuente: ATTR_BLOCK real");
+        assert!(!m.is_movable(969_595, 278_398), "borde de la fuente (el MOVE rechazado)");
+
+        // AGUA (bit ATTR_WATER sin ATTR_BLOCK): el jugador puede caminar por
+        // el agua (parity IsMovablePosition — solo BLOCK|OBJECT bloquean).
+        let (wx, wy) = (996_300i32, 226_500i32);
+        assert_eq!(m.attr(wx, wy), Some(0x42), "agua: WATER + bit meta, sin BLOCK");
+        assert!(m.is_movable(wx, wy), "el agua no bloquea");
+
+        // MONTANA (ATTR_BLOCK): no movible (el anti-teleport la rechaza).
+        let (mx, my) = (921_600i32, 204_800i32);
+        assert_eq!(m.attr(mx, my), Some(0x49), "montana: BLOCK + bits meta");
+        assert!(!m.is_movable(mx, my), "montana bloqueada");
+    }
     /// Carga completa por el `MapStore` (index + Setting + attr) y fallos
     /// cacheados: un mapa inexistente no re-intenta por MOVE.
     #[test]

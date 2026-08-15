@@ -5,28 +5,22 @@
 //! `exp_table[level]`, `char.cpp:7190-7196`). El `TPacketGCPoints` del entry
 //! manda `POINT_NEXT_EXP = GetNextExp()` (`char.cpp:1564`).
 
-use tokio_postgres::{Client, NoTls};
+use crate::pool::{Client, PgPool};
 
 use crate::account::pg_err;
 
 /// Repositorio del dominio common. Conexion por llamada (ADR-0008).
 pub struct CommonRepo {
-    pg_conn: String,
+    pool: PgPool,
 }
 
 impl CommonRepo {
-    pub fn new(pg_conn: impl Into<String>) -> Self {
-        Self { pg_conn: pg_conn.into() }
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
     }
 
     async fn connect(&self) -> Result<Client, String> {
-        let (client, connection) = tokio_postgres::connect(&self.pg_conn, NoTls)
-            .await
-            .map_err(|e| format!("PG connect: {e}"))?;
-        tokio::spawn(async move {
-            let _ = connection.await;
-        });
-        Ok(client)
+        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
     }
 
     /// `exp_table[level]` — la exp necesaria para subir de nivel (parity
@@ -83,7 +77,7 @@ mod tests {
     fn next_exp_sql_shape() {
         // El SQL es inline en next_exp(); el contrato se verifica en el gated
         // contra la tabla real (common.exp_table — level 1 -> 300).
-        let repo = CommonRepo::new("host=noop");
+        let repo = CommonRepo::new(crate::pool::new_pool("host=127.0.0.1 port=1 user=x password=x dbname=x", 2).expect("pool"));
         let _ = repo;
     }
 
@@ -92,7 +86,7 @@ mod tests {
     /// (common.gmlist — 0 filas hoy; el test no puede crear filas).
     #[test]
     fn gm_authority_sql_shape() {
-        let repo = CommonRepo::new("host=noop");
+        let repo = CommonRepo::new(crate::pool::new_pool("host=127.0.0.1 port=1 user=x password=x dbname=x", 2).expect("pool"));
         let _ = repo;
     }
 }

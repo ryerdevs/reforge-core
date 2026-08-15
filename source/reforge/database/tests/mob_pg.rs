@@ -27,7 +27,7 @@ fn pg_conn() -> String {
 #[tokio::test]
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
 async fn mob_repo_loads_map41_vnums() {
-    let repo = MobRepo::new(pg_conn());
+    let repo = MobRepo::new(database::pool::new_pool(&pg_conn(), 4).expect("pool PG"));
     // NPCs y mobs reales del mapa 41 (npc.txt: 20340, 20001, 9001, 11004;
     // regen.txt: 101 = Perro Salvaje, 191 = Lykos; boss: 151; stone: 8001).
     for vnum in [20340i64, 20001, 9001, 11004, 101, 191, 151, 8001, 5001] {
@@ -66,7 +66,7 @@ async fn mob_repo_loads_map41_vnums() {
 #[tokio::test]
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
 async fn mob_repo_combat_fields() {
-    let repo = MobRepo::new(pg_conn());
+    let repo = MobRepo::new(database::pool::new_pool(&pg_conn(), 4).expect("pool PG"));
     let m = repo.load_by_vnum(101).await.expect("DB up").expect("101 existe");
     assert_eq!(m.ht, 5, "mob 101: la bCon del C++ = la columna ht");
     assert_eq!(m.def, 4, "mob 101: wDef (harness del combate: wdef=4)");
@@ -80,7 +80,7 @@ async fn mob_repo_combat_fields() {
 #[tokio::test]
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
 async fn mob_repo_locale_name_is_bytes() {
-    let repo = MobRepo::new(pg_conn());
+    let repo = MobRepo::new(database::pool::new_pool(&pg_conn(), 4).expect("pool PG"));
     let m = repo.load_by_vnum(20340).await.expect("DB up").expect("20340 existe");
     // El dump ES del 2026-08-08 puso nombres UTF-8 en name/locale_name
     // (varbinary 24); lo que importa para el wire: locale_name es BYTES
@@ -101,7 +101,7 @@ async fn mob_repo_locale_name_is_bytes() {
 #[tokio::test]
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
 async fn mob_repo_batch_load_map41_vnums() {
-    let repo = MobRepo::new(pg_conn());
+    let repo = MobRepo::new(database::pool::new_pool(&pg_conn(), 4).expect("pool PG"));
     // Los 117 vnums distintos del mapa 41 expandido (evidencia del lane:
     // inventario verificado contra el runtime 2026-08-11).
     let vnums: Vec<i64> = vec![

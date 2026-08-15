@@ -248,7 +248,10 @@ impl TPacketGCQuickSlotDel {
     pub const HEADER: u8 = 29;
 
     pub fn new(pos: u8) -> Self {
-        Self { header: Self::HEADER, pos }
+        Self {
+            header: Self::HEADER,
+            pos,
+        }
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
@@ -1952,7 +1955,10 @@ mod tests {
         assert_eq!(&b2[4..8], &0u32.to_le_bytes(), "gold 0");
         assert_eq!(b2[8], 7, "count");
         assert_eq!(TPacketCGItemDrop2::from_bytes(&b2).unwrap(), d2);
-        assert!(TPacketCGItemDrop2::from_bytes(&b2[..8]).is_err(), "BadLength");
+        assert!(
+            TPacketCGItemDrop2::from_bytes(&b2[..8]).is_err(),
+            "BadLength"
+        );
     }
 
     /// Quickslot wire del lane D (Packet.h:607-626): CG_QUICKSLOT_ADD (16,
@@ -1993,7 +1999,10 @@ mod tests {
             change_pos: 8,
         };
         assert_eq!(s.to_bytes(), [18, 3, 8]);
-        assert_eq!(TPacketCGQuickSlotSwap::from_bytes(&s.to_bytes()).unwrap(), s);
+        assert_eq!(
+            TPacketCGQuickSlotSwap::from_bytes(&s.to_bytes()).unwrap(),
+            s
+        );
 
         // Respuestas GC: DEL (29) y SWAP (30).
         assert_eq!(TPacketGCQuickSlotDel::new(4).to_bytes(), [29, 4]);

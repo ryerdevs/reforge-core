@@ -62,7 +62,7 @@ async fn write_lang_hwid(conn: &str, login: &str, lang: &str, hwid: &str) {
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
 async fn account_login_contract_against_real_pg() {
     let conn = pg_conn();
-    let repo = AccountRepo::new(&conn);
+    let repo = AccountRepo::new(database::pool::new_pool(&conn, 4).expect("pool PG"));
 
     // login valido -> Some con las 13 columnas correctas.
     let acc = repo
@@ -104,7 +104,7 @@ async fn account_login_contract_against_real_pg() {
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
 async fn account_set_lang_hwid_persist_and_restore() {
     let conn = pg_conn();
-    let repo = AccountRepo::new(&conn);
+    let repo = AccountRepo::new(database::pool::new_pool(&conn, 4).expect("pool PG"));
 
     // Estado previo de la cuenta test (se restaura SIEMPRE al final).
     let (prev_lang, prev_hwid) = read_lang_hwid(&conn, "test").await;

@@ -82,7 +82,10 @@ pub struct VidAlloc {
 
 impl Default for VidAlloc {
     fn default() -> Self {
-        Self { npc: 10_000, item: 50_000 }
+        Self {
+            npc: 10_000,
+            item: 50_000,
+        }
     }
 }
 

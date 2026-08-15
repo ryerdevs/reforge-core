@@ -26,7 +26,7 @@ fn pg_conn() -> String {
 #[tokio::test]
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
 async fn land_load_map_41_contract() {
-    let repo = LandRepo::new(pg_conn());
+    let repo = LandRepo::new(database::pool::new_pool(&pg_conn(), 4).expect("pool PG"));
     let lands = repo.load_by_map(41).await.expect("LAND_LOAD no falla");
     assert_eq!(lands.len(), 18, "18 lands del mapa 41 (parity log del core)");
     let ids: Vec<i64> = lands.iter().map(|l| l.id).collect();

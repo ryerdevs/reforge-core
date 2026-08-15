@@ -15,7 +15,7 @@
 //! Tipos PG reales: account varchar(16), companion varchar(16), PK
 //! (account, companion).
 
-use tokio_postgres::{Client, NoTls};
+use crate::pool::{Client, PgPool};
 
 use crate::account::pg_err;
 use crate::wal::{Batcher, Mutation, Param};
@@ -41,22 +41,16 @@ ON CONFLICT (account, companion) DO NOTHING";
 
 /// Repositorio del dominio social (messenger). Conexion por llamada (ADR-0008).
 pub struct MessengerRepo {
-    pg_conn: String,
+    pool: PgPool,
 }
 
 impl MessengerRepo {
-    pub fn new(pg_conn: impl Into<String>) -> Self {
-        Self { pg_conn: pg_conn.into() }
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
     }
 
     async fn connect(&self) -> Result<Client, String> {
-        let (client, connection) = tokio_postgres::connect(&self.pg_conn, NoTls)
-            .await
-            .map_err(|e| format!("PG connect: {e}"))?;
-        tokio::spawn(async move {
-            let _ = connection.await;
-        });
-        Ok(client)
+        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
     }
 
     /// Lista de companeros de la cuenta (Login -> LoadList). Vec vacio = sin
@@ -187,7 +181,7 @@ mod tests {
 
         let sink = CountingSink::default();
         let batcher = Batcher::spawn(std::time::Duration::from_millis(100), 64, sink.clone());
-        let repo = MessengerRepo::new("host=noop");
+        let repo = MessengerRepo::new(crate::pool::new_pool("host=127.0.0.1 port=1 user=x password=x dbname=x", 2).expect("pool"));
         repo.add_mutated(&batcher, "alice", "bob");
         repo.add_mutated(&batcher, "alice", "carol");
         // Fases del reloj pausado (patron de player.rs/wal.rs).

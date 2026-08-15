@@ -53,7 +53,7 @@ async fn wal_replay_idempotent_and_audit_same_tx() {
     let (conn, client, replay, audit) = setup("replay").await;
 
     let result = async {
-        let sink = PgMutationSink::new(&conn).with_audit_table(audit.clone());
+        let sink = PgMutationSink::new(database::pool::new_pool(&conn, 4).expect("pool")).with_audit_table(audit.clone());
         let batcher = Batcher::spawn(Duration::from_millis(50), 16, sink);
 
         let sql = format!("INSERT INTO {replay} (id, val) VALUES ($1, $2) ON CONFLICT DO NOTHING");
@@ -119,7 +119,7 @@ async fn wal_batch_rolls_back_entirely_on_error() {
     let (conn, client, replay, audit) = setup("rollback").await;
 
     let result = async {
-        let sink = PgMutationSink::new(&conn).with_audit_table(audit.clone());
+        let sink = PgMutationSink::new(database::pool::new_pool(&conn, 4).expect("pool")).with_audit_table(audit.clone());
         let batcher = Batcher::spawn(Duration::from_millis(50), 16, sink);
 
         // Mutation valida seguida de una INVALIDA (tabla no existe).

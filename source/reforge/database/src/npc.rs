@@ -20,7 +20,8 @@
 //!   pack; el C++ las usa para combat/AI — F5, fuera del wire del spawn).
 //! - `folder` varchar(100) — el motion del cliente; no participa en el wire.
 
-use tokio_postgres::{Client, NoTls, Row};
+use crate::pool::{Client, PgPool};
+use tokio_postgres::Row;
 
 use crate::account::pg_err;
 
@@ -122,22 +123,16 @@ FROM player.mob_proto WHERE vnum = ANY($1::int8[])";
 
 /// Repositorio del dominio world (mob_proto). Conexion por llamada (ADR-0008).
 pub struct MobRepo {
-    pg_conn: String,
+    pool: PgPool,
 }
 
 impl MobRepo {
-    pub fn new(pg_conn: impl Into<String>) -> Self {
-        Self { pg_conn: pg_conn.into() }
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
     }
 
     async fn connect(&self) -> Result<Client, String> {
-        let (client, connection) = tokio_postgres::connect(&self.pg_conn, NoTls)
-            .await
-            .map_err(|e| format!("PG connect: {e}"))?;
-        tokio::spawn(async move {
-            let _ = connection.await;
-        });
-        Ok(client)
+        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
     }
 
     /// Load del subset de spawn por vnum. `None` = el vnum no existe en

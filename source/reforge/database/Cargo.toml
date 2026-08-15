@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 tokio-postgres.workspace = true
+deadpool-postgres.workspace = true
 tokio.workspace = true
 uuid.workspace = true
 protocol = { path = "../protocol" }

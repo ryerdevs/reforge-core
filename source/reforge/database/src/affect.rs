@@ -13,7 +13,7 @@
 //! bApplyOn smallint, lApplyValue integer, dwFlag bigint, lDuration integer,
 //! lSPCost integer.
 
-use tokio_postgres::{Client, NoTls};
+use crate::pool::{Client, PgPool};
 
 use crate::account::pg_err;
 
@@ -49,22 +49,16 @@ DELETE FROM player.affect WHERE dwPID = $1 AND bType = $2 AND bApplyOn = $3";
 
 /// Repositorio del dominio world (affect). Conexion por llamada (ADR-0008).
 pub struct AffectRepo {
-    pg_conn: String,
+    pool: PgPool,
 }
 
 impl AffectRepo {
-    pub fn new(pg_conn: impl Into<String>) -> Self {
-        Self { pg_conn: pg_conn.into() }
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
     }
 
     async fn connect(&self) -> Result<Client, String> {
-        let (client, connection) = tokio_postgres::connect(&self.pg_conn, NoTls)
-            .await
-            .map_err(|e| format!("PG connect: {e}"))?;
-        tokio::spawn(async move {
-            let _ = connection.await;
-        });
-        Ok(client)
+        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
     }
 
     /// Load del QID_AFFECT (world entry).

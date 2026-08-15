@@ -55,7 +55,7 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
         i.window == "EQUIPMENT"
             && i.pos as u16 == INVENTORY_MAX_NUM + 4
     }) {
-        ItemRepo::new(&session.config.pg_conn)
+        ItemRepo::new(session.pool.clone())
             .load_proto_use_values(w.vnum)
             .await?
     } else {
@@ -67,7 +67,7 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
     // — char_battle.cpp:2919-2941: el skill de arco NO dispara sin flechas).
     // El flag `pending_arrow_shot` consume la flecha cuando llega el
     // `SkillResult` (events.rs — el disparo se RESOLVIÓ).
-    let proto = SkillRepo::new(&session.config.pg_conn).load(skill_id).await?;
+    let proto = SkillRepo::new(session.pool.clone()).load(skill_id).await?;
     let is_arrow_skill = proto
         .as_ref()
         .is_some_and(|p| p.flag & skill_flag::USE_ARROW_DAMAGE != 0);

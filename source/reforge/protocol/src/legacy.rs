@@ -144,7 +144,10 @@ pub fn load_panama(dir: &Path) -> Vec<PanamaEntry> {
         }
         let mut iv = [0u8; 32];
         iv.copy_from_slice(&iv_bytes);
-        out.push(PanamaEntry { name: name.to_string(), iv });
+        out.push(PanamaEntry {
+            name: name.to_string(),
+            iv,
+        });
     }
     out
 }
@@ -213,7 +216,9 @@ fn parse_hybrid_file(
             let Some(map_bytes) = take(data, &mut pos, map_size) else {
                 return;
             };
-            let map_name = String::from_utf8_lossy(map_bytes).to_string().to_lowercase();
+            let map_name = String::from_utf8_lossy(map_bytes)
+                .to_string()
+                .to_lowercase();
             let block_size = take(data, &mut pos, 1).map(|b| b[0] as usize).unwrap_or(0);
             let Some(blocks) = take(data, &mut pos, block_size) else {
                 return;
@@ -342,7 +347,11 @@ mod tests {
         std::fs::write(dir.join("cshybridcrypt1.bin"), &f).unwrap();
 
         let hybrid = load_hybrid(&dir);
-        assert_eq!(hybrid.keys_stream.len(), 4 + 4 + 3, "i32 cnt + i32 size + keys");
+        assert_eq!(
+            hybrid.keys_stream.len(),
+            4 + 4 + 3,
+            "i32 cnt + i32 size + keys"
+        );
         let sdb = hybrid.sdb.get("none").expect("sdb del mapa none");
         // stream: i32 count=1 + file hash + map size + "none" + block size + blocks
         assert_eq!(&sdb[..4], &1i32.to_le_bytes());

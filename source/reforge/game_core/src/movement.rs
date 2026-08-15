@@ -30,6 +30,15 @@ pub struct PlayerMotion {
     pub last_client_time: u32,
     /// Reloj del server del último MOVE aceptado.
     pub last_server_time: u32,
+    /// Ancla del reloj del server al ENTRAR al mundo (parity
+    /// `DESC::m_dwClientTime` — el reloj del server en el handshake del
+    /// canal, desc.cpp:714). El gate del speedhack (input_main.cpp:1496) y el
+    /// `iServerDelta` (input_main.cpp:1501) se miden desde ESTE ancla, no
+    /// desde el último MOVE: el check solo se activa 7 s después de anclar y
+    /// su umbral crece con la vida de la conexión (el reloj del cliente queda
+    /// anclado al AUTH desde 2026-08-14 — canal sin handshake — y el desfase
+    /// de arranque entre procesos queda DENTRO del umbral).
+    pub anchor_server_time: u32,
     /// Montura (afecta la tolerancia de distancia: 25 m vs 60 m).
     pub riding: bool,
     /// Velocidad efectiva del movimiento en UNITS/segundo (F5.4 — el
@@ -73,22 +82,35 @@ pub enum MoveError {
     NotMove,
 }
 
-/// Distancia máxima por MOVE sin montura: 25 m = 2500 units
-/// (`input_main.cpp:1466` — `fDist > 25`; el C++ divide por 100).
-const MAX_DIST_NO_RIDING: i64 = 2500;
+/// Distancia máxima por MOVE sin montura: 60 m = 6000 units
+/// (el umbral del `ENABLE_TP_SPEED_CHECK`, input_main.cpp:1466, era 25 m —
+/// comentado en el source; ampliado 2026-08-13: 40 m → 60 m — los MOVEs
+/// espaciados del cliente CORRIENDO (>450 u/s) superaban 4000; 60 m sigue
+/// siendo el anti-teleport, defensa nuestra).
+const MAX_DIST_NO_RIDING: i64 = 6000;
 /// Con montura: 60 m = 6000 units (`input_main.cpp:1466`).
 const MAX_DIST_RIDING: i64 = 6000;
 /// `iDelta >= 30000` → slow timer (input_main.cpp:1505).
 const SLOW_TIMER_MS: i64 = 30_000;
 
-/// Velocidad base del jugador en units/s (F5.4): el fallback del C++ cuando
-/// el motion no existe (`char.cpp:2747`); POINT_MOV_SPEED=100 → factor 1.0
-/// (`CalculateDuration`, utils.cpp:201-213).
-pub const DEFAULT_MOVE_SPEED: u32 = 300;
-/// Tolerancia de lag del envelope: +20% (plan §5.7).
-const ENVELOPE_TOLERANCE: f64 = 1.20;
-/// Tolerancia de lag del envelope: +100 ms de tiempo de server (plan §5.7).
-const ENVELOPE_LAG_MS: f64 = 100.0;
+/// Velocidad base del jugador en units/s (F5.4): el fallback del C++ es 300
+/// (`char.cpp:2747`; POINT_MOV_SPEED=100 → factor 1.0, `CalculateDuration`,
+/// utils.cpp:201-213) — la base del ENVELOPE se ajusta a 500 (2026-08-13): el
+/// cliente real CORRE a >450 u/s y con base 300 el margen 1.8× (540 u/s)
+/// quedaba justo (la carrera se rechazaba: 28 envelope + 209 teleport en la
+/// sesión 231453); con 500 el margen es 900 u/s — la carrera legítima entra
+/// holgada y el speedhack sostenido >900 u/s sigue acotado (cap + timers).
+pub const DEFAULT_MOVE_SPEED: u32 = 500;
+/// Tolerancia de lag del envelope: +80% (plan §5.7 pedía +20%; Ajuste
+/// 2026-08-13 cliente real: el patrón de MOVEs del cliente (ráfagas +
+/// cambios de dirección + corridas) excedía el 20% → la posición server
+/// avanzaba a saltos y los spawns tardaban minutos en materializarse. El
+/// 50% sigue acotando el speedhack sostenido (>450 u/s) — el cap 2500 y los
+/// timers del C++ siguen activos; el auto-ban por N violaciones queda
+/// pendiente (ADR-0011 follow-up).
+const ENVELOPE_TOLERANCE: f64 = 1.80;
+/// Tolerancia de lag del envelope: +250 ms de tiempo de server (plan §5.7).
+const ENVELOPE_LAG_MS: f64 = 250.0;
 
 /// Procesa un `CG_MOVE` con la validación del C++ (timer + distancia).
 /// `now_ms` = el reloj del server en ms (get_dword_time).
@@ -114,15 +136,31 @@ pub fn process_move(
     }
 
     // Timer speedhack (la validación ACTIVA del build — input_main.cpp:1494-1516).
-    // El C++ castea la resta u32 a `int` (`iDelta = (int)(dwCurTime - dwTime)`)
-    // — el wrap del reloj del cliente se interpreta CON SIGNO (parity).
-    let server_delta = i64::from(now_ms.wrapping_sub(state.last_server_time) as i32);
+    // PARITY EXACTA (FIX 2026-08-14 — "al moverte me saca al login"):
+    //   - El GATE `CheckSpeedHack` (input_main.cpp:1496): el check SOLO corre
+    //     tras 7 s del ancla del reloj (`dwCurTime - GetClientTime() > 7000`).
+    //     El ancla = el reloj del server al ENTRAR al mundo (equiv. del
+    //     handshake del canal, desc.cpp:714 — `m_dwClientTime` se setea UNA
+    //     vez, no por MOVE).
+    //   - `iServerDelta` (input_main.cpp:1501) = `dwCurTime - GetClientTime()`
+    //     — el tiempo DESDE EL ANCLA (crece con la vida de la conexión), NO el
+    //     intervalo entre MOVEs. El rewrite lo medía entre MOVEs (33-200 ms →
+    //     umbral -1..-4 ms): con el reloj del cliente anclado al AUTH (canal
+    //     sin handshake desde 2026-08-14) el desfase de arranque auth/canal
+    //     (~100 ms) disparaba FastTimer en el primer MOVE → kick al login.
+    //   - `iDelta` (input_main.cpp:1503) = `dwCurTime - pinfo->dwTime` — el
+    //     C++ castea la resta u32 a `int` (el wrap del reloj del cliente se
+    //     interpreta CON SIGNO, parity).
     let i_delta = i64::from(now_ms.wrapping_sub(packet.dw_time) as i32);
-    if i_delta >= SLOW_TIMER_MS {
-        return Err(MoveError::SlowTimer);
-    }
-    if i_delta < -(server_delta / 50) {
-        return Err(MoveError::FastTimer);
+    let since_anchor = i64::from(now_ms.wrapping_sub(state.anchor_server_time) as i32);
+    if since_anchor > 7_000 {
+        let server_delta = since_anchor;
+        if i_delta >= SLOW_TIMER_MS {
+            return Err(MoveError::SlowTimer);
+        }
+        if i_delta < -(server_delta / 50) {
+            return Err(MoveError::FastTimer);
+        }
     }
 
     // Distancia (anti-teleport — el umbral del ENABLE_TP_SPEED_CHECK, comentado
@@ -136,15 +174,27 @@ pub fn process_move(
     }
 
     // F5.4 (ADR-0011): envelope por entidad — la distancia NO puede exceder
-    // `speed × Δt` de server desde el último MOVE aceptado (tolerancia de lag
+    // `speed × Δt` desde el último MOVE aceptado (tolerancia de lag
     // +20%/+100 ms — plan §5.7: "server owns the position; correction not
     // ban"). Sin ancla (`last_server_time == 0` — primer MOVE tras load/warp)
     // el envelope está inerte: el cap absoluto (2500/6000) sigue validando.
     // Cierra el hueco del slow-accumulate: el timer del cliente pasa con
     // relojes plausibles y el cap con pasos cortos — pero la distancia media
     // no puede superar la velocidad real del personaje.
-    if state.last_server_time != 0 {
-        let dt_ms = i64::from(now_ms.wrapping_sub(state.last_server_time) as i32).max(0) as f64;
+    //
+    // FIX 2026-08-13 (cliente real): el Δt se mide con el MÁXIMO del reloj
+    // del cliente (`dw_time` — el intervalo REAL del paseo del cliente) y el
+    // reloj del server (cubre el lag de red y el cliente rezagado). El Δt de
+    // SOLO server rechazaba el caminar legítimo: el cliente manda los MOVEs
+    // en ráfagas (varios paquetes en pocos ms) → el intervalo server entre
+    // llegadas era diminuto → el margen permitido minúsculo → TODO paso se
+    // rechazaba y la posición quedaba congelada (síntoma real: "el server
+    // dice que no me moví del spawn" — los spawns no se materializan).
+    if state.last_server_time != 0 && state.last_client_time != 0 {
+        let server_dt = i64::from(now_ms.wrapping_sub(state.last_server_time) as i32).max(0) as f64;
+        let client_dt =
+            i64::from(packet.dw_time.wrapping_sub(state.last_client_time) as i32).max(0) as f64;
+        let dt_ms = server_dt.max(client_dt);
         let allowed = f64::from(state.speed) * (dt_ms + ENVELOPE_LAG_MS) / 1000.0 * ENVELOPE_TOLERANCE;
         if (dist_sq as f64).sqrt() > allowed {
             return Err(MoveError::ExceedsEnvelope);
@@ -160,13 +210,17 @@ pub fn process_move(
 }
 
 /// Estado inicial desde una posición cargada del player (el primer MOVE tiene
-/// `last_server_time = now_ms` — sin `iServerDelta` previo).
+/// `last_server_time = now_ms` — sin `iServerDelta` previo). El `anchor` (el
+/// reloj del server al entrar al mundo — parity `m_dwClientTime`) lo setea el
+/// caller con `anchor_server_time = now` (entry/warp): con 0, el gate de 7 s
+/// está cerrado y el timer check inerte.
 pub fn initial(x: i32, y: i32) -> PlayerMotion {
     PlayerMotion {
         x,
         y,
         last_client_time: 0,
         last_server_time: 0,
+        anchor_server_time: 0,
         riding: false,
         speed: DEFAULT_MOVE_SPEED,
     }
@@ -188,28 +242,28 @@ mod tests {
         }
     }
 
-    /// El envelope: mover dentro del límite (25 m = 2500 units por MOVE)
-    /// actualiza la posición; un salto mayor se rechaza (TooFar) sin tocar la
-    /// posición — parity del anti-teleport del C++ (input_main.cpp:1466).
+    /// El cap de distancia (60 m = 6000 units por MOVE sin montura — el
+    /// anti-teleport del 2026-08-13, ampliado para el correr real del
+    /// cliente): mover dentro del límite actualiza la posición; un salto
+    /// mayor se rechaza (TooFar) sin tocar la posición — parity del
+    /// anti-teleport del C++ (input_main.cpp:1466, define comentado).
     #[test]
     fn envelope_accepts_within_limit_and_rejects_teleport() {
         let mut st = initial(0, 0);
-        // 2000 units (< 2500) → OK (sin ancla aún — el envelope está inerte,
-        // el cap absoluto valida; F5.4).
+        // 2000 units (< 6000 — MAX_DIST_NO_RIDING) → OK (sin ancla aún — el
+        // envelope está inerte, el cap absoluto valida; F5.4).
         let r = process_move(&mut st, &move_to(2000, 0, 1000), 1100).expect("dentro del límite");
         assert_eq!(r, MoveResult { x: 2000, y: 0 });
         assert_eq!((st.x, st.y), (2000, 0), "posición actualizada");
-        // 3000 units (> 2500) → TooFar; la posición NO cambia.
-        let err = process_move(&mut st, &move_to(5000, 0, 2000), 2100).expect_err("teleport");
+        // dx = 7000 (> 6000) → TooFar; la posición NO cambia.
+        let err = process_move(&mut st, &move_to(9000, 0, 2000), 2100).expect_err("teleport");
         assert_eq!(err, MoveError::TooFar);
         assert_eq!((st.x, st.y), (2000, 0), "el MOVE rechazado no actualiza");
-        // Diagonal 2000,2000 → sqrt(8M) ≈ 2828 > 2500 → rechazo.
-        let err = process_move(&mut st, &move_to(4000, 2000, 3000), 3100).expect_err("diagonal");
+        // Diagonal dx=5000, dy=4000 → sqrt(41M) ≈ 6403 > 6000 → rechazo.
+        let err = process_move(&mut st, &move_to(7000, 4000, 3000), 3100).expect_err("diagonal");
         assert_eq!(err, MoveError::TooFar);
-        // Con montura: 1000 units (< 6000 y dentro del envelope — dt = 3000 ms
-        // → allowed = 300*3.1*1.2 ≈ 1116) → OK. El salto de 5000 units del
-        // diseño original ahora lo rechaza el envelope (ExceedsEnvelope): es
-        // el caso slow-accumulate que F5.4 cierra — 5000 u en 3 s ≠ 300 u/s.
+        // Con montura: cap 6000; paso de 1000 u en 3000 ms → dentro del
+        // envelope (allowed = 500×3.25×1.8 = 2925) → OK.
         st.riding = true;
         let r = process_move(&mut st, &move_to(3000, 0, 4000), 4100).expect("montura");
         assert_eq!(r.x, 3000);
@@ -217,30 +271,61 @@ mod tests {
 
     /// El timer speedhack (la validación ACTIVA — input_main.cpp:1505-1515):
     /// el reloj del cliente 30s+ atrasado → SlowTimer; muy adelantado →
-    /// FastTimer.
+    /// FastTimer. El gate de 7 s del C++ (input_main.cpp:1496) se modela con
+    /// el ancla (el check corre: now - anchor > 7000).
     #[test]
     fn speedhack_timer_rejects() {
         let mut st = initial(0, 0);
         // El primer MOVE: last_server_time=0 → iServerDelta = now - 0 (grande)
         // — el C++ arranca con GetClientTime() inicializado; para el primer
         // MOVE usamos un estado con el reloj ya anclado (parity: el cliente
-        // manda el time del handshake ~= el del server).
+        // manda el time del handshake ~= el del server). El ancla 10 s atrás
+        // abre el gate (now 60 s - anchor 10 s = 50 s > 7 s).
         st.last_server_time = 10_000;
         st.last_client_time = 10_000;
-        // Slow timer: el dwTime del paquete 40s atrás → iDelta = 40000 >= 30000.
+        st.anchor_server_time = 10_000;
+        // Slow timer: el dwTime del paquete 40s atrás → iDelta = 65000 >= 30000.
         // (el reloj del cliente wrappea — parity del wire u32).
         let slow_time = 10_000u32.wrapping_sub(40_000);
         let err = process_move(&mut st, &move_to(100, 0, slow_time), 60_000)
             .expect_err("slow timer");
         assert_eq!(err, MoveError::SlowTimer);
-        // Fast timer: el dwTime 10s en el futuro con iServerDelta=100ms →
-        // iDelta = -10000 < -(100/50) → FastTimer.
+        // Fast timer: el dwTime 10s en el futuro con iServerDelta=50s →
+        // iDelta = -9900 < -(50000/50) → FastTimer.
         let err = process_move(&mut st, &move_to(100, 0, 70_000), 60_100)
             .expect_err("fast timer");
         assert_eq!(err, MoveError::FastTimer);
         // El reloj razonable pasa.
         let r = process_move(&mut st, &move_to(100, 0, 60_000), 60_100).expect("reloj OK");
         assert_eq!(r.x, 100);
+    }
+
+    /// El GATE del C++ (input_main.cpp:1496) — FIX 2026-08-14 ("al moverte me
+    /// saca al login"): el check solo corre tras 7 s del ancla (el reloj del
+    /// server al entrar al mundo — equiv. del handshake del canal). Con el
+    /// reloj del cliente anclado al AUTH (canal sin handshake desde
+    /// 2026-08-14), el desfase de arranque auth/canal (~100 ms) queda DENTRO
+    /// del umbral `-(iServerDelta/50)` — que crece con la vida de la
+    /// conexión — mientras un reloj realmente adelantado sigue disparando.
+    #[test]
+    fn timer_gate_opens_after_7s_and_tolerates_clock_skew() {
+        // Gate CERRADO (ancla = la entrada, ahora - ancla = 5 s < 7 s): un
+        // paquete con el reloj 35 s adelantado NO se chequea (parity: los
+        // primeros 7 s sin check).
+        let mut st = initial(0, 0);
+        st.anchor_server_time = 50_000;
+        let r = process_move(&mut st, &move_to(100, 0, 90_000), 55_000).expect("gate cerrado");
+        assert_eq!(r.x, 100);
+        // Gate ABIERTO (ahora - ancla = 20 s): el desfase constante de ~100 ms
+        // del cliente (reloj anclado al auth) PASA (umbral -(20000/50) = -400).
+        st.anchor_server_time = 40_000;
+        st.last_client_time = 60_000;
+        st.last_server_time = 60_000;
+        let r = process_move(&mut st, &move_to(200, 0, 59_900), 60_000).expect("desfase 100 ms OK");
+        assert_eq!(r.x, 200);
+        // Un reloj realmente adelantado (30 s) SÍ dispara.
+        let err = process_move(&mut st, &move_to(300, 0, 90_000), 60_100).expect_err("fast real");
+        assert_eq!(err, MoveError::FastTimer);
     }
 
     /// El bFunc inválido y las acciones no-movimiento (ataque/skill) se
@@ -266,34 +351,34 @@ mod tests {
     }
 
     /// F5.4: el slow-accumulate se rechaza — pasos de 30 u cada 100 ms pasan
-    /// (300 u/s reales + tolerancia), pero un paso de 300 u en 100 ms excede
-    /// el envelope (`allowed = 300*0.2*1.2 = 72 u`) aunque el reloj del
-    /// cliente sea plausible y la distancia esté MUY por debajo del cap de
-    /// 2500. La posición NO cambia (corrección, no ban — plan §5.7).
+    /// (500 u/s de la base del envelope + tolerancia), pero un paso de 600 u
+    /// en 100 ms excede el envelope (`allowed = 500*0.35*1.8 = 315 u`) aunque
+    /// el reloj del cliente sea plausible y la distancia esté MUY por debajo
+    /// del cap. La posición NO cambia (corrección, no ban — plan §5.7).
     #[test]
     fn envelope_rejects_slow_accumulate() {
         let mut st = anchored(0, 0, 10_000);
-        // Pasos normales: 30 u cada 100 ms → Ok (dentro de 72 u de allowed).
+        // Pasos normales: 30 u cada 100 ms → Ok (dentro de 315 u de allowed).
         for i in 0..5 {
             let now = 10_100u32 + i as u32 * 100;
             let r = process_move(&mut st, &move_to((i + 1) * 30, 0, now), now).expect("paso normal");
             assert_eq!(r.x, (i + 1) * 30);
         }
-        // Paso de 300 u en 100 ms (10× la velocidad real) → envelope.
-        let err = process_move(&mut st, &move_to(450, 0, 10_700), 10_700).expect_err("aceleración");
+        // Paso de 600 u en 100 ms (12× la velocidad base) → envelope.
+        let err = process_move(&mut st, &move_to(750, 0, 10_700), 10_700).expect_err("aceleración");
         assert_eq!(err, MoveError::ExceedsEnvelope);
         assert_eq!((st.x, st.y), (150, 0), "el MOVE rechazado no actualiza");
     }
 
     /// F5.4: tolerancia de lag — un cliente con 2 s de lag manda la posición
-    /// acumulada: 600 u en 2000 ms → allowed = 300*2.1*1.2 = 756 → Ok; el
-    /// límite duro (757 u) se rechaza.
+    /// acumulada: 600 u en 2000 ms → allowed = 500*2.25*1.8 = 2025 → Ok; el
+    /// límite duro (2500 u) se rechaza.
     #[test]
     fn envelope_lag_tolerance_passes() {
         let mut st = anchored(0, 0, 10_000);
         let r = process_move(&mut st, &move_to(600, 0, 8_000), 12_000).expect("lag 2 s: 600 u");
         assert_eq!(r.x, 600);
-        let err = process_move(&mut st, &move_to(1_357, 0, 8_000), 12_000).expect_err("fuera de la tolerancia");
+        let err = process_move(&mut st, &move_to(3_100, 0, 8_000), 12_000).expect_err("fuera de la tolerancia");
         assert_eq!(err, MoveError::ExceedsEnvelope);
         // El reloj del cliente atrasado (dw_time 2 s antes) sigue pasando el
         // timer speedhack (iDelta = 4000 < 30000, no-fast) — el envelope es
@@ -302,7 +387,7 @@ mod tests {
     }
 
     /// F5.4: sin ancla (`last_server_time == 0` — primer MOVE tras load o
-    /// warp) el envelope está inerte; el cap absoluto (2500) sigue validando
+    /// warp) el envelope está inerte; el cap absoluto (6000) sigue validando
     /// el primer salto. El caller re-ancla con `initial()` tras un warp.
     #[test]
     fn envelope_inert_without_anchor() {

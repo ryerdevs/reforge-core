@@ -167,6 +167,10 @@ pub async fn run(config: Config) -> std::io::Result<()> {
     let listener = TcpListener::bind(&config.listen).await?;
     // El puerto real (relevante con `listen = "127.0.0.1:0"` en tests).
     println!("server_realms: auth escuchando en {}", listener.local_addr()?);
+    // Pool COMPARTIDO de conexiones PG (fix del cuello del entry 2026-08-13):
+    // los repos del crate database ya no abren conexion por llamada.
+    let pool = database::pool::new_pool(&config.pg_conn, config.pool_max_size)
+        .map_err(std::io::Error::other)?;
     let legacy = LegacyData::load(&config.legacy_dir);
     if !legacy.panama.is_empty() || !legacy.hybrid.keys_stream.is_empty() {
         eprintln!(
@@ -182,8 +186,9 @@ pub async fn run(config: Config) -> std::io::Result<()> {
         let legacy = legacy.clone();
         let id = conn_id;
         conn_id = conn_id.wrapping_add(1);
+        let pool = pool.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, cfg, legacy, id).await {
+            if let Err(e) = handle_connection(stream, cfg, legacy, pool, id).await {
                 eprintln!("server_realms: auth conn {id}: {e}");
             }
         });
@@ -195,9 +200,10 @@ async fn handle_connection(
     stream: TcpStream,
     config: Config,
     legacy: LegacyData,
+    pool: database::pool::PgPool,
     conn_id: u32,
 ) -> Result<(), String> {
-    match tokio::time::timeout(config.timeout, connection_inner(stream, &config, &legacy)).await {
+    match tokio::time::timeout(config.timeout, connection_inner(stream, &config, &legacy, pool)).await {
         Err(_) => Err(format!(
             "auth conn {conn_id}: timeout global de {} ms — conexión cerrada",
             config.timeout.as_millis()
@@ -206,7 +212,12 @@ async fn handle_connection(
     }
 }
 
-async fn connection_inner(stream: TcpStream, config: &Config, legacy: &LegacyData) -> Result<(), String> {
+async fn connection_inner(
+    stream: TcpStream,
+    config: &Config,
+    legacy: &LegacyData,
+    pool: database::pool::PgPool,
+) -> Result<(), String> {
     let mut conn = Connection::new(stream);
     let mut framer = Framer::new(ConnectionRole::Auth);
 
@@ -240,7 +251,7 @@ async fn connection_inner(stream: TcpStream, config: &Config, legacy: &LegacyDat
                 break TPacketCGLogin3::from_bytes(&pkt).map_err(|e| format!("LOGIN3: {e}"))?
             }
             header::CG_LOCALE_REQUEST => {
-                handle_locale_request(&mut conn, config, &pkt).await?;
+                handle_locale_request(&mut conn, pool.clone(), &pkt).await?;
                 continue;
             }
             other => {
@@ -256,7 +267,7 @@ async fn connection_inner(stream: TcpStream, config: &Config, legacy: &LegacyDat
         "server_realms: auth: LOGIN3 login={login} lang={:?} version={:?} hwid={:?}",
         extract_lang(&login3.sz_language),
         login3.version,
-        login3.hwid.as_ref().map(|h| hex16(h))
+        login3.hwid.as_ref().map(hex16)
     );
 
     // 2b. F2b: version gate — si el cliente manda `version` (72/88 B) y no
@@ -264,15 +275,14 @@ async fn connection_inner(stream: TcpStream, config: &Config, legacy: &LegacyDat
     //     version check en input_auth.cpp; decisión: sin GC_LOGIN_FAILURE —
     //     no hay status legacy para versión mala y un status arbitrario
     //     confundiría al cliente; el cliente nuevo maneja el EOF).
-    if let Some(v) = login3.version {
-        if v != config.expected_version {
+    if let Some(v) = login3.version
+        && v != config.expected_version {
             eprintln!(
                 "server_realms: auth: VERSION MISMATCH login={login} got={v} expected={} — cierre limpio",
                 config.expected_version
             );
             return Ok(());
         }
-    }
 
     // 3. Validaciones (parity input_auth.cpp:66-152).
     if !is_valid_login_string(&login) {
@@ -309,7 +319,7 @@ async fn connection_inner(stream: TcpStream, config: &Config, legacy: &LegacyDat
             // lang: el auth persiste el idioma ANTES de validar (parity
             // input_auth.cpp:133-152) — best-effort, nunca rompe el login.
             if let Some(lang) = extract_lang(&login3.sz_language)
-                && let Err(e) = AccountRepo::new(&config.pg_conn).set_lang(&login, &lang).await
+                && let Err(e) = AccountRepo::new(pool.clone()).set_lang(&login, &lang).await
             {
                 eprintln!("server_realms: auth: LOGIN_BY_KEY set_lang falló para {login}: {e} — login sigue");
             }
@@ -326,7 +336,7 @@ async fn connection_inner(stream: TcpStream, config: &Config, legacy: &LegacyDat
             // Rust degrada a denegación, parity de resultado observable
             // input_db.cpp:1719).
             ok = match account_login(
-                &config.pg_conn,
+                &pool,
                 &login,
                 passwd,
                 extract_lang(&login3.sz_language),
@@ -383,6 +393,26 @@ async fn connection_inner(stream: TcpStream, config: &Config, legacy: &LegacyDat
             .await
             .map_err(|e| format!("enviando GC_AUTH_SUCCESS: {e}"))?;
     }
+
+    // 7. Drain hasta el cierre del cliente (FIX 2026-08-14 — el auth colgaba
+    //    el login del cliente real de forma INTERMITENTE). El C++ NO cierra la
+    //    conexión tras el resultado: el cliente la cierra al despachar el
+    //    GC_AUTH_SUCCESS (`__AuthState_RecvAuthSuccess` → `Disconnect()`,
+    //    AccountConnector.cpp:484). Cerrar aquí (Ok(()) inmediato) era una
+    //    RACE: el EOF podía ganar al consumo del 164+150 (el cliente consume
+    //    UN paquete por frame en la fase auth) → `OnRemoteDisconnect` →
+    //    STATE_OFFLINE → los paquetes ya en el buffer quedaban SIN procesar →
+    //    sin connect al canal → el cliente colgado en "estás siendo
+    //    conectado". Con el drain, la conexión vive hasta el Disconnect del
+    //    cliente (keepalives ignorados; cualquier otro paquete también — el
+    //    C++ no hace nada más tras el resultado); el timeout global de la
+    //    conexión (config) cubre el caso del cliente muerto.
+    while let Ok(pkt) = framer.next_packet(&mut conn).await {
+        match pkt[0] {
+            header::CG_TIME_SYNC | header::CG_PONG => continue,
+            _ => break,
+        }
+    }
     Ok(())
 }
 
@@ -427,7 +457,7 @@ async fn send_login_failure(conn: &mut Connection<TcpStream>, status: &str) -> R
 /// Stateless: el flujo de login sigue intacto (el caller continúa el loop).
 async fn handle_locale_request<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
     conn: &mut Connection<S>,
-    config: &Config,
+    pool: database::pool::PgPool,
     pkt: &[u8],
 ) -> Result<(), String> {
     let req = CgLocaleRequest::from_bytes(pkt).map_err(|e| format!("CG_LOCALE_REQUEST: {e}"))?;
@@ -438,7 +468,7 @@ async fn handle_locale_request<S: tokio::io::AsyncRead + tokio::io::AsyncWrite +
         ));
     };
     eprintln!("server_realms: auth: CG_LOCALE_REQUEST lang={lang}");
-    let bundle = LocaleRepo::new(&config.pg_conn)
+    let bundle = LocaleRepo::new(pool.clone())
         .load_for_lang(&lang)
         .await
         .map_err(|e| format!("locale {lang}: {e}"))?;
@@ -475,13 +505,13 @@ async fn handle_locale_request<S: tokio::io::AsyncRead + tokio::io::AsyncWrite +
 ///     parity `utils.cpp:30-58`; el auth C++ NO llama a la función PG).
 /// Los errores de DB se propagan (`Err` → el caller degrada a bResult=0).
 async fn account_login(
-    pg_conn: &str,
+    pool: &database::pool::PgPool,
     login: &str,
     passwd: &str,
     lang: Option<String>,
     hwid: Option<[u8; 16]>,
 ) -> Result<bool, String> {
-    let repo = AccountRepo::new(pg_conn);
+    let repo = AccountRepo::new(pool.clone());
     if let Some(lang) = lang {
         repo.set_lang(login, &lang).await?;
     }
@@ -549,9 +579,19 @@ fn cstr(bytes: &[u8]) -> &str {
 /// `now_ms` — reloj del servidor en ms desde boot (parity `get_dword_time`,
 /// `utils.c:445`); el handshake lo usa como `dwTime` (el cliente alinea su
 /// reloj con él).
+/// Reloj del servidor en ms — BASE COMPARTIDA unix-ms (FIX P0-A 2026-08-14):
+/// el handshake envía este valor como `dwTime` (TPacketGCHandshake) y el
+/// cliente ancla su reloj a ÉL (`ELTimer_SetServerMSec`). El canal usa la
+/// MISMA base (SystemTime) → el desfase de arranque entre procesos
+/// desaparece: un restart independiente del auth o del canal ya NO desalinea
+/// el reloj del cliente (el kick del speedhack por skew — SlowTimer/
+/// FastTimer — era el síntoma). El wrap u32 de `now32` (49,7 días) es parity
+/// del `get_dword_time` del C++.
 fn now_ms() -> u64 {
-    static START: OnceLock<Instant> = OnceLock::new();
-    START.get_or_init(Instant::now).elapsed().as_millis() as u64
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 // ---------------------------------------------------------------------------

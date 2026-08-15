@@ -20,7 +20,7 @@
 //! Tipos PG reales: `log.money_log` (time timestamp, type/vnum/gold integer,
 //! sin PK — append-only). `player.player.gold` integer.
 
-use tokio_postgres::{Client, NoTls};
+use crate::pool::{Client, PgPool};
 
 use crate::account::pg_err;
 use crate::wal::{Mutation, Param};
@@ -44,22 +44,16 @@ INSERT INTO log.money_log (time, type, vnum, gold) VALUES (NOW(), $1, $2, $3)";
 
 /// Repositorio del dominio economy (money log). Conexion por llamada (ADR-0008).
 pub struct EconomyRepo {
-    pg_conn: String,
+    pool: PgPool,
 }
 
 impl EconomyRepo {
-    pub fn new(pg_conn: impl Into<String>) -> Self {
-        Self { pg_conn: pg_conn.into() }
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
     }
 
     async fn connect(&self) -> Result<Client, String> {
-        let (client, connection) = tokio_postgres::connect(&self.pg_conn, NoTls)
-            .await
-            .map_err(|e| format!("PG connect: {e}"))?;
-        tokio::spawn(async move {
-            let _ = connection.await;
-        });
-        Ok(client)
+        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
     }
 
     /// Money log append-only (`log.cpp:114-122`): una fila por evento, escrita

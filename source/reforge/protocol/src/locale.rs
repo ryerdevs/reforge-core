@@ -94,14 +94,23 @@ impl CgLocaleRequest {
 
     /// `lang` se trunca/NUL-pad a 3 bytes (`from_cstr` — "es" → "es\0").
     pub fn new(lang: &str) -> Self {
-        Self { header: Self::HEADER, lang: from_cstr(lang) }
+        Self {
+            header: Self::HEADER,
+            lang: from_cstr(lang),
+        }
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
-        Ok(Self { header: data[0], lang: [data[1], data[2], data[3]] })
+        Ok(Self {
+            header: data[0],
+            lang: [data[1], data[2], data[3]],
+        })
     }
 
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
@@ -148,7 +157,10 @@ pub fn decode_payload(payload: &[u8]) -> std::result::Result<LocaleBundle, Local
     let mut pos = 0usize;
     // Lee `n` bytes o `Truncated` (el cierre del slice evita panics).
     let take = |pos: &mut usize, n: usize| -> std::result::Result<&[u8], LocaleError> {
-        let end = pos.checked_add(n).filter(|&e| e <= payload.len()).ok_or(LocaleError::Truncated)?;
+        let end = pos
+            .checked_add(n)
+            .filter(|&e| e <= payload.len())
+            .ok_or(LocaleError::Truncated)?;
         let s = &payload[*pos..end];
         *pos = end;
         Ok(s)
@@ -162,9 +174,11 @@ pub fn decode_payload(payload: &[u8]) -> std::result::Result<LocaleBundle, Local
         let kind = take(&mut pos, 1)?[0];
         let count = u32::from_le_bytes(take(&mut pos, 4)?.try_into().expect("4 bytes"));
         for _ in 0..count {
-            let key_len = u16::from_le_bytes(take(&mut pos, 2)?.try_into().expect("2 bytes")) as usize;
+            let key_len =
+                u16::from_le_bytes(take(&mut pos, 2)?.try_into().expect("2 bytes")) as usize;
             let key = take(&mut pos, key_len)?;
-            let val_len = u16::from_le_bytes(take(&mut pos, 2)?.try_into().expect("2 bytes")) as usize;
+            let val_len =
+                u16::from_le_bytes(take(&mut pos, 2)?.try_into().expect("2 bytes")) as usize;
             let val = take(&mut pos, val_len)?;
             let pair = (
                 String::from_utf8_lossy(key).into_owned(),
@@ -245,12 +259,24 @@ mod tests {
     /// Bundle fixture con las 6 secciones (claves/vals realistas).
     fn fixture() -> LocaleBundle {
         LocaleBundle {
-            mob: vec![("101".into(), "Perro Salvaje".into()), ("2101".into(), "Zorro del Desierto".into())],
-            item: vec![("1".into(), "Yang".into()), ("10".into(), "Espada +0".into())],
+            mob: vec![
+                ("101".into(), "Perro Salvaje".into()),
+                ("2101".into(), "Zorro del Desierto".into()),
+            ],
+            item: vec![
+                ("1".into(), "Yang".into()),
+                ("10".into(), "Espada +0".into()),
+            ],
             item_desc: vec![("300".into(), "Hoja de zodíaco+0".into())],
             skill: vec![("1".into(), "Corte de tres maneras".into())],
             map: vec![("41".into(), "metin2_map_c1".into())],
-            ui: vec![("ACCEPT".into(), "Aceptar".into()), ("ATTACH_METIN_INFO".into(), "¿Quieres usar la Piedra Espíritu?".into())],
+            ui: vec![
+                ("ACCEPT".into(), "Aceptar".into()),
+                (
+                    "ATTACH_METIN_INFO".into(),
+                    "¿Quieres usar la Piedra Espíritu?".into(),
+                ),
+            ],
         }
     }
 
@@ -272,11 +298,17 @@ mod tests {
         assert_eq!(parsed.lang, *b"de\0");
         assert!(matches!(
             CgLocaleRequest::from_bytes(&[132, b'e']),
-            Err(ProtocolError::BadLength { expected: 4, got: 2 })
+            Err(ProtocolError::BadLength {
+                expected: 4,
+                got: 2
+            })
         ));
         assert!(matches!(
             CgLocaleRequest::from_bytes(&[132, b'e', b's', 0, 0]),
-            Err(ProtocolError::BadLength { expected: 4, got: 5 })
+            Err(ProtocolError::BadLength {
+                expected: 4,
+                got: 5
+            })
         ));
     }
 
@@ -325,18 +357,33 @@ mod tests {
         // Chunk pequeño (fuerza varios chunks), mediano y mayor que el payload.
         for max_chunk in [1usize, 7, 32, 64_000] {
             let chunks = encode_chunks(&payload, max_chunk);
-            assert!(!chunks.is_empty(), "max_chunk {max_chunk}: al menos un chunk");
+            assert!(
+                !chunks.is_empty(),
+                "max_chunk {max_chunk}: al menos un chunk"
+            );
             for (i, c) in chunks.iter().enumerate() {
                 assert_eq!(c[0], HEADER_GC_LOCALE, "header 0x8c");
                 let len = u16::from_le_bytes([c[1], c[2]]) as usize;
                 assert_eq!(c.len(), 3 + len, "u16 payload_len = todo lo que sigue");
                 let flag = c[3];
                 assert!(flag <= 1, "flag 0/1");
-                assert_eq!(c.len() - 4, max_chunk.min(payload.len() - i * max_chunk), "tamaño del chunk {i}");
-                assert_eq!(c[3], if i + 1 < chunks.len() { 1 } else { 0 }, "flag del chunk {i}");
+                assert_eq!(
+                    c.len() - 4,
+                    max_chunk.min(payload.len() - i * max_chunk),
+                    "tamaño del chunk {i}"
+                );
+                assert_eq!(
+                    c[3],
+                    if i + 1 < chunks.len() { 1 } else { 0 },
+                    "flag del chunk {i}"
+                );
             }
             let joined: Vec<&[u8]> = chunks.iter().map(|c| c.as_slice()).collect();
-            assert_eq!(decode_chunks(&joined).expect("reensamblar"), payload, "max_chunk {max_chunk}");
+            assert_eq!(
+                decode_chunks(&joined).expect("reensamblar"),
+                payload,
+                "max_chunk {max_chunk}"
+            );
         }
     }
 
@@ -345,9 +392,16 @@ mod tests {
     fn chunks_empty_payload() {
         let chunks = encode_chunks(&[], 64_000);
         assert_eq!(chunks.len(), 1);
-        assert_eq!(chunks[0], [HEADER_GC_LOCALE, 1, 0, 0], "header + len 1 + flag 0");
+        assert_eq!(
+            chunks[0],
+            [HEADER_GC_LOCALE, 1, 0, 0],
+            "header + len 1 + flag 0"
+        );
         let joined: Vec<&[u8]> = chunks.iter().map(|c| c.as_slice()).collect();
-        assert_eq!(decode_chunks(&joined).expect("reensamblar"), Vec::<u8>::new());
+        assert_eq!(
+            decode_chunks(&joined).expect("reensamblar"),
+            Vec::<u8>::new()
+        );
     }
 
     /// El chunk de tamaño máximo: 64_000 bytes de chunk → wire de 64_004 B
@@ -366,7 +420,11 @@ mod tests {
         let big = encode_chunks(&big_payload, 100_000);
         assert_eq!(big.len(), 2, "65_534 + 34_466");
         assert_eq!(big[0].len(), 1 + 2 + 1 + 65_534, "capado a u16::MAX - 1");
-        assert_eq!(u16::from_le_bytes([big[0][1], big[0][2]]), u16::MAX, "payload_len máximo");
+        assert_eq!(
+            u16::from_le_bytes([big[0][1], big[0][2]]),
+            u16::MAX,
+            "payload_len máximo"
+        );
         assert_eq!(big[0][3], 1, "hay más chunks");
         assert_eq!(big[1][3], 0, "el último es final");
         let joined: Vec<&[u8]> = big.iter().map(|c| c.as_slice()).collect();
@@ -401,12 +459,28 @@ mod tests {
         // Chunks: longitud incoherente, header malo, sin flag final, flag
         // final seguido de otro chunk → Truncated.
         assert_eq!(decode_chunks(&[]), Err(LocaleError::Truncated));
-        assert_eq!(decode_chunks(&[&[0x8c, 5, 0, 0]]), Err(LocaleError::Truncated), "len != resto");
-        assert_eq!(decode_chunks(&[&[0x00, 1, 0, 0]]), Err(LocaleError::Truncated), "header malo");
-        assert_eq!(decode_chunks(&[&[0x8c, 1, 0, 1]]), Err(LocaleError::Truncated), "sin flag final");
+        assert_eq!(
+            decode_chunks(&[&[0x8c, 5, 0, 0]]),
+            Err(LocaleError::Truncated),
+            "len != resto"
+        );
+        assert_eq!(
+            decode_chunks(&[&[0x00, 1, 0, 0]]),
+            Err(LocaleError::Truncated),
+            "header malo"
+        );
+        assert_eq!(
+            decode_chunks(&[&[0x8c, 1, 0, 1]]),
+            Err(LocaleError::Truncated),
+            "sin flag final"
+        );
         let final_chunk = [0x8cu8, 1, 0, 0];
         let extra = [0x8cu8, 1, 0, 1];
-        assert_eq!(decode_chunks(&[&final_chunk, &extra]), Err(LocaleError::Truncated), "chunk tras el final");
+        assert_eq!(
+            decode_chunks(&[&final_chunk, &extra]),
+            Err(LocaleError::Truncated),
+            "chunk tras el final"
+        );
     }
 
     /// Valores no-UTF-8 en el payload se decodifican lossy (nunca panic).
@@ -429,6 +503,10 @@ mod tests {
             }
         }
         let decoded = decode_payload(&payload).expect("decode");
-        assert_eq!(decoded.ui, vec![("K".to_string(), "\u{FFFD}".to_string())], "lossy, sin panic");
+        assert_eq!(
+            decoded.ui,
+            vec![("K".to_string(), "\u{FFFD}".to_string())],
+            "lossy, sin panic"
+        );
     }
 }

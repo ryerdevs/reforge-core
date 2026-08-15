@@ -49,9 +49,15 @@ impl CgQuery {
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() < Self::MIN_SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::MIN_SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::MIN_SIZE,
+                got: data.len(),
+            });
         }
-        Ok(Self { table_id: data[1], payload: data[2..].to_vec() })
+        Ok(Self {
+            table_id: data[1],
+            payload: data[2..].to_vec(),
+        })
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -79,15 +85,26 @@ impl GcResponse {
     pub const MIN_SIZE: usize = 4;
 
     pub fn new(table_id: u8, row_count: u16, payload: Vec<u8>) -> Self {
-        Self { table_id, row_count, payload }
+        Self {
+            table_id,
+            row_count,
+            payload,
+        }
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() < Self::MIN_SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::MIN_SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::MIN_SIZE,
+                got: data.len(),
+            });
         }
         let row_count = u16::from_le_bytes([data[2], data[3]]);
-        Ok(Self { table_id: data[1], row_count, payload: data[4..].to_vec() })
+        Ok(Self {
+            table_id: data[1],
+            row_count,
+            payload: data[4..].to_vec(),
+        })
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -138,7 +155,11 @@ mod tests {
             (1, vec![0xAA; 4096]),
         ] {
             let q = CgQuery::new(table_id, payload.clone());
-            assert_eq!(CgQuery::from_bytes(&q.to_bytes()).unwrap(), q, "table_id={table_id}");
+            assert_eq!(
+                CgQuery::from_bytes(&q.to_bytes()).unwrap(),
+                q,
+                "table_id={table_id}"
+            );
         }
     }
 
@@ -151,7 +172,11 @@ mod tests {
             (200, 1, vec![0x00, 0xFF, 0x10]),
         ] {
             let r = GcResponse::new(table_id, row_count, payload.clone());
-            assert_eq!(GcResponse::from_bytes(&r.to_bytes()).unwrap(), r, "table_id={table_id} rows={row_count}");
+            assert_eq!(
+                GcResponse::from_bytes(&r.to_bytes()).unwrap(),
+                r,
+                "table_id={table_id} rows={row_count}"
+            );
         }
     }
 
@@ -180,8 +205,14 @@ mod tests {
             ));
         }
         // Boundary: exactamente MIN_SIZE es válido (payload vacío).
-        assert_eq!(CgQuery::from_bytes(&[162, 9]).unwrap().payload, Vec::<u8>::new());
-        assert_eq!(GcResponse::from_bytes(&[163, 9, 0, 0]).unwrap().payload, Vec::<u8>::new());
+        assert_eq!(
+            CgQuery::from_bytes(&[162, 9]).unwrap().payload,
+            Vec::<u8>::new()
+        );
+        assert_eq!(
+            GcResponse::from_bytes(&[163, 9, 0, 0]).unwrap().payload,
+            Vec::<u8>::new()
+        );
         // Payloads arbitrarios se conservan byte a byte.
         let q = CgQuery::from_bytes(&[162, 1, 0xDE, 0xAD, 0xBE, 0xEF]).unwrap();
         assert_eq!((q.table_id, q.payload), (1, vec![0xDE, 0xAD, 0xBE, 0xEF]));

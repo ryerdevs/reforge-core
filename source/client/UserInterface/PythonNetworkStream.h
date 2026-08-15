@@ -313,6 +313,7 @@ class CPythonNetworkStream : public CNetworkStream, public CSingleton<CPythonNet
 	public:
 		void SetOffLinePhase();
 		void SetHandShakePhase();
+		void SetHandShakePhaseNoPython(); // P0 2026-08-14: fase sin callback Python (canal post-auth)
 		void SetLoginPhase();
 		void SetSelectPhase();
 		void SetLoadingPhase();

@@ -297,21 +297,23 @@ async fn auth_phase(cfg: &BotConfig, clock: &mut ServerClock, counts: &mut Count
     }
 }
 
-/// Fase canal (:30003): handshake → `GC_PHASE(LOGIN)` → LOGIN3 (65 B) →
-/// `GC_EMPIRE` + `GC_PHASE(SELECT)` + 449 B → `CG_PLAYER_SELECT`.
-/// Devuelve la sesión ABIERTA (mitades del stream + splitter — la entrada al
+/// Fase canal (:30003): GC_PHASE(LOGIN) DIRECTO (sin handshake del canal -
+/// 2026-08-14: el canal ya no handshakea; el reloj queda anclado por el auth) -
+/// GC_EMPIRE + GC_PHASE(SELECT) + 449 B -> CG_PLAYER_SELECT.
 /// mundo continúa en la MISMA conexión) y `(slot, x, y)` del personaje
 /// elegido (el primero no vacío).
 #[allow(clippy::type_complexity)]
 async fn channel_phase(
     cfg: &BotConfig,
-    clock: &mut ServerClock,
     counts: &mut Counts,
 ) -> Result<(u8, i32, i32, OwnedReadHalf, OwnedWriteHalf, Splitter), BotError> {
     let stream = connect(&cfg.channel_addr, cfg.timeout).await?;
     let (mut rd, mut wr) = stream.into_split();
     let mut sp = Splitter::new();
-    client_handshake(&mut rd, &mut wr, &mut sp, clock, cfg.timeout).await?;
+    // SIN handshake del canal (SOLUCIÓN DEFINITIVA 2026-08-14 — el cliente
+    // real conecta con Connect() crudo y manda su LOGIN3 al procesar la fase
+    // Login; el canal manda GC_PHASE(LOGIN) directo; el reloj del bot queda
+    // anclado por el handshake del AUTH).
 
     loop {
         let p = recv(&mut rd, &mut sp, cfg.timeout, "channel_phase").await?;
@@ -473,7 +475,7 @@ pub async fn run_bot(cfg: BotConfig, index: usize) -> BotReport {
         auth_ms = Some(elapsed_ms(start));
 
         let (slot, x, y, mut rd, mut wr, mut sp) =
-            channel_phase(&cfg, &mut clock, &mut counts).await?;
+            channel_phase(&cfg, &mut counts).await?;
         channel_login_ms = Some(elapsed_ms(start));
         let _ = slot; // el slot elegido (información)
 

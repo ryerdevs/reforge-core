@@ -459,6 +459,12 @@ const char* CPythonNetworkStream::GetAccountCharacterSlotDataz(UINT iSlot, UINT 
 
 void CPythonNetworkStream::ConnectLoginServer(const char* c_szAddr, UINT uPort)
 {
+	// FIX 2026-08-14 (handshake silencioso del cliente real): la fase
+	// HandShake se prepara ANTES del connect — el GC_PHASE(HANDSHAKE)+
+	// GC_HANDSHAKE del canal se procesan al instante y el eco sale; antes el
+	// cliente conectaba sin fase, no procesaba el handshake y la conexión
+	// moría muda en el primer intento tras cada restart del servidor.
+	SetHandShakePhase();
 	CNetworkStream::Connect(c_szAddr, uPort);
 }
 
@@ -475,6 +481,10 @@ void CPythonNetworkStream::ConnectGameServer(UINT iChrSlot)
 	m_dwSelectedCharacterIndex = iChrSlot;
 
 	__DirectEnterMode_Set(iChrSlot);
+
+	// FIX 2026-08-14 (handshake silencioso — reconexión DirectEnter/warp):
+	// misma preparación de fase que ConnectLoginServer.
+	SetHandShakePhase();
 
 	const TSimplePlayerInformation&	rkSimplePlayerInfo=m_akSimplePlayerInfo[iChrSlot];
 	CNetworkStream::Connect((DWORD)rkSimplePlayerInfo.lAddr, rkSimplePlayerInfo.wPort);

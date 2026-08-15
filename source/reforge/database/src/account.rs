@@ -15,7 +15,8 @@
 //! como `Result<_, String>` con contexto, `mysql5_password` (hash Rust), `hex16`.
 //! NO refactoriza el auth (funciona; la migracion de sus queries es un follow-up).
 
-use tokio_postgres::{Client, NoTls, Row};
+use crate::pool::{Client, PgPool};
+use tokio_postgres::Row;
 
 use crate::sha1;
 
@@ -83,23 +84,17 @@ WHERE a.login = $1 AND a.password = $2";
 /// (patron verificado en `auth.rs` — coste local ~ms; el pool se decide con
 /// el pipeline WAL).
 pub struct AccountRepo {
-    pg_conn: String,
+    pool: PgPool,
 }
 
 impl AccountRepo {
-    pub fn new(pg_conn: impl Into<String>) -> Self {
-        Self { pg_conn: pg_conn.into() }
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
     }
 
     /// Conexion nueva por llamada (parity `auth.rs:293-298`).
     async fn connect(&self) -> Result<Client, String> {
-        let (client, connection) = tokio_postgres::connect(&self.pg_conn, NoTls)
-            .await
-            .map_err(|e| format!("PG connect: {e}"))?;
-        tokio::spawn(async move {
-            let _ = connection.await;
-        });
-        Ok(client)
+        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
     }
 
     /// Semantica de QUERY_LOGIN: `Some(AccountLogin)` solo si login + password

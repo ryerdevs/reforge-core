@@ -12,7 +12,8 @@
 //! `message_texts` e `item_icons` NO se leen (server-side / panel — ADR-0009).
 
 use protocol::locale::LocaleBundle;
-use tokio_postgres::{Client, NoTls, Row};
+use crate::pool::{Client, PgPool};
+use tokio_postgres::Row;
 
 use crate::account::pg_err;
 
@@ -28,23 +29,17 @@ const UI_SQL: &str = "SELECT key, value FROM common.ui_texts WHERE lang = $1";
 
 /// Repositorio del locale (ADR-0008): conexión por llamada.
 pub struct LocaleRepo {
-    pg_conn: String,
+    pool: PgPool,
 }
 
 impl LocaleRepo {
-    pub fn new(pg_conn: impl Into<String>) -> Self {
-        Self { pg_conn: pg_conn.into() }
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
     }
 
     /// Conexión nueva por llamada (patrón `npc.rs` — coste local ~ms).
     async fn connect(&self) -> Result<Client, String> {
-        let (client, connection) = tokio_postgres::connect(&self.pg_conn, NoTls)
-            .await
-            .map_err(|e| format!("PG connect: {e}"))?;
-        tokio::spawn(async move {
-            let _ = connection.await;
-        });
-        Ok(client)
+        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
     }
 
     /// Lee las 6 secciones del locale para `lang` con el fallback EN
@@ -202,7 +197,7 @@ mod tests {
         let pg = std::env::var("DATABASE_TEST_PG").unwrap_or_else(|_| {
             "host=127.0.0.1 port=5432 user=mt2 password=mt2 dbname=metin2".to_string()
         });
-        let repo = LocaleRepo::new(&pg);
+        let repo = LocaleRepo::new(crate::pool::new_pool(&pg, 4).expect("pool"));
         let es = repo.load_for_lang("es").await.expect("load es");
         assert_eq!(es.mob.len(), 2_876, "mob ES (dump 2026-08-12)");
         assert_eq!(es.item.len(), 11_427, "item ES");
