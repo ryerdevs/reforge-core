@@ -706,8 +706,12 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
         // VID coincide con el `s_kNetActorData` pendiente —
         // PythonNetworkStreamPhaseGameActor.cpp:153,165).
         let parts = packets::equipped_parts(session.row(), &session.inventory);
+        // dw_arrow = VNUM del item en WEAR_ARROW (parity UpdatePacket
+        // char.cpp:1046: `GetWear(WEAR_ARROW)->GetOriginalVnum()`; el cliente
+        // SetArrow lo resuelve como vnum — InstanceBase.cpp:3354). Fix
+        // 2026-08-15 (verifier): antes mandaba el count -> carcaj nunca visible.
         let arrows = super::equipped_arrow_index(&session.inventory)
-            .map(|i| session.inventory[i].count as u32)
+            .map(|i| session.inventory[i].vnum as u32)
             .unwrap_or(0);
         session
             .send(&packets::character_update_with_parts(session.row(), &parts, arrows).to_bytes())
@@ -789,8 +793,9 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
         // está — el part se quita; parity del C++: `CItem::Unequip` →
         // ComputeBattlePoints + UpdatePacket, item.cpp).
         let parts = packets::equipped_parts(session.row(), &session.inventory);
+        // dw_arrow = VNUM (parity char.cpp:1046/937 — GetOriginalVnum).
         let arrows = super::equipped_arrow_index(&session.inventory)
-            .map(|i| session.inventory[i].count as u32)
+            .map(|i| session.inventory[i].vnum as u32)
             .unwrap_or(0);
         session
             .send(&packets::character_update_with_parts(session.row(), &parts, arrows).to_bytes())
