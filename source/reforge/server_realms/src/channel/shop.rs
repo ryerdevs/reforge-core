@@ -21,7 +21,7 @@
 //!   server (shop.cpp `Buy`) alinea OK=3, NOT_ENOUGH_MONEY=4, SOLDOUT=6,
 //!   INVENTORY_FULL=7, INVALID_POS=8.
 
-use game_core::ecs::{ShopEvent, ShopIntent};
+use game_core::ecs::{Intent, QuestIntent, ShopEvent, ShopIntent};
 use game_core::shop::{self, BuyReceipt, ShopItem};
 
 use crate::channel::session::{Outcome, Session};
@@ -56,10 +56,23 @@ pub async fn click(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String>
         return Ok(Outcome::Continue);
     }
     let npc_vid = u32::from_le_bytes([pkt[1], pkt[2], pkt[3], pkt[4]]);
+    eprintln!(
+        "server_realms: channel conn {}: CG_ON_CLICK recibido (npc vid {})",
+        session.conn_id, npc_vid
+    );
     session.intent(ShopIntent::Open {
         player_vid: session.player_vid(),
         npc_vid,
     }.into())?;
+    // F5 quests (wiring 2026-08-13): el mismo click dispara el trigger
+    // Chat(vnum) de las quests del NPC (el mundo resuelve el vnum del vid) —
+    // si el NPC tiene quests de chat, el diálogo GC_SCRIPT sale (sin quests
+    // para el vnum -> sin evento, silencio).
+    session.intent(Intent::Quest(QuestIntent::NpcClick {
+        player_vid: session.player_vid(),
+        npc_vid,
+        items: session.inventory_counts(),
+    }))?;
     Ok(Outcome::Continue)
 }
 
@@ -234,7 +247,7 @@ async fn apply_buy(
             gold: Some((gold, new_gold)),
         },
         BuyReceipt { stack: None, new_pos, .. } => {
-            let id = ItemRepo::new(&session.config.pg_conn)
+            let id = ItemRepo::new(session.pool.clone())
                 .max_id_in_range(100_000_000, 200_000_000)
                 .await?
                 .map(|m| m + 1)
@@ -341,7 +354,7 @@ async fn apply_sell(session: &mut Session, cell: u16, qty: i64) -> Result<(), St
         let Some(vnum) = item else {
             return Ok(()); // celda vacía — silencio (parity)
         };
-        sell_proto(&session.config.pg_conn, vnum).await?
+        sell_proto(&session.pool, vnum).await?
     };
     let receipt = match shop::sell(&session.inventory, gold, cell, qty, false, proto) {
         Ok(r) => r,
@@ -378,7 +391,7 @@ async fn apply_sell(session: &mut Session, cell: u16, qty: i64) -> Result<(), St
         if session.inventory[idx].count <= 0 {
             let del = TPacketGCItemDelDeprecated::new(
                 TItemPos { window: TItemPos::WINDOW_INVENTORY, cell },
-                vnum_log as u32,
+                0,
                 0,
             );
             session
@@ -403,25 +416,12 @@ async fn apply_sell(session: &mut Session, cell: u16, qty: i64) -> Result<(), St
     send_points_and_log(session, vnum_log, receipt.price).await
 }
 
-/// Los datos del item_proto para la venta (shop_buy_price + flag) — query
-/// directa (la query del proto completo es del lane database — GAP).
-async fn sell_proto(pg_conn: &str, vnum: i64) -> Result<shop::SellProto, String> {
-    let (client, connection) =
-        tokio_postgres::connect(pg_conn, tokio_postgres::NoTls)
-            .await
-            .map_err(|e| format!("PG connect: {e}"))?;
-    tokio::spawn(async move {
-        let _ = connection.await;
-    });
-    let row = client
-        .query_one(
-            "SELECT shop_buy_price, flag FROM player.item_proto WHERE vnum = $1",
-            &[&vnum],
-        )
-        .await
-        .map_err(|e| format!("ITEM_PROTO_SELL({vnum}): {e}"))?;
-    let shop_buy_price: i64 = row.try_get(0).map_err(|e| format!("shop_buy_price: {e}"))?;
-    let flag: i64 = row.try_get(1).map_err(|e| format!("flag: {e}"))?;
+/// Los datos del item_proto para la venta (shop_buy_price + flag) - a traves
+/// del crate database (ItemRepo::load_sell_proto) y el pool compartido
+/// (ADR-0008 2: sin SQL directo fuera del crate).
+async fn sell_proto(pool: &database::pool::PgPool, vnum: i64) -> Result<shop::SellProto, String> {
+    let (shop_buy_price, flag) =
+        database::item::ItemRepo::new(pool.clone()).load_sell_proto(vnum).await?;
     Ok(shop::SellProto {
         shop_buy_price,
         count_per_1gold: flag & game_core::shop::ITEM_FLAG_COUNT_PER_1GOLD != 0,
@@ -439,10 +439,10 @@ async fn send_points_and_log(
     gold_delta: i64,
 ) -> Result<(), String> {
     session
-        .send(&game_core::packets::points_packet(session.row(), session.next_exp).to_bytes())
+        .send(&game_core::packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
         .await
         .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
-    if let Err(e) = database::economy::EconomyRepo::new(&session.config.pg_conn)
+    if let Err(e) = database::economy::EconomyRepo::new(session.pool.clone())
         .money_log(MONEY_LOG_SHOP, vnum as i32, gold_delta as i32)
         .await
     {

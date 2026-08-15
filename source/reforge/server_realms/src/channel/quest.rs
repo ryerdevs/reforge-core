@@ -104,7 +104,7 @@ async fn give_item(session: &mut Session, vnum: u32, count: u32) -> Result<(), S
             .send(&up.to_bytes())
             .await
             .map_err(|e| format!("enviando GC_ITEM_UPDATE (quest): {e}"))?;
-        ItemRepo::new(&session.config.pg_conn)
+        ItemRepo::new(session.pool.clone())
             .upsert(&session.inventory[idx], session.row().id)
             .await?;
         if remaining <= 0 {
@@ -132,7 +132,7 @@ async fn give_item(session: &mut Session, vnum: u32, count: u32) -> Result<(), S
         );
         return Ok(());
     };
-    let id = ItemRepo::new(&session.config.pg_conn)
+    let id = ItemRepo::new(session.pool.clone())
         .max_id_in_range(100_000_000, 200_000_000)
         .await?
         .map(|m| m + 1)
@@ -161,7 +161,7 @@ async fn give_item(session: &mut Session, vnum: u32, count: u32) -> Result<(), S
         .send(&set.to_bytes())
         .await
         .map_err(|e| format!("enviando GC_ITEM_SET (quest): {e}"))?;
-    ItemRepo::new(&session.config.pg_conn)
+    ItemRepo::new(session.pool.clone())
         .upsert(&new_item, session.row().id)
         .await?;
     session.inventory.push(new_item);
@@ -190,14 +190,14 @@ async fn remove_item(session: &mut Session, vnum: u32, count: u32) -> Result<(),
             // Stack agotado: GC_ITEM_DEL (20, 42 B deprecated) + delete fila.
             let del = TPacketGCItemDelDeprecated::new(
                 TItemPos { window: TItemPos::WINDOW_INVENTORY, cell: consumed.pos as u16 },
-                vnum,
+                0,
                 0,
             );
             session
                 .send(&del.to_bytes())
                 .await
                 .map_err(|e| format!("enviando GC_ITEM_DEL (quest): {e}"))?;
-            ItemRepo::new(&session.config.pg_conn).delete(consumed.id).await?;
+            ItemRepo::new(session.pool.clone()).delete(consumed.id).await?;
             session.inventory.remove(idx);
         } else {
             let up = TPacketGCItemUpdate {
@@ -211,7 +211,7 @@ async fn remove_item(session: &mut Session, vnum: u32, count: u32) -> Result<(),
                 .send(&up.to_bytes())
                 .await
                 .map_err(|e| format!("enviando GC_ITEM_UPDATE (quest): {e}"))?;
-            ItemRepo::new(&session.config.pg_conn)
+            ItemRepo::new(session.pool.clone())
                 .upsert(&consumed, session.row().id)
                 .await?;
         }
@@ -278,7 +278,7 @@ async fn persist_flags(session: &mut Session, dirty: &[DirtyFlag]) -> Result<(),
             l_value: d.value as i32,
         })
         .collect();
-    let affected = QuestRepo::new(&session.config.pg_conn).save(&rows).await?;
+    let affected = QuestRepo::new(session.pool.clone()).save(&rows).await?;
     eprintln!(
         "server_realms: channel conn {}: quest flags persistidos ({} filas)",
         session.conn_id, affected
@@ -303,6 +303,31 @@ mod tests {
         let src = u16::from_le_bytes([pkt[4], pkt[5]]);
         assert_eq!(src as usize, "hola[ENTER]".len());
         assert_eq!(&pkt[6..], b"hola[ENTER]");
+    }
+
+    /// ADR-0009 (server dueño del texto): las claves de diálogo se RESUELVEN
+    /// contra el diccionario del engine — la clave real del corpus
+    /// `gameforge.map_warp._20_sayTitle` se envía como su TEXTO; una clave
+    /// sin entrada queda tal cual (fallback).
+    #[test]
+    fn dialog_keys_resolved_from_texts_dictionary() {
+        let mut texts = std::collections::HashMap::new();
+        texts.insert(
+            "gameforge.map_warp._20_sayTitle".to_string(),
+            "Este es el titulo del warp.".to_string(),
+        );
+        let e = game_core::quest::QuestEngine::load(
+            "quest d\n  state start\n    on letter\n      -> say(@gameforge.map_warp._20_sayTitle)\n      -> say(@sin_texto)\n",
+        )
+        .expect("parse")
+        .with_texts(texts);
+        let mut rt = game_core::quest::QuestRuntime::default();
+        let items = std::collections::HashMap::new();
+        let mut rng = |_, _| 0i64;
+        let out = e.run(&mut rt, game_core::quest::QuestTrigger::Letter, 5, 41, 0, &items, &mut rng);
+        let script = out.script.expect("diálogo");
+        assert!(script.starts_with("Este es el titulo del warp.[ENTER]"), "{script}");
+        assert!(script.contains("sin_texto[ENTER]"), "fallback a la clave: {script}");
     }
 
     /// El markup del event-set del cliente: texto + [ENTER], [NEXT] y
