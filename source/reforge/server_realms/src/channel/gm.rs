@@ -21,7 +21,15 @@
 //! `warp x y` (GC_WARP — el cliente reconecta), `item vnum [count]`
 //! (ItemRepo + GC_ITEM_SET), `notice texto` (GC_CHAT NOTICE — al GM; el
 //! broadcast a TODOS los jugadores es GAP: necesita el task del canal con
-//! las `routes`), `level n` (row + GC_POINTS + mundo + save).
+//! las `routes`), `level n` (row + GC_POINTS + mundo + save) y el lote 2
+//! GM_PLAYER (lane B, 2026-08-15 — regla 4: nivel 0 SIN gmlist):
+//! `set_walk_mode`/`set_run_mode` (estado del personaje + GC_WALK_MODE),
+//! `skillup <vnum>` (skill_point del row + blob skill_level + GC_POINTS +
+//! GC_SKILL_LEVEL + save). Los 30 del lote SIN sistema subyacente (party,
+//! horse, emociones, view_equip, observer, safebox, mount, pvp, gskillup)
+//! responden INFO 'not implemented' (regla 3 — el comando EXISTE en el
+//! cmd_info[]; el GAP de cada uno está documentado en la variante del enum
+//! en game_core/gm.rs).
 //!
 //! # Deferred (GAPs documentados)
 //!
@@ -32,15 +40,25 @@
 //!   vids; la conexión solo su propio nombre).
 //! - `warp <jugador>` (warp a OTRO) y `set` (stats): igual — registro de
 //!   nombres / recálculo de puntos.
-//! - Comandos GM_PLAYER (nivel 0: `/logout`, `/restart_here`, `/who`...):
-//!   el cliente maneja logout/restart localmente; fuera del subset.
+//! - `skillup` sin skill_proto: el C++ valida CanUseSkill/level-limit/
+//!   pre-skill/learnability y aplica saltos master por RNG (17→20/30/40 —
+//!   char_skill.cpp:745-777); el subset solo gasta el punto y sube +1
+//!   (cap 40).
+//! - Lote 2 sin sistema (INFO 'not implemented'): party (grupos +
+//!   broadcast), horse (packets HORSE_* + proto), emociones (GC emoticon a
+//!   los cercanos), view_equip (equip de OTRO vid), observer (modo
+//!   observador), safebox (tablas + paquetes propios), mount (stub vacío
+//!   hasta en el C++), pvp (modo PVP), gskillup (guild).
+//! - El GC_WALK_MODE del C++ se broadcasta a los que VEN al personaje
+//!   (PacketView, char.cpp:5773-5780); el subset lo manda solo a la propia
+//!   conexión (el routing por vid del canal es el mismo GAP del notice).
 
 use database::common::CommonRepo;
 use database::item::ItemRepo;
 use game_core::ecs::{CombatIntent, Intent};
 use game_core::gm::{self, GmCommand};
 use game_core::packets;
-use protocol::world::{TPacketGCItemSet, TItemPos};
+use protocol::world::{TPacketGCItemSet, TPacketGCSkillLevel, TItemPos, TPlayerSkill};
 
 use crate::channel::session::{Outcome, Session};
 use crate::channel::{parse_listen, INVENTORY_MAX_NUM};
@@ -48,6 +66,17 @@ use crate::channel::{parse_listen, INVENTORY_MAX_NUM};
 /// CHAT_TYPE_INFO = 1, CHAT_TYPE_NOTICE = 2 (length.h:514-525).
 const CHAT_TYPE_INFO: u8 = 1;
 const CHAT_TYPE_NOTICE: u8 = 2;
+
+/// HEADER_GC_WALK_MODE = 111 (packet.h:212) — el protocol reforge aún no
+/// tiene la struct; igual que CHAT_TYPE_* se define aquí (bytes crudos).
+const HEADER_GC_WALK_MODE: u8 = 111;
+/// WALKMODE_RUN/WALK (packet.h:1880-1882) — el modo del TPacketGCWalkMode
+/// (header 111, vid, mode — packet.h:1884-1886).
+const WALKMODE_RUN: u8 = 0;
+const WALKMODE_WALK: u8 = 1;
+/// Cap del nivel de skill (parity SetSkillLevel MIN(40, bLev)
+/// char_skill.cpp:207).
+const SKILL_LEVEL_MAX: u8 = 40;
 
 /// Texto del chat al GM (GC_CHAT type INFO — parity del ChatPacket del C++;
 /// sin locale system → EN, divergencia documentada).
@@ -82,14 +111,11 @@ pub async fn handle(session: &mut Session, cmd: &str) -> Result<Outcome, String>
         return Ok(Outcome::Continue);
     };
     // GM_PLAYER (nivel 0): comandos de jugador — SIN gmlist (parity
-    // cmd.cpp:340-347; accesibles a todos). El C++ los despacha directo en
-    // do_restart/do_cmd; el revive solo aplica muerto (POS_DEAD) y los de
-    // cierre mandan su paquete y cierran la conexión.
-    if matches!(
-        command,
-        GmCommand::RestartHere | GmCommand::RestartTown | GmCommand::Logout
-            | GmCommand::Quit | GmCommand::PhaseSelect
-    ) {
+    // cmd.cpp:339-466, lote 2 incluido; accesibles a todos). El C++ los
+    // despacha directo en do_restart/do_cmd/do_skillup/do_set_walk_mode...;
+    // el revive solo aplica muerto (POS_DEAD) y los de cierre mandan su
+    // paquete y cierran la conexión.
+    if gm::required_level(&command) == gm::gm_level::PLAYER {
         return handle_player_command(session, command).await;
     }
     // Permisos RE-CHECK en DB por comando (ADR-0011): `common.gmlist` —
@@ -130,18 +156,17 @@ pub async fn handle(session: &mut Session, cmd: &str) -> Result<Outcome, String>
         GmCommand::GiveItem { vnum, count } => give_item(session, vnum, count).await?,
         GmCommand::Notice { text } => self_notice(session, &text).await?,
         GmCommand::SetLevel { level } => set_level(session, level).await?,
-        // Inalcanzable: las variantes de jugador van por `handle_player_command`.
-        GmCommand::RestartHere
-        | GmCommand::RestartTown
-        | GmCommand::Logout
-        | GmCommand::Quit
-        | GmCommand::PhaseSelect => {}
+        // Inalcanzable: todos los GM_PLAYER (nivel 0) van por
+        // `handle_player_command` (routing arriba por required_level).
+        _ => {}
     }
     Ok(Outcome::Continue)
 }
 
-/// Comandos GM_PLAYER (nivel 0, cmd.cpp:340-347) — el diálogo de muerte y el
-/// menú del cliente. Parity do_restart/do_cmd (cmd_general.cpp):
+/// Comandos GM_PLAYER (nivel 0, cmd.cpp:339-466 — lote 1: diálogo de muerte
+/// y menú del cliente; lote 2 del lane B: modo de movimiento, skillup y los
+/// 28 sin sistema → INFO 'not implemented'). Parity do_restart/do_cmd
+/// (cmd_general.cpp):
 ///
 /// - `/restart_here` (SCMD_RESTART_HERE, POS_DEAD): revive en el MISMO
 ///   punto — RestartAtSamePos (remove + insert del personaje).
@@ -200,8 +225,179 @@ async fn handle_player_command(
                 .map_err(|e| format!("enviando GC_PHASE(SELECT): {e}"))?;
             Ok(Outcome::Close("comando /phase_select — reconexión al selector".into()))
         }
-        _ => Ok(Outcome::Continue),
+        // Lote 2 — REALES (regla 2 del lane B: sistema subyacente + persistencia).
+        GmCommand::SetWalkMode => {
+            set_walk_mode(session, true).await?;
+            Ok(Outcome::Continue)
+        }
+        GmCommand::SetRunMode => {
+            set_walk_mode(session, false).await?;
+            Ok(Outcome::Continue)
+        }
+        GmCommand::SkillUp { vnum } => {
+            skillup(session, vnum).await?;
+            Ok(Outcome::Continue)
+        }
+        // Lote 2 — SIN sistema subyacente en reforge (regla 3): el comando
+        // EXISTE en el cmd_info[] → INFO 'not implemented' (NO 'No such
+        // command'). El GAP de cada uno está documentado en la variante del
+        // enum (game_core/gm.rs).
+        GmCommand::Safebox
+        | GmCommand::SafeboxClose
+        | GmCommand::Mount
+        | GmCommand::HorseState
+        | GmCommand::HorseLevel
+        | GmCommand::HorseRide
+        | GmCommand::HorseSummon
+        | GmCommand::HorseUnsummon
+        | GmCommand::HorseSetStat
+        | GmCommand::PartyRequest
+        | GmCommand::PartyRequestAccept
+        | GmCommand::PartyRequestDeny
+        | GmCommand::Pvp
+        | GmCommand::ViewEquip
+        | GmCommand::Observer
+        | GmCommand::ObserverExit
+        | GmCommand::GuildSkillUp
+        | GmCommand::EmotionAllow
+        | GmCommand::Kiss
+        | GmCommand::Slap
+        | GmCommand::FrenchKiss
+        | GmCommand::Clap
+        | GmCommand::Cheer1
+        | GmCommand::Cheer2
+        | GmCommand::Dance1
+        | GmCommand::Dance2
+        | GmCommand::Dance3
+        | GmCommand::Dance4
+        | GmCommand::Dance5
+        | GmCommand::Dance6
+        | GmCommand::Congratulation
+        | GmCommand::Forgive => {
+            not_implemented(session, &command).await?;
+            Ok(Outcome::Continue)
+        }
+        // Inalcanzable: los GM de verdad (warp/item/notice/level) van por el
+        // dispatch de handle() — el routing manda aquí SOLO los GM_PLAYER
+        // (nivel 0). Exhaustividad por si el routing cambia.
+        GmCommand::Warp { .. }
+        | GmCommand::GiveItem { .. }
+        | GmCommand::Notice { .. }
+        | GmCommand::SetLevel { .. } => Ok(Outcome::Continue),
     }
+}
+
+/// Comandos GM_PLAYER sin sistema subyacente en reforge → INFO
+/// 'not implemented' (regla 3 del lane B: NO 'No such command' — el comando
+/// SÍ está en el cmd_info[] del C++ congelado). Texto EN (sin locale system
+/// — divergencia documentada, igual que el resto de INFO del crate).
+async fn not_implemented(session: &mut Session, command: &GmCommand) -> Result<(), String> {
+    eprintln!(
+        "server_realms: channel conn {}: /{:?} de {} — sin sistema en \
+         reforge (GAP) → INFO 'not implemented'",
+        session.conn_id, command, session.row().name
+    );
+    gm_info(session, "not implemented").await
+}
+
+/// `/set_walk_mode`/`/set_run_mode` — modo de movimiento del personaje
+/// (parity do_set_walk_mode/do_set_run_mode cmd_general.cpp:927-937:
+/// SetNowWalking + SetWalking, char.cpp:5759-5780) + GC_WALK_MODE (header
+/// 111, packet.h:212; vid + WALKMODE_RUN=0/WALKMODE_WALK=1,
+/// packet.h:1880-1886). El C++ NO persiste el flag en DB (la row de 42
+/// columnas no tiene columna walking — parity) — vive en el CHARACTER; aquí
+/// en la Session (por conexión). El broadcast del C++ es PacketView (a los
+/// que VEN al personaje) — el subset manda solo a la propia conexión (GAP:
+/// routing por vid del canal, mismo que el notice).
+async fn set_walk_mode(session: &mut Session, walk: bool) -> Result<(), String> {
+    session.walking = walk;
+    let mut out = Vec::with_capacity(6);
+    out.push(HEADER_GC_WALK_MODE);
+    out.extend_from_slice(&session.player_vid().to_le_bytes());
+    out.push(if walk { WALKMODE_WALK } else { WALKMODE_RUN });
+    session
+        .send(&out)
+        .await
+        .map_err(|e| format!("enviando GC_WALK_MODE: {e}"))?;
+    eprintln!(
+        "server_realms: channel conn {}: {} — modo {}",
+        session.conn_id,
+        session.row().name,
+        if walk { "caminar" } else { "correr" }
+    );
+    Ok(())
+}
+
+/// `/skillup <vnum>` — sube un skill gastando 1 skill_point del ROW (parity
+/// do_skillup cmd_general.cpp:754-793 → SkillLevelUp char_skill.cpp:641-760:
+/// `GetPoint(idx) < 1 → return; PointChange(idx, -1)`): skill_point −1,
+/// +1 nivel con cap 40 (SetSkillLevel MIN(40, bLev) char_skill.cpp:207),
+/// GC_POINTS + GC_SKILL_LEVEL (orden parity: PointChange antes que
+/// SkillLevelPacket) + save. El bytea `player.skill_level` ES la serie de
+/// 255 × TPlayerSkill (6 B — tables.h:351-356); el b_level va en el byte +1
+/// de la entrada. GAPs: sin skill_proto en reforge → sin CanUseSkill/
+/// level-limit/pre-skill/learnability, sin el chequeo del tipo del skill
+/// (POINT_SUB_SKILL/POINT_HORSE_SKILL — el subset siempre POINT_SKILL) y sin
+/// los saltos master por RNG (17→20/30/40, char_skill.cpp:745-777).
+async fn skillup(session: &mut Session, vnum: Option<u32>) -> Result<(), String> {
+    let Some(vnum) = vnum else {
+        // Parity cmd_general.cpp:759-761: sin argumento → no-op silencioso.
+        eprintln!(
+            "server_realms: channel conn {}: /skillup sin vnum — no-op (parity)",
+            session.conn_id
+        );
+        return Ok(());
+    };
+    if vnum as usize >= TPacketGCSkillLevel::SKILL_MAX_NUM {
+        // Parity char_skill.cpp:669-673: vnum overflow → sys_err + no-op.
+        eprintln!(
+            "server_realms: channel conn {}: /skillup vnum {vnum} >= SKILL_MAX_NUM \
+             ({}) — no-op (parity)",
+            session.conn_id,
+            TPacketGCSkillLevel::SKILL_MAX_NUM
+        );
+        return Ok(());
+    }
+    // Parity char_skill.cpp:703-705 (`if (!GetSkillGroup()) return;`) y
+    // 724-726 (`GetPoint(idx) < 1 → return` — sin mensaje en el C++).
+    if session.row().skill_group == 0 || session.row().skill_point < 1 {
+        eprintln!(
+            "server_realms: channel conn {}: /skillup {vnum} — sin skill_group \
+             o sin skill_point — no-op (parity)",
+            session.conn_id
+        );
+        return Ok(());
+    }
+    let off = vnum as usize * TPlayerSkill::SIZE;
+    // None/corto → cero (defensivo, mismo criterio que skill_level_packet).
+    let mut blob = match session.row().skill_level.clone() {
+        Some(b) if b.len() == TPacketGCSkillLevel::SKILL_MAX_NUM * TPlayerSkill::SIZE => b,
+        _ => vec![0; TPacketGCSkillLevel::SKILL_MAX_NUM * TPlayerSkill::SIZE],
+    };
+    let level = blob[off + 1];
+    let new_level = level.saturating_add(1).min(SKILL_LEVEL_MAX);
+    blob[off + 1] = new_level;
+    session.row_mut().skill_level = Some(blob);
+    session.row_mut().skill_point -= 1;
+    // Orden parity: PointChange (GC_POINTS) → SkillLevelPacket (GC_SKILL_LEVEL).
+    session
+        .send(&packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
+        .await
+        .map_err(|e| format!("enviando GC_POINTS (GM skillup): {e}"))?;
+    session
+        .send(&packets::skill_level_packet(session.row().skill_level.as_ref()).to_bytes())
+        .await
+        .map_err(|e| format!("enviando GC_SKILL_LEVEL (GM skillup): {e}"))?;
+    session.save();
+    eprintln!(
+        "server_realms: channel conn {}: {} subió skill {vnum} → nivel {} \
+         (skill_point {})",
+        session.conn_id,
+        session.row().name,
+        new_level,
+        session.row().skill_point
+    );
+    Ok(())
 }
 
 /// `warp <x metros> <y metros>` → `GC_WARP` (parity do_warp cmd_gm.cpp:
