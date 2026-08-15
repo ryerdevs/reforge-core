@@ -6,11 +6,12 @@ use std::collections::HashMap;
 
 use bevy_ecs::prelude::*;
 
-use crate::ai::{patrol_step, rotation_5deg, step_toward};
+use crate::ai::{move_duration_ms, patrol_step, rotation_5deg, step_toward};
 use crate::combat::distance_approx;
 use crate::ecs::components::{Aggro, Map, Mob, Player, Position, Vid};
 use crate::ecs::events::MoveEvent;
 use crate::ecs::resources::{NpcOutbox, Rand, Tick};
+use crate::ecs::systems::combat::separate_landing;
 use crate::ecs::world::WorldSim;
 
 /// Radio del patrullaje (units del spawn — parity del estado IDLE del C++).
@@ -28,7 +29,11 @@ const PATROL_MAX_SENDS: usize = 20;
 ///    mapa, con tope de paquetes por tick (multi-jugador: el GC_MOVE se
 ///    difunde a todos los que lo ven).
 pub(crate) fn patrol_system(
-    mut mobs: Query<(&Vid, &Mob, &Aggro, &Map, &mut Position), Without<Player>>,
+    mut mobs: ParamSet<(
+        // Posiciones de TODOS los mobs (C28 — separación; read-only).
+        Query<(&Vid, &Position), Without<Player>>,
+        Query<(&Vid, &Mob, &Aggro, &Map, &mut Position), Without<Player>>,
+    )>,
     players: Query<(&Player, &Map, &Position), Without<Mob>>,
     tick: Res<Tick>,
     mut rng: ResMut<Rand>,
@@ -38,8 +43,15 @@ pub(crate) fn patrol_system(
     for (p, map, pos) in &players {
         by_map.entry(map.map_index).or_default().push((p.vid, pos.x, pos.y));
     }
+    // C28: snapshot de las posiciones de los mobs (la separación consulta
+    // a los OTROS mobs — el ParamSet evita el conflicto de queries).
+    let others: Vec<(u32, i32, i32)> = mobs
+        .p0()
+        .iter()
+        .map(|(v, p)| (v.vid, p.x, p.y))
+        .collect();
     let mut sent = 0usize;
-    for (vid, mob, aggro, map, mut pos) in &mut mobs {
+    for (vid, mob, aggro, map, mut pos) in &mut mobs.p1() {
         if aggro.target.is_some() || mob.nomove {
             continue;
         }
@@ -67,11 +79,19 @@ pub(crate) fn patrol_system(
         ) else {
             continue;
         };
-        let (nx, ny) = step_toward(pos.x, pos.y, tx, ty, mob.move_speed, tick.dt_ms);
-        if (nx, ny) == (pos.x, pos.y) {
+        let (sx, sy) = step_toward(pos.x, pos.y, tx, ty, mob.move_speed, tick.dt_ms);
+        if (sx, sy) == (pos.x, pos.y) {
             continue;
         }
+        // C28 (separación): el destino del paso de PATRULLA debe quedar
+        // libre de otros mobs — si está ocupado, probar flancos o no moverse.
+        let Some((nx, ny)) = separate_landing(&others, vid.vid, (pos.x, pos.y), sx, sy) else {
+            continue; // otro mob bloquea — no moverse este tick
+        };
         let rot = rotation_5deg(pos.x, pos.y, nx, ny);
+        // La duración REAL del paso (parity CalculateMoveDuration,
+        // char.cpp:2765-2768) — el cliente interpola con ESTA duración.
+        let duration_ms = move_duration_ms(nx - pos.x, ny - pos.y, mob.move_speed);
         pos.x = nx;
         pos.y = ny;
         for pv in &visible {
@@ -81,7 +101,7 @@ pub(crate) fn patrol_system(
                 x: nx,
                 y: ny,
                 rot,
-                duration_ms: tick.dt_ms as u32,
+                duration_ms,
             }.into());
         }
         sent += visible.len();

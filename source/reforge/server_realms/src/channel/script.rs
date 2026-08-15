@@ -135,7 +135,7 @@ pub async fn revive(session: &mut Session, answer: u8) -> Result<(), String> {
             .await
             .map_err(|e| format!("enviando GC_CHARACTER_DEL: {e}"))?;
         session
-            .send(&packets::character_add(session.row()).to_bytes())
+            .send(&packets::character_add(session.row(), session.mov_speed).to_bytes())
             .await
             .map_err(|e| format!("enviando GC_CHARACTER_ADD: {e}"))?;
         // ADDITIONAL_INFO con los parts computados del equipo (el revive

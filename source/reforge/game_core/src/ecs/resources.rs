@@ -16,6 +16,22 @@ pub struct Tick {
     pub dt_ms: u64,
 }
 
+/// Reloj ACUMULADO del mundo en ms (C23 — el respawn por tiempo): `update`
+/// lo avanza con el dt de cada tick; el `RespawnQueue` guarda los deadlines
+/// en ESTA escala (monótona y determinista en los tests).
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct WorldClock(pub u64);
+
+/// Cola de RESPAWN por TIEMPO (C23 — parity `regen_event`, regen.cpp:582-600:
+/// el C++ re-spawnea la entrada cada `regen->time` segundos): `(map, index)`
+/// de la entrada → (deadline en ms del reloj del mundo, copias a spaw near).
+/// Lo llena `remove_npc` cuando un mob MUERE (intervalo del regen.txt o
+/// default 60 s) y lo consume el `spawn_despawn_system` (la entrada no se
+/// re-materializa hasta el deadline). `copies` = número de copias muertas
+/// pendientes (count>1: se acumulan — se spaw nean juntas al vencer).
+#[derive(Resource, Debug, Default)]
+pub struct RespawnQueue(pub std::collections::HashMap<(u32, usize), (u64, u32)>);
+
 /// RNG del mundo (xorshift64* — determinista con seed; los tests la fijan).
 /// `roll(min, max)` = el `number()` INCLUSIVE del C++ (mismo patrón que el
 /// `rand32() % span` del canal).
@@ -112,6 +128,9 @@ pub struct WorldMetrics {
     pub mobs_despawned: u64,
     /// Eventos S→C emitidos (routing del canal).
     pub events_emitted: u64,
+    /// Tiempo del ÚLTIMO tick (ms — `schedule.run` de `update`): el timing de
+    /// sistemas que el run de bench registra por tick en `--bench-capture`.
+    pub last_tick_ms: u64,
 }
 
 /// El proto de las skills (del `player.skill_proto` — cargado UNA vez con

@@ -235,6 +235,14 @@ pub struct Session {
     /// lee en TODOS los caminos — la ventana del cliente muestra ataque
     /// (daño del arma) y defensa (level+HT+armor) desde aquí).
     pub battle: game_core::packets::BattlePoints,
+    /// Velocidad de movimiento CACHEADa (C27 — `GetLimitPoint(POINT_MOV_SPEED)`
+    /// char.cpp:2245,2895-2906): 100 + el apply APPLY_MOV_SPEED de la bota
+    /// equipada (`mov_speed_for_boots`). Se computa en el entry y se
+    /// re-computa al equipar/desequipar botas; la consumen el
+    /// CHARACTER_UPDATE/ADD (b_moving_speed) y el envelope anti-speedhack
+    /// del movimiento (el C++ escala la velocidad real con
+    /// `CalculateDuration(POINT_MOV_SPEED, ...)` — char.cpp:2753).
+    pub mov_speed: u8,
     /// Afectos del player (solo el entry los consume).
     pub affects: Vec<AffectRow>,
     /// Pickups en curso: el CG_ITEM_PICKUP manda el intent y el resultado
@@ -361,6 +369,7 @@ impl Session {
             next_exp: 0,
             inventory: Vec::new(),
             battle: game_core::packets::BattlePoints::default(),
+            mov_speed: 100, // sin botas (se computa en el entry)
             affects: Vec::new(),
             pending_pickups: std::collections::HashSet::new(),
             last_packet: tokio::time::Instant::now(),

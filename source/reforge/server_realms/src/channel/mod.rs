@@ -364,11 +364,30 @@ const WEAR_MAX_NUM: u16 = 32;
 /// `WEAR_ARROW = 9` (length.h:110) — el slot del arco/flechas (el cell del
 /// wire = INVENTORY_MAX_NUM + wear, length.h:827).
 const WEAR_ARROW: u16 = 9;
+/// `WEAR_FOOTS = 2` (length.h:102 — las BOTAS; el nombre WEAR_SHOES es del
+/// cliente, el server usa FOOTS; el cell del wire = INVENTORY_MAX_NUM + 2).
+const WEAR_FOOTS: u16 = 2;
 /// `WEAR_WEAPON = 4` (length.h:104) — el slot del arma (el cell del wire =
 /// INVENTORY_MAX_NUM + wear). El daño del arma (value3/value4 —
 /// `GetValue(3)/(4)`, battle.cpp:460-461) alimenta los `POINT_WEAPON_MIN/MAX`
 /// del GC_POINTS (BattlePoints).
 const WEAR_WEAPON: u16 = 4;
+
+/// El proto de la BOTA equipada (WEAR_FOOTS → cell INVENTORY_MAX_NUM + 2):
+/// el C27 lee sus applies `APPLY_MOV_SPEED` (`ModifyPoints` item.cpp:718-735
+/// — el equip los aplica a POINT_MOV_SPEED sobre la base 100 del
+/// ComputePoints PC, char.cpp:2245). `None` = sin botas equipadas.
+async fn equipped_boots_proto(
+    pool: &database::pool::PgPool,
+    inventory: &[database::item::ItemRow],
+) -> Result<Option<database::item::ProtoItem>, String> {
+    for w in inventory.iter().filter(|i| i.window == "EQUIPMENT") {
+        if w.pos as u16 == INVENTORY_MAX_NUM + WEAR_FOOTS {
+            return ItemRepo::new(pool.clone()).load_proto_use_values(w.vnum).await;
+        }
+    }
+    Ok(None)
+}
 
 /// El proto del ARMA equipada (WEAR_WEAPON — cell INVENTORY_MAX_NUM + 4):
 /// `value3/value4` = el daño min/max del arma (parity `GetValue(3)/(4)` —

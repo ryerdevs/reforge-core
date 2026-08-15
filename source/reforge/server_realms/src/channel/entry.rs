@@ -356,6 +356,13 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
             session.conn_id, session.row().map_index
         );
     }
+    // C27 (velocidad de botas): la velocidad computada del personaje — el
+    // b_moving_speed del ADD/INFO viaja con la bota (parity
+    // `GetLimitPoint(POINT_MOV_SPEED)` char.cpp:896 — ModifyPoints aplica
+    // el APPLY_MOV_SPEED de la bota al equipar, item.cpp:718-735).
+    let boots = super::equipped_boots_proto(&session.pool, &session.inventory).await?;
+    let mov_speed = packets::mov_speed_for_boots(boots.as_ref());
+    session.mov_speed = mov_speed;
     let mut enter = enter_packets(
         session.row(),
         session.empire,
@@ -364,6 +371,7 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
         super::equipped_arrow_index(&session.inventory)
             .map(|i| session.inventory[i].count as u32)
             .unwrap_or(0),
+        mov_speed,
     );
     // Cola de entrada (parity input_login.cpp:648-656): TIME + CHANNEL tras
     // el land list — el reloj del server (get_global_time) y el canal.
@@ -1179,15 +1187,19 @@ fn entry_packets(
 /// F5.3: `parts` = los 5 parts COMPUTADOS del equipo (ComputeParts — el
 /// personaje muestra el arma/armadura al entrar; `equipped_parts`).
 /// `arrows` = count de flechas equipadas (dw_arrow — ENABLE_QUIVER_SYSTEM).
+/// `mov_speed` = la velocidad computada (C27 — `mov_speed_for_boots`).
 fn enter_packets(
     row: &database::player::PlayerRow,
     empire: u8,
     lands: &[database::land::LandRow],
     parts: &[u32; 5],
     arrows: u32,
+    mov_speed: u8,
 ) -> Vec<Vec<u8>> {
     let mut out = vec![
-        packets::character_add(row).to_bytes().to_vec(),
+        packets::character_add(row, mov_speed).to_bytes().to_vec(),
+        // El ADDITIONAL_INFO (136) NO lleva b_moving_speed (packet.h:
+        // 1348-1368 — la velocidad con botas viaja en el ADD y el UPDATE).
         packets::character_additional_info_with_parts(row, empire, parts, arrows).to_bytes().to_vec(),
         TPacketGCPhase::new(phase::GAME).to_bytes().to_vec(),
     ];
@@ -1307,10 +1319,11 @@ mod tests {
             guild_id: 0,
         }];
         let parts = packets::equipped_parts(&row, &[]);
-        let pkts = enter_packets(&row, 3, &lands, &parts, 0);
+        let pkts = enter_packets(&row, 3, &lands, &parts, 0, 100);
         assert_eq!(pkts.len(), 4, "ADD + INFO + GAME + LAND_LIST");
         assert_eq!(pkts[0].len(), TPacketGCCharacterAdd::SIZE);
         assert_eq!(pkts[0][0], header::GC_CHARACTER_ADD);
+        assert_eq!(pkts[0][26], 100, "b_moving_speed sin botas (C27)");
         assert_eq!(pkts[1].len(), TPacketGCCharacterAdditionalInfo::SIZE);
         assert_eq!(pkts[1][0], header::GC_CHAR_ADDITIONAL_INFO);
         assert_eq!(pkts[2].len(), TPacketGCPhase::SIZE);
@@ -1319,7 +1332,12 @@ mod tests {
         assert_eq!(pkts[3][0], 130, "GC_LAND_LIST");
         assert_eq!(u16::from_le_bytes([pkts[3][1], pkts[3][2]]), 27, "3 + 1×24");
         // Sin lands -> 3 paquetes (el C++ no manda el paquete vacío).
-        assert_eq!(enter_packets(&row, 3, &[], &parts, 0).len(), 3);
+        assert_eq!(enter_packets(&row, 3, &[], &parts, 0, 100).len(), 3);
+        // Con botas (+10%): el ADD del enter lleva 110 (C27); el
+        // ADDITIONAL_INFO (136) NO lleva speed (packet.h:1348-1368 — solo
+        // ADD y UPDATE tienen b_moving_speed).
+        let pkts = enter_packets(&row, 3, &[], &parts, 0, 110);
+        assert_eq!(pkts[0][26], 110, "b_moving_speed@26 del ADD (C27 botas +10)");
     }
 
     /// Tamaños del wire del flujo select/spawn (invariante byte-exacto).

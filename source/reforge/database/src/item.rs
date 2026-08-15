@@ -107,10 +107,17 @@ pub struct ItemRepo {
 /// básico del lane D; el C++ de esta variante no tiene sistema de peso, la
 /// columna llega vía mysql_proxy). El combate usa value3/4 (daño del arma)
 /// y value5 (bonus); la armadura value1 + 2×value5; las pociones value0/1/3/4.
+/// `applies` = los 3 pares (tipo, valor) del `aApplies[ITEM_APPLY_MAX_NUM]`
+/// del TItemTable (tables.h:608-612 — columnas `applytype0..2`/
+/// `applyvalue0..2`): el equip los aplica con `ModifyPoints` (item.cpp:
+/// 718-735 — `ApplyPoint(aApplies[i].bType, ±lValue)`); el C27 (velocidad
+/// de botas) lee el apply `APPLY_MOV_SPEED` (8) de aquí.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProtoItem {
     pub b_type: i16,
     pub b_sub_type: i16,
+    /// Pares (bType, lValue) del `aApplies` — `APPLY_NONE` (0) = vacío.
+    pub applies: [(i16, i32); 3],
     pub values: [i32; 6],
     pub wear_flag: i64,
     /// Peso del item (unidades crudas de la columna `weight`).
@@ -165,14 +172,17 @@ impl ItemRepo {
     }
 
     /// Valores de USO y COMBATE del item_proto (`player.item_proto` —
-    /// `alValues` + `type`/`sub_type` del TItemTable del C++). El efecto de
-    /// las pociones (`UseItemEx` → USE_POTION, char_item.cpp:4172-4204):
-    /// `value0` = HP flat, `value1` = SP flat, `value3` = HP % (del máximo),
-    /// `value4` = SP % (del máximo). El combate (`Item_GetDamage`,
-    /// battle.cpp:442-462 + CalcMeleeDamage:533,548): arma →
-    /// `value3`/`value4` = daño min/max, `value5` = bonus ×2; armadura
-    /// (char.cpp:2124-2125): `value1` + `2×value5`. `None` = el vnum no
-    /// existe en item_proto. SQL inline (sin dependencia del mapeo de filas).
+    /// `alValues` + `type`/`sub_type` + `aApplies` del TItemTable del C++).
+    /// El efecto de las pociones (`UseItemEx` → USE_POTION,
+    /// char_item.cpp:4172-4204): `value0` = HP flat, `value1` = SP flat,
+    /// `value3` = HP % (del máximo), `value4` = SP % (del máximo). El
+    /// combate (`Item_GetDamage`, battle.cpp:442-462 + CalcMeleeDamage:
+    /// 533,548): arma → `value3`/`value4` = daño min/max, `value5` = bonus
+    /// ×2; armadura (char.cpp:2124-2125): `value1` + `2×value5`. Los
+    /// `applies` (applytype0..2/applyvalue0..2) = el `aApplies` que el
+    /// equip aplica (`ModifyPoints`, item.cpp:718-735) — las botas llevan
+    /// `APPLY_MOV_SPEED` (8) ahí. `None` = el vnum no existe en item_proto.
+    /// SQL inline (sin dependencia del mapeo de filas).
     pub async fn load_proto_use_values(
         &self,
         vnum: i64,
@@ -180,7 +190,9 @@ impl ItemRepo {
         let client = self.connect().await?;
         let rows = client
             .query(
-                "SELECT type, subtype, value0, value1, value2, value3, value4, value5, wearflag, weight \
+                "SELECT type, subtype, \
+                 applytype0, applyvalue0, applytype1, applyvalue1, applytype2, applyvalue2, \
+                 value0, value1, value2, value3, value4, value5, wearflag, weight \
                  FROM player.item_proto WHERE vnum = $1",
                 &[&vnum],
             )
@@ -189,19 +201,25 @@ impl ItemRepo {
         let Some(r) = rows.first() else {
             return Ok(None);
         };
+        let mut applies = [(0i16, 0i32); 3];
+        for (i, slot) in applies.iter_mut().enumerate() {
+            slot.0 = r.try_get(2 + 2 * i).map_err(|e| format!("item_proto.applytype{i}: {e}"))?;
+            slot.1 = r.try_get(3 + 2 * i).map_err(|e| format!("item_proto.applyvalue{i}: {e}"))?;
+        }
         let mut values = [0i32; 6];
         for (i, slot) in values.iter_mut().enumerate() {
-            *slot = r.try_get(2 + i).map_err(|e| format!("item_proto.value{i}: {e}"))?;
+            *slot = r.try_get(8 + i).map_err(|e| format!("item_proto.value{i}: {e}"))?;
         }
         // weight es smallint (int2) en el esquema — cast DESPUÉS (patrón
         // del fix shop.rs:284-289: leer el tipo real, cast a i64 después;
         // leer int2 como i64 daba "error deserializing column 9").
-        let weight: i16 = r.try_get(9).map_err(|e| format!("item_proto.weight: {e}"))?;
+        let weight: i16 = r.try_get(15).map_err(|e| format!("item_proto.weight: {e}"))?;
         Ok(Some(ProtoItem {
             b_type: r.try_get(0).map_err(|e| format!("item_proto.type: {e}"))?,
             b_sub_type: r.try_get(1).map_err(|e| format!("item_proto.sub_type: {e}"))?,
+            applies,
             values,
-            wear_flag: r.try_get(8).map_err(|e| format!("item_proto.wearflag: {e}"))?,
+            wear_flag: r.try_get(14).map_err(|e| format!("item_proto.wearflag: {e}"))?,
             weight: i64::from(weight),
         }))
     }

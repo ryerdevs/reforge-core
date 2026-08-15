@@ -707,6 +707,7 @@ mod tests {
         let sword = ProtoItem {
             b_type: 1, // ITEM_WEAPON
             b_sub_type: 0, // WEAPON_SWORD
+            applies: [(0, 0); 3],
             values: [0; 6],
             wear_flag: 1 << 4, // WEARABLE_WEAPON
             weight: 0,
@@ -721,6 +722,7 @@ mod tests {
         let armor = ProtoItem {
             b_type: 2, // ITEM_ARMOR
             b_sub_type: 0,
+            applies: [(0, 0); 3],
             values: [0; 6],
             wear_flag: 1 << 0,
             weight: 0,

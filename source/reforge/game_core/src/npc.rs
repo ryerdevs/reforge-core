@@ -87,17 +87,30 @@ pub enum SpawnKind {
 pub struct SpawnEntry {
     /// vnum del MOB (siempre directo en la salida de `load_map_spawns`).
     pub vnum: u32,
-    /// Centro del rect del regen en UNITS (parity `regen_load`:
-    /// `(sx+ex)/2 + base` — el C++ posiciona cada copia ALEATORIAMENTE dentro
-    /// del rect `[sx,ex]x[sy,ey]`; el extractor emite el centro y el jitter
-    /// es decisión del runtime F5 — GAP documentado).
+    /// Centro del rect del regen en UNITS (parity `regen_load`: `sx`/`sy`
+    /// del token + base del Setting).
     pub x: i32,
     pub y: i32,
+    /// Media anchura del rect del regen en CELDAS (`ex`/`ey` de la línea —
+    /// en esta variante son la mitad del tamaño del rect, no la otra
+    /// esquina): cada copia se posiciona ALEATORIAMENTE en
+    /// `[x - w_x*100, x + w_x*100] × [y - w_y*100, y + w_y*100]` (parity
+    /// `SpawnMobRange`, char_manager.cpp:545-563 — `number(sx, ex)` sobre
+    /// el rect; C28: el jitter del spawn es lo que evita que las copias
+    /// del mismo entry nazcan apiladas). 0 = punto exacto (tests).
+    pub w_x: i32,
+    pub w_y: i32,
     /// Número de copias que el C++ spawnea: `max_count` del regen para los
     /// directos (`regen_spawn`, regen.cpp:322-380); para los miembros
     /// expandidos, `max_count × apariciones` del miembro en el grupo
     /// (cada aparición en la lista del grupo = un mob).
     pub count: u32,
+    /// Intervalo de respawn del regen (segundos — token `time` de la línea;
+    /// 0 = sin intervalo: el respawn por tiempo usa el default 60 s).
+    /// Parity del `regen->time` (regen.cpp:690 — `event_create(regen_event,
+    /// info, PASSES_PER_SEC(regen->time))`: el C++ respawnea cada `time`
+    /// segundos; C23 lo usa como delay de respawn del mob muerto).
+    pub time: u32,
     pub kind: SpawnKind,
 }
 
@@ -235,7 +248,7 @@ pub fn load_map_spawns(map_id: u32, map_path: &str) -> Result<Vec<SpawnEntry>, S
                 }
             };
             for (vnum, count) in members {
-                out.push(SpawnEntry { vnum, x, y, count, kind });
+                out.push(SpawnEntry { vnum, x, y, count, kind, w_x: raw.w_x, w_y: raw.w_y, time: raw.time });
             }
         }
     }
@@ -298,7 +311,7 @@ impl MobCache {
         Ok(spawns
             .iter()
             .filter(|e| matches!(e.kind, SpawnKind::Mob | SpawnKind::Anywhere))
-            .filter_map(|e| self.rows.get(&i64::from(e.vnum)).map(|row| (e.clone(), row.clone())))
+            .filter_map(|e| self.rows.get(&i64::from(e.vnum)).map(|row| (*e, row.clone())))
             .collect())
     }
 }
@@ -390,11 +403,10 @@ fn load_groups(map_path: &str) -> Result<(std::collections::HashMap<u32, MobGrou
         while let Some(toks) = kv.get(&k.to_string()) {
             let gv = toks.first().and_then(|t| t.parse::<u32>().ok());
             let prob = toks.get(1).and_then(|t| t.parse::<u32>().ok()).unwrap_or(1);
-            if let Some(gv) = gv {
-                if prob != 0 {
+            if let Some(gv) = gv
+                && prob != 0 {
                     gg.groups.push((gv, prob)); // parity AddMember prob==0 skip
                 }
-            }
             k += 1;
         }
         ggs.insert(vnum, gg);
@@ -426,11 +438,10 @@ fn parse_loader_nodes(text: &str) -> Vec<(String, std::collections::HashMap<Stri
                 cur = Some((toks.get(1).cloned().unwrap_or_default(), std::collections::HashMap::new()));
             }
             key => {
-                if let Some((_, kv)) = cur.as_mut() {
-                    if toks.len() > 1 {
+                if let Some((_, kv)) = cur.as_mut()
+                    && toks.len() > 1 {
                         kv.insert(key.to_string(), toks[1..].to_vec());
                     }
-                }
             }
         }
     }
@@ -479,15 +490,17 @@ fn loader_line_tokens(line: &str) -> Option<Vec<String>> {
 }
 
 /// Registro crudo de una línea regen (los 11 tokens; parity `read_line`
-/// regen.cpp:89-237). `c_x`/`c_y` = centro en CELDAS del rect; `w_x`/`w_y` =
-/// media anchura en celdas (el C++ lo descarta al spawnear: usa
-/// `number(sx, ex)` sobre el rect ya escalado — aquí solo se conserva el
-/// centro, GAP documentado en `SpawnEntry`).
+/// regen.cpp:89-237). `c_x`/`c_y` = centro en CELDAS del rect (el token sx/
+/// sy); `w_x`/`w_y` = media anchura en celdas (los tokens ex/ey — en esta
+/// variante la media anchura, no la otra esquina: `r 360 425 10 10` = rect
+/// 20×20 celdas centrado en (360,425)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RegenRaw {
     kind: SpawnKind,
     c_x: i32,
     c_y: i32,
+    w_x: i32,
+    w_y: i32,
     z_section: u8,
     time: u32,
     max_count: i32,
@@ -516,6 +529,8 @@ fn parse_regen_record(tokens: &[&str], i: &mut usize) -> Result<Option<RegenRaw>
     let mut kind = SpawnKind::Mob;
     let mut c_x = 0i32;
     let mut c_y = 0i32;
+    let mut w_x = 0i32;
+    let mut w_y = 0i32;
     let mut z_section = 0u8;
     let mut time = 0u32;
     let mut max_count = 0i32;
@@ -550,11 +565,11 @@ fn parse_regen_record(tokens: &[&str], i: &mut usize) -> Result<Option<RegenRaw>
                 mode += 1;
             }
             MODE_EX => {
-                parse_i32(w, "ex")?; // media anchura — no participa (GAP)
+                w_x = parse_i32(w, "ex")?; // media anchura en celdas (C28)
                 mode += 1;
             }
             MODE_EY => {
-                parse_i32(w, "ey")?;
+                w_y = parse_i32(w, "ey")?;
                 mode += 1;
             }
             MODE_Z => {
@@ -577,6 +592,8 @@ fn parse_regen_record(tokens: &[&str], i: &mut usize) -> Result<Option<RegenRaw>
                     kind,
                     c_x,
                     c_y,
+                    w_x,
+                    w_y,
                     z_section,
                     time,
                     max_count,
@@ -934,19 +951,19 @@ Group\tdeposito
         let e0 = entries[0];
         assert_eq!(
             e0,
-            SpawnEntry { vnum: 101, x: 957600, y: 247300, count: 3, kind: SpawnKind::Mob },
-            "Perro Salvaje 101: líder + 2 apariciones (líder + líneas 1..n)"
+            SpawnEntry { vnum: 101, x: 957600, y: 247300, count: 3, kind: SpawnKind::Mob, w_x: 10, w_y: 10, time: 5 },
+            "Perro Salvaje 101: líder + 2 apariciones (líder + líneas 1..n); rect del regen + intervalo 5s"
         );
         assert_eq!(
             entries[1],
-            SpawnEntry { vnum: 2101, x: 957600, y: 247300, count: 1, kind: SpawnKind::Mob }
+            SpawnEntry { vnum: 2101, x: 957600, y: 247300, count: 1, kind: SpawnKind::Mob, w_x: 10, w_y: 10, time: 5 }
         );
         assert_eq!(
             entries[2],
-            SpawnEntry { vnum: 171, x: 957600, y: 247300, count: 1, kind: SpawnKind::Mob },
+            SpawnEntry { vnum: 171, x: 957600, y: 247300, count: 1, kind: SpawnKind::Mob, w_x: 10, w_y: 10, time: 5 },
             "segundo grupo del gg (todos los grupos — fauna completa)"
         );
-        // m 444 623 -> NPC 20340 en el centro del punto.
+        // m 444 623 -> NPC 20340 en el centro del punto (sin rect ni time).
         assert_eq!(
             entries[3],
             SpawnEntry {
@@ -955,9 +972,13 @@ Group\tdeposito
                 y: MAP41_BASE.1 + 623 * 100,
                 count: 1,
                 kind: SpawnKind::Mob,
+                w_x: 0,
+                w_y: 0,
+                time: 60,
             }
         );
-        // m 343 560 1 1 -> rect [342,344]x[559,561]: centro = 343/560 celdas.
+        // m 343 560 1 1 -> rect [342,344]x[559,561]: centro = 343/560 celdas,
+        // media anchura 1 celda + intervalo 1m.
         assert_eq!(
             entries[5],
             SpawnEntry {
@@ -966,6 +987,9 @@ Group\tdeposito
                 y: MAP41_BASE.1 + 560 * 100,
                 count: 1,
                 kind: SpawnKind::Mob,
+                w_x: 1,
+                w_y: 1,
+                time: 60,
             }
         );
         // s 0 0 ... 600s 100 10 5004 -> Anywhere anclado en el Town spawn,
@@ -978,16 +1002,20 @@ Group\tdeposito
                 y: MAP41_TOWN.1,
                 count: 10,
                 kind: SpawnKind::Anywhere,
+                w_x: 0,
+                w_y: 0,
+                time: 600,
             }
         );
-        // g 12007 -> [191, 20029, 20029] agregados por vnum.
+        // g 12007 -> [191, 20029, 20029] agregados por vnum (rect 100 celdas
+        // + intervalo 1000s del grupo).
         assert_eq!(
             entries[7],
-            SpawnEntry { vnum: 191, x: 959000, y: 315900, count: 1, kind: SpawnKind::Mob }
+            SpawnEntry { vnum: 191, x: 959000, y: 315900, count: 1, kind: SpawnKind::Mob, w_x: 100, w_y: 100, time: 1000 }
         );
         assert_eq!(
             entries[8],
-            SpawnEntry { vnum: 20029, x: 959000, y: 315900, count: 2, kind: SpawnKind::Mob },
+            SpawnEntry { vnum: 20029, x: 959000, y: 315900, count: 2, kind: SpawnKind::Mob, w_x: 100, w_y: 100, time: 1000 },
             "2 apariciones de Pony en el grupo"
         );
         // El resultado NO contiene kinds de grupo (colisión resuelta).
@@ -1102,7 +1130,7 @@ Group\tdeposito
     #[test]
     fn entry_spawns_npc_vs_monster() {
         // NPC real del mapa 41: 20340 "Maestro Fuerza Corporal" (type=1).
-        let npc = SpawnEntry { vnum: 20340, x: 966000, y: 267100, count: 1, kind: SpawnKind::Mob };
+        let npc = SpawnEntry { vnum: 20340, x: 966000, y: 267100, count: 1, kind: SpawnKind::Mob, w_x: 0, w_y: 0, time: 0 };
         let row = mob_row(20340, 1, &[0xB9, 0xD6, 0xBC, 0xBC]);
         let pkts = entry_spawns(41, &[(npc, row)], 10);
         assert_eq!(pkts.len(), 2, "NPC -> add + addInfo");
@@ -1111,7 +1139,7 @@ Group\tdeposito
         assert_eq!(pkts[1].len(), TPacketGCCharacterAdditionalInfo::SIZE, "70 B");
         assert_eq!(pkts[1][0], TPacketGCCharacterAdditionalInfo::HEADER, "header 136");
         // Monster real del mapa 41: 5001 "Pirata Tanaka" (type=0).
-        let mon = SpawnEntry { vnum: 5001, x: 969600, y: 278400, count: 1, kind: SpawnKind::Mob };
+        let mon = SpawnEntry { vnum: 5001, x: 969600, y: 278400, count: 1, kind: SpawnKind::Mob, w_x: 0, w_y: 0, time: 0 };
         let mon_row = mob_row(5001, 0, b"Pirata Tanaka");
         let pkts = entry_spawns(41, &[(mon, mon_row)], 10);
         assert_eq!(pkts.len(), 1, "monster -> solo add");
@@ -1123,7 +1151,7 @@ Group\tdeposito
     /// s_kNetActorData (slot único) y los suelta con el addInfo del VID.
     #[test]
     fn entry_spawns_count_and_vid_order() {
-        let npc = SpawnEntry { vnum: 20001, x: 950800, y: 286000, count: 3, kind: SpawnKind::Mob };
+        let npc = SpawnEntry { vnum: 20001, x: 950800, y: 286000, count: 3, kind: SpawnKind::Mob, w_x: 0, w_y: 0, time: 0 };
         let row = mob_row(20001, 1, b"Alquimista");
         let pkts = entry_spawns(41, &[(npc, row)], 100);
         assert_eq!(pkts.len(), 6, "3 copias x 2 paquetes");
@@ -1145,7 +1173,7 @@ Group\tdeposito
     /// — parity GetName() = szLocaleName (strlcpy de 25 bytes).
     #[test]
     fn entry_spawns_add_info_name_bytes() {
-        let npc = SpawnEntry { vnum: 20340, x: 966000, y: 267100, count: 1, kind: SpawnKind::Mob };
+        let npc = SpawnEntry { vnum: 20340, x: 966000, y: 267100, count: 1, kind: SpawnKind::Mob, w_x: 0, w_y: 0, time: 0 };
         // "Maestro..." CP949 simulado: 3 bytes + resto del nombre corto.
         let row = mob_row(20340, 1, &[0xB9, 0xD6, 0xBC, 0xBC, 0x00]);
         let pkts = entry_spawns(41, &[(npc, row)], 1);
@@ -1169,12 +1197,12 @@ Group\tdeposito
     /// Perro Salvaje); Anywhere SÍ emite (es un mob directo).
     #[test]
     fn entry_spawns_skips_group_kinds() {
-        let gg = SpawnEntry { vnum: 101, x: 957600, y: 247300, count: 1, kind: SpawnKind::GroupGroup };
+        let gg = SpawnEntry { vnum: 101, x: 957600, y: 247300, count: 1, kind: SpawnKind::GroupGroup, w_x: 0, w_y: 0, time: 0 };
         let row = mob_row(101, 0, b"Perro Salvaje");
         assert!(entry_spawns(41, &[(gg, row.clone())], 1).is_empty(), "GroupGroup omitido");
-        let g = SpawnEntry { vnum: 318, x: 959000, y: 315900, count: 1, kind: SpawnKind::Group };
+        let g = SpawnEntry { vnum: 318, x: 959000, y: 315900, count: 1, kind: SpawnKind::Group, w_x: 0, w_y: 0, time: 0 };
         assert!(entry_spawns(41, &[(g, row.clone())], 1).is_empty(), "Group omitido");
-        let any = SpawnEntry { vnum: 5001, x: 969600, y: 278400, count: 1, kind: SpawnKind::Anywhere };
+        let any = SpawnEntry { vnum: 5001, x: 969600, y: 278400, count: 1, kind: SpawnKind::Anywhere, w_x: 0, w_y: 0, time: 0 };
         let pkts = entry_spawns(41, &[(any, row)], 1);
         assert_eq!(pkts.len(), 1, "Anywhere SÍ emite (mob directo)");
         assert_eq!(&pkts[0][22..26], &5001u32.to_le_bytes());
@@ -1185,7 +1213,7 @@ Group\tdeposito
     #[test]
     fn cache_missing_vnums_dedup_and_filter() {
         use std::collections::HashMap;
-        let e = |vnum: u32, kind: SpawnKind| SpawnEntry { vnum, x: 0, y: 0, count: 1, kind };
+        let e = |vnum: u32, kind: SpawnKind| SpawnEntry { vnum, x: 0, y: 0, count: 1, kind, w_x: 0, w_y: 0, time: 0 };
         let spawns = [
             e(101, SpawnKind::Mob),
             e(101, SpawnKind::Mob), // duplicado

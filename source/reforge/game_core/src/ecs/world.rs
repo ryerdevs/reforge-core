@@ -16,8 +16,8 @@ use crate::ecs::events::{
     CombatIntent, Intent, ItemIntent, MoveIntent, NpcEvent, PlayerJoin, SkillIntent,
 };
 use crate::ecs::resources::{
-    ItemIndex, NpcIndex, NpcOutbox, Rand, SkillTable, SpawnCache, SpawnTable, SpawnTableEntry,
-    Tick, VidAlloc, WorldMetrics,
+    ItemIndex, NpcIndex, NpcOutbox, Rand, RespawnQueue, SkillTable, SpawnCache, SpawnTable,
+    SpawnTableEntry, Tick, VidAlloc, WorldClock, WorldMetrics,
 };
 use crate::ecs::systems::combat::{aggro_detect_system, chase_attack_system};
 use crate::ecs::systems::movement::patrol_system;
@@ -71,6 +71,8 @@ impl WorldSim {
         let mut world = World::new();
         world.insert_resource(SpawnCache(spawn_cache));
         world.insert_resource(Tick { dt_ms: 250 });
+        world.insert_resource(WorldClock(0));
+        world.insert_resource(RespawnQueue::default());
         world.insert_resource(Rand::new(seed));
         world.insert_resource(NpcOutbox(Vec::new()));
         world.insert_resource(SpawnTable::default());
@@ -257,6 +259,9 @@ impl WorldSim {
     /// registra por tick vía `--bench-capture`).
     pub fn update(&mut self, dt_ms: u64) -> Vec<NpcEvent> {
         self.world.resource_mut::<Tick>().dt_ms = dt_ms;
+        // C23: el reloj del mundo avanza con el dt (los deadlines del
+        // RespawnQueue se comparan en esta escala).
+        self.world.resource_mut::<WorldClock>().0 += dt_ms;
         let t0 = std::time::Instant::now();
         self.schedule.run(&mut self.world);
         let tick_ms = t0.elapsed().as_millis() as u64;
