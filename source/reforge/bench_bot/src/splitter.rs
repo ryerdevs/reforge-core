@@ -256,11 +256,11 @@ mod tests {
         assert_eq!(fixed_size(76), Some(1531), "GC_SKILL_LEVEL");
         assert_eq!(fixed_size(28), Some(4), "GC_QUICKSLOT_ADD");
         assert_eq!(fixed_size(21), Some(51), "GC_ITEM_SET");
-        assert_eq!(fixed_size(126), Some(22), "GC_AFFECT_ADD");
+        assert_eq!(fixed_size(header::GC_AFFECT_ADD), Some(22), "GC_AFFECT_ADD");
         assert_eq!(fixed_size(106), Some(5), "GC_TIME");
         assert_eq!(fixed_size(121), Some(2), "GC_CHANNEL");
         assert_eq!(fixed_size(3), Some(24), "GC_MOVE");
-        assert_eq!(fixed_size(26), Some(58), "GC_ITEM_GROUND_ADD");
+        assert_eq!(fixed_size(header::GC_ITEM_GROUND_ADD), Some(58), "GC_ITEM_GROUND_ADD");
         assert_eq!(fixed_size(27), Some(5), "GC_ITEM_GROUND_DEL");
         assert_eq!(fixed_size(31), Some(30), "GC_ITEM_OWNERSHIP");
         assert_eq!(fixed_size(25), Some(38), "GC_ITEM_UPDATE");

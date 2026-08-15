@@ -15,7 +15,8 @@
 //!
 //! Little-endian, packed, sin padding (mismo contrato que el resto del crate).
 
-use crate::{rd_arr, rd_u32, Result, ProtocolError};
+use crate::header;
+use crate::{rd_arr, rd_u32, wr_u32, ProtocolError, Result};
 
 /// `TPlayerSkill` (6 B packed x86: `tables.h:351-356` — bMasterType BYTE,
 /// bLevel BYTE, tNextRead time_t = DWORD en el build x86 del server).
@@ -33,7 +34,10 @@ impl TPlayerSkill {
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
         Ok(Self {
             b_master_type: data[0],
@@ -65,9 +69,15 @@ impl TQuickslot {
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
-        Ok(Self { slot_type: data[0], pos: data[1] })
+        Ok(Self {
+            slot_type: data[0],
+            pos: data[1],
+        })
     }
 
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
@@ -92,22 +102,212 @@ impl TPacketGCQuickSlotAdd {
     pub const QUICKSLOT_MAX_NUM: usize = 36;
 
     pub fn new(pos: u8, slot: TQuickslot) -> Self {
-        Self { header: Self::HEADER, pos, slot }
+        Self {
+            header: Self::HEADER,
+            pos,
+            slot,
+        }
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
         Ok(Self {
             header: data[0],
             pos: data[1],
-            slot: TQuickslot { slot_type: data[2], pos: data[3] },
+            slot: TQuickslot {
+                slot_type: data[2],
+                pos: data[3],
+            },
         })
     }
 
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
         [self.header, self.pos, self.slot.slot_type, self.slot.pos]
+    }
+}
+
+/// `TPacketCGQuickSlotAdd` (4 B, header 16 — `Packet.h:607-612`): AÑADIR
+/// un slot a la barra rápida (`command_quickslot_add`): header + pos + slot
+/// (TQuickslot 2 B). Layout IDÉNTICO al `TPacketGCQuickSlotAdd` (28) — solo
+/// cambia el header (el C++ usa el mismo struct para ambos sentidos).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketCGQuickSlotAdd {
+    pub header: u8,
+    pub pos: u8,
+    pub slot: TQuickslot,
+}
+
+impl TPacketCGQuickSlotAdd {
+    pub const SIZE: usize = 4;
+    pub const HEADER: u8 = header::CG_QUICKSLOT_ADD;
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        Ok(Self {
+            header: data[0],
+            pos: data[1],
+            slot: TQuickslot {
+                slot_type: data[2],
+                pos: data[3],
+            },
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        [self.header, self.pos, self.slot.slot_type, self.slot.pos]
+    }
+}
+
+/// `TPacketCGQuickSlotDel` (2 B, header 17 — `Packet.h:614-618`): BORRAR
+/// el slot `pos` de la barra rápida (`command_quickslot_del`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketCGQuickSlotDel {
+    pub header: u8,
+    pub pos: u8,
+}
+
+impl TPacketCGQuickSlotDel {
+    pub const SIZE: usize = 2;
+    pub const HEADER: u8 = header::CG_QUICKSLOT_DEL;
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        Ok(Self {
+            header: data[0],
+            pos: data[1],
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        [self.header, self.pos]
+    }
+}
+
+/// `TPacketCGQuickSlotSwap` (3 B, header 18 — `Packet.h:620-626`):
+/// INTERCAMBIAR dos slots de la barra rápida (`command_quickslot_swap`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketCGQuickSlotSwap {
+    pub header: u8,
+    pub pos: u8,
+    pub change_pos: u8,
+}
+
+impl TPacketCGQuickSlotSwap {
+    pub const SIZE: usize = 3;
+    pub const HEADER: u8 = header::CG_QUICKSLOT_SWAP;
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        Ok(Self {
+            header: data[0],
+            pos: data[1],
+            change_pos: data[2],
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        [self.header, self.pos, self.change_pos]
+    }
+}
+
+/// `TPacketGCQuickSlotDel` (2 B, header 29 — `char_quickslot.cpp:111-118`):
+/// la confirmación S→C del borrado de un slot de la barra rápida
+/// (`packet_quickslot_del` = header + pos).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketGCQuickSlotDel {
+    pub header: u8,
+    pub pos: u8,
+}
+
+impl TPacketGCQuickSlotDel {
+    pub const SIZE: usize = 2;
+    pub const HEADER: u8 = 29;
+
+    pub fn new(pos: u8) -> Self {
+        Self { header: Self::HEADER, pos }
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        Ok(Self {
+            header: data[0],
+            pos: data[1],
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        [self.header, self.pos]
+    }
+}
+
+/// `TPacketGCQuickSlotSwap` (3 B, header 30 — `char_quickslot.cpp:130-145`):
+/// la confirmación S→C del intercambio de slots de la barra rápida
+/// (`packet_quickslot_swap` = header + pos + pos_to).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketGCQuickSlotSwap {
+    pub header: u8,
+    pub pos: u8,
+    pub pos_to: u8,
+}
+
+impl TPacketGCQuickSlotSwap {
+    pub const SIZE: usize = 3;
+    pub const HEADER: u8 = 30;
+
+    pub fn new(pos: u8, pos_to: u8) -> Self {
+        Self {
+            header: Self::HEADER,
+            pos,
+            pos_to,
+        }
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        Ok(Self {
+            header: data[0],
+            pos: data[1],
+            pos_to: data[2],
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        [self.header, self.pos, self.pos_to]
     }
 }
 
@@ -160,11 +360,19 @@ impl TPacketGCItemSet {
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
         let mut sockets = [0i64; 3];
         for (i, s) in sockets.iter_mut().enumerate() {
-            *s = i64::from(i32::from_le_bytes([data[18 + i * 4], data[19 + i * 4], data[20 + i * 4], data[21 + i * 4]]));
+            *s = i64::from(i32::from_le_bytes([
+                data[18 + i * 4],
+                data[19 + i * 4],
+                data[20 + i * 4],
+                data[21 + i * 4],
+            ]));
         }
         let mut attrs = [(0i16, 0i16); 7];
         for (i, a) in attrs.iter_mut().enumerate() {
@@ -173,7 +381,10 @@ impl TPacketGCItemSet {
         }
         Ok(Self {
             header: data[0],
-            cell: TItemPos { window: data[1], cell: u16::from_le_bytes([data[2], data[3]]) },
+            cell: TItemPos {
+                window: data[1],
+                cell: u16::from_le_bytes([data[2], data[3]]),
+            },
             vnum: u32::from_le_bytes([data[4], data[5], data[6], data[7]]),
             count: data[8],
             flags: u32::from_le_bytes([data[9], data[10], data[11], data[12]]),
@@ -227,7 +438,10 @@ impl TPacketGCItemUpdate {
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
         let mut sockets = [0i64; 3];
         for (i, s) in sockets.iter_mut().enumerate() {
@@ -245,7 +459,10 @@ impl TPacketGCItemUpdate {
         }
         Ok(Self {
             header: data[0],
-            cell: TItemPos { window: data[1], cell: u16::from_le_bytes([data[2], data[3]]) },
+            cell: TItemPos {
+                window: data[1],
+                cell: u16::from_le_bytes([data[2], data[3]]),
+            },
             count: data[4],
             sockets,
             attrs,
@@ -287,16 +504,27 @@ impl TPacketCGItemUse {
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
         Ok(Self {
             header: data[0],
-            pos: TItemPos { window: data[1], cell: u16::from_le_bytes([data[2], data[3]]) },
+            pos: TItemPos {
+                window: data[1],
+                cell: u16::from_le_bytes([data[2], data[3]]),
+            },
         })
     }
 
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
-        [self.header, self.pos.window, self.pos.cell as u8, (self.pos.cell >> 8) as u8]
+        [
+            self.header,
+            self.pos.window,
+            self.pos.cell as u8,
+            (self.pos.cell >> 8) as u8,
+        ]
     }
 }
 
@@ -323,12 +551,21 @@ impl TPacketCGItemMove {
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
         Ok(Self {
             header: data[0],
-            pos: TItemPos { window: data[1], cell: u16::from_le_bytes([data[2], data[3]]) },
-            change_pos: TItemPos { window: data[4], cell: u16::from_le_bytes([data[5], data[6]]) },
+            pos: TItemPos {
+                window: data[1],
+                cell: u16::from_le_bytes([data[2], data[3]]),
+            },
+            change_pos: TItemPos {
+                window: data[4],
+                cell: u16::from_le_bytes([data[5], data[6]]),
+            },
             num: data[7],
         })
     }
@@ -341,6 +578,102 @@ impl TPacketCGItemMove {
         b[4] = self.change_pos.window;
         b[5..7].copy_from_slice(&self.change_pos.cell.to_le_bytes());
         b[7] = self.num;
+        b
+    }
+}
+
+/// `TPacketCGItemDrop` (8 B, header 12 — `Packet.h:566-570` +
+/// `packet.h:631-636`): SOLTAR un item del inventario
+/// (`command_item_drop`): header + TItemPos + DWORD gold (sin
+/// ENABLE_CHEQUE_SYSTEM — el cheque va en un build aparte). El C++ lo
+/// procesa en `ItemDrop` (input_main.cpp:855-871): gold > 0 →
+/// `DropGold` (item vnum 1 con count = gold); si no → `DropItem(Cell)`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketCGItemDrop {
+    pub header: u8,
+    pub cell: TItemPos,
+    pub gold: u32,
+}
+
+impl TPacketCGItemDrop {
+    /// 1 + 3 + 4 = 8 (packed).
+    pub const SIZE: usize = 8;
+    pub const HEADER: u8 = header::CG_ITEM_DROP;
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        Ok(Self {
+            header: data[0],
+            cell: TItemPos {
+                window: data[1],
+                cell: u16::from_le_bytes([data[2], data[3]]),
+            },
+            gold: rd_u32(data, 4),
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        b[1] = self.cell.window;
+        b[2..4].copy_from_slice(&self.cell.cell.to_le_bytes());
+        wr_u32(&mut b, 4, self.gold);
+        b
+    }
+}
+
+/// `TPacketCGItemDrop2` (9 B, header 20 — `Packet.h:566-575` +
+/// `packet.h:641-650`): SOLTAR con CANTIDAD (`command_item_drop2`):
+/// header + TItemPos + DWORD gold + BYTE count (sin
+/// ENABLE_CHEQUE_SYSTEM). El C++ lo procesa en `ItemDrop2`
+/// (input_main.cpp:875-890): gold > 0 → `DropGold`; si no →
+/// `DropItem(Cell, count)`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketCGItemDrop2 {
+    pub header: u8,
+    pub cell: TItemPos,
+    pub gold: u32,
+    /// 0 = todo el stack (parity `DropItem`: bCount == 0 → count del item).
+    pub count: u8,
+}
+
+impl TPacketCGItemDrop2 {
+    /// 1 + 3 + 4 + 1 = 9 (packed).
+    pub const SIZE: usize = 9;
+    pub const HEADER: u8 = header::CG_ITEM_DROP2;
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        Ok(Self {
+            header: data[0],
+            cell: TItemPos {
+                window: data[1],
+                cell: u16::from_le_bytes([data[2], data[3]]),
+            },
+            gold: rd_u32(data, 4),
+            count: data[8],
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        b[1] = self.cell.window;
+        b[2..4].copy_from_slice(&self.cell.cell.to_le_bytes());
+        wr_u32(&mut b, 4, self.gold);
+        b[8] = self.count;
         b
     }
 }
@@ -379,7 +712,10 @@ impl TPacketGCItemDelDeprecated {
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
         let mut sockets = [0i64; 3];
         for (i, s) in sockets.iter_mut().enumerate() {
@@ -397,7 +733,10 @@ impl TPacketGCItemDelDeprecated {
         }
         Ok(Self {
             header: data[0],
-            cell: TItemPos { window: data[1], cell: u16::from_le_bytes([data[2], data[3]]) },
+            cell: TItemPos {
+                window: data[1],
+                cell: u16::from_le_bytes([data[2], data[3]]),
+            },
             vnum: u32::from_le_bytes([data[4], data[5], data[6], data[7]]),
             count: data[8],
             sockets,
@@ -475,7 +814,7 @@ pub struct TPacketGCItemGroundAdd {
 
 impl TPacketGCItemGroundAdd {
     pub const SIZE: usize = 58;
-    pub const HEADER: u8 = 26;
+    pub const HEADER: u8 = header::GC_ITEM_GROUND_ADD;
 
     pub fn new(vid: u32, vnum: u32, x: i32, y: i32, z: i32, count: u32) -> Self {
         Self {
@@ -493,7 +832,10 @@ impl TPacketGCItemGroundAdd {
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
         let mut sockets = [0i64; 3];
         for (i, s) in sockets.iter_mut().enumerate() {
@@ -556,14 +898,23 @@ impl TPacketGCItemGroundDel {
     pub const HEADER: u8 = 27;
 
     pub fn new(vid: u32) -> Self {
-        Self { header: Self::HEADER, vid }
+        Self {
+            header: Self::HEADER,
+            vid,
+        }
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
-        Ok(Self { header: data[0], vid: rd_u32(data, 1) })
+        Ok(Self {
+            header: data[0],
+            vid: rd_u32(data, 1),
+        })
     }
 
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
@@ -593,16 +944,27 @@ impl TPacketGCItemOwnership {
         let mut n = [0u8; 25];
         let len = name.len().min(24);
         n[..len].copy_from_slice(&name[..len]);
-        Self { header: Self::HEADER, vid, name: n }
+        Self {
+            header: Self::HEADER,
+            vid,
+            name: n,
+        }
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
         let mut name = [0u8; 25];
         name.copy_from_slice(&data[5..30]);
-        Ok(Self { header: data[0], vid: rd_u32(data, 1), name })
+        Ok(Self {
+            header: data[0],
+            vid: rd_u32(data, 1),
+            name,
+        })
     }
 
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
@@ -625,15 +987,21 @@ pub struct TPacketGCAffectAdd {
 
 impl TPacketGCAffectAdd {
     pub const SIZE: usize = 22;
-    pub const HEADER: u8 = 126;
+    pub const HEADER: u8 = header::GC_AFFECT_ADD;
 
     pub fn new(elem: TPacketAffectElement) -> Self {
-        Self { header: Self::HEADER, elem }
+        Self {
+            header: Self::HEADER,
+            elem,
+        }
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
         let mut b = [0u8; Self::SIZE];
         b.copy_from_slice(data);
@@ -645,7 +1013,10 @@ impl TPacketGCAffectAdd {
             l_duration: i32::from_le_bytes([b[14], b[15], b[16], b[17]]),
             l_sp_cost: i32::from_le_bytes([b[18], b[19], b[20], b[21]]),
         };
-        Ok(Self { header: data[0], elem })
+        Ok(Self {
+            header: data[0],
+            elem,
+        })
     }
 
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
@@ -671,7 +1042,10 @@ impl TPacketGCDead {
     pub const HEADER: u8 = 14;
 
     pub fn new(vid: u32) -> Self {
-        Self { header: Self::HEADER, vid }
+        Self {
+            header: Self::HEADER,
+            vid,
+        }
     }
 
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
@@ -706,10 +1080,14 @@ pub struct TPacketGCTarget {
 
 impl TPacketGCTarget {
     pub const SIZE: usize = 6;
-    pub const HEADER: u8 = 63;
+    pub const HEADER: u8 = header::GC_TARGET;
 
     pub fn new(vid: u32, b_hp_percent: u8) -> Self {
-        Self { header: Self::HEADER, vid, b_hp_percent }
+        Self {
+            header: Self::HEADER,
+            vid,
+            b_hp_percent,
+        }
     }
 
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
@@ -726,7 +1104,10 @@ impl TPacketGCCharacterDelete {
     pub const HEADER: u8 = 2;
 
     pub fn new(vid: u32) -> Self {
-        Self { header: Self::HEADER, vid }
+        Self {
+            header: Self::HEADER,
+            vid,
+        }
     }
 
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
@@ -752,14 +1133,23 @@ impl TPacketGCTime {
     pub const HEADER: u8 = 106;
 
     pub fn new(time: u32) -> Self {
-        Self { header: Self::HEADER, time }
+        Self {
+            header: Self::HEADER,
+            time,
+        }
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
-        Ok(Self { header: data[0], time: rd_u32(data, 1) })
+        Ok(Self {
+            header: data[0],
+            time: rd_u32(data, 1),
+        })
     }
 
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
@@ -784,14 +1174,23 @@ impl TPacketGCChannel {
     pub const HEADER: u8 = 121;
 
     pub fn new(channel: u8) -> Self {
-        Self { header: Self::HEADER, channel }
+        Self {
+            header: Self::HEADER,
+            channel,
+        }
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
-        Ok(Self { header: data[0], channel: data[1] })
+        Ok(Self {
+            header: data[0],
+            channel: data[1],
+        })
     }
 
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
@@ -823,12 +1222,21 @@ impl TPacketGCWarp {
     pub const HEADER: u8 = 65;
 
     pub fn new(x: i32, y: i32, addr: u32, port: u16) -> Self {
-        Self { header: Self::HEADER, x, y, addr, port }
+        Self {
+            header: Self::HEADER,
+            x,
+            y,
+            addr,
+            port,
+        }
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
         Ok(Self {
             header: data[0],
@@ -869,7 +1277,10 @@ impl TPacketCGMarkLogin {
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
         Ok(Self {
             header: data[0],
@@ -924,7 +1335,10 @@ impl TPacketGCMainCharacter {
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
         Ok(Self {
             header: data[0],
@@ -975,13 +1389,24 @@ impl TPacketGCPoints {
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
         let mut points = [0i32; 255];
         for (i, p) in points.iter_mut().enumerate() {
-            *p = i32::from_le_bytes([data[1 + i * 4], data[2 + i * 4], data[3 + i * 4], data[4 + i * 4]]);
+            *p = i32::from_le_bytes([
+                data[1 + i * 4],
+                data[2 + i * 4],
+                data[3 + i * 4],
+                data[4 + i * 4],
+            ]);
         }
-        Ok(Self { header: data[0], points })
+        Ok(Self {
+            header: data[0],
+            points,
+        })
     }
 
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
@@ -1010,13 +1435,23 @@ impl TPacketGCSkillLevel {
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() != Self::SIZE {
-            return Err(ProtocolError::BadLength { expected: Self::SIZE, got: data.len() });
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
         }
-        let mut skills = [TPlayerSkill { b_master_type: 0, b_level: 0, t_next_read: 0 }; 255];
+        let mut skills = [TPlayerSkill {
+            b_master_type: 0,
+            b_level: 0,
+            t_next_read: 0,
+        }; 255];
         for (i, s) in skills.iter_mut().enumerate() {
             *s = TPlayerSkill::from_bytes(&data[1 + i * 6..7 + i * 6])?;
         }
-        Ok(Self { header: data[0], skills })
+        Ok(Self {
+            header: data[0],
+            skills,
+        })
     }
 
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
@@ -1085,15 +1520,27 @@ mod tests {
         assert_eq!(TQuickslot::SIZE, 2);
         assert_eq!(TPacketGCQuickSlotAdd::SIZE, 4, "header + pos + TQuickslot");
         assert_eq!(TItemPos::SIZE, 3, "window BYTE + cell WORD");
-        assert_eq!(TPacketGCItemSet::SIZE, 51, "1+3+4+1+4+4+1+12+21 (packed — attrs 3 B)");
+        assert_eq!(
+            TPacketGCItemSet::SIZE,
+            51,
+            "1+3+4+1+4+4+1+12+21 (packed — attrs 3 B)"
+        );
         assert_eq!(TPacketAffectElement::SIZE, 21);
         assert_eq!(TPacketGCAffectAdd::SIZE, 22, "header + element");
         assert_eq!(TPacketGCTime::SIZE, 5, "header + time_t(4)");
         assert_eq!(TPacketGCChannel::SIZE, 2, "header + channel");
-        assert_eq!(TPacketGCMainCharacter::SIZE, 47, "layout del CLIENTE (sin empire — Packet.h:1349-1357)");
+        assert_eq!(
+            TPacketGCMainCharacter::SIZE,
+            47,
+            "layout del CLIENTE (sin empire — Packet.h:1349-1357)"
+        );
         assert_eq!(TPacketGCDead::SIZE, 5, "header + vid");
         assert_eq!(TPacketGCCharacterDelete::SIZE, 5, "header + vid");
-        assert_eq!(TPacketGCTarget::SIZE, 6, "header + vid + bHPPercent (Packet.h:1374-1379)");
+        assert_eq!(
+            TPacketGCTarget::SIZE,
+            6,
+            "header + vid + bHPPercent (Packet.h:1374-1379)"
+        );
         assert_eq!(TPacketGCPoints::SIZE, 1 + 255 * 4);
         assert_eq!(TPacketGCSkillLevel::SIZE, 1 + 255 * 6);
         assert_eq!(TLandPacketElement::SIZE, 24);
@@ -1101,7 +1548,13 @@ mod tests {
 
     #[test]
     fn roundtrip_quickslot_and_itemset() {
-        let q = TPacketGCQuickSlotAdd::new(3, TQuickslot { slot_type: 0, pos: 5 });
+        let q = TPacketGCQuickSlotAdd::new(
+            3,
+            TQuickslot {
+                slot_type: 0,
+                pos: 5,
+            },
+        );
         let b = q.to_bytes();
         assert_eq!(b, [28, 3, 0, 5]);
         assert_eq!(TPacketGCQuickSlotAdd::from_bytes(&b).unwrap(), q);
@@ -1113,7 +1566,10 @@ mod tests {
 
         let it = TPacketGCItemSet {
             header: TPacketGCItemSet::HEADER,
-            cell: TItemPos { window: TItemPos::WINDOW_INVENTORY, cell: 7 },
+            cell: TItemPos {
+                window: TItemPos::WINDOW_INVENTORY,
+                cell: 7,
+            },
             vnum: 27001,
             count: 1,
             flags: 0,
@@ -1127,11 +1583,19 @@ mod tests {
         let b = it.to_bytes();
         assert_eq!(b.len(), 51, "packed (attrs 3 B, sockets long 4 B)");
         assert_eq!(b[0], 21);
-        assert_eq!(&b[1..4], &[1, 7, 0], "TItemPos: window=1(INVENTORY), cell=7");
+        assert_eq!(
+            &b[1..4],
+            &[1, 7, 0],
+            "TItemPos: window=1(INVENTORY), cell=7"
+        );
         assert_eq!(&b[4..8], &27001u32.to_le_bytes());
         assert_eq!(b[8], 1, "count BYTE");
         assert_eq!(&b[18..22], &0x1234i32.to_le_bytes(), "socket0 (long 4 B)");
-        assert_eq!(&b[30..33], &[1, 100, 0], "attr0 packed: type BYTE + value short");
+        assert_eq!(
+            &b[30..33],
+            &[1, 100, 0],
+            "attr0 packed: type BYTE + value short"
+        );
         let it2 = TPacketGCItemSet::from_bytes(&b).unwrap();
         assert_eq!(it, it2);
     }
@@ -1162,7 +1626,11 @@ mod tests {
         assert_eq!(b.len(), 5);
         assert_eq!(b[0], 106);
         assert_eq!(TPacketGCTime::from_bytes(&b).unwrap(), t);
-        assert_eq!(TPacketGCTime::from_bytes(&b[..4]).is_err(), true, "5 B exactos");
+        assert_eq!(
+            TPacketGCTime::from_bytes(&b[..4]).is_err(),
+            true,
+            "5 B exactos"
+        );
 
         let c = TPacketGCChannel::new(1);
         let b = c.to_bytes();
@@ -1172,13 +1640,20 @@ mod tests {
 
     #[test]
     fn roundtrip_mark_login() {
-        let p = TPacketCGMarkLogin { header: 100, handle: 0xDEAD_BEEF, random_key: 0xCAFE_BABE };
+        let p = TPacketCGMarkLogin {
+            header: 100,
+            handle: 0xDEAD_BEEF,
+            random_key: 0xCAFE_BABE,
+        };
         let b = p.to_bytes();
         assert_eq!(b.len(), 9);
         assert_eq!(b[0], 100);
         let p2 = TPacketCGMarkLogin::from_bytes(&b).unwrap();
         assert_eq!(p, p2);
-        assert!(TPacketCGMarkLogin::from_bytes(&b[..8]).is_err(), "9 B exactos");
+        assert!(
+            TPacketCGMarkLogin::from_bytes(&b[..8]).is_err(),
+            "9 B exactos"
+        );
     }
 
     #[test]
@@ -1195,8 +1670,15 @@ mod tests {
         };
         let b = p.to_bytes();
         assert_eq!(b.len(), 47, "layout del CLIENTE (sin empire)");
-        assert_eq!(b[0], TPacketGCMainCharacter::HEADER, "header 15 = MAIN_CHARACTER sin BGM (Packet.h:160)");
-        assert_eq!(b[46], 3, "skill_group@46 (el offset del empire del server NO existe en el cliente)");
+        assert_eq!(
+            b[0],
+            TPacketGCMainCharacter::HEADER,
+            "header 15 = MAIN_CHARACTER sin BGM (Packet.h:160)"
+        );
+        assert_eq!(
+            b[46], 3,
+            "skill_group@46 (el offset del empire del server NO existe en el cliente)"
+        );
         let p2 = TPacketGCMainCharacter::from_bytes(&b).unwrap();
         assert_eq!(p, p2);
         assert_eq!(p2.name(), "ninja");
@@ -1204,7 +1686,10 @@ mod tests {
 
     #[test]
     fn roundtrip_points_and_skills() {
-        let mut pts = TPacketGCPoints { header: TPacketGCPoints::HEADER, points: [0; 255] };
+        let mut pts = TPacketGCPoints {
+            header: TPacketGCPoints::HEADER,
+            points: [0; 255],
+        };
         pts.points[1] = 5; // POINT_LEVEL
         pts.points[5] = 100; // POINT_HP
         let b = pts.to_bytes();
@@ -1214,7 +1699,14 @@ mod tests {
         assert_eq!(p2.points[5], 100);
         assert_eq!(p2, pts);
 
-        let mut sk = TPacketGCSkillLevel { header: TPacketGCSkillLevel::HEADER, skills: [TPlayerSkill { b_master_type: 0, b_level: 0, t_next_read: 0 }; 255] };
+        let mut sk = TPacketGCSkillLevel {
+            header: TPacketGCSkillLevel::HEADER,
+            skills: [TPlayerSkill {
+                b_master_type: 0,
+                b_level: 0,
+                t_next_read: 0,
+            }; 255],
+        };
         sk.skills[1].b_level = 20;
         sk.skills[1].b_master_type = 2;
         sk.skills[1].t_next_read = 0xDEAD_BEEF;
@@ -1234,7 +1726,14 @@ mod tests {
         let mut raw = [0u8; 1530];
         raw[0] = 1; // bMasterType skill 0
         raw[1] = 3; // bLevel skill 0
-        let mut sk = TPacketGCSkillLevel { header: 76, skills: [TPlayerSkill { b_master_type: 0, b_level: 0, t_next_read: 0 }; 255] };
+        let mut sk = TPacketGCSkillLevel {
+            header: 76,
+            skills: [TPlayerSkill {
+                b_master_type: 0,
+                b_level: 0,
+                t_next_read: 0,
+            }; 255],
+        };
         for (i, s) in sk.skills.iter_mut().enumerate() {
             *s = TPlayerSkill::from_bytes(&raw[i * 6..(i + 1) * 6]).unwrap();
         }
@@ -1262,8 +1761,14 @@ mod tests {
         assert_eq!(bytes[0], 130, "header GC_LAND_LIST");
         assert_eq!(u16::from_le_bytes([bytes[1], bytes[2]]), 435, "size WORD");
         // Primer elemento: dwID@3, x@7...
-        assert_eq!(u32::from_le_bytes([bytes[3], bytes[4], bytes[5], bytes[6]]), 201u32);
-        assert_eq!(i32::from_le_bytes([bytes[7], bytes[8], bytes[9], bytes[10]]), 66100);
+        assert_eq!(
+            u32::from_le_bytes([bytes[3], bytes[4], bytes[5], bytes[6]]),
+            201u32
+        );
+        assert_eq!(
+            i32::from_le_bytes([bytes[7], bytes[8], bytes[9], bytes[10]]),
+            66100
+        );
         assert_eq!(u16::from_le_bytes([bytes[1], bytes[2]]), bytes.len() as u16);
     }
 
@@ -1284,7 +1789,11 @@ mod tests {
         assert_eq!(b[0], 65, "header GC_WARP");
         assert_eq!(&b[1..5], &969600i32.to_le_bytes(), "lX");
         assert_eq!(&b[5..9], &278400i32.to_le_bytes(), "lY");
-        assert_eq!(&b[9..13], &0xC9A8_8019u32.to_le_bytes(), "lAddr inet_addr LE");
+        assert_eq!(
+            &b[9..13],
+            &0xC9A8_8019u32.to_le_bytes(),
+            "lAddr inet_addr LE"
+        );
         assert_eq!(&b[13..15], &30003u16.to_le_bytes(), "wPort");
         assert_eq!(TPacketGCWarp::from_bytes(&b).unwrap(), w);
         // Bad lengths → Err.
@@ -1300,7 +1809,10 @@ mod tests {
         assert_eq!(TPacketGCItemUpdate::SIZE, 38, "1+3+1+12+21 (packed)");
         let u = TPacketGCItemUpdate {
             header: TPacketGCItemUpdate::HEADER,
-            cell: TItemPos { window: TItemPos::WINDOW_INVENTORY, cell: 7 },
+            cell: TItemPos {
+                window: TItemPos::WINDOW_INVENTORY,
+                cell: 7,
+            },
             count: 200,
             sockets: [0x1234, 0, 0],
             attrs: [(1, 100), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0)],
@@ -1308,13 +1820,20 @@ mod tests {
         let b = u.to_bytes();
         assert_eq!(b.len(), 38);
         assert_eq!(b[0], 25, "header GC_ITEM_UPDATE");
-        assert_eq!(&b[1..4], &[1, 7, 0], "TItemPos: window=1(INVENTORY), cell=7");
+        assert_eq!(
+            &b[1..4],
+            &[1, 7, 0],
+            "TItemPos: window=1(INVENTORY), cell=7"
+        );
         assert_eq!(b[4], 200, "count");
         assert_eq!(&b[5..9], &0x1234i32.to_le_bytes(), "socket0 (long 4 B)");
         assert_eq!(b[17], 1, "attr0 type");
         assert_eq!(&b[18..20], &100i16.to_le_bytes(), "attr0 value");
         assert_eq!(TPacketGCItemUpdate::from_bytes(&b).unwrap(), u);
-        assert!(TPacketGCItemUpdate::from_bytes(&b[..37]).is_err(), "BadLength");
+        assert!(
+            TPacketGCItemUpdate::from_bytes(&b[..37]).is_err(),
+            "BadLength"
+        );
     }
 
     /// Item use wire (F5.3): `CG_ITEM_USE` (11) = 4 B — header + TItemPos
@@ -1325,7 +1844,10 @@ mod tests {
         assert_eq!(TPacketCGItemUse::SIZE, 4, "1+3 (header + TItemPos)");
         let u = TPacketCGItemUse {
             header: TPacketCGItemUse::HEADER,
-            pos: TItemPos { window: TItemPos::WINDOW_INVENTORY, cell: 7 },
+            pos: TItemPos {
+                window: TItemPos::WINDOW_INVENTORY,
+                cell: 7,
+            },
         };
         let b = u.to_bytes();
         assert_eq!(b.len(), 4);
@@ -1342,8 +1864,14 @@ mod tests {
         assert_eq!(TPacketCGItemMove::SIZE, 8, "1+3+3+1 (packed)");
         let m = TPacketCGItemMove {
             header: TPacketCGItemMove::HEADER,
-            pos: TItemPos { window: TItemPos::WINDOW_INVENTORY, cell: 7 },
-            change_pos: TItemPos { window: TItemPos::WINDOW_INVENTORY, cell: 3 },
+            pos: TItemPos {
+                window: TItemPos::WINDOW_INVENTORY,
+                cell: 7,
+            },
+            change_pos: TItemPos {
+                window: TItemPos::WINDOW_INVENTORY,
+                cell: 3,
+            },
             num: 5,
         };
         let b = m.to_bytes();
@@ -1363,7 +1891,10 @@ mod tests {
     fn gc_item_del_deprecated_wire_size_and_parse() {
         assert_eq!(TPacketGCItemDelDeprecated::SIZE, 42, "1+3+4+1+12+21");
         let d = TPacketGCItemDelDeprecated::new(
-            TItemPos { window: TItemPos::WINDOW_INVENTORY, cell: 7 },
+            TItemPos {
+                window: TItemPos::WINDOW_INVENTORY,
+                cell: 7,
+            },
             101,
             1,
         );
@@ -1374,7 +1905,112 @@ mod tests {
         assert_eq!(&b[4..8], &101u32.to_le_bytes(), "vnum");
         assert_eq!(b[8], 1, "count");
         assert_eq!(TPacketGCItemDelDeprecated::from_bytes(&b).unwrap(), d);
-        assert!(TPacketGCItemDelDeprecated::from_bytes(&b[..41]).is_err(), "BadLength");
+        assert!(
+            TPacketGCItemDelDeprecated::from_bytes(&b[..41]).is_err(),
+            "BadLength"
+        );
+    }
+
+    /// Drop wire del lane D: `CG_ITEM_DROP` (12) = 8 B (header + TItemPos +
+    /// gold — `command_item_drop`, Packet.h:566-570) y `CG_ITEM_DROP2` (20)
+    /// = 9 B (+ count BYTE — Packet.h:566-575). Byte-exacto contra el C++.
+    #[test]
+    fn item_drop_wire_sizes_and_parse() {
+        // CG_ITEM_DROP: 1 + 3 + 4 = 8 (packed).
+        assert_eq!(TPacketCGItemDrop::SIZE, 8);
+        let d = TPacketCGItemDrop {
+            header: TPacketCGItemDrop::HEADER,
+            cell: TItemPos {
+                window: TItemPos::WINDOW_INVENTORY,
+                cell: 0x1234,
+            },
+            gold: 5000,
+        };
+        let b = d.to_bytes();
+        assert_eq!(b.len(), 8);
+        assert_eq!(b[0], 12, "header CG_ITEM_DROP");
+        assert_eq!(&b[1..4], &[1, 0x34, 0x12], "TItemPos cell 0x1234");
+        assert_eq!(&b[4..8], &5000u32.to_le_bytes(), "gold");
+        assert_eq!(TPacketCGItemDrop::from_bytes(&b).unwrap(), d);
+        assert!(TPacketCGItemDrop::from_bytes(&b[..7]).is_err(), "BadLength");
+
+        // CG_ITEM_DROP2: 1 + 3 + 4 + 1 = 9 (packed).
+        assert_eq!(TPacketCGItemDrop2::SIZE, 9);
+        let d2 = TPacketCGItemDrop2 {
+            header: TPacketCGItemDrop2::HEADER,
+            cell: TItemPos {
+                window: TItemPos::WINDOW_INVENTORY,
+                cell: 3,
+            },
+            gold: 0,
+            count: 7,
+        };
+        let b2 = d2.to_bytes();
+        assert_eq!(b2.len(), 9);
+        assert_eq!(b2[0], 20, "header CG_ITEM_DROP2");
+        assert_eq!(&b2[1..4], &[1, 3, 0], "TItemPos");
+        assert_eq!(&b2[4..8], &0u32.to_le_bytes(), "gold 0");
+        assert_eq!(b2[8], 7, "count");
+        assert_eq!(TPacketCGItemDrop2::from_bytes(&b2).unwrap(), d2);
+        assert!(TPacketCGItemDrop2::from_bytes(&b2[..8]).is_err(), "BadLength");
+    }
+
+    /// Quickslot wire del lane D (Packet.h:607-626): CG_QUICKSLOT_ADD (16,
+    /// 4 B: header + pos + TQuickslot), DEL (17, 2 B), SWAP (18, 3 B); las
+    /// respuestas GC_QUICKSLOT_DEL (29, 2 B) y GC_QUICKSLOT_SWAP (30, 3 B)
+    /// — byte-exacto contra `char_quickslot.cpp:96-145`.
+    #[test]
+    fn quickslot_wire_sizes_and_parse() {
+        // ADD (16) — mismo layout que el GC_QUICKSLOT_ADD (28).
+        assert_eq!(TPacketCGQuickSlotAdd::SIZE, 4);
+        let a = TPacketCGQuickSlotAdd {
+            header: TPacketCGQuickSlotAdd::HEADER,
+            pos: 5,
+            slot: TQuickslot {
+                slot_type: 1, // QUICKSLOT_TYPE_SKILL
+                pos: 12,
+            },
+        };
+        let b = a.to_bytes();
+        assert_eq!(b, [16, 5, 1, 12]);
+        assert_eq!(TPacketCGQuickSlotAdd::from_bytes(&b).unwrap(), a);
+        assert!(TPacketCGQuickSlotAdd::from_bytes(&b[..3]).is_err());
+
+        // DEL (17).
+        assert_eq!(TPacketCGQuickSlotDel::SIZE, 2);
+        let d = TPacketCGQuickSlotDel {
+            header: TPacketCGQuickSlotDel::HEADER,
+            pos: 9,
+        };
+        assert_eq!(d.to_bytes(), [17, 9]);
+        assert_eq!(TPacketCGQuickSlotDel::from_bytes(&d.to_bytes()).unwrap(), d);
+
+        // SWAP (18).
+        assert_eq!(TPacketCGQuickSlotSwap::SIZE, 3);
+        let s = TPacketCGQuickSlotSwap {
+            header: TPacketCGQuickSlotSwap::HEADER,
+            pos: 3,
+            change_pos: 8,
+        };
+        assert_eq!(s.to_bytes(), [18, 3, 8]);
+        assert_eq!(TPacketCGQuickSlotSwap::from_bytes(&s.to_bytes()).unwrap(), s);
+
+        // Respuestas GC: DEL (29) y SWAP (30).
+        assert_eq!(TPacketGCQuickSlotDel::new(4).to_bytes(), [29, 4]);
+        assert_eq!(
+            TPacketGCQuickSlotDel::from_bytes(&[29, 4]).unwrap(),
+            TPacketGCQuickSlotDel::new(4)
+        );
+        assert_eq!(TPacketGCQuickSlotSwap::new(2, 6).to_bytes(), [30, 2, 6]);
+        assert_eq!(
+            TPacketGCQuickSlotSwap::from_bytes(&[30, 2, 6]).unwrap(),
+            TPacketGCQuickSlotSwap::new(2, 6)
+        );
+        // BadLength en todos.
+        assert!(TPacketCGQuickSlotDel::from_bytes(&[17]).is_err());
+        assert!(TPacketCGQuickSlotSwap::from_bytes(&[18, 1]).is_err());
+        assert!(TPacketGCQuickSlotDel::from_bytes(&[29]).is_err());
+        assert!(TPacketGCQuickSlotSwap::from_bytes(&[30]).is_err());
     }
 
     /// Drop wire (F5.3): `GC_ITEM_GROUND_ADD` (26) = 58 B packed con
@@ -1397,7 +2033,11 @@ mod tests {
             sockets: [0x1234, 0, 0],
             attrs: [(1, 100), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0)],
         };
-        assert_eq!(TPacketGCItemGroundAdd::SIZE, 58, "1+12+4+4+4+12+21 (packed)");
+        assert_eq!(
+            TPacketGCItemGroundAdd::SIZE,
+            58,
+            "1+12+4+4+4+12+21 (packed)"
+        );
         let b = add.to_bytes();
         assert_eq!(b.len(), 58);
         assert_eq!(b[0], 26, "header");
