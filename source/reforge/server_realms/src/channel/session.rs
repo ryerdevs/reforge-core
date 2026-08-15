@@ -197,6 +197,10 @@ pub struct Session {
     /// RAII del peer de chat (registrado en el world join — chat.rs;
     /// desregistra al soltar la sesión).
     pub chat_guard: Option<crate::channel::chat::ChatPeerGuard>,
+    /// Último SHOUT del jugador — cooldown de 15 s (parity
+    /// `m_pointsInstant.dwLastShoutPulse` input_main.cpp:743-748 — el C++
+    /// compara el pulse del heart; aquí un Instant de tokio).
+    pub last_shout: Option<tokio::time::Instant>,
     /// RAII de la captura golden del harness (open al crear, close al soltar).
     /// Nunca se LEE — vive solo por su Drop (dead_code intencional).
     #[allow(dead_code)]
@@ -321,6 +325,7 @@ impl Session {
             chat_tx,
             chat_rx,
             chat_guard: None,
+            last_shout: None,
             cap: CaptureGuard::open(conn_id),
             leave: None,
             login_guard: None,

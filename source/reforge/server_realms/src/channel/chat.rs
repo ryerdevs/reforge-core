@@ -5,21 +5,41 @@
 //!
 //! CG_CHAT (3): header + length(WORD) + type + msg (el framer ya entrega
 //! `length` bytes totales — el formato de TPacketCGChat Packet.h:534-539).
+//! El texto se recorta en el PRIMER NUL (el cliente manda strlen+1 — parity
+//! strlcpy+strlen input_main.cpp:657-658: sin el recorte "warp 100 200\0" ≠
+//! "warp 100 200" → TODO comando '/' responde "No such command", C-02) y se
+//! capa a 485 B (C-01 — el cliente legacy hace `Recv(uChatSize)` sobre
+//! `char buf[1025]` sin bound-check, PythonNetworkStreamPhaseGame.cpp:
+//! 1290-1301; el cap evita el wrap del size u16).
 //! El hook de COMANDOS vive ANTES del broadcast (parity input_main.cpp:661-665
 //! — `interpret_command` ANTES del echo y del anti-spam; el comando no se
 //! muestra ni se difunde).
 //! GC_CHAT: header(4) + size(WORD, incluye header 9 B) + type + dwVID +
-//! bEmpire + msg (Packet.h:1336-1343; el cliente hace
-//! size - sizeof(TPacketGCChat)). El emisor recibe el echo SIEMPRE; el resto
-//! de jugadores lo reciben según el tipo: TALKING → mismo mapa y distancia
-//! ≤ ~1000 (el radio de visibilidad del personaje — parity del
-//! `PacketToVisibleSet` del C++), SHOUT → mismo mapa sin límite; el resto de
-//! tipos NO se difunden (solo el emisor los ve).
+//! bEmpire + payload (Packet.h:1336-1343; el cliente hace
+//! size - sizeof(TPacketGCChat) y pinta el payload verbatim — AppendChat,
+//! PythonChat.cpp:436+). El payload es "Name : msg" SIN NUL (parity
+//! `snprintf("%s : %s")` input_main.cpp:723-725 + `Packet(msg, len)` — C-05:
+//! sin el nombre la ventana no muestra quién habla y los ':' rompen el
+//! strip del cliente). El emisor recibe el echo SIEMPRE; el resto lo reciben
+//! según el tipo: TALKING → mismo mapa y distancia ≤ rango del view 5500
+//! (el C++ difunde a TODO el mapa SIN filtro de distancia server-side —
+//! FEmpireChatPacket filtra solo por map_index, input_main.cpp:763-780; el
+//! recorte real es client-side, el vid no spawneado se descarta, con spawn
+//! range VIEW_RANGE 5000 + 500, config.cpp:104-105 — divergencia
+//! documentada: cull por el rango del view, mismo resultado visible y menos
+//! fanout), SHOUT → canal COMPLETO (todos los mapas) con id=0 y cooldown
+//! 15 s (parity SendShout/FuncShout input_p2p.cpp:208-228 + ChatPacket
+//! char.cpp:3947); el resto de tipos NO se difunden (solo el emisor los ve).
 //!
 //! CG_WHISPER (19): header + wSize(WORD, total) + szNameTo[25] + msg
 //! (TPacketCGWhisper Packet.h:540-546 — `CHARACTER_NAME_MAX_LEN=24`).
-//! Resuelve el destino por NOMBRE en el registro de sesiones activas y
-//! entrega el mensaje (parity `Whisper()`):
+//! El mensaje se recorta en el primer NUL y se capa a 512 B (parity
+//! strlcpy+strlen input_main.cpp:398-401 — el payload del GC_WHISPER no
+//! puede desbordar `buf[513]` del cliente, PythonNetworkStreamPhaseGame.cpp:
+//! 1422-1429). Resuelve el destino por NOMBRE CASE-INSENSITIVE (parity
+//! `FindPC` char_manager.cpp:209-223 — str_lower + mapa keyed por
+//! minúsculas) en el registro de sesiones activas y entrega el mensaje
+//! (parity `Whisper()`):
 //! - destino online → GC_WHISPER (34, bType CHAT, szNameFrom = emisor) al
 //!   destinatario + CONFIRMACIÓN al emisor (echo GC_WHISPER con el nombre
 //!   del destinatario — el cliente pinta "dest : msg" en su pestaña);
@@ -44,9 +64,36 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::channel::session::{Outcome, Session};
 
-/// Radio del broadcast TALKING (parity del `PacketToVisibleSet` del C++ — el
-/// rango de visibilidad del personaje, ~1000).
-const TALKING_RANGE: i64 = 1000;
+/// Rango del broadcast TALKING = VIEW_RANGE 5000 + VIEW_BONUS_RANGE 500
+/// (config.cpp:104-105) — el radio de spawn/visibilidad del personaje. El
+/// C++ NO filtra distancia server-side: difunde a TODO el mapa
+/// (FEmpireChatPacket filtra SOLO por map_index, input_main.cpp:763-780; el
+/// recorte real es client-side, el vid no spawneado se descarta). Divergencia
+/// documentada (C-03): cull server-side por el rango del view — el resultado
+/// visible es el MISMO y el fanout menor.
+const TALKING_RANGE: i64 = 5000 + 500;
+
+/// Cap del texto del chat: `CHAT_MAX_LEN 512 - (CHARACTER_NAME_MAX_LEN 24 +
+/// 3) + 1` = 486 B de buffer → 485 chars (parity `char buf[...]` + strlcpy,
+/// input_main.cpp:657-658). C-01: sin el cap, un msg de 65531 B (wSize
+/// 65535) wrappea el size u16 a 4 → el cliente legacy hace `Recv(uChatSize)`
+/// sobre `char buf[1025]` sin bound-check (PythonNetworkStreamPhaseGame.cpp:
+/// 1290-1301) → stack overflow.
+const CHAT_MSG_MAX: usize = 485;
+
+/// Cap del mensaje del whisper: buf `[CHAT_MAX_LEN + 1]` = 513 → 512 chars
+/// (parity strlcpy input_main.cpp:398-399 — el payload del GC_WHISPER no
+/// puede desbordar `buf[513]` del cliente, PythonNetworkStreamPhaseGame.cpp:
+/// 1422-1429, assert solo debug).
+const WHISPER_MSG_MAX: usize = 512;
+
+/// Cap del payload del GC_CHAT "Name : msg" (parity `chatbuf[CHAT_MAX_LEN +
+/// 1]` — input_main.cpp:720-729: `len >= sizeof(chatbuf)` → 512).
+const CHATBUF_MAX: usize = 512;
+
+/// Cooldown del SHOUT: 15 s (parity input_main.cpp:743-748 —
+/// `pulse - lastShoutPulse < passes_per_sec * 15` → return silencioso).
+const SHOUT_COOLDOWN: tokio::time::Duration = tokio::time::Duration::from_secs(15);
 
 /// Peer de chat de una sesión activa: lo que el broadcast/whisper necesitan
 /// de OTRA conexión (nombre para el whisper, posición/mapa para el rango y
@@ -107,10 +154,34 @@ pub fn update_position(vid: u32, x: i32, y: i32) {
     }
 }
 
+/// Recorta el texto del chat/whisper en el PRIMER NUL y lo capa (parity
+/// strlcpy + strlen del C++ — el cliente manda strlen+1 y el C++ corta en el
+/// NUL ANTES de parsear/difundir; C-02: sin el recorte, "warp 100 200\0" ≠
+/// "warp 100 200" → TODO comando '/' responde "No such command").
+fn chat_text(pkt: &[u8], cap: usize) -> &[u8] {
+    let end = pkt.iter().position(|&b| b == 0).unwrap_or(pkt.len());
+    &pkt[..end.min(cap)]
+}
+
+/// Payload del GC_CHAT: "Name : msg" (parity `snprintf("%s : %s")` —
+/// input_main.cpp:723-725; el size del paquete usa strlen SIN el NUL — el
+/// cliente pinta el payload verbatim, AppendChat PythonChat.cpp:436+). Cap
+/// a 512 B (parity `chatbuf[CHAT_MAX_LEN + 1]`, input_main.cpp:720-729).
+fn chat_payload(name: &str, msg: &[u8]) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(name.len() + 3 + msg.len());
+    payload.extend_from_slice(name.as_bytes());
+    payload.extend_from_slice(b" : ");
+    payload.extend_from_slice(msg);
+    payload.truncate(CHATBUF_MAX);
+    payload
+}
+
 /// ¿El peer `o` recibe un chat de tipo `t` emitido desde (my_map, my_x,
 /// my_y)? Parity del C++ (input_main.cpp:641-685): TALKING → mismo mapa +
-/// distancia ≤ ~1000; SHOUT → mismo mapa sin límite de distancia; el resto
-/// de tipos NO se difunden (solo el emisor los ve — echo).
+/// distancia ≤ rango del view 5500 (el C++ NO filtra distancia server-side;
+/// el recorte client-side es por spawn — ver TALKING_RANGE); SHOUT NO pasa
+/// por aquí (canal completo, rama propia en handle — C-04); el resto de
+/// tipos NO se difunden (solo el emisor los ve — echo).
 fn visible_to(t: u8, my_map: i32, my_x: i32, my_y: i32, o: &ChatPeer) -> bool {
     if o.map_index != my_map {
         return false;
@@ -121,7 +192,6 @@ fn visible_to(t: u8, my_map: i32, my_x: i32, my_y: i32, o: &ChatPeer) -> bool {
             let dy = i64::from(o.y) - i64::from(my_y);
             dx * dx + dy * dy <= TALKING_RANGE * TALKING_RANGE
         }
-        pchat::TYPE_SHOUT => true,
         _ => false,
     }
 }
@@ -140,7 +210,10 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
         return Ok(Outcome::Continue);
     }
     let chat_type = pkt[3];
-    let msg = &pkt[4..];
+    // C-01/C-02: recorte en el primer NUL + cap a 485 (parity strlcpy+strlen,
+    // input_main.cpp:657-658 — el cliente manda strlen+1; sin el recorte el
+    // NUL rompe el parseo del comando y sin el cap el size u16 wrappea).
+    let msg = chat_text(&pkt[4..], CHAT_MSG_MAX);
     // El comando: '/' + texto (parity input_main.cpp:661-665 — `*buf == '/'`
     // → `interpret_command(ch, buf + 1, ...)`; el comando NO se muestra NI se
     // difunde — el hook vive ANTES del broadcast).
@@ -151,24 +224,73 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
         )
         .await;
     }
+    // SHOUT (C-04): canal COMPLETO (todos los mapas) con id=0 y payload
+    // "Name : msg" (parity SendShout/FuncShout — input_p2p.cpp:208-228, sin
+    // filtro de mapa — + ChatPacket con id=0, char.cpp:3947; el emisor
+    // también lo recibe: GetClientSet incluye al emisor). Cooldown 15 s por
+    // sesión (parity input_main.cpp:743-748 — return silencioso). Gate de
+    // imperio del FuncShout (GM_PLAYER de otro imperio no recibe) NO
+    // implementado: el peer no tiene empire/GM level — divergencia
+    // documentada.
+    if chat_type == pchat::TYPE_SHOUT {
+        if session
+            .last_shout
+            .is_some_and(|t| t.elapsed() < SHOUT_COOLDOWN)
+        {
+            return Ok(Outcome::Continue);
+        }
+        session.last_shout = Some(tokio::time::Instant::now());
+        let payload = chat_payload(&session.row().name, msg);
+        let size = (9 + payload.len()) as u16;
+        let mut out = Vec::with_capacity(9 + payload.len());
+        out.push(header::GC_CHAT);
+        out.extend_from_slice(&size.to_le_bytes());
+        out.push(chat_type);
+        out.extend_from_slice(&0u32.to_le_bytes()); // id=0 — parity ChatPacket
+        out.push(session.empire);
+        out.extend_from_slice(&payload);
+        let mut sent = 0usize;
+        {
+            let ps = peers().lock().expect("chat peers lock");
+            for peer in ps.values() {
+                // UnboundedSender::send es síncrono (no await) — el lock no
+                // se sostiene a través de un punto de suspensión.
+                if peer.out.send(out.clone()).is_ok() {
+                    sent += 1;
+                }
+            }
+        }
+        eprintln!(
+            "server_realms: channel conn {}: SHOUT de {} (type {}): {} — {sent} en el canal",
+            session.conn_id,
+            session.row().name,
+            chat_type,
+            String::from_utf8_lossy(msg)
+        );
+        return Ok(Outcome::Continue);
+    }
     // GC_CHAT: header(4) + size(WORD, incluye header 9 B) + type + dwVID +
-    // bEmpire + msg (Packet.h:1336-1343; el cliente hace
-    // size - sizeof(TPacketGCChat)).
-    let size = (9 + msg.len()) as u16;
-    let mut out = Vec::with_capacity(9 + msg.len());
+    // bEmpire + payload "Name : msg" SIN NUL (Packet.h:1336-1343 — el
+    // cliente pinta el payload verbatim; parity input_main.cpp:723-725,
+    // C-05).
+    let payload = chat_payload(&session.row().name, msg);
+    let size = (9 + payload.len()) as u16;
+    let mut out = Vec::with_capacity(9 + payload.len());
     out.push(header::GC_CHAT);
     out.extend_from_slice(&size.to_le_bytes());
     out.push(chat_type);
     out.extend_from_slice(&session.player_vid().to_le_bytes());
     out.push(session.empire);
-    out.extend_from_slice(msg);
+    out.extend_from_slice(&payload);
     // Echo al emisor SIEMPRE (parity: el emisor está en el set de destino).
     session
         .send(&out)
         .await
         .map_err(|e| format!("enviando GC_CHAT: {e}"))?;
-    // Broadcast a los peers en rango (parity del C++: Chat → difusión a los
-    // jugadores visibles — TALKING ~1000 / SHOUT mapa; el resto no se difunde).
+    // Broadcast a los peers en rango (parity del C++: Chat → difusión a
+    // TODO el mapa sin filtro de distancia; aquí el cull es por el rango del
+    // view 5500 — TALKING; el resto de tipos no se difunde — el SHOUT ya
+    // volvió por su rama).
     let my_vid = session.player_vid();
     let my_map = session.row().map_index;
     let (my_x, my_y) = (session.motion().x, session.motion().y);
@@ -218,12 +340,10 @@ pub async fn handle_whisper(session: &mut Session, pkt: &[u8]) -> Result<Outcome
         .position(|&b| b == 0)
         .unwrap_or(name_bytes.len());
     let target = String::from_utf8_lossy(&name_bytes[..end]).into_owned();
-    // El mensaje: el cliente manda strlen+1 (con NUL); el C++ lo corta con
-    // strlen (input_main.cpp:400-401) — el GC_WHISPER viaja SIN el NUL.
-    let mut msg = &pkt[pchat::CG_WHISPER_FIXED..];
-    if let Some(stripped) = msg.strip_suffix(&[0]) {
-        msg = stripped;
-    }
+    // C-01: recorte en el primer NUL + cap a 512 (parity strlcpy+strlen,
+    // input_main.cpp:398-401 — el GC_WHISPER viaja SIN el NUL; el cap evita
+    // desbordar buf[513] del cliente).
+    let msg = chat_text(&pkt[pchat::CG_WHISPER_FIXED..], WHISPER_MSG_MAX);
     if target.is_empty() || msg.is_empty() {
         // Sin destino o sin mensaje → no-op (parity `if (buflen > 0)`).
         return Ok(Outcome::Continue);
@@ -231,8 +351,12 @@ pub async fn handle_whisper(session: &mut Session, pkt: &[u8]) -> Result<Outcome
     let my_vid = session.player_vid();
     let target_peer = {
         let ps = peers().lock().expect("chat peers lock");
-        // Resolución por nombre EXACTO (parity `FindPC` del C++).
-        ps.iter().find(|(_, p)| p.name == target).map(|(vid, p)| (*vid, p.clone()))
+        // Resolución por nombre CASE-INSENSITIVE (parity `FindPC` del C++ —
+        // char_manager.cpp:209-223: str_lower + mapa keyed por minúsculas;
+        // C-06: "target" llega a "Target").
+        ps.iter()
+            .find(|(_, p)| p.name.eq_ignore_ascii_case(&target))
+            .map(|(vid, p)| (*vid, p.clone()))
     };
     let Some(target_peer) = target_peer else {
         // Destino inexistente → GC_WHISPER NOT_EXIST al emisor (parity
@@ -303,6 +427,12 @@ mod tests {
 
     use database::player::PlayerRow;
     use tokio::io::AsyncReadExt;
+
+    /// Serializa los tests ASYNC de chat: el registro de peers es un static
+    /// COMPARTIDO y el test del SHOUT difunde al canal COMPLETO (todos los
+    /// mapas, C-04) — sin el lock, el shout contamina los outbox de los
+    /// peers registrados por OTROS tests que corren en paralelo.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     /// Fila mínima del player para los handlers (solo los campos que el chat
     /// lee: id/name/map_index/posición).
@@ -422,48 +552,61 @@ mod tests {
         pkt
     }
 
-    /// Broadcast TALKING: el emisor recibe el echo; el peer EN RANGO recibe
-    /// los mismos bytes por su outbox; el peer LEJANO no recibe nada.
-    /// (Vids/nombres ÚNICOS por test — el registro de peers es un static
-    /// compartido y los tests corren en paralelo.)
+    /// Broadcast TALKING: el emisor recibe el echo; los peers EN RANGO del
+    /// view (5500) reciben los mismos bytes por su outbox; el peer FUERA del
+    /// view no recibe nada. (Vids/nombres ÚNICOS por test — el registro de
+    /// peers es un static compartido y los tests corren en paralelo.)
     #[tokio::test]
     async fn chat_broadcast_reaches_in_range_and_skips_far() {
+        let _guard = TEST_LOCK.lock().expect("test lock");
         // Mapa 10 EXCLUSIVO del test (el registro de peers es un static
         // compartido y los tests corren en paralelo — mapas distintos aíslan
         // el rango del broadcast).
         let (mut a, mut a_sock) = test_session(101, "Alice", 10, 100, 100).await;
-        let (mut b, _b_sock) = test_session(102, "Bob", 10, 300, 400).await; // a ~360 (< 1000)
-        let (mut c, _c_sock) = test_session(103, "Carol", 10, 9000, 9000).await; // lejos (> 1000)
+        let (mut b, _b_sock) = test_session(102, "Bob", 10, 300, 400).await; // a ~360 (< 5500)
+        let (mut c, _c_sock) = test_session(103, "Carol", 10, 9000, 9000).await; // ~12586 (> 5500 — fuera del view)
+        let (mut d, _d_sock) = test_session(104, "Dave", 10, 3000, 3000).await; // ~4101 (< 5500, > 1000 — C-03: el rango es el del view)
         // CG_CHAT TALKING "hola": length = 4 + 5 = 9 (parity del framer).
         let mut pkt = vec![header::CG_CHAT];
         pkt.extend_from_slice(&9u16.to_le_bytes());
         pkt.push(pchat::TYPE_TALKING);
         pkt.extend_from_slice(b"hola\0");
         let _ = handle(&mut a, &pkt).await.expect("chat OK");
-        // Echo al emisor (GC_CHAT byte-exacto).
+        // Echo al emisor (GC_CHAT byte-exacto — payload "Name : msg" SIN
+        // NUL, C-05: parity input_main.cpp:723-725).
         let echo = read_packet(&mut a_sock).await;
         assert_eq!(echo[0], header::GC_CHAT, "GC_CHAT del echo");
         assert_eq!(u16::from_le_bytes([echo[1], echo[2]]) as usize, echo.len());
-        assert_eq!(&echo[9..], b"hola\0", "mensaje intacto");
+        assert_eq!(&echo[9..], b"Alice : hola", "payload 'Name : msg' sin NUL");
         // Bob (en rango) recibe EXACTAMENTE los mismos bytes por su outbox.
         let to_bob = tokio::time::timeout(Duration::from_secs(2), b.chat_rx.recv())
             .await
             .expect("Bob recibe el broadcast en 2 s")
             .expect("outbox de Bob abierto");
         assert_eq!(to_bob, echo, "mismos bytes que el echo (vid/empire del emisor)");
-        // Carol (lejana) NO recibe nada.
+        // Dave (~4101: fuera del viejo rango 1000, dentro del view 5500)
+        // TAMBIÉN lo recibe — C-03: el broadcast cubre el rango del view.
+        let to_dave = tokio::time::timeout(Duration::from_secs(2), d.chat_rx.recv())
+            .await
+            .expect("Dave recibe el broadcast en 2 s")
+            .expect("outbox de Dave abierto");
+        assert_eq!(to_dave, echo, "mismos bytes que el echo");
+        // Carol (fuera del view) NO recibe nada.
         assert!(
             tokio::time::timeout(Duration::from_millis(100), c.chat_rx.recv())
                 .await
                 .is_err(),
-            "Carol está fuera de rango (9000,9000)"
+            "Carol está fuera del view (9000,9000)"
         );
     }
 
     /// El hook de comandos ('/' → gm) vive ANTES del broadcast: el comando no
-    /// se difunde a los peers (parity interpret_command).
+    /// se difunde a los peers (parity interpret_command). El texto lleva el
+    /// NUL de cola del cliente (SendChatPacket manda strlen+1) — el hook lo
+    /// recorta (C-02).
     #[tokio::test]
     async fn chat_command_hook_before_broadcast() {
+        let _guard = TEST_LOCK.lock().expect("test lock");
         // Mapa 20 exclusivo del test (aislamiento entre tests en paralelo).
         let (mut a, _a_sock) = test_session(201, "Cmdr", 20, 100, 100).await;
         let (mut b, _b_sock) = test_session(202, "Peer", 20, 300, 400).await;
@@ -482,11 +625,176 @@ mod tests {
         );
     }
 
+    /// C-02 (unidad): el NUL de cola del cliente (SendChatPacket manda
+    /// strlen+1) se recorta ANTES del parseo (parity strlcpy+strlen
+    /// input_main.cpp:657-665) — "/warp 100 200\0" ejecuta el comando (no
+    /// "No such command": parse_command("warp 100 200\0") → None).
+    #[test]
+    fn chat_text_strips_trailing_nul_before_command_parse() {
+        let stripped = chat_text(b"/warp 100 200\0", CHAT_MSG_MAX);
+        assert_eq!(stripped, b"/warp 100 200");
+        let cmd = game_core::gm::parse_command(std::str::from_utf8(&stripped[1..]).unwrap());
+        assert_eq!(
+            cmd,
+            Some(game_core::gm::GmCommand::Warp { x: 100, y: 200 }),
+            "sin el NUL el comando existe"
+        );
+    }
+
+    /// C-02 (integración): "/set_walk_mode\0" (con NUL) ejecuta el comando
+    /// GM_PLAYER → GC_WALK_MODE (header 111 packet.h:212 + vid + modo), NO
+    /// el INFO "No such command".
+    #[tokio::test]
+    async fn chat_command_with_trailing_nul_executes() {
+        let _guard = TEST_LOCK.lock().expect("test lock");
+        let (mut a, mut a_sock) = test_session(211, "Cmdr2", 21, 100, 100).await;
+        // CG_CHAT "/set_walk_mode\0": length = 4 + 15 = 19.
+        let mut pkt = vec![header::CG_CHAT];
+        pkt.extend_from_slice(&19u16.to_le_bytes());
+        pkt.push(pchat::TYPE_TALKING);
+        pkt.extend_from_slice(b"/set_walk_mode\0");
+        let _ = handle(&mut a, &pkt).await.expect("comando OK");
+        // GC_WALK_MODE no lleva size word: header(111) + vid(4) + modo(1).
+        // El vid es el del player (player_vid = row.id — el dummy row tiene
+        // id 1, distinto del vid 211 de la conexión).
+        let mut resp = [0u8; 6];
+        a_sock.read_exact(&mut resp).await.expect("GC_WALK_MODE");
+        assert_eq!(resp[0], 111, "GC_WALK_MODE (packet.h:212)");
+        assert_eq!(u32::from_le_bytes(resp[1..5].try_into().unwrap()), 1, "vid = row.id");
+        assert_eq!(resp[5], 1, "WALKMODE_WALK (packet.h:1880-1882)");
+    }
+
+    /// C-01 (chat): cap a 485 B (parity strlcpy input_main.cpp:657-658) — el
+    /// size u16 del GC_CHAT nunca wrappea (el cliente legacy hace
+    /// `Recv(uChatSize)` sin bound-check — PythonNetworkStreamPhaseGame.cpp:
+    /// 1290-1301).
+    #[tokio::test]
+    async fn chat_caps_message_length() {
+        let _guard = TEST_LOCK.lock().expect("test lock");
+        let (mut a, mut a_sock) = test_session(221, "Long", 22, 100, 100).await;
+        // CG_CHAT TALKING con 600 B + NUL: length = 4 + 601 = 605.
+        let mut pkt = vec![header::CG_CHAT];
+        pkt.extend_from_slice(&605u16.to_le_bytes());
+        pkt.push(pchat::TYPE_TALKING);
+        pkt.extend_from_slice(&[b'x'; 600]);
+        pkt.push(0);
+        let _ = handle(&mut a, &pkt).await.expect("chat OK");
+        let echo = read_packet(&mut a_sock).await;
+        assert_eq!(
+            u16::from_le_bytes([echo[1], echo[2]]) as usize,
+            echo.len(),
+            "size consistente — sin wrap u16"
+        );
+        // payload "Long : " + 485 x's (sin NUL).
+        assert_eq!(&echo[9..16], b"Long : ");
+        assert_eq!(echo.len(), 9 + 4 + 3 + 485);
+        assert!(echo[16..].iter().all(|&b| b == b'x'), "msg truncado a 485");
+    }
+
+    /// C-01 (whisper): cap a 512 B (parity input_main.cpp:398-401 — buf
+    /// [CHAT_MAX_LEN + 1]) — el payload del GC_WHISPER no puede desbordar
+    /// buf[513] del cliente (PythonNetworkStreamPhaseGame.cpp:1422-1429).
+    #[tokio::test]
+    async fn whisper_caps_message_length() {
+        let _guard = TEST_LOCK.lock().expect("test lock");
+        let (mut a, _a_sock) = test_session(321, "LongW", 33, 100, 100).await;
+        let (mut b, _b_sock) = test_session(322, "TargetLong", 34, 500, 500).await;
+        // CG_WHISPER a "TargetLong" con 600 B + NUL: wSize = 28 + 601 = 629.
+        let mut pkt = vec![header::CG_WHISPER];
+        pkt.extend_from_slice(&629u16.to_le_bytes());
+        let mut name = [0u8; pchat::NAME_BYTES];
+        name[..10].copy_from_slice(b"TargetLong");
+        pkt.extend_from_slice(&name);
+        pkt.extend_from_slice(&[b'y'; 600]);
+        pkt.push(0);
+        let _ = handle_whisper(&mut a, &pkt).await.expect("whisper OK");
+        let to_b = tokio::time::timeout(Duration::from_secs(2), b.chat_rx.recv())
+            .await
+            .expect("TargetLong recibe en 2 s")
+            .expect("outbox abierto");
+        assert_eq!(to_b[0], header::GC_WHISPER);
+        assert_eq!(to_b.len(), pchat::GC_WHISPER_FIXED + 512, "msg truncado a 512");
+        assert!(to_b[29..].iter().all(|&b| b == b'y'), "solo el mensaje");
+    }
+
+    /// C-04: SHOUT → canal COMPLETO (todos los mapas) con id=0 y payload
+    /// "Name : msg" (parity SendShout/FuncShout input_p2p.cpp:208-228 +
+    /// ChatPacket id=0 char.cpp:3947) + cooldown 15 s por sesión (parity
+    /// input_main.cpp:743-748). Reloj virtual (pause/advance) para el
+    /// cooldown.
+    #[tokio::test]
+    async fn shout_reaches_whole_channel_with_id_zero_and_15s_cooldown() {
+        let _guard = TEST_LOCK.lock().expect("test lock");
+        tokio::time::pause();
+        let (mut a, _a_sock) = test_session(501, "Shouter", 50, 100, 100).await;
+        let (mut b, _b_sock) = test_session(502, "Listener", 51, 1, 1).await; // OTRO mapa — SHOUT es de canal
+        // CG_CHAT SHOUT "guerra!\0": length = 4 + 8 = 12.
+        let mut pkt = vec![header::CG_CHAT];
+        pkt.extend_from_slice(&12u16.to_le_bytes());
+        pkt.push(pchat::TYPE_SHOUT);
+        pkt.extend_from_slice(b"guerra!\0");
+        let _ = handle(&mut a, &pkt).await.expect("shout OK");
+        // El emisor TAMBIÉN lo recibe por su outbox (parity: GetClientSet
+        // incluye al emisor) — con id=0.
+        let to_a = a.chat_rx.try_recv().expect("shout al emisor");
+        assert_eq!(
+            u32::from_le_bytes(to_a[4..8].try_into().unwrap()),
+            0,
+            "id=0 (parity ChatPacket char.cpp:3947)"
+        );
+        assert_eq!(to_a[3], pchat::TYPE_SHOUT);
+        assert_eq!(&to_a[9..], b"Shouter : guerra!", "payload 'Name : msg'");
+        assert!(a.chat_rx.try_recv().is_err(), "un solo paquete por shout");
+        // El peer de OTRO mapa recibe EXACTAMENTE los mismos bytes.
+        let to_b = b.chat_rx.try_recv().expect("shout al otro mapa");
+        assert_eq!(to_b, to_a, "mismos bytes en todo el canal");
+        assert!(b.chat_rx.try_recv().is_err());
+        // Segundo shout inmediato → dentro del cooldown de 15 s → no-op
+        // silencioso (parity).
+        let _ = handle(&mut a, &pkt).await.expect("shout en cooldown OK");
+        assert!(a.chat_rx.try_recv().is_err(), "cooldown 15 s activo");
+        assert!(b.chat_rx.try_recv().is_err());
+        // Tras 15 s el cooldown expira y el shout vuelve a salir.
+        tokio::time::advance(Duration::from_secs(16)).await;
+        let _ = handle(&mut a, &pkt).await.expect("shout tras cooldown OK");
+        let to_a2 = a.chat_rx.try_recv().expect("shout tras el cooldown");
+        assert_eq!(&to_a2[9..], b"Shouter : guerra!");
+    }
+
+    /// C-06: resolución case-insensitive (parity `FindPC` char_manager.cpp:
+    /// 209-223 — str_lower + mapa keyed por minúsculas): "target" en
+    /// minúsculas llega a "Target".
+    #[tokio::test]
+    async fn whisper_resolves_target_case_insensitive() {
+        let _guard = TEST_LOCK.lock().expect("test lock");
+        let (mut a, _a_sock) = test_session(331, "Wisp", 35, 100, 100).await;
+        let (mut b, _b_sock) = test_session(332, "Target", 36, 500, 500).await;
+        // CG_WHISPER a "target" (minúsculas): wSize = 28 + 5 = 33.
+        let mut pkt = vec![header::CG_WHISPER];
+        pkt.extend_from_slice(&33u16.to_le_bytes());
+        let mut name = [0u8; pchat::NAME_BYTES];
+        name[..6].copy_from_slice(b"target");
+        pkt.extend_from_slice(&name);
+        pkt.extend_from_slice(b"hola\0");
+        let _ = handle_whisper(&mut a, &pkt).await.expect("whisper OK");
+        let to_b = tokio::time::timeout(Duration::from_secs(2), b.chat_rx.recv())
+            .await
+            .expect("Target recibe en 2 s")
+            .expect("outbox abierto");
+        assert_eq!(to_b[3], pchat::WHISPER_CHAT, "entregado (no NOT_EXIST)");
+        let from = String::from_utf8_lossy(&to_b[4..29])
+            .trim_end_matches('\0')
+            .to_string();
+        assert_eq!(from, "Wisp", "szNameFrom = el emisor");
+        assert_eq!(&to_b[29..], b"hola", "mensaje sin NUL");
+    }
+
     /// Whisper entre 2: el destinatario recibe GC_WHISPER (bType CHAT) con el
     /// nombre del EMISOR y el emisor recibe la confirmación (echo con el
     /// nombre del DESTINATARIO). El mensaje viaja SIN el NUL (parity strlen).
     #[tokio::test]
     async fn whisper_delivers_to_recipient_and_confirms_sender() {
+        let _guard = TEST_LOCK.lock().expect("test lock");
         // Mapas exclusivos del test (31/32 — el whisper es global, sin rango).
         let (mut a, mut a_sock) = test_session(301, "Whisperer", 31, 100, 100).await;
         let (mut b, _b_sock) = test_session(302, "Target", 32, 500, 500).await; // otro mapa — el whisper es global
@@ -525,6 +833,7 @@ mod tests {
     /// (bType NOT_EXIST) con el nombre buscado y SIN mensaje (parity).
     #[tokio::test]
     async fn whisper_to_nonexistent_notifies_sender() {
+        let _guard = TEST_LOCK.lock().expect("test lock");
         // Mapa 40 exclusivo del test.
         let (mut a, mut a_sock) = test_session(401, "Solo", 40, 100, 100).await;
         // CG_WHISPER a "Ghost" (no registrado): wSize = 28 + 5 = 33 ("hola\0").
