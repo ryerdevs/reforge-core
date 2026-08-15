@@ -40,6 +40,16 @@ pub struct Aggro {
     pub target: Option<Entity>,
 }
 
+/// C29: momento (ms del `WorldClock`) del ÚLTIMO ataque de este mob — el
+/// cooldown del golpe (`CalculateDuration(attack_speed, 2000)` ms, parity
+/// char_state.cpp:1005-1012) se computa contra ESTE instante. Empieza en 0
+/// (el mob ataca en el primer tick en rango, como el C++ que no tiene
+/// last-attack al spawn).
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LastAttack {
+    pub at_ms: u64,
+}
+
 /// Stats ESTÁTICAS del mob (una copia por entidad, del `mob_proto` vía
 /// `Mob::from_row`) — lo que los sistemas y el combate leen.
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
@@ -53,6 +63,9 @@ pub struct Mob {
     pub drop_item: i64,
     /// `move_speed` (UNITS/seg) — el paso del AI por tick.
     pub move_speed: i32,
+    /// `attack_speed` (default 100) — el cooldown del golpe del mob
+    /// (`CalculateDuration(attack_speed, 2000)` ms — C29).
+    pub attack_speed: i32,
     /// `damage_min`/`damage_max` — el daño del ataque del mob.
     pub damage_min: i32,
     pub damage_max: i32,
@@ -88,6 +101,7 @@ impl Mob {
             gold_max: row.gold_max,
             drop_item: row.drop_item,
             move_speed: row.move_speed,
+            attack_speed: row.attack_speed,
             damage_min: row.damage_min,
             damage_max: row.damage_max,
             home_x: entry.x,

@@ -83,6 +83,24 @@ pub fn attack_damage(
     dam
 }
 
+/// Cooldown del ATAQUE del mob en ms — parity `CalculateDuration`
+/// (utils.cpp:201-210): `i = 100 - iSpd`; `i>0 → 100+i`, `i<0 → 10000/(100-i)`,
+/// `i==0 → 100`; `return iDur * i / 100`. El C++ usa `CalculateDuration(
+/// GetLimitPoint(POINT_ATT_SPEED), 2000)` (char_state.cpp:1005-1012): con
+/// `attack_speed == 100` (default) el cooldown es EXACTAMENTE 2000 ms — el
+/// legacy NO golpea a 250 ms como el rewrite hacía (C29).
+pub fn mob_attack_cooldown_ms(attack_speed: i32) -> u64 {
+    let i = 100 - attack_speed;
+    let i = if i > 0 {
+        100 + i
+    } else if i < 0 {
+        10000 / (100 - i)
+    } else {
+        100
+    };
+    (2000 * i / 100) as u64
+}
+
 /// `IsAggressive()` parity (`char_state.cpp:224-226` — `AIFLAG_AGGRESSIVE`):
 /// el mob ataca PROACTIVAMENTE a quien entra en su `aggressive_sight`. El
 /// `ai_flag` del PG es el SET legacy migrado a TEXTO (p.ej. "AGGR,COWARD" —
@@ -300,5 +318,21 @@ mod tests {
         assert_eq!(move_duration_ms(500, 0, 100), 5_000, "paso largo del patrulla");
         assert_eq!(move_duration_ms(50, 0, 300), 166, "50×1000/300 = 166.67 — el C++ TRUNCA ((int) fDist/motionSpeed×1000, char.cpp:2767)");
         assert_eq!(move_duration_ms(0, 0, 0), 1, "floor 1 ms (nunca 0)");
+    }
+
+    /// C29: cooldown del ataque del mob — parity `CalculateDuration`
+    /// (utils.cpp:201-210). El rewrite atacaba cada tick (250 ms); el legacy
+    /// golpea cada `CalculateDuration(POINT_ATT_SPEED, 2000)` (char_state.cpp:
+    /// 1005-1012): attack_speed 100 → EXACTAMENTE 2000 ms.
+    #[test]
+    fn mob_attack_cooldown_parity() {
+        // i = 100 - 100 = 0 → i = 100 → 2000 × 100 / 100 = 2000 ms
+        assert_eq!(mob_attack_cooldown_ms(100), 2_000, "default attack_speed");
+        // i = 100 - 200 = -100 → i = 10000/(100+100) = 50 → 2000×50/100 = 1000
+        assert_eq!(mob_attack_cooldown_ms(200), 1_000, "doble velocidad → mitad");
+        // i = 100 - 50 = 50 → i = 150 → 2000×150/100 = 3000
+        assert_eq!(mob_attack_cooldown_ms(50), 3_000, "media velocidad → 1.5×");
+        // i = 100 - 80 = 20 → i = 120 → 2000×120/100 = 2400
+        assert_eq!(mob_attack_cooldown_ms(80), 2_400, "80 = 20% más lento");
     }
 }

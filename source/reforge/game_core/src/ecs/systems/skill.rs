@@ -509,8 +509,9 @@ mod tests {
         w.set_player_mp(2, 500);
         load_skills(&mut w, vec![skill19_proto()]);
 
-        // Sin buff: 200 − (5 + 24) = 171 (ninja sin armor).
-        let events = w.update(500);
+        // Sin buff: 200 − (5 + 24) = 171 (ninja sin armor). C29: cooldown
+        // 2000 ms — un tick de 2000 ms dispara el primer golpe.
+        let events = w.update(2_000);
         let d1 = events.iter().find_map(|e| match e {
             NpcEvent::Combat(CombatEvent::MobAttack { damage, .. }) => Some(*damage),
             _ => None,
@@ -539,8 +540,9 @@ mod tests {
         assert_eq!(elem.dw_flag, crate::skill::aff::CHEONGEUN);
         assert_eq!(elem.l_duration, 96, "60+90*0.4");
 
-        // Con el buff: 200 − (29 + 88) = 83.
-        let events = w.update(500);
+        // Con el buff: 200 − (29 + 88) = 83. C29: el cooldown sigue activo
+        // tras el skill (2000 ms desde el último golpe) — otro tick de 2000.
+        let events = w.update(2_000);
         let d2 = events.iter().find_map(|e| match e {
             NpcEvent::Combat(CombatEvent::MobAttack { damage, .. }) => Some(*damage),
             _ => None,
@@ -554,7 +556,7 @@ mod tests {
             removed |= events.iter().any(|e| matches!(e, NpcEvent::Skill(SkillEvent::AffectRemoved { skill_id: 19, .. })));
         }
         assert!(removed, "AffectRemoved al expirar");
-        let events = w.update(500);
+        let events = w.update(2_000); // C29: cooldown 2000 ms para el golpe
         let d3 = events.iter().find_map(|e| match e {
             NpcEvent::Combat(CombatEvent::MobAttack { damage, .. }) => Some(*damage),
             _ => None,
