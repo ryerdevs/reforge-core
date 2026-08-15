@@ -133,7 +133,12 @@ El plan "Base jugable" de 5 bugs fue un PRIMER BLOQUE, no la totalidad.
 | **Safebox/Messenger repos dormidos** | `database/src/{safebox,messenger}.rs` tienen 4+3 fns pero **cero callers** — sin handlers, sin framer, sin dispatch | Código escrito e inaccesible |
 | **CG_ITEM_DROP (soltar item)** | Sin handler (el kill-drop y pickup sí existen) | El jugador no puede soltar items del inventario |
 | **Headers GC ad-hoc** | `GC_EXCHANGE=42` en trade.rs, `GC_AFFECT_ADD=126` en packets.rs... — sin tabla central | Deuda estructural del wire S→C |
-| **CG_CHARACTER_POSITION (28)** | Sin handler (sync de posición del C++) | Menor |
+| **CG_CHARACTER_POSITION (28)** | Sin handler (Standup/Sitdown — sentarse) | El jugador no puede sentarse |
+| **PvP/PK** | `process_attack` solo usa `npc_view` — atacar a otro PC no hace nada | PvP al 0% |
+| **Subir stats (+ de la ventana)** | Los stat_points se cargan y se mandan en GC_POINTS pero no hay handler para asignarlos | El jugador no puede subir ST/DX/IQ/HT |
+| **Peso/carga** | Sin sistema de weight | El inventario no limita por peso |
+| **Oro en el suelo** | Sin recogida de oro (solo items) | Menor |
+| **POINT_* (stats/buffs)** | C++ gestiona **165 puntos**; el Rust conoce **32** (19%) | Buffs/skills incompletos |
 
 ## 5. Prioridades propuestas (siguiente loop)
 
