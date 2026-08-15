@@ -70,7 +70,7 @@ impl WorldSim {
     pub fn with_seed(spawn_cache: Arc<tokio::sync::Mutex<MobCache>>, seed: u64) -> Self {
         let mut world = World::new();
         world.insert_resource(SpawnCache(spawn_cache));
-        world.insert_resource(Tick { dt_ms: 500 });
+        world.insert_resource(Tick { dt_ms: 250 });
         world.insert_resource(Rand::new(seed));
         world.insert_resource(NpcOutbox(Vec::new()));
         world.insert_resource(SpawnTable::default());

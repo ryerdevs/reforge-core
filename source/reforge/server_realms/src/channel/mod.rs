@@ -31,8 +31,9 @@
 //! - DB caída en el LOGIN3 → `GC_LOGIN_FAILURE "NOTAVAIL"` (el C++ con el db
 //!   caído no responde nada — la query se pierde; el Rust degrada a un status
 //!   válido del protocolo, determinista; mismo espíritu que el auth bResult=0).
-//! - `WorldStore` por conexión (sanity + Batcher por login): el pool y el
-//!   Batcher compartido se deciden con el pipeline WAL (ADR-0008).
+//! - El canal usa un `PgPool` compartido (`database::pool`) y UN `Batcher`
+//!   por canal (Arc, flush 100 ms — cláusula del pool de ADR-0008, ejecutada
+//!   2026-08-13); `Session` lo recibe por referencia (pool + batcher).
 //! - `test_server` gate (`input_login.cpp:108-114`, "VERSION"): el Rust no lo
 //!   aplica (el runtime real del C++ lo tiene desactivado).
 //! - `last_play`/`g_iUserLimit` (FULL) del canal C++: no implementados
@@ -60,11 +61,10 @@ mod social;
 mod trade;
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use database::item::ItemRepo;
-use game_core::ecs::{CombatEvent, Intent, NpcEvent, WorldSim};
+use game_core::ecs::{CombatEvent, Intent, NpcEvent, QuestIntent, WorldSim};
 use protocol::world::TItemPos;
 use tokio::net::{TcpListener, TcpStream};
 
@@ -84,6 +84,39 @@ pub async fn run(config: Config) -> std::io::Result<()> {
     println!("server_realms: channel escuchando en {actual}");
     let mut config = config;
     config.listen = actual.to_string();
+    // Pool COMPARTIDO de conexiones PG del canal (fix del cuello del entry
+    // 2026-08-13): los repos del crate database YA NO abren conexión por
+    // llamada — el pool se crea aquí con `pool_max_size` del toml (default
+    // 10) y las queries reutilizan sus conexiones. LAZY a propósito: sin
+    // sanity en el arranque — con PG caída el canal sigue escuchando y cada
+    // login degrada a NOTAVAIL (semántica previa de `WorldStore::new`, que el
+    // smoke `channel_handles_login3_with_db_down` fija como contrato).
+    let pool = match database::pool::new_pool(&config.pg_conn, config.pool_max_size) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("server_realms: channel: {e} — PG no disponible, abortando");
+            return Err(std::io::Error::other(e));
+        }
+    };
+    // Replay del WAL local UNA vez por proceso (idempotente — `replay_once`).
+    // Antes vivía en WorldStore::new (por login, bloqueando con NOTAVAIL).
+    // Fail-open: si falla (PG caída / archivo corrupto) el canal SIGUE — el
+    // archivo WAL queda en disco (no se borra) y el próximo arranque lo
+    // reintenta; los logins degradan a NOTAVAIL mientras tanto.
+    let wal_dir = game_core::world::wal_dir();
+    if let Err(e) = game_core::world::replay_once(&pool, &wal_dir).await {
+        eprintln!("server_realms: channel: replay del WAL: {e} — sigue (fail-open); el WAL queda en disco");
+    }
+    // Batcher ÚNICO del canal (WAL local durable-first + audit en la misma
+    // tx, 100 ms / 64 mutations — semántica intacta de `database::wal`): los
+    // jugadores COMPARTEN el worker de flush (antes había un Batcher por
+    // WorldStore = por jugador).
+    let sink = database::wal::WalSink::new(database::wal::PgMutationSink::new(pool.clone()), wal_dir);
+    let batcher = std::sync::Arc::new(database::wal::Batcher::spawn(
+        Duration::from_millis(100),
+        64,
+        sink,
+    ));
     // Caché de mob_proto COMPARTIDA entre conexiones (F5 perf): la
     // resolución de spawns hace UNA query batch por los vnums que falten;
     // la caché evita el stall de minutos (10k conexiones por entrada).
@@ -95,6 +128,26 @@ pub async fn run(config: Config) -> std::io::Result<()> {
     let map_store = std::sync::Arc::new(std::sync::Mutex::new(game_core::map::MapStore::new()));
     let mut world = WorldSim::new(spawn_cache);
     let (intent_tx, mut intent_rx) = tokio::sync::mpsc::unbounded_channel::<Intent>();
+    // F5 quests (wiring 2026-08-13, fix A/B 2026-08-14): la conversión del
+    // corpus (194 archivos, ~2 s) NO puede bloquear el arranque — el cliente
+    // conecta al backlog del listener y cierra si el handshake llega tarde
+    // ("32 attempts" con quests cargadas; A/B: quest_path vacío conecta). La
+    // carga va en SEGUNDO PLANO: el accept loop arranca inmediatamente; el
+    // canal arranca SIN quests y las recibe cuando la conversión acaba
+    // (QuestIntent::Load por el mpsc normal — fail-open documentado).
+    let quest_dir = if config.quest_path.is_empty() {
+        default_quest_dir(&config.map_path)
+    } else {
+        config.quest_path.clone()
+    };
+    if !quest_dir.is_empty() {
+        let tx = intent_tx.clone();
+        tokio::spawn(async move {
+            if let Some((text, texts)) = load_quest_corpus(&quest_dir) {
+                let _ = tx.send(Intent::Quest(QuestIntent::Load { text, texts }));
+            }
+        });
+    }
     // El canal conserva un emisor propio: el mpsc NO se cierra cuando la
     // última conexión termina (la tarea del mundo sigue viva para aceptar).
     let _keepalive = intent_tx.clone();
@@ -103,8 +156,13 @@ pub async fn run(config: Config) -> std::io::Result<()> {
         u32,
         tokio::sync::mpsc::UnboundedSender<NpcEvent>,
     > = std::collections::HashMap::new();
-    // Tick de AI del mundo (500 ms — parity del tick previo del canal).
-    const AI_TICK_MS: u64 = 500;
+    // Tick de AI del mundo. 2026-08-15: 500 → 250 ms — los pasos de
+    // speed×0.5s cada medio segundo se veían "a saltos rápidos" (el C++
+    // mueve los mobs cada frame ~100ms con pasos continuos — con 500ms el
+    // cliente interpola cada paso pero con pausas entre ellos). Con 250ms
+    // los pasos son speed×0.25s — 2× más suave, misma velocidad real
+    // (step_toward usa tick.dt_ms). El dt del mundo se pasa por update().
+    const AI_TICK_MS: u64 = 250;
     let mut ai_timer = tokio::time::interval_at(
         tokio::time::Instant::now() + Duration::from_millis(AI_TICK_MS),
         Duration::from_millis(AI_TICK_MS),
@@ -116,6 +174,9 @@ pub async fn run(config: Config) -> std::io::Result<()> {
                 // Tick del mundo COMPARTIDO: los sistemas corren sobre TODAS
                 // las entidades; cada evento va a la cola de su jugador.
                 let events = world.update(AI_TICK_MS);
+                // Harness F5: tick_ms por tick (timing de sistemas) + los
+                // contadores del mundo -> `--bench-capture` (no-op sin flag).
+                crate::bench_capture::record_metrics(world.metrics());
                 route_events(events, &routes);
             }
             intent = intent_rx.recv() => {
@@ -128,7 +189,7 @@ pub async fn run(config: Config) -> std::io::Result<()> {
                         let pvid = player.vid;
                         let pmap = player.map_index;
                         routes.insert(pvid, out);
-                        let repo = database::npc::MobRepo::new(&config.pg_conn);
+                        let repo = database::npc::MobRepo::new(pool.clone());
                         let events = match world.join_player(player, &repo, &config.map_path).await {
                             Ok(ev) => ev,
                             Err(e) => {
@@ -144,10 +205,22 @@ pub async fn run(config: Config) -> std::io::Result<()> {
                         // La tabla de skills (UNA vez — estática en el
                         // runtime); si falla, las skills quedan desactivadas.
                         if let Err(e) = world
-                            .load_skills(&game_core::skill::SkillRepo::new(&config.pg_conn))
+                            .load_skills(&game_core::skill::SkillRepo::new(pool.clone()))
                             .await
                         {
                             eprintln!("server_realms: channel: skill_proto: {e} — skills desactivadas");
+                        }
+                        // La tabla de tiendas (UNA vez — estática en el
+                        // runtime). FIX 2026-08-14: load_shops NUNCA se
+                        // llamaba — la ShopTable estaba vacía y el click a
+                        // un vendedor moría en silencio (parity
+                        // StartShopping — shop_manager.cpp:102-152). Si
+                        // falla, las tiendas quedan desactivadas.
+                        if let Err(e) = world
+                            .load_shops(&game_core::shop::ShopRepo::new(pool.clone()))
+                            .await
+                        {
+                            eprintln!("server_realms: channel: player.shop: {e} — tiendas desactivadas");
                         }
                         let spawned = events
                             .iter()
@@ -178,9 +251,11 @@ pub async fn run(config: Config) -> std::io::Result<()> {
                 let id = conn_id;
                 let tx = intent_tx.clone();
                 let ms = map_store.clone();
+                let pool = pool.clone();
+                let batcher = batcher.clone();
                 conn_id = conn_id.wrapping_add(1);
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(stream, cfg, id, tx, ms).await {
+                    if let Err(e) = handle_connection(stream, cfg, id, tx, ms, pool, batcher).await {
                         eprintln!("server_realms: channel conn {id}: {e}");
                     }
                 });
@@ -222,8 +297,10 @@ async fn handle_connection(
     conn_id: u32,
     intent_tx: tokio::sync::mpsc::UnboundedSender<Intent>,
     map_store: std::sync::Arc<std::sync::Mutex<game_core::map::MapStore>>,
+    pool: database::pool::PgPool,
+    batcher: std::sync::Arc<database::wal::Batcher>,
 ) -> Result<(), String> {
-    let mut session = Session::new(stream, config, conn_id, intent_tx, map_store);
+    let mut session = Session::new(stream, config, conn_id, intent_tx, map_store, pool, batcher);
     // Fases 1-7 (handshake → login → select → entry → world join): la sesión
     // queda LLENA (row/store/motion/leave) antes del loop de juego.
     entry::run(&mut session).await?;
@@ -250,10 +327,13 @@ fn parse_listen(listen: &str) -> Result<(String, u16), String> {
 /// con el resto de operaciones del inventario) — el tick del AI lo lee del
 /// mundo ECS (`WorldSim::set_player_armor`), eliminando las queries PG por
 /// tick del código previo.
-async fn equipped_armor(inventory: &[database::item::ItemRow], pg_conn: &str) -> Result<i32, String> {
+async fn equipped_armor(
+    inventory: &[database::item::ItemRow],
+    pool: &database::pool::PgPool,
+) -> Result<i32, String> {
     let mut armor = 0i32;
     for w in inventory.iter().filter(|i| i.window == "EQUIPMENT") {
-        if let Some(p) = ItemRepo::new(pg_conn).load_proto_use_values(w.vnum).await? {
+        if let Some(p) = ItemRepo::new(pool.clone()).load_proto_use_values(w.vnum).await? {
             const ITEM_TYPE_ARMOR: i16 = 2; // ItemData.h:73
             if p.b_type == ITEM_TYPE_ARMOR && matches!(p.b_sub_type, 0 | 1 | 2 | 4) {
                 armor += p.values[1] + 2 * p.values[5];
@@ -278,6 +358,26 @@ const WEAR_MAX_NUM: u16 = 32;
 /// `WEAR_ARROW = 9` (length.h:110) — el slot del arco/flechas (el cell del
 /// wire = INVENTORY_MAX_NUM + wear, length.h:827).
 const WEAR_ARROW: u16 = 9;
+/// `WEAR_WEAPON = 4` (length.h:104) — el slot del arma (el cell del wire =
+/// INVENTORY_MAX_NUM + wear). El daño del arma (value0/value1) alimenta los
+/// `POINT_WEAPON_MIN/MAX` de la ventana del personaje (BattlePoints).
+const WEAR_WEAPON: u16 = 4;
+
+/// El proto del ARMA equipada (WEAR_WEAPON — cell INVENTORY_MAX_NUM + 4):
+/// `value0/value1` = el daño min/max que la ventana del cliente muestra como
+/// ataque (POINT_WEAPON_MIN/MAX — `uicharacter.py` ATT_MIN/ATT_MAX). `None` =
+/// sin arma (manos vacías).
+async fn equipped_weapon_proto(
+    pool: &database::pool::PgPool,
+    inventory: &[database::item::ItemRow],
+) -> Result<Option<database::item::ProtoItem>, String> {
+    for w in inventory.iter().filter(|i| i.window == "EQUIPMENT") {
+        if w.pos as u16 == INVENTORY_MAX_NUM + WEAR_WEAPON {
+            return ItemRepo::new(pool.clone()).load_proto_use_values(w.vnum).await;
+        }
+    }
+    Ok(None)
+}
 
 /// El item de flechas EQUIPADO (WEAR_ARROW → cell 180+9=189): el slot que el
 /// legacy lee con `GetWear(WEAR_ARROW)` (char_battle.cpp:2747 —
@@ -313,7 +413,7 @@ pub(crate) async fn consume_arrow(session: &mut Session) -> Result<(), String> {
         .send(&up.to_bytes())
         .await
         .map_err(|e| format!("enviando GC_ITEM_UPDATE (flecha): {e}"))?;
-    ItemRepo::new(&session.config.pg_conn)
+    ItemRepo::new(session.pool.clone())
         .upsert(&session.inventory[idx], session.row().id)
         .await?;
     eprintln!(
@@ -323,10 +423,113 @@ pub(crate) async fn consume_arrow(session: &mut Session) -> Result<(), String> {
     Ok(())
 }
 
+/// El dir de quests por defecto (derivado del `map_path`): el `quest`
+/// hermano del dir del mapa; si está vacío (el runtime desplegado tiene
+/// `spain/quest` vacío y el corpus legacy en `germany/quest`), el `quest`
+/// del locale `germany` hermano.
+fn default_quest_dir(map_path: &str) -> String {
+    let locale = std::path::Path::new(map_path)
+        .parent()
+        .unwrap_or(std::path::Path::new("."));
+    for cand in [locale.join("quest"), locale.join("germany").join("quest")] {
+        if cand.is_dir()
+            && std::fs::read_dir(&cand).map(|mut e| e.next().is_some()).unwrap_or(false)
+        {
+            return cand.display().to_string();
+        }
+    }
+    locale.join("quest").display().to_string()
+}
+
+/// Carga el corpus de quests del runtime (`quest_path`): convierte cada
+/// `.quest` legacy a DSL (`quest_dsl::convert::convert_corpus`) y concatena
+/// los que convierten — el SUBSET usable con el estado actual del conversor
+/// (el corpus 194/194 convierte; los constructos no mapeados se reportan y
+/// los eventos con triggers no mapeados se omiten — quest_dsl). También
+/// parsea `quest_text.txt` del mismo dir (clave<TAB>texto por línea — el
+/// diccionario ADR-0009; ausente = claves sin resolver). `None` si el dir no
+/// existe o nada convirtió (fail-open: el canal sigue sin quests).
+fn load_quest_corpus(dir: &str) -> Option<(String, std::collections::HashMap<String, String>)> {
+    let mut files: Vec<(String, String)> = Vec::new();
+    collect_quest_files(std::path::Path::new(dir), &mut files);
+    if files.is_empty() {
+        eprintln!("server_realms: channel: quests: {dir} vacío o inexistente — sin quests");
+        return None;
+    }
+    let (outputs, report) = quest_dsl::convert::convert_corpus(&files);
+    for (f, e) in &report.failed {
+        eprintln!("server_realms: channel: quest {f}: {e}");
+    }
+    if outputs.is_empty() {
+        return None;
+    }
+    let mut text = String::new();
+    for (_, dsl) in &outputs {
+        text.push_str(dsl);
+        text.push('\n');
+    }
+    let texts = load_quest_texts(dir);
+    eprintln!(
+        "server_realms: channel: quests convertidas: {} archivos ({} unmapped, {} fallidas; {} textos de quest)",
+        outputs.len(),
+        report.unmapped.len(),
+        report.failed.len(),
+        texts.len()
+    );
+    Some((text, texts))
+}
+
+/// `quest_text.txt` del dir de quests: una `clave<TAB>texto` por línea (el
+/// formato legacy del quest_text de metin2). Ausente/vacío -> diccionario
+/// vacío (fallback: las claves se envían tal cual).
+fn load_quest_texts(dir: &str) -> std::collections::HashMap<String, String> {
+    let path = std::path::Path::new(dir).join("quest_text.txt");
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return std::collections::HashMap::new();
+    };
+    let mut texts = std::collections::HashMap::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((k, v)) = line.split_once('\t') {
+            texts.insert(k.trim().to_string(), v.trim().to_string());
+        }
+    }
+    texts
+}
+
+/// Recoge los `.quest` del dir (recursivo) — lossy UTF-8 (los archivos
+/// legacy mezclan bytes CP949 en comentarios; el CLI del conversor hace lo
+/// mismo).
+fn collect_quest_files(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            collect_quest_files(&p, out);
+        } else if p.extension().is_some_and(|e| e == "quest") {
+            let rel = p.to_string_lossy().replace('\\', "/");
+            if let Ok(bytes) = std::fs::read(&p) {
+                out.push((rel, String::from_utf8_lossy(&bytes).into_owned()));
+            }
+        }
+    }
+}
+
 /// `now_ms` — reloj del servidor en ms desde boot (parity `get_dword_time`).
+/// Reloj del servidor en ms — BASE COMPARTIDA unix-ms (FIX P0-A 2026-08-14):
+/// el AUTH usa la misma base y el cliente ancla su reloj al dwTime del
+/// handshake del auth → el desfase de arranque auth/canal desaparece (el
+/// kick del speedhack por skew era el síntoma — FastTimer/SlowTimer al
+/// moverte tras un restart independiente). El wrap u32 de `now32` (49,7 días)
+/// es parity del `get_dword_time` del C++.
 fn now_ms() -> u64 {
-    static START: OnceLock<Instant> = OnceLock::new();
-    START.get_or_init(Instant::now).elapsed().as_millis() as u64
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// `now_ms` como u32 (el wire del MOVE — parity `get_dword_time` con wrap).
@@ -357,6 +560,43 @@ mod tests {
         for _ in 0..100 {
             assert_ne!(rand32(), 0);
         }
+    }
+
+    /// El wiring de quests (2026-08-13): un corpus fixture (2 archivos qc)
+    /// se convierte a DSL (`load_quest_corpus`) y el texto carga en el
+    /// QuestEngine — la quest del NPC con `when <vnum>.chat` queda disponible
+    /// para el click.
+    #[test]
+    fn quest_corpus_loads_into_engine() {
+        let dir = std::env::temp_dir().join(format!("quest_wire_{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(
+            dir.join("hello.quest"),
+            "quest hello begin\n\tstate start begin\n\t\twhen login begin\n\t\t\tsay(gameforge.x._t)\n\t\tend\n\tend\nend\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("sub/npc1.quest"),
+            "quest npc1 begin\n\tstate start begin\n\t\twhen 20084.chat begin\n\t\t\tsay(gameforge.npc1._s)\n\t\tend\n\tend\nend\n",
+        )
+        .unwrap();
+        let (text, texts) = load_quest_corpus(dir.to_str().unwrap()).expect("corpus convierte");
+        assert!(texts.is_empty(), "sin quest_text.txt: diccionario vacío");
+        let engine = game_core::quest::QuestEngine::load(&text).expect("DSL parsea");
+        let names: Vec<&str> = engine.quests().iter().map(|q| q.name.as_str()).collect();
+        assert!(names.contains(&"hello") && names.contains(&"npc1"), "{names:?}");
+        // La quest del NPC tiene el trigger chat 20084 (la asociación del click).
+        let npc1 = engine.quest("npc1").expect("npc1");
+        let has_chat = npc1.states[0].events.iter().any(|e| {
+            e.triggers.iter().any(|t| {
+                t.kind
+                    == quest_dsl::ast::TriggerKind::Chat {
+                        target: quest_dsl::ast::TriggerTarget::Num(20084),
+                    }
+            })
+        });
+        assert!(has_chat, "el trigger chat 20084 sobrevive la conversión");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// parse_listen: el addr:port del config — la dirección del DirectEnter.
