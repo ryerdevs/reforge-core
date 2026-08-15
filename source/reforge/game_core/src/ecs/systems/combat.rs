@@ -3,6 +3,8 @@
 //! y sus helpers `npc_view`/`damage_npc`/`remove_npc`) + los syncs de stats
 //! del jugador que alimentan las fórmulas (hp/sp/armor/level).
 
+use std::collections::HashMap;
+
 use bevy_ecs::prelude::*;
 
 use crate::ai::{attack_damage, move_duration_ms, rotation_5deg, step_toward};
@@ -93,25 +95,28 @@ fn npc_state(vid: u32, pos: &Position, mob: &Mob) -> NpcState {
 ///    ataque en rango melee (GC_MOVE(FUNC_ATTACK) + daño al jugador — parity
 ///    char_state.cpp:386 + `battle_hit`) o paso de persecución (`step_toward`).
 ///    Multi-jugador: cada mob persigue SU objetivo (`Aggro.target`).
+#[allow(clippy::type_complexity)] // firma de sistema bevy (ParamSet con 2 queries)
 pub(crate) fn chase_attack_system(
     mut mobs: ParamSet<(
         // Posiciones de TODOS los mobs (C28 — separación; read-only).
-        Query<(&Vid, &Position), Without<Player>>,
-        Query<(&Vid, &Mob, &mut Aggro, &mut Position), Without<Player>>,
+        Query<(&Vid, &Position, &Map), Without<Player>>,
+        Query<(&Vid, &Mob, &Map, &mut Aggro, &mut Position), Without<Player>>,
     )>,
     mut players: Query<(Entity, &Player, &Position, &mut Hp, &Affects), Without<Mob>>,
     tick: Res<Tick>,
     mut rng: ResMut<Rand>,
     mut outbox: ResMut<NpcOutbox>,
 ) {
-    // C28: snapshot de las posiciones de los mobs (la separación consulta
-    // a los OTROS mobs — el ParamSet evita el conflicto de queries).
-    let others: Vec<(u32, i32, i32)> = mobs
-        .p0()
-        .iter()
-        .map(|(v, p)| (v.vid, p.x, p.y))
-        .collect();
-    for (vid, mob, mut aggro, mut pos) in &mut mobs.p1() {
+    // C28: snapshot de las posiciones de los mobs AGRUPADO POR MAPA (la
+    // separación consulta a los OTROS mobs del MISMO mapa — el ParamSet
+    // evita el conflicto de queries). F1: el mundo materializa mobs de
+    // TODOS los mapas — sin el filtro, un mob de otro mapa con coords
+    // coincidentes (≤ 60 u del aterrizaje) bloqueaba falsamente el paso.
+    let mut others_by_map: HashMap<u32, Vec<(u32, i32, i32)>> = HashMap::new();
+    for (v, p, m) in &mobs.p0() {
+        others_by_map.entry(m.map_index).or_default().push((v.vid, p.x, p.y));
+    }
+    for (vid, mob, map, mut aggro, mut pos) in &mut mobs.p1() {
         let Some(target) = aggro.target else {
             continue;
         };
@@ -158,8 +163,15 @@ pub(crate) fn chase_attack_system(
             continue; // ya en el jugador (o speed 0)
         }
         // C28 (separación): el destino del paso debe quedar libre de otros
-        // mobs — si está ocupado, probar flancos o no moverse este tick.
-        let Some((nx, ny)) = separate_landing(&others, vid.vid, (pos.x, pos.y), sx, sy) else {
+        // mobs del MISMO mapa — si está ocupado, probar flancos o no
+        // moverse este tick (F1: los mobs de otros mapas no bloquean).
+        let Some((nx, ny)) = separate_landing(
+            others_by_map.get(&map.map_index).map(Vec::as_slice).unwrap_or(&[]),
+            vid.vid,
+            (pos.x, pos.y),
+            sx,
+            sy,
+        ) else {
             continue; // otro mob bloquea — no moverse este tick
         };
         let rot = rotation_5deg(pos.x, pos.y, nx, ny);
@@ -278,8 +290,8 @@ impl WorldSim {
     /// mob vino de una entrada de la tabla de spawns, programa su RESPAWN
     /// por tiempo (parity `regen_event`, regen.cpp:582-600): la entrada
     /// vuelve a materializarse tras el intervalo del regen.txt (`entry.time`
-    /// — 5s/30s/60s/3600s en el runtime) o 60 s por defecto si la entrada
-    /// no tiene intervalo (tests).
+    /// — 5s/30s/60s/3600s en el runtime). `time == 0` → SIN respawn (parity
+    /// regen.cpp:680-693 — el C++ no re-spawnea esas entradas).
     pub(crate) fn remove_npc(&mut self, vid: u32) {
         // Deadline + copias ANTES del despawn (necesita el SpawnRef y la
         // tabla — borrows secuenciales).
@@ -301,12 +313,20 @@ impl WorldSim {
                 .and_then(|es| es.get(sr.index))
                 .map(|se| se.entry.time)
                 .unwrap_or(0);
-            // Default 60 s si la entrada no declara intervalo (el C++ solo
-            // re-spawnea entradas con `time != 0`, regen.cpp:682-693; las
-            // entradas sin intervalo del runtime no existen — el loader las
-            // salta — así que el default solo aplica a los tests).
-            let interval = if interval == 0 { 60 } else { interval };
-            let due = self.world.resource::<WorldClock>().0 + u64::from(interval) * 1000;
+            // C23/F2 (parity `regen_load` + `regen_event`, regen.cpp:680-693
+            // y 582-600): `time == 0` → SIN respawn — el C++ solo spawnea y
+            // re-spawnea entradas con `time != 0` (el runtime spain tiene
+            // ~2800 entradas "0s": holyplace_flame 2303, sungzi_flame_pass
+            // 2311 — mueren UNA vez y no vuelven). El sentinel u64::MAX
+            // marca la entrada como muerta para siempre: el spawn dinámico
+            // NO debe re-materializarla al re-acercarse un jugador (parity:
+            // el mob del C++ no reaparece NUNCA, ni con players
+            // entrando/saliendo del área).
+            let due = if interval == 0 {
+                u64::MAX
+            } else {
+                self.world.resource::<WorldClock>().0 + u64::from(interval) * 1000
+            };
             Some((sr.map, sr.index, due))
         };
         if let Some(e) = self.world.resource_mut::<NpcIndex>().0.remove(&vid)
@@ -769,6 +789,61 @@ mod tests {
         );
     }
 
+    /// C28 (separación POR MAPA — F1): el snapshot de `others` se filtra
+    /// por el mapa del mob — 2 mobs de mapas DISTINTOS con coordenadas
+    /// coincidentes NO se bloquean (el mundo materializa mobs de TODOS los
+    /// mapas; sin el filtro, un mob de otro mapa sentado sobre el aterrizaje
+    /// del paso desviaba el chase al flanco o lo congelaba).
+    #[test]
+    fn mobs_on_different_maps_never_block_each_other() {
+        let mut w = world_with(42);
+        let mut row = mob_row(101);
+        row.ai_flag = Some("AGGR".into()); // persigue al jugador del mapa 41
+        let mut other_map = mob_row(2101);
+        other_map.ai_flag = Some("NOMOVE".into()); // se queda quieto en (300,0)
+        load(&mut w, vec![(entry(101, 400, 0, 1), row)]);
+        w.load_table(42, vec![(entry(2101, 300, 0, 1), other_map)]);
+        // Jugador 2 en el mapa 41: materializa el mob 101 (aggro → chase).
+        let events = join_at(&mut w, 2, 0, 0);
+        assert_eq!(w.npc_count(), 1, "solo el mob del mapa 41");
+        assert!(events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::AggroOn { .. }))));
+        // Jugador 3 en el mapa 42 (mismas coords del mundo): materializa el
+        // mob 2101 — el primer tick del join también mueve al mob 101
+        // (paso 400 → 350; el chase corre DESPUÉS del detect en el mismo
+        // tick, parity del orden del canal).
+        w.join_player_ready(PlayerJoin {
+            vid: 3,
+            map_index: 42,
+            x: 0,
+            y: 0,
+            hp: 100,
+            max_hp: 100,
+            mp: 100,
+            max_mp: 100,
+            skill_level: Vec::new(),
+            level: 5,
+            ht: 30,
+            armor: 0,
+            job: 1,
+            st: 30,
+            dx: 30,
+            iq: 30,
+        });
+        assert_eq!(w.npc_count(), 2, "el mob del mapa 42 también se materializó");
+        // Tick siguiente: el mob 101 avanza RECTO y pisa las coordenadas
+        // EXACTAS del mob del mapa 42 (350 → 300) — sin el filtro por mapa,
+        // el mob 2101 (a 0 u del aterrizaje, 100 u del mob) lo desviaría al
+        // flanco (350, ∓50).
+        let events = w.update(500);
+        let moved = events.iter().find_map(|e| match e {
+            NpcEvent::Move(MoveEvent::Moved { vid, x, y, .. }) => Some((*vid, *x, *y)),
+            _ => None,
+        });
+        assert_eq!(moved, Some((10_000, 300, 0)), "paso recto: el mob del mapa 42 no bloquea");
+        assert_eq!(w.npc_view(10_000).map(|v| (v.state.x, v.state.y)), Some((300, 0)));
+        assert_eq!(w.npc_view(10_001).map(|v| (v.state.x, v.state.y)), Some((300, 0)), "el mob del mapa 42 sigue en su sitio");
+    }
+
     /// C28 (amontonamiento): 2 mobs del MISMO entry persiguiendo al mismo
     /// jugador NUNCA ocupan la misma celda — el jitter del spawn los separa
     /// (parity `SpawnMobRange`, char_manager.cpp:545-563) y la separación
@@ -813,10 +888,12 @@ mod tests {
         assert!(d1 <= 300, "mob B en rango: {d1}");
     }
 
-    /// C23 (respawn por tiempo): el mob MUERTO no reaparece hasta el
-    /// intervalo del regen.txt (entry.time — parity `regen_event`,
-    /// regen.cpp:582-600: el C++ re-spawnea cada `time` segundos) y luego
-    /// re-materializa con vid FRESCO en su entrada.
+    /// C23 (respawn por tiempo — F2, caso `time > 0`): el mob MUERTO no
+    /// reaparece hasta el intervalo del regen.txt (entry.time — parity
+    /// `regen_event`, regen.cpp:582-600: el C++ re-spawnea cada `time`
+    /// segundos) y luego re-materializa con vid FRESCO en su entrada.
+    /// (El caso `time == 0` — SIN respawn — lo cubre
+    /// `killed_mob_with_time_zero_never_respawns`.)
     #[test]
     fn killed_mob_respawns_after_regen_interval() {
         use crate::npc::SpawnEntry;
@@ -845,5 +922,50 @@ mod tests {
         assert!(events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))), "respawn: {events:?}");
         assert_eq!(w.npc_count(), 1, "reapareció tras el intervalo");
         assert!(w.npc_view(10_001).is_some(), "vid fresco 10_001 (el 10_000 murió)");
+    }
+
+    /// C23/F2 (time=0 → SIN respawn): las entradas con `time == 0` del
+    /// regen.txt NO respawnean (parity regen_load: solo spawnea/re-spawnea
+    /// con `time != 0`, regen.cpp:680-693 + regen_event auto-cancel,
+    /// regen.cpp:582-600 — el runtime spain tiene ~2800 entradas "0s":
+    /// holyplace_flame 2303, sungzi_flame_pass 2311 — mueren UNA vez y no
+    /// vuelven NUNCA, ni al re-acercarse un jugador).
+    #[test]
+    fn killed_mob_with_time_zero_never_respawns() {
+        use crate::npc::SpawnEntry;
+        let mut w = world_with(42);
+        let mut row = mob_row(101);
+        row.max_hp = 10; // un golpe (46+) mata
+        load(&mut w, vec![(SpawnEntry { time: 0, ..entry(101, 0, 0, 1) }, row)]);
+        join(&mut w);
+        assert_eq!(w.npc_count(), 1);
+        // Muerte (el reloj del mundo va en 500 ms — el del join).
+        w.process_intent(
+            CombatIntent::Attack { player_vid: 2, victim_vid: 10_000, b_type: 0, weapon: None }.into(),
+            1_000,
+        );
+        assert_eq!(w.npc_count(), 0, "muerto: despawn inmediato");
+        // 3 × 20 s = 60 s: el antiguo default de 60 s ya venció — la entrada
+        // NO re-materializa (parity: el mob no vuelve).
+        for _ in 0..3 {
+            let events = w.update(20_000);
+            assert!(
+                !events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))),
+                "time=0 no respawnea: {events:?}"
+            );
+            assert_eq!(w.npc_count(), 0);
+        }
+        // Ni al salir y re-acercarse: el sentinel del RespawnQueue bloquea
+        // la re-materialización del spawn dinámico (parity: el mob del C++
+        // no reaparece aunque los players entren/salgan del área).
+        w.process_intent(MoveIntent::Move { player_vid: 2, x: 10_800, y: 0 }.into(), 61_000);
+        w.update(500);
+        w.process_intent(MoveIntent::Move { player_vid: 2, x: 0, y: 0 }.into(), 62_000);
+        let events = w.update(500);
+        assert!(
+            !events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))),
+            "no reaparece al volver el jugador: {events:?}"
+        );
+        assert_eq!(w.npc_count(), 0);
     }
 }
