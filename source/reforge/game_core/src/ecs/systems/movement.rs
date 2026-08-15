@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use bevy_ecs::prelude::*;
 
-use crate::ai::{move_duration_ms, patrol_step, rotation_5deg, step_toward};
+use crate::ai::{mob_move_speed, move_duration_ms, patrol_step, rotation_5deg, step_toward};
 use crate::combat::distance_approx;
 use crate::ecs::components::{Aggro, Map, Mob, Player, Position, Vid};
 use crate::ecs::events::MoveEvent;
@@ -81,7 +81,7 @@ pub(crate) fn patrol_system(
         ) else {
             continue;
         };
-        let (sx, sy) = step_toward(pos.x, pos.y, tx, ty, mob.move_speed, tick.dt_ms);
+        let (sx, sy) = step_toward(pos.x, pos.y, tx, ty, mob_move_speed(mob.move_speed) as i32, tick.dt_ms);
         if (sx, sy) == (pos.x, pos.y) {
             continue;
         }
@@ -100,7 +100,7 @@ pub(crate) fn patrol_system(
         let rot = rotation_5deg(pos.x, pos.y, nx, ny);
         // La duración REAL del paso (parity CalculateMoveDuration,
         // char.cpp:2765-2768) — el cliente interpola con ESTA duración.
-        let duration_ms = move_duration_ms(nx - pos.x, ny - pos.y, mob.move_speed);
+        let duration_ms = move_duration_ms(nx - pos.x, ny - pos.y, mob_move_speed(mob.move_speed) as i32);
         pos.x = nx;
         pos.y = ny;
         for pv in &visible {

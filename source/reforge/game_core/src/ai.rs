@@ -90,15 +90,38 @@ pub fn attack_damage(
 /// `attack_speed == 100` (default) el cooldown es EXACTAMENTE 2000 ms — el
 /// legacy NO golpea a 250 ms como el rewrite hacía (C29).
 pub fn mob_attack_cooldown_ms(attack_speed: i32) -> u64 {
-    let i = 100 - attack_speed;
+    calculate_duration(attack_speed, 2000) as u64
+}
+
+/// `CalculateDuration` pura (parity utils.cpp:201-210) — el factor de
+/// velocidad/cooldown del C++: `POINT_*` es el FACTOR (100 = neutro), no un
+/// valor directo. Reutilizada por el cooldown del ataque (C29) y la
+/// velocidad real del mob (C30).
+pub fn calculate_duration(i_spd: i32, i_dur: i64) -> i64 {
+    let i = 100 - i_spd;
     let i = if i > 0 {
-        100 + i
+        100_i64 + i as i64
     } else if i < 0 {
-        10000 / (100 - i)
+        10_000 / (100_i64 - i as i64)
     } else {
         100
     };
-    (2000 * i / 100) as u64
+    i_dur * i / 100
+}
+
+/// Velocidad REAL del mob en u/s — parity `CHARACTER::GetMoveSpeed`
+/// (char.cpp:2751-2754): `GetMoveMotionSpeed() * 10000 / CalculateDuration(
+/// POINT_MOV_SPEED, 10000)`. La columna `move_speed` del mob_proto es el
+/// FACTOR (POINT_MOV_SPEED, 100 = neutro); la velocidad sale de la ANIMACIÓN
+/// (motion RUN de la raza — C30). Sin los `.msa`/`.granny` en el rewrite,
+/// `MOTION_SPEED` es la constante aproximada (~300 u/s, el valor típico del
+/// motion de las razas legacy — GAP: tabla por raza cuando exista). Con
+/// factor 100 → EXACTAMENTE 300 u/s (el rewrite usaba la columna como u/s →
+/// mobs ~3× más lentos, C30).
+pub fn mob_move_speed(move_speed: i32) -> u32 {
+    const MOTION_SPEED: u32 = 300; // u/s del motion RUN legacy (~300)
+    let dur = calculate_duration(move_speed, 10_000);
+    (MOTION_SPEED * 10_000 / dur.max(1) as u32).max(1)
 }
 
 /// `IsAggressive()` parity (`char_state.cpp:224-226` — `AIFLAG_AGGRESSIVE`):
@@ -334,5 +357,22 @@ mod tests {
         assert_eq!(mob_attack_cooldown_ms(50), 3_000, "media velocidad → 1.5×");
         // i = 100 - 80 = 20 → i = 120 → 2000×120/100 = 2400
         assert_eq!(mob_attack_cooldown_ms(80), 2_400, "80 = 20% más lento");
+    }
+
+    /// C30: la velocidad REAL del mob = motion(300) × 10000/CalculateDuration
+    /// (char.cpp:2751-2754). La columna es el FACTOR: 100 → 300 u/s exactos
+    /// (el rewrite usaba la columna como u/s → ~3× más lento, "se mueven
+    /// raro"); 0/1 (308 mobs del PG) ya no congelan (el C++ los mueve a
+    /// ~mitad de velocidad); 200 → 600 u/s.
+    #[test]
+    fn mob_move_speed_is_motion_times_factor() {
+        assert_eq!(mob_move_speed(100), 300, "factor neutro → motion");
+        // CalculateDuration(50, 10000): i=150 → 15000 → 300×10000/15000 = 200
+        assert_eq!(mob_move_speed(50), 200, "más lento");
+        // CalculateDuration(200, 10000): i=50 → 5000 → 300×10000/5000 = 600
+        assert_eq!(mob_move_speed(200), 600, "2× la velocidad");
+        // CalculateDuration(0, 10000): i=200 → 20000 → 300×10000/20000 = 150
+        assert_eq!(mob_move_speed(0), 150, "factor 0 no congela (parity)");
+        assert_eq!(mob_move_speed(1), 150, "factor 1 ≈ 150 u/s (parity)");
     }
 }

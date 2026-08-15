@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use bevy_ecs::prelude::*;
 
-use crate::ai::{attack_damage, move_duration_ms, rotation_5deg, step_toward};
+use crate::ai::{attack_damage, mob_move_speed, move_duration_ms, rotation_5deg, step_toward};
 use crate::combat::{
     attack_speed_for_weapon, distance_approx, handle_attack, melee_max_range,
     player_def_grade, CombatState, NpcState, PlayerState,
@@ -171,7 +171,7 @@ pub(crate) fn chase_attack_system(
         }
         // Persecución: paso hacia el jugador a `move_speed` (parity
         // `step_toward` — el canal difundía el GC_MOVE FUNC_MOVE).
-        let (sx, sy) = step_toward(pos.x, pos.y, ppos.x, ppos.y, mob.move_speed, tick.dt_ms);
+        let (sx, sy) = step_toward(pos.x, pos.y, ppos.x, ppos.y, mob_move_speed(mob.move_speed) as i32, tick.dt_ms);
         if (sx, sy) == (pos.x, pos.y) {
             continue; // ya en el jugador (o speed 0)
         }
@@ -191,7 +191,7 @@ pub(crate) fn chase_attack_system(
         // La duración REAL del paso (parity CalculateMoveDuration,
         // char.cpp:2765-2768) — el cliente interpola con ESTA duración; el
         // dt del tick fijo animaba los pasos largos a velocidad altísima.
-        let duration_ms = move_duration_ms(nx - pos.x, ny - pos.y, mob.move_speed);
+        let duration_ms = move_duration_ms(nx - pos.x, ny - pos.y, mob_move_speed(mob.move_speed) as i32);
         pos.x = nx;
         pos.y = ny;
         outbox.0.push(MoveEvent::Moved {
@@ -650,9 +650,11 @@ mod tests {
             _ => None,
         });
         let (vid, x, y, rot, dur) = moved.expect("paso hacia el jugador");
-        assert_eq!((vid, x, y), (10_000, 350, 0), "400 − 100 units/s × 0.5 s");
+        // C30: la velocidad REAL = motion(300) × factor — move_speed 100 →
+        // 300 u/s (el rewrite usaba la columna como u/s → 3× más lento).
+        assert_eq!((vid, x, y), (10_000, 250, 0), "400 − 300 units/s × 0.5 s");
         assert_eq!(rot, 36, "oeste (180°/5) — el mob avanza hacia el origen");
-        assert_eq!(dur, 500, "dw_duration = dist/move_speed = 50 u / 100 u/s = 500 ms (parity CalculateMoveDuration)");
+        assert_eq!(dur, 500, "dw_duration = dist/move_speed = 150 u / 300 u/s = 500 ms (parity CalculateMoveDuration)");
         assert!(!events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::MobAttack { .. }))), "400 > rango melee");
     }
 
@@ -814,9 +816,14 @@ mod tests {
         let mut w = world_with(42);
         let mut row = mob_row(101);
         row.ai_flag = Some("AGGR".into()); // persigue al jugador del mapa 41
+        // C30: el paso real es 150 u (300 u/s × 0.5 s) — el mob spawnea a
+        // 600 para que el update (tras el join del jugador 3) PISE las
+        // coords del mob 2101 (300,0) exactamente; sight ampliado a 700
+        // para que el aggro proactivo lo alcance (600 ≤ 700).
+        row.aggressive_sight = 700;
         let mut other_map = mob_row(2101);
         other_map.ai_flag = Some("NOMOVE".into()); // se queda quieto en (300,0)
-        load(&mut w, vec![(entry(101, 400, 0, 1), row)]);
+        load(&mut w, vec![(entry(101, 600, 0, 1), row)]);
         w.load_table(42, vec![(entry(2101, 300, 0, 1), other_map)]);
         // Jugador 2 en el mapa 41: materializa el mob 101 (aggro → chase).
         let events = join_at(&mut w, 2, 0, 0);
@@ -824,8 +831,8 @@ mod tests {
         assert!(events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::AggroOn { .. }))));
         // Jugador 3 en el mapa 42 (mismas coords del mundo): materializa el
         // mob 2101 — el primer tick del join también mueve al mob 101
-        // (paso 400 → 350; el chase corre DESPUÉS del detect en el mismo
-        // tick, parity del orden del canal).
+        // (paso 600 → 450 con la velocidad real 300 u/s; el chase corre
+        // DESPUÉS del detect en el mismo tick, parity del orden del canal).
         w.join_player_ready(PlayerJoin {
             vid: 3,
             map_index: 42,
@@ -845,10 +852,11 @@ mod tests {
             iq: 30,
         });
         assert_eq!(w.npc_count(), 2, "el mob del mapa 42 también se materializó");
-        // Tick siguiente: el mob 101 avanza RECTO y pisa las coordenadas
-        // EXACTAS del mob del mapa 42 (350 → 300) — sin el filtro por mapa,
-        // el mob 2101 (a 0 u del aterrizaje, 100 u del mob) lo desviaría al
-        // flanco (350, ∓50).
+        // Tick siguiente: el mob 101 (en 450, fuera de rango 300) avanza
+        // RECTO y pisa las coordenadas EXACTAS del mob del mapa 42
+        // (450 → 300, paso de 150 u con la velocidad real 300 u/s) — sin el
+        // filtro por mapa, el mob 2101 (a 0 u del aterrizaje) lo desviaría
+        // al flanco (300, ∓50).
         let events = w.update(500);
         let moved = events.iter().find_map(|e| match e {
             NpcEvent::Move(MoveEvent::Moved { vid, x, y, .. }) => Some((*vid, *x, *y)),
