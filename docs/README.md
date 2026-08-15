@@ -22,7 +22,7 @@ The rewrite goal, verified state of the legacy baseline, and working rules live 
 | Section | What it holds | Entry point |
 |---|---|---|
 | **[Plans](plans/)** | Active design and migration plans (single-file canonical design) | [`plans/server-rewrite.md`](plans/server-rewrite.md) |
-| **[Decisions](decisions/)** | Architecture decision records (ADRs 0001–0012) | [`decisions/`](decisions/) (table below) |
+| **[Decisions](decisions/)** | Architecture decision records (ADRs 0001–0013) | [`decisions/`](decisions/) (table below) |
 | **[Reference](reference/)** | Technical contracts: wire protocol, legacy compatibility, quest DSL, legacy system notes | [`reference/`](reference/README.md) |
 | **[Guardrails](guardrails/)** | Lessons and rules not to repeat (encoding traps, operations, crash postmortem) | [`guardrails/`](guardrails/README.md) |
 | **[History](history/)** | Superseded plans, specs and snapshots — read-only, never deleted | [`history/`](history/README.md) |
@@ -39,6 +39,7 @@ The rewrite goal, verified state of the legacy baseline, and working rules live 
 | "How is this repository documented and reviewed?" | [`DOCUMENTATION.md`](DOCUMENTATION.md) |
 | "Why is the architecture the way it is?" | [`decisions/`](decisions/) (ADRs, see table below) |
 | "Full design of the Rust server" | [`plans/server-rewrite.md`](plans/server-rewrite.md) |
+| "Full design of the Rust client" | [`plans/client-rewrite.md`](plans/client-rewrite.md) |
 | "Byte-exact wire contract of the login flow" | [`reference/protocol/login-flow.md`](reference/protocol/login-flow.md) |
 | "What must I never break / repeat?" | [`guardrails/`](guardrails/README.md) |
 | "Where is a specific definition, table, header?" | [`reference/`](reference/README.md) + crate docs in [`../source/reforge`](../source/reforge) |
@@ -64,7 +65,9 @@ Real state as of 2026-08-10 (see [`CURRENT.md`](CURRENT.md) for the full snapsho
 
 - [`plans/master-plan.md`](plans/master-plan.md) — **the consolidated master plan** (joins ROADMAP + canonical design + locale plan + ADRs 0001–0012 + CURRENT snapshot; **oracle-reviewed 2026-08-12**, recommendations H.1–H.5 applied). Status: **Draft v0.2**.
 - [`plans/server-rewrite.md`](plans/server-rewrite.md) — canonical single-file design: architecture, anti-hack, data layer, migration order (G-PG before F2), quest DSL, regional channels, modifiable client. Status: **Draft v0.3 (canonical)**.
+- [`plans/client-rewrite.md`](plans/client-rewrite.md) — canonical single-file design of the Rust client rewrite: Bevy 0.19 + slint + build-time asset conversion, phases F0–F6, 3-layer map architecture. Status: **Draft v0.1 (canonical); ADR-0013 Accepted (2026-08-13, amended 2026-08-13 after oracle review)**.
 - [`plans/locale-redesign.md`](plans/locale-redesign.md) — server-side locale: one PG table + one packet (GC_LOCALE) + client cache; per-language text owned by the server. Status: **F1 importer DONE (2026-08-12); wire slice next; ADR-0009 Accepted**.
+- [`plans/gap-analysis-2026-08-15.md`](plans/gap-analysis-2026-08-15.md) — **legacy vs Rust gap analysis (2026-08-15): commands 174 vs 9, game headers 11 ignored, shop data bug, coverage ~35-40%.**
 
 ## Decisions (ADRs)
 
@@ -82,6 +85,7 @@ Real state as of 2026-08-10 (see [`CURRENT.md`](CURRENT.md) for the full snapsho
 | [0010](decisions/0010-domain-boundaries-and-data-ownership.md) | Domain boundaries + bevy_ecs World + per-connection state + WorldStore | Accepted (2026-08-12) |
 | [0011](decisions/0011-anti-hack-model.md) | Anti-hack model (always-on controls) | Accepted (2026-08-12) |
 | [0012](decisions/0012-windows-native-runtime-wsl-on-demand.md) | Runtime hosting: native Windows + on-demand WSL oracle until F6 (C++ frozen, never rebuilt) | Accepted (2026-08-12, executed + verified) |
+| [0013](decisions/0013-client-rewrite.md) | Client rewrite: Bevy 0.19 + slint UI + build-time legacy asset conversion (14 decisions D1–D14) | Accepted (2026-08-13; amended 2026-08-13 after oracle review) |
 
 ## Reference
 
@@ -111,8 +115,8 @@ docs/
 ├── README.md            ← you are here (hub)
 ├── CURRENT.md           current snapshot (status source of truth)
 ├── DOCUMENTATION.md     documentation policy (mandatory reading before writing docs)
-├── plans/               active design/migration plans (master-plan.md, server-rewrite.md)
-├── decisions/           ADRs 0001–0012 (architecture decisions)
+├── plans/               active design/migration plans (master-plan.md, server-rewrite.md, client-rewrite.md)
+├── decisions/           ADRs 0001–0013 (architecture decisions)
 ├── reference/           technical contracts (protocol, quests, legacy notes)
 ├── guardrails/          lessons and rules not to repeat (index + 5 files)
 ├── history/             superseded plans and specs (read-only; index)

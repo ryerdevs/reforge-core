@@ -7,6 +7,49 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-15] (48th part) — Real-client session fixes + full gap analysis
+
+> Sl session (continuation). Despliegue del wave de los 5 bugs (build release 04:10,
+> auth.041013/channel.041013) + sesión de juego del usuario que reveló 3 problemas
+> reales. Análisis completo de brechas vs el legacy (docs/plans/gap-analysis-2026-08-15.md).
+
+### Fixes de la sesión real del cliente
+
+- **Doble-click en item equipado → desequipa (toggle parity)**: `handle_use` solo
+  buscaba en INVENTORY — el doble-click en un item EQUIPADO daba "uso de celda 182 sin
+  item". Fix: buscar en INVENTORY o EQUIPMENT + toggle (parity UseItemEx
+  char_item.cpp:1874-1938 — equipado → UnequipItem). (items.rs, `46517a8`)
+- **Diag de tiendas**: el silencio parity impedía saber qué NPC fallaba al click. Se
+  añade log con el vnum (`world: shop Open vid X — NPC vnum Y SIN shop`). (social.rs,
+  `46517a8`)
+- **Tick del mundo 500→250 ms**: los mobs se veían "a saltos rápidos" (pasos de
+  speed×0.5s con pausas entre ellos; el C++ mueve cada ~100ms). Con 250ms los pasos son
+  speed×0.25s — 2× más suave, misma velocidad (step_toward usa tick.dt_ms). (mod.rs +
+  world.rs, `58cad3a`)
+
+### Despliegue
+
+- Build release 04:09, deploy 04:10 (binario 5,045,760 B, auth.041013/channel.041013),
+  boot limpio (0 panics).
+
+### Hallazgos del gap analysis (documento nuevo)
+
+- **Comandos**: 174 en el C++ vs 9 en el Rust (5%). Los botones del cliente mandan
+  comandos por el chat (PythonNetworkStream.cpp:203-240).
+- **Headers de juego**: 27 en el framer, 16 con dispatch, 11 ignorados en silencio
+  (CG_ITEM_DROP, CG_QUICKSLOT_*, CG_WHISPER, CG_PVP, CG_MYSHOP...).
+- **Tiendas — BUG DE DATOS**: los shops 1-8 legacy apuntaban a npc_vnum 9001-9009; el
+  wave 45-46 re-asignó 1-3 a 20002/20006/20023 y los vnums legacy se perdieron. El NPC
+  9003 del pueblo (con shop en el legacy) ya no tiene. Fix propuesto: re-asignar
+  npc_vnum (requiere confirmación del usuario — no game-data edits sin OK).
+- **Cobertura global ~35-40%** (no 90%): party/guild/safebox/messenger/PvP/refinar/
+  data-channel en 0%.
+
+### Commits
+
+- `46517a8` fix(items+shop): doble-click en equipado desequipa (toggle) + diag shop
+- `58cad3a` fix(movement): tick del mundo 500->250ms — mobs a saltos rapidos
+
 ## [2026-08-15] (47th part) — "Base jugable": 5 bugs gameplay fixeados (equip drag, GC_ITEM_DEL, CG_SHOP framer, comandos GM_PLAYER, barra de vida del mob)
 
 > Sl session (pi-loop-mode `/loop`). Los 5 bugs del plan "Base jugable" con causa raíz confirmada se arreglaron, cada uno con tests + `cargo test --workspace` + commit. El servidor C++ quedó FROZEN (solo parity, nunca se reconstruyó). Workspace **584 passed / 0 failed** (+20 desde los 564 del último wave).
@@ -469,8 +512,6 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 - **Restart opencode** to load everything accumulated: coder "The Reforger" + routing, MCPs for all agents, skill adjustments, oracle v4-pro.
 - After restart: slice 18 spec review with the oracle on v4-pro, then the bevy_ecs adoption.
 
-
-
 > User: "solo crea la del coder que todavía no tiene personalidad — ¿omo-slim trae un .md prompt ya enriquecido del cual podamos usar?" Answer: NO — coder does not exist in the harness pantheon (it is our custom agent replacing `build`); the harness ships agent prompts as `.ts` template strings (functional Role/Behavior/Constraints, no narrative — "The Last Builder" etc. is README marketing only, verified in `fixer.ts`); the `.md` mechanism is for USER overrides, not pre-made prompts. So the personality was created modeled on the harness style + our project rules.
 
 ### Changed — coder personality and config (local/gitignored, requires restart)
@@ -484,8 +525,6 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 - **Restart opencode** to load: coder personality (The Reforger), coder routing, MCPs for all agents, explorer/fixer skills, oracle v4-pro.
 - After restart: slice 18 spec review with the oracle on v4-pro, then the bevy_ecs adoption.
-
-
 
 > User direction: "las skills que ya tienen están perfecto — lo que quiero es que cada agente tenga habilidades enfocadas en su laburo: los MCPs que tenemos para todos, explorer con skills para explorar código a gran escala, librarian con skills de documentación, fixer con skills de debug/arreglar, coder con clean code". Deep analysis of the harness done first (lib-2: README completo + 7 docs + schema + los 8 prompts fuente de src/agents/*.ts).
 
@@ -510,8 +549,6 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 - **Restart opencode** para cargar: MCPs de todos los agentes + skills nuevas de explorer/fixer (oráculo v4-pro sigue pendiente también).
 - Después: revisión de la spec del slice 18 (World compartido por canal) y el desarrollo de personalidades restante (routing de @coder, Council, prompt layering por proyecto) si el usuario lo aprueba.
 
-
-
 > The 31st part claimed (a) the GitHub repo "is not on GitHub yet" and (b) `context7`/`gh_grep` were "never registered — dead refs". **Both claims were WRONG** (user correction, verified empirically). This entry corrects the record; the 31st part stays as history.
 
 ### Corrected facts (verified 2026-08-12)
@@ -534,8 +571,6 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 - **Restart opencode** to load all config changes (oracle v4-pro, fixer 13 skills, coder/librarian graphify MCP, designer brainstorming, restored MCPs).
 - After restart: **slice 18 spec review with the oracle on v4-pro** before Coder starts the bevy_ecs adoption.
 
-
-
 > User questions: "¿para qué sirven los MCPs? ¿no es mejor un GitHub MCP que el CLI? ¿no deberíamos añadir skills a los agentes sin skills?" — answered with verified facts, applied the fixes.
 
 ### Answered (verified)
@@ -555,8 +590,6 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 - **Restart opencode** to load all config changes (oracle v4-pro, fixer 13 skills, coder/librarian graphify MCP, designer brainstorming, MCP cleanup).
 - After restart: **slice 18 spec review with the oracle on v4-pro** before Coder starts the bevy_ecs adoption.
 
-
-
 > Config: `~/.config/opencode/oh-my-opencode-slim.json` (preset `opencode-go` + `agents.coder`) + `.opencode/agents/*.md` (local, gitignored). Docs: `docs/explanation/agent-organization.md`. All changes require an opencode restart (guardrail rule 7 — verified empirically with a fresh-oracle probe: the new model does NOT load hot).
 
 ### Changed — agent team config
@@ -572,8 +605,6 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 - **Restart opencode** to load: oracle v4-pro + fixer/librarian/coder skill-MCP changes.
 - After restart: **slice 18 spec review with the oracle on v4-pro** (fresh session) before Coder starts the bevy_ecs adoption (World compartido por canal, 5 pasos — spec de ora-1 aprobada).
-
-
 
 > User decision after the strategic review: "Metin2 es un juego de farmeo — el lag con muchos mobs es el problema core; con ECS mejoraría muchísimo el rendimiento. Y para el cliente futuro, bevy (no wgpu desde cero)." Documented in ADR-0010 §2 (amended) + ADR-0007 (amended) + plan/ROADMAP.
 
@@ -592,8 +623,6 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 - `docs/decisions/0007` amended: new client = bevy + Slint (decided 2026-08-12).
 - `source/reforge/README.md`: realm row → bevy_ecs World adoptado (ADR-0010 §2).
 - **Next slice**: ECS adoption implementation — `MobCache` → World components/systems with the 371 existing tests staying green (ADR-0010 Consequences).
-
-
 
 > User-requested full-project review ("are we only transcribing, not innovating?"). Three recon lanes (explorer inventory, librarian plan digest, oracle verdict) + two doc lanes (librarian staleness sweep x2). No code changed.
 
@@ -623,8 +652,6 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 - **ADR-0010 — Domain boundaries and data ownership**: ratifies the real realm architecture (pure functions + per-connection state + WorldStore, NOT the plan's ECS); ECS entry criterion = F5 benchmark failing 1,000+/instance with ≥2–5x CPU headroom or AI-tick >500ms; data ownership volatile/durable/derived; **translator-vs-core governing boundary** (user principle codified); wire debt inventory D1–D6 with F7 removal plan.
 - **ADR-0011 — Anti-hack model**: invariant server-authoritative zero client trust; ratifies implemented controls (timer speedhack always-on, anti-teleport, 0x00→close, DB fail-fast, idle timeout, server-clock cooldowns); **decides signed clock wrap** → modular difference with tolerance (kick stays as policy); pending controls with phase (speed envelope, walkability from PG, floods, god-mode, dupe completion, farm bots); attack-class table.
-
-
 
 > Team model change (user-directed, defined before implementation). Config: `~/.config/opencode/oh-my-opencode-slim.json` + `.opencode/agents/*.md` (local, gitignored). Docs: this repo.
 
@@ -1385,7 +1412,6 @@ The client reached the select screen early, but world entry failed silently (cle
 
 - **El selector de banderas causó pantalla NEGRA al abrir el login** (primera versión 18:04): `btn.SetEvent(ui.__mem_func__(self.__OnClickLanguageFlag(...)))` envolvía una **closure** con `__mem_func__` (wrapper pensado para métodos bound estilo `self.__OnClickLoginButton`) → excepción en `__CreateLanguageSelector` durante `LoginWindow.Open()` → el login no se construye → negro. **Fix:** `SetEvent` directo con la closure (igual que las lambdas del teclado virtual, `key_space.SetEvent(lambda ...)`) + **try/except blindado** en `__CreateLanguageSelector` (`print` del error, el login se muestra igual aunque el selector falle). Repack 538368 B 18:12, desplegado a `client\pack` y verificado por desempaquetado (línea 379 sin `__mem_func__`, 32 banderas dentro del epk).
 - **Verificado el `.rar` del sistema completo** (`systems\Language System 1.2.6.rar`, UnRAR l): contenido idéntico a la carpeta extraída, **sin ninguna imagen de bandera de país** y sin lógica de selector de login. Los 8 `02. Client\root\*.py` del mod son parches del coliseo PVP (dependen de `__LANGUAGE_SYSTEM__` en el C++ del cliente, no integrado) — **copiarlos rompería el login** (ImportError `uiLanguageSystem`, AttributeError `app.LANGUAGE_SYSTEM`, `player.IsLanguageSystem()` inexistente). Confirmada la decisión #8 del doc de estado (no integrar ese root).
-
 
 ## [2026-08-09] (3ª sesión, 2ª parte) — Crash de entrada al mundo: diagnóstico en curso + auditoría del Language System
 
