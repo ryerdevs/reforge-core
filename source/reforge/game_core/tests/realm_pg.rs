@@ -260,7 +260,7 @@ async fn realm_create_character_rollback_deletes_player_row() {
     // datos reales.
     let account = 990_000_002i64;
     let rollback_name = format!("e2e_rrollback_{}", ts());
-    let ok_name = format!("e2e_rcreate_ok_{}", ts());
+    let ok_name = format!("e2e_rok_{}", ts());
 
     let result = async {
         let mk = |name: String| PlayerCreate {

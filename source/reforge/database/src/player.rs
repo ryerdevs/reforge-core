@@ -372,14 +372,14 @@ $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26) RETURNING id",
             .map_err(|e| pg_err("PLAYER_DELETE items", &e))?;
         client
             .execute(
-                "DELETE FROM player.quest WHERE dw_pid = $1",
+                "DELETE FROM player.quest WHERE dwPID = $1",
                 &[&player_id],
             )
             .await
             .map_err(|e| pg_err("PLAYER_DELETE quests", &e))?;
         client
             .execute(
-                "DELETE FROM player.affect WHERE dw_pid = $1",
+                "DELETE FROM player.affect WHERE dwPID = $1",
                 &[&player_id],
             )
             .await

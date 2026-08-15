@@ -36,6 +36,7 @@ pub mod locale;
 pub mod messenger;
 pub mod npc;
 pub mod player;
+pub mod pool;
 pub mod quest;
 pub mod safebox;
 pub mod sha1;
