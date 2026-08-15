@@ -15,8 +15,7 @@
 //! proxy). El mapeo de salida decodifica bytea -> `Vec<u8>` crudo (patron `\x`
 //! ya resuelto por el driver).
 
-use crate::pool::{Client, PgPool};
-use tokio_postgres::Row;
+use tokio_postgres::{Client, NoTls, Row};
 
 use crate::account::pg_err;
 use crate::wal::{Batcher, Mutation, Param};
@@ -106,10 +105,6 @@ pub struct PlayerSummary {
 }
 
 /// Datos del create (Q4, `ClientManagerPlayer.cpp:853-892` — 27 columnas).
-/// Divergencia documentada: el C++ NO inserta `map_index` (lo deja en 0 y lo
-/// resuelve con `CMapLocation` al entrar — `input_db.cpp:222-227`); el
-/// rewrite lo fija en el create porque el canal sirve UN solo mapa (41) y el
-/// load del select necesita el mapa válido desde la fila (P0-B).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlayerCreate {
     pub account_id: i64,
@@ -125,7 +120,6 @@ pub struct PlayerCreate {
     pub x: i32,
     pub y: i32,
     pub z: i32,
-    pub map_index: i32,
     pub hp: i32,
     pub mp: i32,
     pub random_hp: i16,
@@ -143,16 +137,22 @@ pub struct PlayerCreate {
 
 /// Repositorio del dominio world (player). Conexion por llamada (ADR-0008).
 pub struct PlayerRepo {
-    pool: PgPool,
+    pg_conn: String,
 }
 
 impl PlayerRepo {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+    pub fn new(pg_conn: impl Into<String>) -> Self {
+        Self { pg_conn: pg_conn.into() }
     }
 
     async fn connect(&self) -> Result<Client, String> {
-        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
+        let (client, connection) = tokio_postgres::connect(&self.pg_conn, NoTls)
+            .await
+            .map_err(|e| format!("PG connect: {e}"))?;
+        tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        Ok(client)
     }
 
     /// Load completo (Q2). `None` = no existe el personaje.
@@ -162,7 +162,7 @@ impl PlayerRepo {
             .query(LOAD_SQL, &[&id])
             .await
             .map_err(|e| pg_err("PLAYER_LOAD", &e))?;
-        rows.first().map(player_row_from_row).transpose()
+        Ok(rows.first().map(player_row_from_row).transpose()?)
     }
 
     /// Save (Q5 shape, `CreatePlayerSaveQuery`): UPDATE de todas las columnas
@@ -226,20 +226,7 @@ $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26) RETURNING id",
             )
             .await
             .map_err(|e| pg_err("PLAYER_CREATE", &e))?;
-        let id: i64 = row.try_get(0).map_err(|e| format!("PLAYER_CREATE id: {e}"))?;
-        // Divergencia documentada: el C++ no toca el map_index en el create
-        // (lo resuelve CMapLocation); el rewrite fija el mapa 41 (el único
-        // que sirve el canal) para que el load del select cargue el mapa
-        // correcto desde la fila (P0-B — sin esto el entry fail-opens y el
-        // cliente carga un mapa inexistente → 0xC0000374).
-        client
-            .execute(
-                "UPDATE player.player SET map_index = $2 WHERE id = $1",
-                &[&id, &c.map_index],
-            )
-            .await
-            .map_err(|e| pg_err("PLAYER_CREATE map_index", &e))?;
-        Ok(id)
+        row.try_get(0).map_err(|e| format!("PLAYER_CREATE id: {e}"))
     }
 
     /// Pid del slot en `player.player_index` (parity `ClientManagerPlayer.cpp:794`
@@ -260,132 +247,6 @@ $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26) RETURNING id",
             .and_then(|r| r.try_get(0).ok())
             .filter(|&pid| pid > 0))
     }
-
-    /// ¿Existe OTRO personaje con este nombre? (parity `QUERY_CHANGE_NAME`
-    /// `ClientManager.cpp:548-570` — `COUNT WHERE name AND id <> except_id`;
-    /// el create la usa con `except_id = 0` — parity `__QUERY_PLAYER_CREATE`
-    /// `ClientManagerPlayer.cpp:812-829`). La columna `name` NO es UNIQUE en
-    /// el esquema (solo KEY `name_idx` — el chequeo es del app, como el C++).
-    pub async fn name_exists(&self, name: &str, except_id: i64) -> Result<bool, String> {
-        let client = self.connect().await?;
-        let row = client
-            .query_one(
-                "SELECT EXISTS(SELECT 1 FROM player.player WHERE name = $1 AND id <> $2)",
-                &[&name, &except_id],
-            )
-            .await
-            .map_err(|e| pg_err("PLAYER_NAME_EXISTS", &e))?;
-        row.try_get(0).map_err(|e| format!("PLAYER_NAME_EXISTS: {e}"))
-    }
-
-    /// Escribe el pid en el slot del índice (create — parity
-    /// `ClientManagerPlayer.cpp:890-900`). Garantiza la fila del índice con
-    /// `INSERT ... ON CONFLICT DO NOTHING` (parity
-    /// `PLAYER_INDEX_CREATE_BUG_FIX`, `ClientManagerLogin.cpp:213` — el C++
-    /// crea la fila perezosamente al login; el rewrite la garantiza aquí).
-    pub async fn set_slot(&self, account_id: i64, slot: u8, player_id: i64) -> Result<(), String> {
-        let client = self.connect().await?;
-        client
-            .execute(
-                "INSERT INTO player.player_index (id) VALUES ($1) ON CONFLICT (id) DO NOTHING",
-                &[&account_id],
-            )
-            .await
-            .map_err(|e| pg_err("PLAYER_INDEX_CREATE", &e))?;
-        let sql = format!("UPDATE player.player_index SET {} = $2 WHERE id = $1", index_col(slot)?);
-        client
-            .execute(&sql, &[&account_id, &player_id])
-            .await
-            .map_err(|e| pg_err("PLAYER_INDEX_SET", &e))?;
-        Ok(())
-    }
-
-    /// Empire de la cuenta en el índice (parity `QUERY_EMPIRE_SELECT`
-    /// `ClientManager.cpp:1129-1134` — `UPDATE player_index SET empire`).
-    pub async fn set_empire(&self, account_id: i64, empire: i16) -> Result<u64, String> {
-        let client = self.connect().await?;
-        client
-            .execute(
-                "INSERT INTO player.player_index (id) VALUES ($1) ON CONFLICT (id) DO NOTHING",
-                &[&account_id],
-            )
-            .await
-            .map_err(|e| pg_err("PLAYER_INDEX_CREATE", &e))?;
-        client
-            .execute(
-                "UPDATE player.player_index SET empire = $2 WHERE id = $1",
-                &[&account_id, &empire],
-            )
-            .await
-            .map_err(|e| pg_err("PLAYER_INDEX_EMPIRE", &e))
-    }
-
-    /// Renombre (parity `QUERY_CHANGE_NAME` `ClientManager.cpp:573-580` —
-    /// `UPDATE player SET name`). Devuelve filas afectadas (1 = ok).
-    pub async fn rename(&self, player_id: i64, name: &str) -> Result<u64, String> {
-        let client = self.connect().await?;
-        client
-            .execute(
-                "UPDATE player.player SET name = $2 WHERE id = $1",
-                &[&player_id, &name],
-            )
-            .await
-            .map_err(|e| pg_err("PLAYER_RENAME", &e))
-    }
-
-    /// Borrado de personaje (parity `__RESULT_PLAYER_DELETE`
-    /// `ClientManagerPlayer.cpp:1055-1130`): 1) el GATE — el slot del índice
-    /// se pone a 0 (si no afecta filas → `Err`, el C++ responde
-    /// DELETE_FAILED); 2) DELETE del player + sus items/quests/afectos (el
-    /// C++ los borra en cascada). Divergencia documentada: sin archivo en
-    /// `player_deleted` (el C++ mueve la fila ANTES de borrar — red de
-    /// seguridad del legacy; el rewrite confía en el DELETE directo).
-    pub async fn delete(&self, account_id: i64, slot: u8, player_id: i64) -> Result<(), String> {
-        let client = self.connect().await?;
-        let sql = format!(
-            "UPDATE player.player_index SET {} = 0 WHERE id = $1 AND {} = $2",
-            index_col(slot)?,
-            index_col(slot)?
-        );
-        let n = client
-            .execute(&sql, &[&account_id, &player_id])
-            .await
-            .map_err(|e| pg_err("PLAYER_INDEX_DEL", &e))?;
-        if n == 0 {
-            return Err(format!(
-                "PLAYER_INDEX_DEL: slot {slot} de la cuenta {account_id} no apunta a {player_id}"
-            ));
-        }
-        client
-            .execute(
-                "DELETE FROM player.player WHERE id = $1",
-                &[&player_id],
-            )
-            .await
-            .map_err(|e| pg_err("PLAYER_DELETE", &e))?;
-        client
-            .execute(
-                "DELETE FROM player.item WHERE owner_id = $1",
-                &[&player_id],
-            )
-            .await
-            .map_err(|e| pg_err("PLAYER_DELETE items", &e))?;
-        client
-            .execute(
-                "DELETE FROM player.quest WHERE dw_pid = $1",
-                &[&player_id],
-            )
-            .await
-            .map_err(|e| pg_err("PLAYER_DELETE quests", &e))?;
-        client
-            .execute(
-                "DELETE FROM player.affect WHERE dw_pid = $1",
-                &[&player_id],
-            )
-            .await
-            .map_err(|e| pg_err("PLAYER_DELETE affects", &e))?;
-        Ok(())
-    }
 }
 
 /// Nombres de columna del índice por slot (parity `ClientManagerPlayer.cpp:794`
@@ -393,21 +254,13 @@ $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26) RETURNING id",
 /// se valida antes de indexar (`index_sql`).
 const PID_COLUMNS: [&str; 5] = ["pid1", "pid2", "pid3", "pid4", "pid5"];
 
-/// Columna del índice para el slot (parity `ClientManagerPlayer.cpp:794`
-/// — `pid%u` con `account_index + 1` = pid1..pid5). Constante cerrada: el slot
-/// se valida antes de indexar (`index_col`).
-fn index_col(slot: u8) -> Result<&'static str, String> {
-    PID_COLUMNS
-        .get(slot as usize)
-        .copied()
-        .ok_or_else(|| format!("player_index: slot {slot} fuera de rango 0..4"))
-}
-
 /// SQL del índice para el slot: `SELECT pid{n} FROM player.player_index
 /// WHERE id = $1`. `Err` si el slot está fuera de 0..4 (nunca se interpola un
 /// valor del caller — la columna viene de la constante cerrada).
 fn index_sql(slot: u8) -> Result<String, String> {
-    let col = index_col(slot)?;
+    let col = PID_COLUMNS
+        .get(slot as usize)
+        .ok_or_else(|| format!("player_index: slot {slot} fuera de rango 0..4"))?;
     Ok(format!("SELECT {col} FROM player.player_index WHERE id = $1"))
 }
 
@@ -629,7 +482,7 @@ mod tests {
 
         let sink = CountingSink::default();
         let batcher = Batcher::spawn(std::time::Duration::from_millis(100), 64, sink.clone());
-        let repo = PlayerRepo::new(crate::pool::new_pool("host=127.0.0.1 port=1 user=x password=x dbname=x", 2).expect("pool"));
+        let repo = PlayerRepo::new("host=noop");
         let mut a = dummy_row();
         a.id = 1;
         a.x = 969600;
