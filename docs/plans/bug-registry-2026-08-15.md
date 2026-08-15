@@ -236,3 +236,19 @@
 - Peso: formula clasica no presente en este C++ — gate fail-open aditivo (B16 del verifier D).
 - `f16_peer_smoke` inexistente en el arbol actual.
 - Tests PG/WSL gated por diseno (map41_spawns, channel_pg).
+
+### C26. [ABIERTO — NUEVO, CRÍTICO] Revivir en la ciudad no teletransporta
+
+- El path answer==1 manda GC_WARP al village (969600,278400) pero NO actualiza `row.x/y` antes del `save()`. La reconexion (DirectEnter) hace player_load con la posicion guardada = la del death -> el jugador aparece donde murio, no en el village.
+- Fix: en revive() answer==1, setear row.x/y al village + save ANTES del GC_WARP.
+
+### C27. [ABIERTO — NUEVO] Botas no agregan velocidad de movimiento
+
+- El C++ da velocidad por AddAffect(POINT_MOV_SPEED, item->GetValue(2)) al equipar botas (char_item.cpp:4337 y variantes). El Rust hardcodea b_moving_speed=100 (packets.rs:282) sin procesar affects de items equipados.
+- Impacto: las botas no dan velocidad; tampoco pociones de velocidad.
+- Fix: calcular b_moving_speed desde los affects de items equipados.
+
+### C28. [ABIERTO — NUEVO] Mobs se amontonan (sin separación)
+
+- No hay collision/separacion entre mobs — todos persiguen al jugador en linea recta y se superponen. El C++ tiene distancia minima entre mobs.
+- Fix: no perseguir si hay otro mob en el radio (~50-100 u) + separacion en el patrol.
