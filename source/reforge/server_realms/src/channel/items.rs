@@ -23,6 +23,17 @@ use game_core::ecs::{CombatIntent, Intent, ItemIntent};
 use game_core::packets;
 
 use crate::channel::session::{Outcome, Session};
+
+/// `ITEM_TYPE_USE = 3` (ItemData.h:77 — el tipo consumible del wire).
+const ITEM_TYPE_USE: i16 = 3;
+/// `ITEM_TYPE_AUTOUSE = 4` (ItemData.h:78 — auto-poción, también consumible).
+const ITEM_TYPE_AUTOUSE: i16 = 4;
+
+/// El gate de consumibles (parity `UseItemEx`, char_item.cpp:1616+): SOLO
+/// los items ITEM_TYPE_USE/AUTOUSE se aplican y consumen con CG_ITEM_USE.
+fn is_consumable(b_type: i16) -> bool {
+    b_type == ITEM_TYPE_USE || b_type == ITEM_TYPE_AUTOUSE
+}
 use crate::channel::{equipped_armor, ITEM_COUNT_LIMIT, INVENTORY_MAX_NUM, WEAR_MAX_NUM};
 
 /// CG_ITEM_PICKUP (11): manda el intent `PickupItem` al mundo (la respuesta
@@ -82,7 +93,7 @@ pub async fn handle_use(session: &mut Session, pkt: &[u8]) -> Result<Outcome, St
         );
         return Ok(Outcome::Continue);
     };
-    let Some(proto) = ItemRepo::new(&session.config.pg_conn)
+    let Some(proto) = ItemRepo::new(session.pool.clone())
         .load_proto_use_values(session.inventory[idx].vnum)
         .await?
     else {
@@ -93,6 +104,43 @@ pub async fn handle_use(session: &mut Session, pkt: &[u8]) -> Result<Outcome, St
         );
         return Ok(Outcome::Continue);
     };
+    // EQUIPAR por doble-click (FIX 2026-08-14 — "no puedo usar las dagas ni
+    // las botas"): parity `UseItemEx` → `EquipItem` (char_item.cpp:1874-1938 —
+    // el switch por tipo EQUIPA armas/armaduras/costume; el consumo es SOLO
+    // para consumibles USE/AUTOUSE). El gate del wave 7 rechazaba los no
+    // consumibles y rompió el equip por doble-click. Se reutiliza el path del
+    // CG_ITEM_MOVE (equip INVENTORY→EQUIPMENT, validación + wire + parts +
+    // persistencia) sintetizando el paquete con el slot COMPUTADO
+    // (`FindEquipCell` — item.cpp:509-623). GAP documentado: el slot ocupado
+    // se RECHAZA (el C++ desequipa el actual y hace swap — pendiente).
+    if !is_consumable(proto.b_type) {
+        let Some(slot) = packets::find_equip_cell(&proto) else {
+            eprintln!(
+                "server_realms: channel conn {}: item vnum {} type {} no equipable \
+                 (wearflag 0 o fuera del subset) — uso ignorado",
+                session.conn_id, session.inventory[idx].vnum, proto.b_type
+            );
+            return Ok(Outcome::Continue);
+        };
+        let synthesized = protocol::world::TPacketCGItemMove {
+            header: protocol::world::TPacketCGItemMove::HEADER,
+            pos: TItemPos {
+                window: TItemPos::WINDOW_INVENTORY,
+                cell: item_use.pos.cell,
+            },
+            change_pos: TItemPos {
+                window: TItemPos::WINDOW_EQUIPMENT,
+                cell: INVENTORY_MAX_NUM + slot,
+            },
+            num: 0,
+        };
+        eprintln!(
+            "server_realms: channel conn {}: doble-click item vnum {} type {} → \
+             equip (wear {slot})",
+            session.conn_id, session.inventory[idx].vnum, proto.b_type
+        );
+        return handle_move(session, &synthesized.to_bytes()).await;
+    }
     let values = proto.values;
     let max = packets::compute_max_points(session.row()).unwrap_or([100, 100, 0]);
     let mut used = false;
@@ -143,10 +191,10 @@ pub async fn handle_use(session: &mut Session, pkt: &[u8]) -> Result<Outcome, St
     }))?;
     // GC_POINTS (hp/mp actualizados) + persistencia.
     session
-        .send(&packets::points_packet(session.row(), session.next_exp).to_bytes())
+        .send(&packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
         .await
         .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
-    session.store().save_character(session.row());
+    session.save();
     // Consumir 1 del stack (parity `item->SetCount(count-1)`).
     session.inventory[idx].count -= 1;
     if session.inventory[idx].count <= 0 {
@@ -161,7 +209,7 @@ pub async fn handle_use(session: &mut Session, pkt: &[u8]) -> Result<Outcome, St
             .send(&TPacketGCItemDelDeprecated::new(cell, vnum as u32, 0).to_bytes())
             .await
             .map_err(|e| format!("enviando GC_ITEM_DEL: {e}"))?;
-        ItemRepo::new(&session.config.pg_conn).delete(id).await?;
+        ItemRepo::new(session.pool.clone()).delete(id).await?;
         session.inventory.remove(idx);
         eprintln!(
             "server_realms: channel conn {}: {} usó item vnum {vnum} \
@@ -184,7 +232,7 @@ pub async fn handle_use(session: &mut Session, pkt: &[u8]) -> Result<Outcome, St
             .send(&up.to_bytes())
             .await
             .map_err(|e| format!("enviando GC_ITEM_UPDATE: {e}"))?;
-        ItemRepo::new(&session.config.pg_conn)
+        ItemRepo::new(session.pool.clone())
             .upsert(&session.inventory[idx], session.row().id)
             .await?;
         eprintln!(
@@ -204,6 +252,17 @@ pub async fn handle_use(session: &mut Session, pkt: &[u8]) -> Result<Outcome, St
 /// stack si el destino tiene el mismo vnum + sockets iguales + count < 200;
 /// split si `0 < num < count`; si no, mover todo. Subset: INVENTORY→
 /// INVENTORY + equipar/desequipar (Belt/DS pendiente).
+/// Parity `SItemPos::IsEquipPosition` (length.h:825-830): una posición es
+/// de equip si window ∈ {INVENTORY, EQUIPMENT} Y cell ∈ [INVENTORY_MAX_NUM,
+/// INVENTORY_MAX_NUM + WEAR_MAX_NUM). El drag-equip del cliente llega como
+/// INVENTORY→INVENTORY con cell destino = 180+wear (no EQUIPMENT); el
+/// doble-click como INVENTORY→EQUIPMENT. Ambos deben equipar (bug 2026-08-15).
+fn is_equip_position(p: TItemPos) -> bool {
+    (p.window == TItemPos::WINDOW_INVENTORY || p.window == TItemPos::WINDOW_EQUIPMENT)
+        && p.cell >= INVENTORY_MAX_NUM
+        && p.cell < INVENTORY_MAX_NUM + WEAR_MAX_NUM
+}
+
 pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String> {
     let mv = match protocol::world::TPacketCGItemMove::from_bytes(pkt) {
         Ok(m) => m,
@@ -215,13 +274,18 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
             return Ok(Outcome::Continue);
         }
     };
+    // Parity `SItemPos::IsEquipPosition` (length.h:825-830) — ver
+    // `is_equip_position` abajo (bug 2026-08-15: el drag-equip manda
+    // INVENTORY→INVENTORY con cell = 180+wear; el doble-click EQUIPMENT).
     // Subset de windows: INVENTORY→INVENTORY (mover/stack/split),
-    // INVENTORY→EQUIPMENT (equipar — parity `EquipItem` char_item.cpp:6128;
+    // INVENTORY→equip (equipar — parity `EquipItem` char_item.cpp:6128;
     // wire: el cell del EQUIPMENT = INVENTORY_MAX_NUM + wear, length.h:827)
-    // y EQUIPMENT→INVENTORY (desequipar). Belt/DS fuera.
-    let equipping = mv.change_pos.window == TItemPos::WINDOW_EQUIPMENT;
-    let unequipping = mv.pos.window == TItemPos::WINDOW_EQUIPMENT;
-    let inv_to_inv = mv.pos.window == TItemPos::WINDOW_INVENTORY
+    // y equip→INVENTORY (desequipar). Belt/DS fuera.
+    let equipping = is_equip_position(mv.change_pos);
+    let unequipping = is_equip_position(mv.pos);
+    let inv_to_inv = !is_equip_position(mv.pos)
+        && !is_equip_position(mv.change_pos)
+        && mv.pos.window == TItemPos::WINDOW_INVENTORY
         && mv.change_pos.window == TItemPos::WINDOW_INVENTORY;
     if !(inv_to_inv || (equipping && mv.pos.window == TItemPos::WINDOW_INVENTORY)
         || (unequipping && mv.change_pos.window == TItemPos::WINDOW_INVENTORY))
@@ -297,7 +361,7 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
         // iCandidateCell)`, char_item.cpp:6139 + item.cpp:509-623): el slot
         // candidato debe ser el slot del item según su `wearflag`
         // (WEARABLE_*). Un item sin wearflag o con slot equivocado → rechazo.
-        let Some(proto) = ItemRepo::new(&session.config.pg_conn)
+        let Some(proto) = ItemRepo::new(session.pool.clone())
             .load_proto_use_values(session.inventory[src].vnum)
             .await?
         else {
@@ -363,7 +427,7 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
             .send(&set.to_bytes())
             .await
             .map_err(|e| format!("enviando GC_ITEM_SET (equip): {e}"))?;
-        ItemRepo::new(&session.config.pg_conn)
+        ItemRepo::new(session.pool.clone())
             .upsert(&session.inventory[src], session.row().id)
             .await?;
         // El ADDITIONAL_INFO (parts) se reenvía con los parts COMPUTADOS de
@@ -386,11 +450,22 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
         // El iArmor del mundo COMPARTIDO (el ataque del mob usa
         // `player_def_grade` con la armadura del equipo — solo cambia al
         // equipar/desequipar).
-        let armor = equipped_armor(&session.inventory, &session.config.pg_conn).await?;
+        let armor = equipped_armor(&session.inventory, &session.pool).await?;
         session.intent(Intent::Combat(CombatIntent::SetArmor {
             player_vid: session.player_vid(),
             armor,
         }))?;
+        // Battle points RE-COMPUTADOS con el equipo nuevo (parity: el C++
+        // tras EquipItem hace ComputePoints/ComputeBattlePoints → el
+        // PointsPacket — char_item.cpp:6309+): la ventana del cliente muestra
+        // el ataque (daño del arma) y la defensa (level+HT+armor) nuevos.
+        let weapon_proto = super::equipped_weapon_proto(&session.pool, &session.inventory).await?;
+        session.battle =
+            packets::compute_battle_points(session.row(), weapon_proto.as_ref(), armor);
+        session
+            .send(&packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
+            .await
+            .map_err(|e| format!("enviando GC_POINTS (equip): {e}"))?;
         eprintln!(
             "server_realms: channel conn {}: {} EQUIPÓ item vnum {vnum} \
              (wear {wear}, cell {})",
@@ -446,7 +521,7 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
             .send(&set.to_bytes())
             .await
             .map_err(|e| format!("enviando GC_ITEM_SET (desequip): {e}"))?;
-        ItemRepo::new(&session.config.pg_conn)
+        ItemRepo::new(session.pool.clone())
             .upsert(&session.inventory[src], session.row().id)
             .await?;
         // ADDITIONAL_INFO con los parts COMPUTADOS (el arma/armadura ya no
@@ -466,11 +541,21 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
             .await
             .map_err(|e| format!("enviando GC_CHARACTER_ADDITIONAL_INFO: {e}"))?;
         // El iArmor del mundo COMPARTIDO baja con el item quitado.
-        let armor = equipped_armor(&session.inventory, &session.config.pg_conn).await?;
+        let armor = equipped_armor(&session.inventory, &session.pool).await?;
         session.intent(Intent::Combat(CombatIntent::SetArmor {
             player_vid: session.player_vid(),
             armor,
         }))?;
+        // Battle points RE-COMPUTADOS (el arma/armadura ya no está — la
+        // ventana del cliente baja el ataque/defensa; parity del C++ tras
+        // UnequipItem → ComputeBattlePoints → PointsPacket).
+        let weapon_proto = super::equipped_weapon_proto(&session.pool, &session.inventory).await?;
+        session.battle =
+            packets::compute_battle_points(session.row(), weapon_proto.as_ref(), armor);
+        session
+            .send(&packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
+            .await
+            .map_err(|e| format!("enviando GC_POINTS (desequip): {e}"))?;
         eprintln!(
             "server_realms: channel conn {}: {} DESEQUIPÓ item vnum {vnum} \
              → celda {}",
@@ -514,7 +599,7 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
                 .send(&up.to_bytes())
                 .await
                 .map_err(|e| format!("enviando GC_ITEM_UPDATE: {e}"))?;
-            ItemRepo::new(&session.config.pg_conn)
+            ItemRepo::new(session.pool.clone())
                 .upsert(&session.inventory[dst], session.row().id)
                 .await?;
             eprintln!(
@@ -538,7 +623,7 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
                     .send(&TPacketGCItemDelDeprecated::new(cell, vnum as u32, 0).to_bytes())
                     .await
                     .map_err(|e| format!("enviando GC_ITEM_DEL: {e}"))?;
-                ItemRepo::new(&session.config.pg_conn).delete(id).await?;
+                ItemRepo::new(session.pool.clone()).delete(id).await?;
                 session.inventory.remove(src);
             } else {
                 // El origen queda → GC_ITEM_UPDATE + upsert.
@@ -556,7 +641,7 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
                     .send(&up.to_bytes())
                     .await
                     .map_err(|e| format!("enviando GC_ITEM_UPDATE: {e}"))?;
-                ItemRepo::new(&session.config.pg_conn)
+                ItemRepo::new(session.pool.clone())
                     .upsert(&session.inventory[src], session.row().id)
                     .await?;
             }
@@ -589,10 +674,10 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
             .send(&up.to_bytes())
             .await
             .map_err(|e| format!("enviando GC_ITEM_UPDATE: {e}"))?;
-        ItemRepo::new(&session.config.pg_conn)
+        ItemRepo::new(session.pool.clone())
             .upsert(&session.inventory[src], session.row().id)
             .await?;
-        let id = ItemRepo::new(&session.config.pg_conn)
+        let id = ItemRepo::new(session.pool.clone())
             .max_id_in_range(100_000_000, 200_000_000)
             .await?
             .map(|m| m + 1)
@@ -624,7 +709,7 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
             .send(&set.to_bytes())
             .await
             .map_err(|e| format!("enviando GC_ITEM_SET: {e}"))?;
-        ItemRepo::new(&session.config.pg_conn)
+        ItemRepo::new(session.pool.clone())
             .upsert(&new_item, session.row().id)
             .await?;
         session.inventory.push(new_item);
@@ -672,7 +757,7 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
             .send(&set.to_bytes())
             .await
             .map_err(|e| format!("enviando GC_ITEM_SET: {e}"))?;
-        ItemRepo::new(&session.config.pg_conn)
+        ItemRepo::new(session.pool.clone())
             .upsert(&session.inventory[src], session.row().id)
             .await?;
         eprintln!(
@@ -686,4 +771,42 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
         );
     }
     Ok(Outcome::Continue)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// El gate del uso (fix 2026-08-14): SOLO consumibles (USE=3/AUTOUSE=4)
+    /// pasan — armas (1)/armaduras (2) se rechazan (el doble-click se las
+    /// comía: la daga 1007 se borró del slot; las botas 15005 "sin efecto").
+    #[test]
+    fn use_gate_only_consumables() {
+        assert!(is_consumable(3), "ITEM_TYPE_USE (poción)");
+        assert!(is_consumable(4), "ITEM_TYPE_AUTOUSE");
+        assert!(!is_consumable(1), "arma — NO se consume");
+        assert!(!is_consumable(2), "armadura — NO se consume");
+        assert!(!is_consumable(0), "NONE — NO se consume");
+    }
+
+    /// Fix bug 2026-08-15: el drag-equip del cliente llega como
+    /// INVENTORY→INVENTORY con cell destino = 180+wear; el doble-click como
+    /// INVENTORY→EQUIPMENT. Ambos deben reconocerse como posición de equip
+    /// (parity `SItemPos::IsEquipPosition`, length.h:825-830).
+    #[test]
+    fn equip_position_accepts_drag_and_double_click() {
+        let p = |w: u8, cell: u16| TItemPos { window: w, cell };
+        let inv = TItemPos::WINDOW_INVENTORY;
+        let eqp = TItemPos::WINDOW_EQUIPMENT;
+        // Drag-equip: INVENTORY con cell = 180 + wear (ej. wear 4 → 184).
+        assert!(is_equip_position(p(inv, INVENTORY_MAX_NUM + 4)), "drag (INV 184)");
+        // Doble-click: EQUIPMENT con el mismo cell.
+        assert!(is_equip_position(p(eqp, INVENTORY_MAX_NUM + 4)), "doble-click (EQP 184)");
+        // Último slot de wear válido (212-1).
+        assert!(is_equip_position(p(inv, INVENTORY_MAX_NUM + WEAR_MAX_NUM - 1)), "wear 31");
+        // Fuera de rango: celda de inventario normal, y celda > 180+32.
+        assert!(!is_equip_position(p(inv, 7)), "inv normal 7");
+        assert!(!is_equip_position(p(inv, INVENTORY_MAX_NUM + WEAR_MAX_NUM)), "cell 212");
+        // Otras ventanas (p. ej. SAFEBOX) nunca son equip.
+        assert!(!is_equip_position(p(5, INVENTORY_MAX_NUM + 4)), "safebox");
+    }
 }
