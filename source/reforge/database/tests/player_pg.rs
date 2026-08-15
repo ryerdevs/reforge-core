@@ -44,7 +44,7 @@ async fn delete_throwaway(client: &tokio_postgres::Client, name: &str) {
 #[tokio::test]
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
 async fn player_load_contract_against_real_pg() {
-    let repo = PlayerRepo::new(pg_conn());
+    let repo = PlayerRepo::new(database::pool::new_pool(&pg_conn(), 4).expect("pool PG"));
     let p = repo
         .load(NINJA_ID)
         .await
@@ -66,7 +66,7 @@ async fn player_load_contract_against_real_pg() {
 #[tokio::test]
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
 async fn player_list_for_account_contract() {
-    let repo = PlayerRepo::new(pg_conn());
+    let repo = PlayerRepo::new(database::pool::new_pool(&pg_conn(), 4).expect("pool PG"));
     let list = repo.list_for_account(1).await.expect("list");
     assert!(list.len() >= 3, ">=3 (E2E Q3): got {}", list.len());
     let names: Vec<&str> = list.iter().map(|s| s.name.as_str()).collect();
@@ -86,7 +86,7 @@ async fn player_list_for_account_contract() {
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
 async fn player_create_save_roundtrip_throwaway() {
     let conn = pg_conn();
-    let repo = PlayerRepo::new(&conn);
+    let repo = PlayerRepo::new(database::pool::new_pool(&conn, 4).expect("pool PG"));
     let name = throwaway_name();
 
     let result = async {
@@ -107,6 +107,7 @@ async fn player_create_save_roundtrip_throwaway() {
             x: 0,
             y: 0,
             z: 0,
+            map_index: 41,
             hp: 100,
             mp: 100,
             random_hp: 0,
@@ -167,7 +168,7 @@ async fn player_create_save_roundtrip_throwaway() {
 #[tokio::test]
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
 async fn player_index_pid_live_account_slots() {
-    let repo = PlayerRepo::new(pg_conn());
+    let repo = PlayerRepo::new(database::pool::new_pool(&pg_conn(), 4).expect("pool PG"));
     // pids del E2E Q1 (QUERY_LOGIN col 6..10: pi.pid1..pid5 de la cuenta test).
     let expected = [Some(1i64), Some(3), Some(5), None, Some(2)];
     for (slot, want) in expected.iter().enumerate() {
