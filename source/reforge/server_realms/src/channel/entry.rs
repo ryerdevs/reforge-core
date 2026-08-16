@@ -1097,8 +1097,18 @@ fn validated_load_position(session: &Session) -> Option<(i32, i32)> {
         return None; // fail-open defensivo
     };
     let (x, y) = (session.row().x, session.row().y);
-    if map.attr(x, y).is_some() {
-        return None; // in-bounds (aunque esté bloqueado — leniente)
+    // GUARD de posición (2026-08-16): si la celda NO es movible (fuera de
+    // límites O bloqueada/agua — no solo out-of-bounds), hacer fallback al
+    // spawn del mapa. El cliente legacy carga el mapa desde SU pack
+    // (maps.epk), que puede diferir del server_attr del runtime: una
+    // posición "in-bounds pero rara" (ej. 987103,314720 en el mapa 41)
+    // rompía LoadMap del cliente → PostQuitMessage(0) → "se cierra al
+    // entrar" (0xc0000374 / diálogo VC++ Runtime eran SÍNTOMAS del mapa
+    // no cargado, no el crash raíz). Parity: el C++ GetValidLocation
+    // (sectree_manager.cpp:790-837) falla al spawn (EMPIRE_START) cuando
+    // el árbol no encuentra la celda.
+    if map.is_movable(x, y) {
+        return None; // posición OK (movible) — mantener
     }
     match map.first_movable() {
         Some(f) => Some(f),
