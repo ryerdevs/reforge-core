@@ -327,3 +327,6 @@
 ### C45. [CERRADO — fix `841dd0a`] Party sin bonus de exp
 
 - bonus por tamaño (tabla CHN [0,0,12,18,26,40,53,70,100], cap 8) + 5% party veterana (>60 min); aplicado al pool antes del reparto, solo si el kill cerca del líder. Gold: el C++ no reparte (drop al suelo del killer). Gaps: +30% item del líder, centralización 5%.
+
+### C46. [CERRADO — fix `c3bd2e9`] Crash del cliente al entrar (world-entry)
+- ROOT CAUSE: posición guardada del personaje in-bounds para el server_attr pero NO cargable por el pack del cliente (maps.epk ≠ runtime) → LoadMap fail → PostQuitMessage(0) → cierre limpio (0xc0000374/VC++ Runtime eran síntomas). FIX: guard estricto (is_movable: bounds+bloqueado+agua) con fallback a la primera celda movible (parity GetValidLocation). El 0xc0000374 de WER 12-16 ago NO era el LAA.
