@@ -115,7 +115,7 @@ pub(crate) fn chase_attack_system(
     mut mobs: ParamSet<(
         // Posiciones de TODOS los mobs (C28 — separación; read-only).
         Query<(&Vid, &Position, &Map), Without<Player>>,
-        Query<(&Vid, &Mob, &Map, &mut Aggro, &mut Position, &mut LastAttack, &mut AttackPos), Without<Player>>,
+        Query<(&Vid, &Mob, &Map, &mut Aggro, &mut Position, &mut LastAttack, &mut AttackPos, &Hp), Without<Player>>,
     )>,
     mut players: Query<(Entity, &Player, &Position, &mut Hp, &Affects), Without<Mob>>,
     tick: Res<Tick>,
@@ -132,7 +132,7 @@ pub(crate) fn chase_attack_system(
     for (v, p, m) in &mobs.p0() {
         others_by_map.entry(m.map_index).or_default().push((v.vid, p.x, p.y));
     }
-    for (vid, mob, map, mut aggro, mut pos, mut last_attack, mut attack_pos) in &mut mobs.p1() {
+    for (vid, mob, map, mut aggro, mut pos, mut last_attack, mut attack_pos, mob_hp) in &mut mobs.p1() {
         let Some(target) = aggro.target else {
             continue;
         };
@@ -162,20 +162,39 @@ pub(crate) fn chase_attack_system(
             // 100) — 8× más rápido. El `last_attack` se actualiza SOLO al
             // golpear (parity `m_dwLastAttackTime` en `OnMove(true)` tras un
             // ataque exitoso — char.cpp:4828-4834).
-            let cooldown = crate::ai::mob_attack_cooldown_ms(mob.attack_speed);
+            // GODSPEED: bajo `sp_godspeed`% HP el mob ataca a 250
+            // (`SetGodSpeed` → `POINT_ATT_SPEED = 250`, char_state.cpp:
+            // 1021-1023 + char.cpp:6867-6879).
+            let attack_speed = if mob.sp_godspeed > 0
+                && mob_hp.hp > 0
+                && mob_hp.hp * 100 / mob_hp.max_hp.max(1) < mob.sp_godspeed
+            {
+                250
+            } else {
+                mob.attack_speed
+            };
+            let cooldown = crate::ai::mob_attack_cooldown_ms(attack_speed);
             if now.0.saturating_sub(last_attack.at_ms) < cooldown {
                 continue; // aún en cooldown — no atacar este tick
             }
             // EN RANGO: ataque del mob — daño = atk del mob_proto − DEF del
             // jugador (parity char.cpp:2114 + items ARMOR —
             // `player_def_grade`; + el bonus de DEF_GRADE de los buffs —
-            // parity POINT_DEF_GRADE_BONUS).
-            let damage = attack_damage(
+            // parity POINT_DEF_GRADE_BONUS). BERSERK: bajo `sp_berserk`%
+            // HP el daño se DOBLA (`GetMobDamageMultiply` ×2, char.cpp:
+            // 1963-1964 — activado en StateBattle, char_state.cpp:1016-1018).
+            let mut damage = attack_damage(
                 mob.damage_min,
                 mob.damage_max,
                 player_def_grade(p.level, p.ht, p.armor) + paff.def_grade_bonus(),
                 &mut |lo, hi| rng.roll(lo, hi),
             );
+            if mob.sp_berserk > 0
+                && mob_hp.hp > 0
+                && mob_hp.hp * 100 / mob_hp.max_hp.max(1) < mob.sp_berserk
+            {
+                damage *= 2;
+            }
             last_attack.at_ms = now.0;
             php.hp = (php.hp - damage).max(0);
             outbox.0.push(CombatEvent::MobAttack {
@@ -336,8 +355,16 @@ impl WorldSim {
         let e = *self.world.resource::<NpcIndex>().0.get(&vid)?;
         let hp_after = {
             let mut ent = self.world.get_entity_mut(e).ok()?;
+            // STONESKIN: el daño recibido se divide por 2 si el HP% del mob
+            // está bajo `sp_stoneskin` (parity `dam /= 2`,
+            // char_battle.cpp:2082-2084 — activado por `IsStoneSkinner`).
+            let stoneskin = ent.get::<Mob>().map(|m| m.sp_stoneskin).unwrap_or(0);
             let mut hp = ent.get_mut::<Hp>()?;
-            hp.hp = (hp.hp - damage).max(0);
+            let mut dmg = damage;
+            if stoneskin > 0 && hp.hp > 0 && hp.hp * 100 / hp.max_hp.max(1) < stoneskin {
+                dmg /= 2;
+            }
+            hp.hp = (hp.hp - dmg).max(0);
             hp.hp
         };
         // El aggro se marca en un borrow aparte (borrows secuenciales).
@@ -678,6 +705,94 @@ mod tests {
         assert_eq!(player_vid, 2);
         assert!((1..=5).contains(&damage), "floor de CalcBattleDamage: {damage}");
         assert_eq!(w.player_hp(2), 100 - damage, "el mundo aplicó el daño");
+    }
+
+    /// AIFLAGs de combate del mob: BERSERK (daño ×2 bajo sp_berserk% HP,
+    /// char_state.cpp:1016-1018 + char.cpp:1963-1964) y GODSPEED (ATT_SPEED
+    /// 250 bajo sp_godspeed% — char_state.cpp:1021-1023 → cooldown de 1000
+    /// ms en vez de 2000). STONESKIN (/2 al recibir) se prueba por separado
+    /// en damage_npc.
+    #[test]
+    fn mob_combat_aiflags_berserk_and_godspeed() {
+        // BERSERK: daño fijo 200; sp_berserk=30 con HP bajo → 200−def(5,30,0)
+        // = 171... pero para ver el ×2 sin floor, def del player = 0 no
+        // aplica aquí — usamos damage 200 y def del harness (29): 171 base,
+        // 342 con berserk. El mob se daña AL 20% vía un ataque del jugador
+        // (46 de daño → max_hp 60 → hp 14 = 23% < 30%).
+        let mut w = world_with(42);
+        let mut row = mob_row(101);
+        row.ai_flag = Some("AGGR".into());
+        row.damage_min = 200;
+        row.damage_max = 200;
+        row.sp_berserk = 30;
+        row.max_hp = 60; // 46 de daño del jugador → hp 14 (23% < 30%)
+        load(&mut w, vec![(entry(101, 0, 0, 1), row)]);
+        join(&mut w);
+        // El jugador ataca al mob (daño 46 → hp 14).
+        w.process_intent(
+            CombatIntent::Attack { player_vid: 2, victim_vid: 10_000, b_type: 0, weapon: None }.into(),
+            1_000,
+        );
+        // C29 cooldown: 2000 ms (att_speed 100 — sin godspeed).
+        let events = w.update(2_000);
+        let attack = events.iter().find_map(|e| match e {
+            NpcEvent::Combat(CombatEvent::MobAttack { damage, .. }) => Some(*damage),
+            _ => None,
+        });
+        // 200 − 29 = 171; berserk ×2 = 342 (parity GetMobDamageMultiply ×2).
+        assert_eq!(attack, Some(342), "200−29=171 → berserk ×2 = 342");
+
+        // GODSPEED: sp_godspeed=30, HP bajo → cooldown 1000 ms (att_speed
+        // 250 → CalculateDuration(250, 2000) = 1000) en vez de 2000.
+        let mut w3 = world_with(42);
+        let mut row3 = mob_row(101);
+        row3.ai_flag = Some("AGGR".into());
+        row3.attack_speed = 100;
+        row3.sp_godspeed = 30;
+        row3.max_hp = 60;
+        load(&mut w3, vec![(entry(101, 0, 0, 1), row3)]);
+        join(&mut w3);
+        w3.process_intent(
+            CombatIntent::Attack { player_vid: 2, victim_vid: 10_000, b_type: 0, weapon: None }.into(),
+            1_000,
+        );
+        // Un tick de 1000 ms dispara el golpe SOLO con godspeed (sin él
+        // harían falta 2000).
+        let events = w3.update(1_000);
+        assert!(
+            events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::MobAttack { .. }))),
+            "godspeed: cooldown 1000 ms con att_speed 250 — el tick de 1000 dispara"
+        );
+    }
+
+    /// STONESKIN: el mob bajo sp_stoneskin% HP recibe la MITAD del daño
+    /// (parity `dam /= 2`, char_battle.cpp:2082-2084).
+    #[test]
+    fn mob_stoneskin_halves_incoming_damage() {
+        let mut w = world_with(42);
+        let mut row = mob_row(101);
+        row.max_hp = 80; // el jugador pega ~46
+        row.sp_stoneskin = 50;
+        load(&mut w, vec![(entry(101, 0, 0, 1), row)]);
+        join(&mut w);
+        // Primer golpe: 80 → 34 (100% > 50% — el skin NO aplica).
+        w.process_intent(
+            CombatIntent::Attack { player_vid: 2, victim_vid: 10_000, b_type: 0, weapon: None }.into(),
+            1_000,
+        );
+        let hp1 = w.npc_view(10_000).expect("mob").hp;
+        assert!(hp1 > 30 && hp1 < 36, "primer golpe sin skin (100% > 50%): hp {hp1}");
+        // Segundo golpe (esperando el cooldown del jugador 1250 ms): hp
+        // ~34/80 = 42% < 50% → el daño se divide (46/2 = 23 → ~11).
+        w.process_intent(
+            CombatIntent::Attack { player_vid: 2, victim_vid: 10_000, b_type: 0, weapon: None }.into(),
+            3_000,
+        );
+        let hp2 = w.npc_view(10_000).expect("mob").hp;
+        assert!(
+            hp2 >= 8 && hp2 <= 14,
+            "segundo golpe CON skin (42% < 50%): 34 − ~23 = ~11, hp {hp2}"
+        );
     }
 
     /// Persecución: el mob aggro fuera de rango da un paso exacto
