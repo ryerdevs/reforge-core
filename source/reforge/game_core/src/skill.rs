@@ -543,7 +543,8 @@ impl SkillRepo {
             .query(
                 "SELECT dwvnum, btype, blevelstep, bmaxlevel, szpointon, szpointpoly, \
                  szspcostpoly, szdurationpoly, szcooldownpoly, setflag, setaffectflag, \
-                 eskilltype, imaxhit, dwtargetrange \
+                 eskilltype, imaxhit, dwtargetrange, dwsplashrange, \
+                 szsplasharounddamageadjustpoly \
                  FROM player.skill_proto WHERE dwvnum = $1",
                 &[&(vnum as i32)],
             )
