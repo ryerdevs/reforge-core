@@ -7,6 +7,22 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-16] (62nd part) — Fix chain complete: world entry + channel panic
+
+> After the position guard (61st), the channel PANICKED right after a
+> successful entry — SkillRepo::load vs the splash columns. Workspace
+> **712 passed / 0 failed**, pushed (`72b7970`, `1dae23c`).
+
+- **`72b7970`**: SkillRepo::load SELECTed 14 columns but skill_proto_from_row
+  reads 16 (splash_range/splash_adjust_poly added by the SPLASH fix) —
+  mapper index 14 hit a missing column → panic 'error deserializing column
+  14' right after world entry, killing :30003.
+- **`1dae23c`**: the real bug — dwsplashrange is **bigint** in PG but read as
+  i32 (tokio-postgres refuses bigint→i32). load_all failed at boot
+  (swallowed: 'skills desactivadas') and load() panicked at runtime. Read as
+  i64 now; 33 skills have real splash (range up to 600, verified).
+- Client verified entering fine (multiple entries after the chain).
+
 ## [2026-08-16] (61st part) — Client world-entry crash: root cause = load position
 
 > The client crashed "just on entering" (0xc0000374 heap corruption in WER +
