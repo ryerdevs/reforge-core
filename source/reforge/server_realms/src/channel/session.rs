@@ -332,6 +332,12 @@ pub struct Session {
     /// char.cpp:5508-5513: `PASSES_PER_SEC(10)` desde el cierre). Se arma al
     /// CERRAR (`safebox::close`) y se consulta al abrir.
     pub safebox_cooldown_until: Option<tokio::time::Instant>,
+    /// Target del jugador (CG_TARGET — parity `m_dwTargetVID` del CHARACTER
+    /// C++, char.cpp:5048-5094): el vid del último mob apuntado. Lo consume
+    /// el `/kill` de GM (lote 3 — parity do_kill sobre el target en vez del
+    /// nombre; GAP: el C++ limpia el target al morir/despawn — el subset
+    /// tolera vids stale: el mundo responde no-op).
+    pub target_vid: Option<u32>,
 }
 
 /// `g_iStatusPointGetLevelLimit` (config.cpp:47 — 90): el nivel hasta el que
@@ -426,6 +432,7 @@ impl Session {
             party_guard: None,
             safebox: None,
             safebox_cooldown_until: None,
+            target_vid: None,
         }
     }
 

@@ -10,9 +10,10 @@ use bevy_ecs::prelude::*;
 use crate::combat::distance_approx;
 use crate::ecs::components::{Aggro, AttackPos, Hp, LastAttack, Map, Mob, Player, Position, SpawnRef, SpawnSeen, Vid};
 use crate::ecs::events::CombatEvent;
+use crate::ecs::events::NpcEvent;
 use crate::ecs::resources::{
-    NpcIndex, NpcOutbox, Rand, RespawnQueue, SpawnCache, SpawnTable, VidAlloc, WorldClock,
-    WorldMetrics,
+    NpcIndex, NpcOutbox, Rand, RespawnQueue, SpawnCache, SpawnTable, SpawnTableEntry, VidAlloc,
+    WorldClock, WorldMetrics,
 };
 use crate::ecs::world::WorldSim;
 use crate::npc::{entry_spawns, SpawnEntry, SpawnKind};
@@ -240,6 +241,102 @@ pub(crate) fn spawn_despawn_system(
 }
 
 impl WorldSim {
+    /// `/mob <vnum> [count]` de GM (parity do_mob cmd_gm.cpp:630-700 →
+    /// SpawnMobRange): materializa `count` (clamp 1..20) copias del mob en
+    /// un rect ALEATORIO alrededor del GM — cada copia cae en
+    /// `[x - a, x + b] × [y - c, y + d]` con a/b/c/d = `number(200, 750)`
+    /// independientes (parity exacta del SpawnMobRange del C++).
+    ///
+    /// La entrada SINTÉTICA de la SpawnTable usa `SpawnKind::Group` (el
+    /// spawn dinámico la salta — el mob del GM NO se re-materializa por la
+    /// tabla al acercarse otro jugador) con `time 0` (sin respawn — parity:
+    /// SpawnMobRange no crea regen; `remove_npc` la marca muerta para
+    /// siempre con el sentinel u64::MAX). El SpawnRef da el pase B (ADD a
+    /// los espectadores nuevos) y el despawn por distancia; los ADDs
+    /// iniciales van al GM (`SpawnSeen`).
+    pub(crate) fn spawn_gm_mob(
+        &mut self,
+        player_vid: u32,
+        map_index: u32,
+        x: i32,
+        y: i32,
+        count: u32,
+        row: MobRow,
+    ) -> Vec<NpcEvent> {
+        let count = count.clamp(1, 20);
+        // Entrada sintética en la tabla (kind Group — el spawn dinámico la
+        // salta; time 0 — sin respawn). Un índice fresco por llamada.
+        let base_entry = SpawnEntry {
+            vnum: row.vnum as u32,
+            x,
+            y,
+            w_x: 0,
+            w_y: 0,
+            count,
+            time: 0,
+            kind: SpawnKind::Group,
+        };
+        let index = {
+            let mut table = self.world.resource_mut::<SpawnTable>();
+            let entries = table.maps.entry(map_index).or_default();
+            let index = entries.len();
+            entries.push(SpawnTableEntry { entry: base_entry, mob: row.clone() });
+            index
+        };
+        // Copias con vids frescos + jitter parity SpawnMobRange (a/b/c/d =
+        // number(200, 750); offset = -a + number(0, a+b) — el punto del rect).
+        // Los vids se asignan con un contador local y el allocador se avanza
+        // al final (borrows secuenciales del mundo — el RNG no puede vivir
+        // junto a otras mutaciones).
+        let base = self.world.resource::<VidAlloc>().npc;
+        let mut copies: Vec<(SpawnEntry, u32)> = Vec::with_capacity(count as usize);
+        {
+            let mut rng = self.world.resource_mut::<Rand>();
+            for i in 0..count {
+                let vid = base + i;
+                let (a, b) = (rng.roll(200, 750), rng.roll(200, 750));
+                let (c, d) = (rng.roll(200, 750), rng.roll(200, 750));
+                let mut copy = base_entry;
+                copy.x = x - a + rng.roll(0, a + b);
+                copy.y = y - c + rng.roll(0, c + d);
+                copy.count = 1;
+                copies.push((copy, vid));
+            }
+        }
+        self.world.resource_mut::<VidAlloc>().npc = base + count;
+        for (copy, vid) in &copies {
+            let e = self
+                .world
+                .spawn((
+                    Vid { vid: *vid },
+                    Map { map_index },
+                    Position { x: copy.x, y: copy.y },
+                    Hp { hp: row.max_hp as i32, max_hp: row.max_hp as i32 },
+                    Aggro { target: None },
+                    LastAttack { at_ms: 0 },
+                    AttackPos { last_change_ms: 0, dest: None },
+                    Mob::from_row(copy, &row),
+                    SpawnRef { map: map_index, index },
+                    SpawnSeen(HashSet::from([player_vid])),
+                ))
+                .id();
+            self.world.resource_mut::<NpcIndex>().0.insert(*vid, e);
+        }
+        self.world.resource_mut::<WorldMetrics>().mobs_spawned += u64::from(count);
+        // ADD(+INFO) de cada copia (kind Mob en el wire — entry_spawns salta
+        // los Group). Los espectadores nuevos lo reciben por el pase B.
+        let entries: Vec<(SpawnEntry, MobRow)> = copies
+            .iter()
+            .map(|(c, _)| {
+                let mut wire = *c;
+                wire.kind = SpawnKind::Mob;
+                (wire, row.clone())
+            })
+            .collect();
+        let packets = entry_spawns(map_index, &entries, base);
+        vec![CombatEvent::Spawned { player_vid, packets }.into()]
+    }
+
     /// Resuelve los spawns con la CACHÉ COMPARTIDA + UNA query batch por los
     /// vnums que falten (`MobCache::resolve`).
     pub(crate) async fn resolve_spawns(
@@ -472,5 +569,50 @@ mod tests {
         load(&mut w, vec![(entry(101, 0, 0, 1), mob_row(101))]);
         assert!(w.update(500).is_empty());
         assert_eq!(w.npc_count(), 0, "sin jugadores no materializa");
+    }
+
+    /// Lote 3 (GM `/mob` — parity do_mob → SpawnMobRange): materializa las
+    /// copias alrededor del GM con vids frescos y sus ADDs; el jitter cae
+    /// dentro de ±750 (number(200,750) por eje); la entrada SINTÉTICA no se
+    /// re-materializa por la tabla (kind Group) y el mob muerto NO
+    /// respawnea (time 0 — parity: SpawnMobRange no crea regen).
+    #[test]
+    fn gm_mob_spawns_copies_around_gm() {
+        let mut w = world_with(42);
+        join(&mut w); // jugador 2 en (0,0), mapa 41
+        let events = w.process_intent(
+            CombatIntent::GmSpawn {
+                player_vid: 2,
+                map_index: 41,
+                x: 0,
+                y: 0,
+                count: 3,
+                mob: mob_row(101),
+            }
+            .into(),
+            1_000,
+        );
+        let spawned = spawn_events(&events);
+        assert_eq!(spawned.len(), 1, "un evento Spawned con los 3 adds: {events:?}");
+        assert_eq!(spawned[0].len(), 3, "3 copias → 3 paquetes");
+        assert_eq!(&spawned[0][0][1..5], &10_000u32.to_le_bytes());
+        assert_eq!(&spawned[0][1][1..5], &10_001u32.to_le_bytes());
+        assert_eq!(&spawned[0][2][1..5], &10_002u32.to_le_bytes());
+        assert_eq!(w.npc_count(), 3);
+        // Jitter parity SpawnMobRange: cada copia cae a ≤ 750 del GM.
+        for vid in 10_000..10_003 {
+            let v = w.npc_view(vid).expect("mob del GM");
+            assert!(v.state.x.abs() <= 750 && v.state.y.abs() <= 750, "vid {vid}: {v:?}");
+        }
+        // La entrada sintética NO re-materializa (kind Group — el spawn
+        // dinámico la salta) y el mob del GM no respawnea al morir (time 0).
+        w.process_intent(CombatIntent::GmKill { player_vid: 2, target_vid: 10_000 }.into(), 2_000);
+        assert_eq!(w.npc_count(), 2);
+        let events = w.update(1_000);
+        assert!(
+            !events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))),
+            "sin re-materialización ni respawn: {events:?}"
+        );
+        assert_eq!(w.npc_count(), 2);
     }
 }

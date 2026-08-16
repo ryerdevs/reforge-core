@@ -56,8 +56,9 @@
 
 use database::common::CommonRepo;
 use database::item::ItemRepo;
+use database::npc::MobRepo;
 use game_core::ecs::{CombatIntent, Intent};
-use game_core::gm::{self, GmCommand};
+use game_core::gm::{self, GmCommand, StatPoint};
 use game_core::packets;
 use protocol::world::{TPacketGCItemSet, TPacketGCSkillLevel, TItemPos, TPlayerSkill};
 
@@ -159,6 +160,12 @@ pub async fn handle(session: &mut Session, cmd: &str) -> Result<Outcome, String>
         GmCommand::GiveItem { vnum, count } => give_item(session, vnum, count).await?,
         GmCommand::Notice { text } => self_notice(session, &text).await?,
         GmCommand::SetLevel { level } => set_level(session, level).await?,
+        // Lote 3 — los GM de verdad (parity cmd.cpp): mob/kill HIGH_WIZARD,
+        // purge WIZARD, goto LOW_WIZARD.
+        GmCommand::Mob { vnum, count } => gm_mob(session, vnum, count).await?,
+        GmCommand::Kill => gm_kill(session).await?,
+        GmCommand::Purge { all } => gm_purge(session, all).await?,
+        GmCommand::Goto { name } => gm_goto(session, &name).await?,
         // Safebox (tamaño) — GM_HIGH_WIZARD (parity cmd.cpp:351): el lote 2
         // de jugador va por `handle_player_command`; este es el único
         // safebox con nivel GM real.
@@ -251,6 +258,17 @@ async fn handle_player_command(
             set_walk_mode(session, false).await?;
             Ok(Outcome::Continue)
         }
+        // Lote 3 — `/stat`/`/stat-`: GM_PLAYER (cmd.cpp:324-325 — el
+        // cliente los usa para asignar stats SIN gmlist; parity do_stat/
+        // do_stat_minus cmd_general.cpp:577-702).
+        GmCommand::Stat { point, amount } => {
+            gm_stat(session, point, amount).await?;
+            Ok(Outcome::Continue)
+        }
+        GmCommand::StatMinus { point, amount } => {
+            gm_stat_minus(session, point, amount).await?;
+            Ok(Outcome::Continue)
+        }
         // Inalcanzable aquí: `safebox` (tamaño) requiere HIGH_WIZARD — el
         // routing de `handle()` lo manda al match GM (exhaustividad).
         GmCommand::Safebox { .. } => Ok(Outcome::Continue),
@@ -296,13 +314,18 @@ async fn handle_player_command(
             not_implemented(session, &command).await?;
             Ok(Outcome::Continue)
         }
-        // Inalcanzable: los GM de verdad (warp/item/notice/level) van por el
-        // dispatch de handle() — el routing manda aquí SOLO los GM_PLAYER
-        // (nivel 0). Exhaustividad por si el routing cambia.
+        // Inalcanzable: los GM de verdad (warp/item/notice/level/mob/kill/
+        // purge/goto) van por el dispatch de handle() — el routing manda
+        // aquí SOLO los GM_PLAYER (nivel 0). Exhaustividad por si el
+        // routing cambia.
         GmCommand::Warp { .. }
         | GmCommand::GiveItem { .. }
         | GmCommand::Notice { .. }
-        | GmCommand::SetLevel { .. } => Ok(Outcome::Continue),
+        | GmCommand::SetLevel { .. }
+        | GmCommand::Mob { .. }
+        | GmCommand::Kill
+        | GmCommand::Purge { .. }
+        | GmCommand::Goto { .. } => Ok(Outcome::Continue),
     }
 }
 
@@ -471,14 +494,20 @@ async fn skillup(session: &mut Session, vnum: Option<u32>) -> Result<(), String>
 /// flujo DirectEnter completo, igual que el revive en la ciudad).
 async fn warp(session: &mut Session, x: i32, y: i32) -> Result<(), String> {
     let (wx, wy) = (x.saturating_mul(100), y.saturating_mul(100));
+    warp_units(session, wx, wy, "GM warp").await
+}
+
+/// `GC_WARP` a UNITS concretas (base del `warp` en metros y del `/goto` de
+/// GM — el cliente RECONECTA con el flujo DirectEnter completo).
+async fn warp_units(session: &mut Session, x: i32, y: i32, why: &str) -> Result<(), String> {
     let (ip, port) = parse_listen(&session.config.listen)?;
     let addr = packets::ip_to_inet_addr(&ip)?;
     session
-        .send(&protocol::world::TPacketGCWarp::new(wx, wy, addr, port).to_bytes())
+        .send(&protocol::world::TPacketGCWarp::new(x, y, addr, port).to_bytes())
         .await
-        .map_err(|e| format!("enviando GC_WARP (GM): {e}"))?;
+        .map_err(|e| format!("enviando GC_WARP ({why}): {e}"))?;
     eprintln!(
-        "server_realms: channel conn {}: GM {} warpeó a {wx},{wy} \
+        "server_realms: channel conn {}: GM {} {why} → {x},{y} \
          ({}:{port} — reconexión)",
         session.conn_id, session.row().name, ip
     );
@@ -624,6 +653,265 @@ async fn set_level(session: &mut Session, level: i32) -> Result<(), String> {
     Ok(())
 }
 
+// === Lote 3 (2026-08-17): mob / kill / purge / goto / stat ===
+
+/// `mob <vnum> [count]` — spawn de mobs alrededor del GM (parity do_mob
+/// cmd_gm.cpp:630-700 → SpawnMobRange: rect ±(200..750) units, count clamp
+/// 1..20). El mob row se carga de `mob_proto` (MobRepo::load_by_vnum); vnum
+/// inexistente → "No such mob by that vnum" (parity). El MUNDO materializa
+/// las copias y emite los ADDs (el wire lo construye `entry_spawns` — el
+/// mundo no toca PG). GAP: el caso nombre del C++ (`CMobManager::Get(arg1,
+/// true)`) no se resuelve — reforge no tiene el índice nombre→vnum.
+async fn gm_mob(session: &mut Session, vnum: u32, count: u32) -> Result<(), String> {
+    let Some(row) = MobRepo::new(session.pool.clone())
+        .load_by_vnum(i64::from(vnum))
+        .await?
+    else {
+        eprintln!(
+            "server_realms: channel conn {}: GM {} — mob vnum {vnum} \
+             inexistente (mob_proto)",
+            session.conn_id, session.row().name
+        );
+        gm_info(session, &format!("No such mob by that vnum: {vnum}")).await?;
+        return Ok(());
+    };
+    // Posición VIVA del GM (la fuente de verdad del x/y — session.rs save).
+    let (x, y) = (session.motion().x, session.motion().y);
+    let map_index = session.row().map_index;
+    session.intent(Intent::Combat(CombatIntent::GmSpawn {
+        player_vid: session.player_vid(),
+        map_index: map_index as u32,
+        x,
+        y,
+        count,
+        mob: row,
+    }))?;
+    eprintln!(
+        "server_realms: channel conn {}: GM {} spawneó mob {vnum} x{count} \
+         en {x},{y} (mapa {map_index})",
+        session.conn_id, session.row().name
+    );
+    Ok(())
+}
+
+/// `kill` — mata el TARGET del jugador (CG_TARGET) si es un mob (parity
+/// do_kill cmd_gm.cpp:1505+ → `SetDead` directo: SIN drop ni exp; PC →
+/// no-op — el mundo solo resuelve mobs del NpcIndex). Divergencia
+/// documentada: el C++ mata a un JUGADOR por nombre; el rewrite usa el
+/// target. El GC_DEAD (animación) lo manda el evento GmKilled; el
+/// GC_CHARACTER_DEL a todos los espectadores lo emite el Despawned del
+/// mismo kill (routing del mundo).
+async fn gm_kill(session: &mut Session) -> Result<(), String> {
+    let Some(target_vid) = session.target_vid else {
+        gm_info(session, "No target (click a mob first)").await?;
+        return Ok(());
+    };
+    session.intent(Intent::Combat(CombatIntent::GmKill {
+        player_vid: session.player_vid(),
+        target_vid,
+    }))?;
+    eprintln!(
+        "server_realms: channel conn {}: GM {} — /kill del target {target_vid}",
+        session.conn_id, session.row().name
+    );
+    Ok(())
+}
+
+/// `purge [all]` — mata los mobs del área (parity do_purge cmd_gm.cpp:775+
+/// → FuncPurge: radio 1000 units sin `all`, todo el mapa con `all`;
+/// M2_DESTROY_CHARACTER — sin drop ni exp, sin animación de muerte). El
+/// mundo emite los GC_CHARACTER_DEL a los espectadores.
+async fn gm_purge(session: &mut Session, all: bool) -> Result<(), String> {
+    let (x, y) = (session.motion().x, session.motion().y);
+    let map_index = session.row().map_index;
+    session.intent(Intent::Combat(CombatIntent::GmPurge {
+        player_vid: session.player_vid(),
+        map_index: map_index as u32,
+        x,
+        y,
+        all,
+    }))?;
+    eprintln!(
+        "server_realms: channel conn {}: GM {} — /purge{} en {x},{y} \
+         (mapa {map_index})",
+        session.conn_id,
+        session.row().name,
+        if all { " all" } else { "" }
+    );
+    Ok(())
+}
+
+/// `goto <nombre>` — teletransporta al GM a la posición del jugador
+/// nombrado (parity do_goto → WarpSet; el C++ congelado es
+/// `goto <x y>`/`<mapname>` — divergencia deliberada del lane: la forma
+/// jugador es la de mayor valor jugable). El destino sale del registro de
+/// sesiones activas del chat (chat.rs::find_player — name → vid/posición
+/// VIVA). Parity WarpSet: mover + persistir ANTES del GC_WARP (el
+/// DirectEnter de la reconexión recarga el row guardado — bug C26 del
+/// revive). GAP: sin cross-map por eventos — el row.map_index del destino
+/// se persiste igual (el entry de la reconexión carga el mapa del row).
+async fn gm_goto(session: &mut Session, name: &str) -> Result<(), String> {
+    let Some((_vid, map_index, x, y)) = crate::channel::chat::find_player(name) else {
+        gm_info(session, &format!("{name}: no such a player")).await?;
+        return Ok(());
+    };
+    {
+        let row = session.row_mut();
+        row.x = x;
+        row.y = y;
+        row.map_index = map_index;
+    }
+    session.motion = Some(game_core::movement::initial(x, y));
+    session.save();
+    warp_units(session, x, y, "goto").await
+}
+
+/// `g_iStatusPointSetMaxValue = 90` (config.cpp:48) — el cap MAX_STAT del
+/// do_stat (`GetRealPoint(idx) >= MAX_STAT` — cmd_general.cpp:675).
+const STAT_MAX: i16 = 90;
+
+/// Valor actual del stat en el row (parity `GetRealPoint`).
+fn stat_value(row: &database::player::PlayerRow, point: StatPoint) -> i16 {
+    match point {
+        StatPoint::St => row.st,
+        StatPoint::Dx => row.dx,
+        StatPoint::Ht => row.ht,
+        StatPoint::Iq => row.iq,
+    }
+}
+
+/// Acceso mutable al stat del row (`SetRealPoint`).
+fn stat_value_mut(row: &mut database::player::PlayerRow, point: StatPoint) -> &mut i16 {
+    match point {
+        StatPoint::St => &mut row.st,
+        StatPoint::Dx => &mut row.dx,
+        StatPoint::Ht => &mut row.ht,
+        StatPoint::Iq => &mut row.iq,
+    }
+}
+
+/// `JobInitialPoints` (constants.cpp:6-15): st/ht/dx/iq iniciales por job
+/// (race 0..7 → job 0..3 — parity RaceToJob) — el FLOOR del `/stat-`
+/// (parity do_stat_minus: no baja de ahí, cmd_general.cpp:587-625).
+fn job_initial_stat(row: &database::player::PlayerRow, point: StatPoint) -> i16 {
+    let init = match packets::race_to_job(row.job).unwrap_or(1) {
+        0 => (6, 4, 3, 3), // JOB_WARRIOR
+        1 => (4, 3, 6, 3), // JOB_ASSASSIN
+        2 => (5, 3, 3, 5), // JOB_SURA
+        _ => (3, 4, 3, 6), // JOB_SHAMAN
+    };
+    match point {
+        StatPoint::St => init.0,
+        StatPoint::Ht => init.1,
+        StatPoint::Dx => init.2,
+        StatPoint::Iq => init.3,
+    }
+}
+
+/// Sync post-stat: mundo (el AI usa st/dx/iq/ht) + GC_POINTS + save
+/// (parity PointChange → SendPointsPacket del C++).
+async fn sync_stats(session: &mut Session) -> Result<(), String> {
+    let (st, dx, iq, ht) = (session.row().st, session.row().dx, session.row().iq, session.row().ht);
+    session.intent(Intent::Combat(CombatIntent::SetStats {
+        player_vid: session.player_vid(),
+        st: i32::from(st),
+        dx: i32::from(dx),
+        iq: i32::from(iq),
+        ht: i32::from(ht),
+    }))?;
+    session
+        .send(&packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
+        .await
+        .map_err(|e| format!("enviando GC_POINTS (GM stat): {e}"))?;
+    session.save();
+    Ok(())
+}
+
+/// `/stat <st|dx|ht|iq> [cantidad]` — asigna puntos de stat (parity do_stat
+/// cmd_general.cpp:644-702: gasta POINT_STAT, cap MAX_STAT = 90 —
+/// `nPoint = 90 - actual`; la cantidad es la extensión del lane, default 1).
+/// Sin POINT_STAT suficiente → no-op silencioso (parity `GetPoint(POINT_STAT)
+/// <= 0 → return`). El recálculo de MAX_HP/MAX_SP del C++ lo refleja el
+/// GC_POINTS vía compute_max_points (max_hp = f(ht), max_sp = f(iq)).
+async fn gm_stat(session: &mut Session, point: StatPoint, amount: i32) -> Result<(), String> {
+    if i32::from(session.row().stat_point) < amount {
+        eprintln!(
+            "server_realms: channel conn {}: /stat {} {amount} — sin \
+             POINT_STAT suficiente ({}) — no-op (parity)",
+            session.conn_id,
+            point.name(),
+            session.row().stat_point
+        );
+        return Ok(());
+    }
+    let cur = stat_value(session.row(), point);
+    // Cap MAX_STAT (parity do_stat: `nPoint = 90 - GetPoint` — el exceso no
+    // se aplica NI se gasta).
+    let applied = (i32::from(cur) + amount).min(i32::from(STAT_MAX)) - i32::from(cur);
+    if applied <= 0 {
+        eprintln!(
+            "server_realms: channel conn {}: /stat {} — ya en el cap \
+             MAX_STAT ({STAT_MAX}) — no-op (parity)",
+            session.conn_id, point.name()
+        );
+        return Ok(());
+    }
+    *stat_value_mut(session.row_mut(), point) += applied as i16;
+    session.row_mut().stat_point -= applied as i16;
+    sync_stats(session).await?;
+    eprintln!(
+        "server_realms: channel conn {}: {} asignó +{applied} a {} \
+         (queda {} POINT_STAT)",
+        session.conn_id,
+        session.row().name,
+        point.name(),
+        session.row().stat_point
+    );
+    Ok(())
+}
+
+/// `/stat- <st|dx|ht|iq> [cantidad]` — devuelve puntos de stat (parity
+/// do_stat_minus cmd_general.cpp:577-643: gasta POINT_STAT_RESET_COUNT y no
+/// baja del floor de los iniciales del job; `PointChange(POINT_STAT, +1)`).
+/// Sin POINT_STAT_RESET_COUNT → no-op silencioso (parity).
+async fn gm_stat_minus(session: &mut Session, point: StatPoint, amount: i32) -> Result<(), String> {
+    if session.row().stat_reset_count < 1 {
+        eprintln!(
+            "server_realms: channel conn {}: /stat- {} — sin \
+             POINT_STAT_RESET_COUNT — no-op (parity)",
+            session.conn_id, point.name()
+        );
+        return Ok(());
+    }
+    let floor = job_initial_stat(session.row(), point);
+    let cur = stat_value(session.row(), point);
+    // Floor del job (parity `GetRealPoint <= JobInitialPoints → return`) +
+    // no más del pedido.
+    let applied = (cur - floor).min(amount as i16).max(0);
+    if applied <= 0 {
+        eprintln!(
+            "server_realms: channel conn {}: /stat- {} — ya en el floor \
+             inicial del job ({floor}) — no-op (parity)",
+            session.conn_id, point.name()
+        );
+        return Ok(());
+    }
+    *stat_value_mut(session.row_mut(), point) -= applied;
+    session.row_mut().stat_point = (session.row().stat_point + applied).min(STAT_MAX * 100);
+    session.row_mut().stat_reset_count = (session.row().stat_reset_count - applied).max(0);
+    sync_stats(session).await?;
+    eprintln!(
+        "server_realms: channel conn {}: {} devolvió {applied} de {} \
+         (POINT_STAT {} — reset restantes {})",
+        session.conn_id,
+        session.row().name,
+        point.name(),
+        session.row().stat_point,
+        session.row().stat_reset_count
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -686,5 +974,80 @@ mod tests {
         blob[1 * TPlayerSkill::SIZE] = 0;
         assert_eq!(skillup_apply(&mut blob, 1), Some(6));
         assert_eq!(blob[1 * TPlayerSkill::SIZE], 0, "0..19 → SKILL_NORMAL(0)");
+    }
+
+    /// Lote 3 (GM `/stat-`): el floor del job (parity JobInitialPoints
+    /// constants.cpp:6-15 — st/ht/dx/iq iniciales por job, race→job del
+    /// RaceToJob) + los accessors del stat del row.
+    #[test]
+    fn stat_job_floors_and_accessors() {
+        fn row(job: i16) -> database::player::PlayerRow {
+            database::player::PlayerRow {
+                id: 1,
+                name: "gm".into(),
+                job,
+                voice: 0,
+                dir: 0,
+                x: 0,
+                y: 0,
+                z: 0,
+                map_index: 41,
+                exit_x: 0,
+                exit_y: 0,
+                exit_map_index: 0,
+                hp: 100,
+                mp: 100,
+                stamina: 100,
+                random_hp: 0,
+                random_sp: 0,
+                playtime: 0,
+                gold: 0,
+                level: 5,
+                level_step: 0,
+                st: 30,
+                ht: 30,
+                dx: 30,
+                iq: 30,
+                exp: 0,
+                stat_point: 10,
+                skill_point: 0,
+                sub_skill_point: 0,
+                stat_reset_count: 3,
+                part_base: 0,
+                part_hair: 0,
+                part_main: 0,
+                skill_level: None,
+                quickslot: None,
+                skill_group: 3,
+                alignment: 0,
+                horse_level: 0,
+                horse_riding: 0,
+                horse_hp: 0,
+                horse_hp_droptime: 0,
+                horse_stamina: 0,
+                logoff_interval: 0.0,
+                horse_skill_point: 0,
+            }
+        }
+        // WARRIOR (race 0): 6/4/3/3; ASSASSIN (1): 4/3/6/3; SURA (2):
+        // 5/3/3/5; SHAMAN (3): 3/4/3/6 — constants.cpp:6-15.
+        let w = row(0);
+        assert_eq!(job_initial_stat(&w, StatPoint::St), 6);
+        assert_eq!(job_initial_stat(&w, StatPoint::Ht), 4);
+        assert_eq!(job_initial_stat(&w, StatPoint::Dx), 3);
+        assert_eq!(job_initial_stat(&w, StatPoint::Iq), 3);
+        let a = row(1);
+        assert_eq!(job_initial_stat(&a, StatPoint::St), 4);
+        assert_eq!(job_initial_stat(&a, StatPoint::Dx), 6);
+        let s = row(2);
+        assert_eq!(job_initial_stat(&s, StatPoint::Iq), 5);
+        let sh = row(3);
+        assert_eq!(job_initial_stat(&sh, StatPoint::Ht), 4);
+        assert_eq!(job_initial_stat(&sh, StatPoint::Iq), 6);
+        // Accessors: lectura/escritura del stat del row (SetRealPoint).
+        let mut r = row(1);
+        assert_eq!(stat_value(&r, StatPoint::St), 30);
+        *stat_value_mut(&mut r, StatPoint::St) += 5;
+        assert_eq!(stat_value(&r, StatPoint::St), 35);
     }
 }

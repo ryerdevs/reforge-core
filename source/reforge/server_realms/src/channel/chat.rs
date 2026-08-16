@@ -154,6 +154,18 @@ pub fn update_position(vid: u32, x: i32, y: i32) {
     }
 }
 
+/// Busca un jugador CONECTADO por nombre (case-insensitive — parity
+/// `FindPC` char_manager.cpp:209-223: str_lower + mapa keyed por
+/// minúsculas; misma resolución que el whisper). Devuelve
+/// (vid, map_index, x, y) — lo usa el `/goto <nombre>` de GM (lote 3): el
+/// registro de sesiones activas es el "nombre → vid/posición" del canal.
+pub fn find_player(name: &str) -> Option<(u32, i32, i32, i32)> {
+    let ps = peers().lock().expect("chat peers lock");
+    ps.iter()
+        .find(|(_, p)| p.name.eq_ignore_ascii_case(name))
+        .map(|(vid, p)| (*vid, p.map_index, p.x, p.y))
+}
+
 /// Recorta el texto del chat/whisper en el PRIMER NUL y lo capa (parity
 /// strlcpy + strlen del C++ — el cliente manda strlen+1 y el C++ corta en el
 /// NUL ANTES de parsear/difundir; C-02: sin el recorte, "warp 100 200\0" ≠
@@ -788,6 +800,26 @@ mod tests {
             .to_string();
         assert_eq!(from, "Wisp", "szNameFrom = el emisor");
         assert_eq!(&to_b[29..], b"hola", "mensaje sin NUL");
+    }
+
+    /// Lote 3 (GM `/goto`): `find_player` resuelve el nombre →
+    /// (vid, map_index, x, y) del registro de sesiones activas —
+    /// case-insensitive (parity FindPC) y con la posición VIVA del peer.
+    #[tokio::test]
+    async fn find_player_resolves_goto_target() {
+        let _guard = TEST_LOCK.lock().expect("test lock");
+        let (a, _a_sock) = test_session(331, "Wisp", 35, 100, 200).await;
+        let (b, _b_sock) = test_session(332, "Target", 36, 500, 500).await;
+        assert_eq!(
+            find_player("wisp"),
+            Some((331, 35, 100, 200)),
+            "case-insensitive + posición de registro"
+        );
+        assert_eq!(find_player("TARGET"), Some((332, 36, 500, 500)));
+        assert_eq!(find_player("nadie"), None, "desconectado → None");
+        drop(a);
+        drop(b);
+        assert_eq!(find_player("target"), None, "el guard desregistra al soltar");
     }
 
     /// Whisper entre 2: el destinatario recibe GC_WHISPER (bType CHAT) con el

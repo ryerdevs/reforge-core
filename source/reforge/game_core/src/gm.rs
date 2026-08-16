@@ -171,6 +171,65 @@ pub enum GmCommand {
     /// `/gskillup` — skill de guild (do_guildskillup). Sin sistema de guild
     /// → INFO (GAP).
     GuildSkillUp,
+    // === Lote 3 (lane 2026-08-17) — los commands de mayor valor jugable ===
+    // do_mob/do_kill/do_purge/do_goto/do_stat (cmd_gm.cpp + cmd_general.cpp).
+    /// `/mob <vnum> [count]` — spawn `count` (clamp 1..20 — parity
+    /// MINMAX(1, iCount, 20) cmd_gm.cpp:662) copias del mob en un rect
+    /// aleatorio ±(200..750) alrededor del GM (parity do_mob cmd_gm.cpp:
+    /// 630-700 → SpawnMobRange). GM_HIGH_WIZARD (cmd.cpp:310). GAP: el
+    /// nombre del mob no se resuelve (solo vnum numérico — el lookup por
+    /// nombre del C++ `CMobManager::Get(arg1, true)` necesita un índice
+    /// nombre→vnum que reforge no tiene).
+    Mob {
+        vnum: u32,
+        count: u32,
+    },
+    /// `/kill` — mata el TARGET del jugador (CG_TARGET) si es un mob
+    /// (parity do_kill cmd_gm.cpp:1505+ → `SetDead` directo: SIN drop ni
+    /// exp; PC → no-op). GM_HIGH_WIZARD (cmd.cpp:314). DIVERGENCIA
+    /// deliberada del lane: el C++ congelado mata a un JUGADOR por nombre
+    /// (`FindByCharacterName` → `Dead()`) — el rewrite solo apunta mobs
+    /// (el handler de comandos no alcanza el registro nombre→vid; la
+    /// variante jugador necesita el sistema de muerte de PCs del PvP).
+    Kill,
+    /// `/purge [all]` — mata los mobs del área (sin `all`: radio 1000
+    /// units — parity `FuncPurge` cmd_gm.cpp:757; con `all`: todo el mapa).
+    /// Sin drop ni exp (`M2_DESTROY_CHARACTER` directo). GM_WIZARD
+    /// (cmd.cpp:292).
+    Purge {
+        all: bool,
+    },
+    /// `/goto <nombre>` — teletransporta al GM a la posición del jugador
+    /// nombrado (parity do_goto → WarpSet; el C++ congelado es
+    /// `goto <x y>`/`goto <mapname> [empire]` — DIVERGENCIA deliberada del
+    /// lane: la forma jugador es la de mayor valor jugable y el registro de
+    /// sesiones del channel (chat.rs) la permite; la de coordenadas ya
+    /// existe como `warp`). GM_LOW_WIZARD (cmd.cpp:296).
+    Goto {
+        name: String,
+    },
+    /// `/stat <st|dx|ht|iq> [cantidad]` — asigna puntos de stat gastando
+    /// POINT_STAT, con cap MAX_STAT = 90 (parity do_stat cmd_general.cpp:
+    /// 644-702: `SetRealPoint +1`, cap `GetRealPoint(idx) >= MAX_STAT`,
+    /// `PointChange(POINT_STAT, -1)`; g_iStatusPointSetMaxValue,
+    /// config.cpp:48). La cantidad es una EXTENSIÓN del lane (el C++ solo
+    /// hace +1; el cliente manda `/stat st` sin cantidad → 1). El
+    /// recálculo de MAX_HP/MAX_SP del C++ (PointChange(POINT_MAX_HP/SP, 0))
+    /// lo refleja el GC_POINTS del rewrite vía `compute_max_points`
+    /// (max_hp = f(ht), max_sp = f(iq) — parity char.cpp:2230-2231).
+    /// GM_PLAYER (cmd.cpp:324 — el cliente lo usa para asignar stats).
+    Stat {
+        point: StatPoint,
+        amount: i32,
+    },
+    /// `/stat- <st|dx|ht|iq> [cantidad]` — devuelve puntos de stat (parity
+    /// do_stat_minus cmd_general.cpp:577-643: gasta POINT_STAT_RESET_COUNT,
+    /// floor de los iniciales del job — JobInitialPoints constants.cpp:6-15;
+    /// `PointChange(POINT_STAT, +1)`). GM_PLAYER (cmd.cpp:325).
+    StatMinus {
+        point: StatPoint,
+        amount: i32,
+    },
     /// `/emotion_allow <0|1>` — permite/deniega emociones de otros hacia el
     /// personaje (do_emotion_allow cmd_emotion.cpp:55+). INFO (GAP).
     EmotionAllow,
@@ -193,6 +252,51 @@ pub enum GmCommand {
     Dance6,
     Congratulation,
     Forgive,
+}
+
+/// POINT_ST/POINT_DX/POINT_HT/POINT_IQ del do_stat (cmd_general.cpp:664-671
+/// — compara por nombre "st"/"dx"/"ht"/"iq", case-sensitive como el
+/// strcmp del interpret_command).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatPoint {
+    St,
+    Dx,
+    Ht,
+    Iq,
+}
+
+impl StatPoint {
+    /// El nombre del argumento del comando (parity strcmp del do_stat).
+    pub fn from_name(s: &str) -> Option<Self> {
+        match s {
+            "st" => Some(Self::St),
+            "dx" => Some(Self::Dx),
+            "ht" => Some(Self::Ht),
+            "iq" => Some(Self::Iq),
+            _ => None,
+        }
+    }
+
+    /// El nombre canónico (logs del handler).
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::St => "st",
+            Self::Dx => "dx",
+            Self::Ht => "ht",
+            Self::Iq => "iq",
+        }
+    }
+
+    /// POINT_ST/POINT_HT/POINT_DX/POINT_IQ del wire (length.h:500-506 — el
+    /// GC_POINTS los manda en estos índices).
+    pub fn index(self) -> usize {
+        match self {
+            Self::St => 12,
+            Self::Ht => 13,
+            Self::Dx => 14,
+            Self::Iq => 15,
+        }
+    }
 }
 
 /// Parseo del texto tras el '/': `parse_command("warp 100 200")` →
@@ -283,6 +387,50 @@ pub fn parse_command(cmd: &str) -> Option<GmCommand> {
             Some(GmCommand::SkillUp { vnum })
         }
         "gskillup" => Some(GmCommand::GuildSkillUp),
+        // Lote 3 — parity de los nombres del cmd.cpp:292/296/310/314/324-325
+        // (strcmp case-sensitive). `kill` ignora argumentos extra (el target
+        // vive en la sesión, no en el texto).
+        "mob" => {
+            let vnum: u32 = it.next()?.parse().ok()?;
+            let count = it
+                .next()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1)
+                .clamp(1, 20); // parity MINMAX(1, iCount, 20) cmd_gm.cpp:662
+            Some(GmCommand::Mob { vnum, count })
+        }
+        "kill" => Some(GmCommand::Kill),
+        "purge" => {
+            // Parity do_purge cmd_gm.cpp:775-783: el flag `all` solo si el
+            // primer argumento es exactamente "all"; cualquier otro valor
+            // → radio 1000 (NO es error).
+            let all = it.next().is_some_and(|s| s == "all");
+            Some(GmCommand::Purge { all })
+        }
+        "goto" => {
+            let name = it.next()?.to_string();
+            if name.is_empty() {
+                return None;
+            }
+            Some(GmCommand::Goto { name })
+        }
+        "stat" | "stat-" => {
+            // Parity do_stat/do_stat_minus: el primer argumento es el punto
+            // ("st"/"dx"/"ht"/"iq"); sin él → no-op. La CANTIDAD es una
+            // extensión del lane (default 1 — el cliente manda `/stat st`);
+            // cantidad <= 0 → None (parity del "잘못 입력하셨습니다" del
+            // do_stat_plus_amount — el subset responde el INFO genérico).
+            let point = StatPoint::from_name(it.next()?)?;
+            let amount = it.next().and_then(|s| s.parse().ok()).unwrap_or(1);
+            if amount <= 0 {
+                return None;
+            }
+            if name == "stat-" {
+                Some(GmCommand::StatMinus { point, amount })
+            } else {
+                Some(GmCommand::Stat { point, amount })
+            }
+        }
         "emotion_allow" => Some(GmCommand::EmotionAllow),
         "kiss" => Some(GmCommand::Kiss),
         "slap" => Some(GmCommand::Slap),
@@ -311,6 +459,12 @@ pub fn required_level(cmd: &GmCommand) -> i16 {
         GmCommand::Warp { .. } | GmCommand::SetLevel { .. } => gm_level::LOW_WIZARD,
         GmCommand::GiveItem { .. } => gm_level::GOD,
         GmCommand::Notice { .. } => gm_level::HIGH_WIZARD,
+        // Lote 3 (parity cmd.cpp): mob 310 HIGH_WIZARD, kill 314
+        // HIGH_WIZARD, purge 292 WIZARD, goto 296 LOW_WIZARD; stat/stat-
+        // son GM_PLAYER (cmd.cpp:324-325 — el cliente los usa sin gmlist).
+        GmCommand::Mob { .. } | GmCommand::Kill => gm_level::HIGH_WIZARD,
+        GmCommand::Purge { .. } => gm_level::WIZARD,
+        GmCommand::Goto { .. } => gm_level::LOW_WIZARD,
         // Safebox (tamaño): GM_HIGH_WIZARD (parity cmd.cpp:351).
         GmCommand::Safebox { .. } => gm_level::HIGH_WIZARD,
         GmCommand::RestartHere
@@ -344,6 +498,8 @@ pub fn required_level(cmd: &GmCommand) -> i16 {
         | GmCommand::SetRunMode
         | GmCommand::SkillUp { .. }
         | GmCommand::GuildSkillUp
+        | GmCommand::Stat { .. }
+        | GmCommand::StatMinus { .. }
         | GmCommand::EmotionAllow
         | GmCommand::Kiss
         | GmCommand::Slap
@@ -481,16 +637,103 @@ mod tests {
         assert_eq!(parse_command(""), None);
         assert_eq!(parse_command("   "), None);
         assert_eq!(parse_command("teleport 1 2"), None, "comando desconocido");
+        assert_eq!(parse_command("mob"), None, "mob sin vnum");
+        assert_eq!(parse_command("mob abc"), None, "mob vnum no numérico");
+        assert_eq!(parse_command("kill x"), Some(GmCommand::Kill), "kill ignora el arg");
+        assert_eq!(parse_command("goto"), None, "goto sin nombre");
+        assert_eq!(parse_command("stat"), None, "stat sin punto");
+        assert_eq!(parse_command("stat foo"), None, "punto desconocido");
+        assert_eq!(parse_command("stat st -3"), None, "cantidad negativa → no-op");
+    }
+
+    /// Lote 3: parseo de los 5 comandos nuevos (parity de los nombres del
+    /// cmd.cpp — strcmp case-sensitive).
+    #[test]
+    fn parse_lote3_commands() {
         assert_eq!(
             parse_command("mob 101"),
-            None,
-            "mob: fuera del subset (GAP)"
+            Some(GmCommand::Mob { vnum: 101, count: 1 }),
+            "sin count → 1 (parity do_mob)"
         );
         assert_eq!(
-            parse_command("kill alguien"),
-            None,
-            "kill: fuera del subset (GAP)"
+            parse_command("mob 101 5"),
+            Some(GmCommand::Mob { vnum: 101, count: 5 })
         );
+        assert_eq!(
+            parse_command("mob 101 0"),
+            Some(GmCommand::Mob { vnum: 101, count: 1 }),
+            "MINMAX(1, count, 20)"
+        );
+        assert_eq!(
+            parse_command("mob 101 99"),
+            Some(GmCommand::Mob { vnum: 101, count: 20 }),
+            "cap 20 (@fixme339)"
+        );
+        assert_eq!(parse_command("kill"), Some(GmCommand::Kill));
+        assert_eq!(parse_command("purge"), Some(GmCommand::Purge { all: false }));
+        assert_eq!(
+            parse_command("purge all"),
+            Some(GmCommand::Purge { all: true })
+        );
+        assert_eq!(
+            parse_command("purge xyz"),
+            Some(GmCommand::Purge { all: false }),
+            "arg != all → radio 1000 (parity, NO error)"
+        );
+        assert_eq!(
+            parse_command("goto Pepe"),
+            Some(GmCommand::Goto { name: "Pepe".into() })
+        );
+        assert_eq!(
+            parse_command("goto  pepe  extra"),
+            Some(GmCommand::Goto { name: "pepe".into() }),
+            "solo el primer token (one_argument)"
+        );
+        assert_eq!(parse_command("MOB 101"), None, "case-sensitive");
+        assert_eq!(parse_command("Purge"), None);
+    }
+
+    /// Lote 3: `/stat`/`/stat-` — el punto por nombre exacto, la cantidad
+    /// opcional (default 1 — el cliente manda `/stat st` sin cantidad).
+    #[test]
+    fn parse_stat_point_and_amount() {
+        assert_eq!(
+            parse_command("stat st"),
+            Some(GmCommand::Stat { point: StatPoint::St, amount: 1 })
+        );
+        assert_eq!(
+            parse_command("stat dx 5"),
+            Some(GmCommand::Stat { point: StatPoint::Dx, amount: 5 })
+        );
+        assert_eq!(
+            parse_command("stat- ht 2"),
+            Some(GmCommand::StatMinus { point: StatPoint::Ht, amount: 2 })
+        );
+        assert_eq!(
+            parse_command("stat- iq"),
+            Some(GmCommand::StatMinus { point: StatPoint::Iq, amount: 1 })
+        );
+        assert_eq!(parse_command("stat ST"), None, "case-sensitive (parity strcmp)");
+        assert_eq!(parse_command("stat-"), None, "sin punto → no-op");
+        assert_eq!(parse_command("stat st 0"), None, "cantidad 0 → no-op");
+        assert_eq!(parse_command("stat- dx abc"), Some(GmCommand::StatMinus { point: StatPoint::Dx, amount: 1 }), "no numérico → default 1");
+    }
+
+    /// Lote 3: niveles GM de parity (cmd.cpp:292/296/310/314/324-325) y
+    /// el gate para el GM mínimo.
+    #[test]
+    fn lote3_required_levels_parity() {
+        assert_eq!(required_level(&GmCommand::Mob { vnum: 1, count: 1 }), gm_level::HIGH_WIZARD);
+        assert_eq!(required_level(&GmCommand::Kill), gm_level::HIGH_WIZARD);
+        assert_eq!(required_level(&GmCommand::Purge { all: false }), gm_level::WIZARD);
+        assert_eq!(required_level(&GmCommand::Goto { name: "x".into() }), gm_level::LOW_WIZARD);
+        assert_eq!(required_level(&GmCommand::Stat { point: StatPoint::St, amount: 1 }), gm_level::PLAYER);
+        assert_eq!(required_level(&GmCommand::StatMinus { point: StatPoint::St, amount: 1 }), gm_level::PLAYER);
+        // Gate: LOW_WIZARD no puede purge (1 < 2); WIZARD sí (2 >= 2).
+        assert!(!is_allowed(gm_level::LOW_WIZARD, required_level(&GmCommand::Purge { all: false })));
+        assert!(is_allowed(gm_level::WIZARD, required_level(&GmCommand::Purge { all: false })));
+        assert!(is_allowed(gm_level::LOW_WIZARD, required_level(&GmCommand::Goto { name: "x".into() })));
+        assert!(is_allowed(gm_level::PLAYER, required_level(&GmCommand::Stat { point: StatPoint::St, amount: 1 })), "stat es GM_PLAYER — sin gmlist");
     }
 
     /// Fix bug 4 (2026-08-15): los comandos del diálogo de muerte y del menú
