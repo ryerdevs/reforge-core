@@ -676,6 +676,129 @@ impl WorldSim {
         }.into()]
     }
 
+    /// `/kill` de GM (parity do_kill cmd_gm.cpp:1505+ → `SetDead` directo:
+    /// SIN drop ni exp): mata el mob del target del GM. Emite `GmKilled`
+    /// (el canal manda el GC_DEAD — animación de muerte — al GM) + un
+    /// `Despawned` (GC_CHARACTER_DEL) a TODOS los jugadores del mapa del
+    /// mob (el mob desaparece para todos — parity PacketView del C++). Sin
+    /// mob para el vid (PC o inexistente) → sin eventos (parity: el subset
+    /// solo apunta mobs; un PC no está en el NpcIndex). El respawn por
+    /// tiempo de la entrada aplica (parity: un mob de un regen reaparece en
+    /// su deadline — lo programa `remove_npc`).
+    pub(crate) fn gm_kill(&mut self, player_vid: u32, target_vid: u32) -> Vec<NpcEvent> {
+        let Some((vnum, mut events)) = self.gm_remove_mob(target_vid) else {
+            return Vec::new();
+        };
+        let mut out = vec![CombatEvent::GmKilled { player_vid, vid: target_vid, vnum }.into()];
+        out.append(&mut events);
+        out
+    }
+
+    /// `/purge [all]` de GM (parity do_purge cmd_gm.cpp:775+ → FuncPurge +
+    /// M2_DESTROY_CHARACTER: SIN drop ni exp): mata los mobs del mapa del
+    /// GM — radio 1000 units sin `all` (parity `iDist >= 1000 → return`),
+    /// TODO el mapa con `all`. Sin animación de muerte (destroy directo —
+    /// solo GC_CHARACTER_DEL a los espectadores, igual que el C++). Los
+    /// mobs de entradas con respawn reaparecen en su deadline (`remove_npc`).
+    pub(crate) fn gm_purge(
+        &mut self,
+        _player_vid: u32,
+        map_index: u32,
+        x: i32,
+        y: i32,
+        all: bool,
+    ) -> Vec<NpcEvent> {
+        // Snapshot de vids ANTES de mutar (borrows secuenciales del mundo).
+        let targets: Vec<u32> = self
+            .world
+            .resource::<NpcIndex>()
+            .0
+            .iter()
+            .filter_map(|(vid, e)| {
+                let Ok(ent) = self.world.get_entity(*e) else {
+                    return None;
+                };
+                let map = ent.get::<Map>()?;
+                if map.map_index != map_index {
+                    return None;
+                }
+                let pos = ent.get::<Position>()?;
+                if !all && distance_approx(pos.x - x, pos.y - y) >= 1000 {
+                    return None; // parity FuncPurge: fuera de 1000 units
+                }
+                Some(*vid)
+            })
+            .collect();
+        let mut events = Vec::new();
+        for vid in targets {
+            if let Some((_, mut ev)) = self.gm_remove_mob(vid) {
+                events.append(&mut ev);
+            }
+        }
+        events
+    }
+
+    /// Quita el mob del mundo + emite `Despawned` (GC_CHARACTER_DEL) a los
+    /// jugadores de su mapa (la pieza común del kill/purge de GM — parity
+    /// PacketView: todos los del mapa ven el mob desaparecer). None si el
+    /// vid no es un mob materializado (PC o inexistente).
+    fn gm_remove_mob(&mut self, target_vid: u32) -> Option<(i64, Vec<NpcEvent>)> {
+        let (vnum, map_index) = self.npc_vnum_map(target_vid)?;
+        self.remove_npc(target_vid);
+        let mut events = Vec::new();
+        for (pv, _, _) in self.map_players(map_index) {
+            events.push(CombatEvent::Despawned { player_vid: pv, vid: target_vid }.into());
+        }
+        Some((vnum, events))
+    }
+
+    /// Sincroniza las stats del jugador (`/stat`/`/stat-` de GM — el AI las
+    /// usa en `player_def_grade` y en el ataque del jugador; parity
+    /// `SetRealPoint`+`SetPoint` del C++).
+    pub(crate) fn set_player_stats(&mut self, player_vid: u32, st: i32, dx: i32, iq: i32, ht: i32) {
+        let Some(e) = self.players.get(&player_vid).copied() else {
+            return;
+        };
+        if let Ok(mut ent) = self.world.get_entity_mut(e)
+            && let Some(mut p) = ent.get_mut::<Player>()
+        {
+            p.st = st;
+            p.dx = dx;
+            p.iq = iq;
+            p.ht = ht;
+        }
+    }
+
+    /// (vnum, map_index) del mob `vid` — None si no hay mob materializado
+    /// (helper del GM kill/purge — `npc_view` no lleva el mapa).
+    fn npc_vnum_map(&self, vid: u32) -> Option<(i64, u32)> {
+        let e = *self.world.resource::<NpcIndex>().0.get(&vid)?;
+        let ent = self.world.get_entity(e).ok()?;
+        Some((ent.get::<Mob>()?.vnum, ent.get::<Map>()?.map_index))
+    }
+
+    /// (vid, x, y) de los jugadores del mapa `map_index` (broadcast del GM
+    /// kill — parity PacketView: todos los del mapa ven el mob desaparecer).
+    fn map_players(&self, map_index: u32) -> Vec<(u32, i32, i32)> {
+        let mut out = Vec::new();
+        for (pv, e) in &self.players {
+            let Ok(ent) = self.world.get_entity(*e) else {
+                continue;
+            };
+            let Some(map) = ent.get::<Map>() else {
+                continue;
+            };
+            if map.map_index != map_index {
+                continue;
+            }
+            let Some(pos) = ent.get::<Position>() else {
+                continue;
+            };
+            out.push((*pv, pos.x, pos.y));
+        }
+        out
+    }
+
     /// Sincroniza el HP del jugador (pociones/revive — la sesión ya aplicó el
     /// cambio a row.hp; el mundo lo refleja para el daño del AI).
     pub(crate) fn set_player_hp(&mut self, player_vid: u32, hp: i32) {
@@ -1494,5 +1617,120 @@ mod tests {
             2_500,
         );
         assert!(events.is_empty(), "víctima muerta → no atacable: {events:?}");
+    }
+
+    /// Lote 3 (GM `/kill` — parity do_kill → SetDead directo): el mob del
+    /// target muere SIN recompensa — GmKilled (GC_DEAD del canal) al GM +
+    /// Despawned (GC_CHARACTER_DEL) a los jugadores del mapa; un PC (o vid
+    /// inexistente) NO se mata (parity: el subset solo apunta mobs). El
+    /// mob de un entry con respawn (time != 0) reaparece en su deadline
+    /// (parity: el C++ respawnea la entrada del regen).
+    #[test]
+    fn gm_kill_removes_target_mob_without_reward() {
+        use crate::npc::SpawnEntry;
+        let mut w = world_with(42);
+        let mut row = mob_row(101);
+        row.ai_flag = Some("NOMOVE".into());
+        let e = SpawnEntry { time: 2, ..entry(101, 0, 0, 1) }; // regen 2 s
+        load(&mut w, vec![(e, row)]);
+        join(&mut w); // jugador 2 + mob 10_000
+        let events = w.process_intent(
+            CombatIntent::GmKill { player_vid: 2, target_vid: 10_000 }.into(),
+            1_000,
+        );
+        assert!(
+            events.iter().any(|ev| matches!(
+                ev,
+                NpcEvent::Combat(CombatEvent::GmKilled { player_vid: 2, vid: 10_000, vnum: 101 })
+            )),
+            "GmKilled al GM: {events:?}"
+        );
+        assert!(
+            events.iter().any(|ev| matches!(
+                ev,
+                NpcEvent::Combat(CombatEvent::Despawned { player_vid: 2, vid: 10_000 })
+            )),
+            "el GM ve el GC_CHARACTER_DEL: {events:?}"
+        );
+        assert_eq!(w.npc_count(), 0, "el mob se quita del mundo");
+        // PC (el propio jugador) → no-op (parity: solo mobs).
+        let events = w.process_intent(
+            CombatIntent::GmKill { player_vid: 2, target_vid: 2 }.into(),
+            1_000,
+        );
+        assert!(events.is_empty(), "un PC no se mata: {events:?}");
+        // Respawn por tiempo de la entrada (parity regen_event): al vencer
+        // el deadline (2 s) la entrada re-materializa con vid fresco.
+        let events = w.update(2_500);
+        assert!(
+            events.iter().any(|ev| matches!(ev, NpcEvent::Combat(CombatEvent::Spawned { .. }))),
+            "respawn de la entrada con regen: {events:?}"
+        );
+        assert_eq!(w.npc_count(), 1, "el regen reaparece");
+    }
+
+    /// Lote 3 (GM `/purge` — parity FuncPurge cmd_gm.cpp:757): sin `all`
+    /// solo mueren los mobs a < 1000 units del GM (`iDist >= 1000 → return`);
+    /// con `all` muere TODO el mapa. Sin animación de muerte (destroy — solo
+    /// Despawned, sin GmKilled).
+    #[test]
+    fn gm_purge_radius_and_all() {
+        let mut w = world_with(42);
+        let mut far = mob_row(2101);
+        far.ai_flag = Some("NOMOVE".into());
+        load(&mut w, vec![
+            (entry(101, 0, 0, 1), mob_row(101)),
+            (entry(2101, 2_000, 0, 1), far), // fuera del radio 1000 del GM
+        ]);
+        join(&mut w); // jugador 2 en (0,0) — ambos dentro de SPAWN_VIEW
+        // purge sin all: solo el mob cercano.
+        let events = w.process_intent(
+            CombatIntent::GmPurge { player_vid: 2, map_index: 41, x: 0, y: 0, all: false }.into(),
+            1_000,
+        );
+        let dels: Vec<u32> = events
+            .iter()
+            .filter_map(|ev| match ev {
+                NpcEvent::Combat(CombatEvent::Despawned { vid, .. }) => Some(*vid),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(dels, vec![10_000], "solo el cercano: {events:?}");
+        assert!(
+            !events.iter().any(|ev| matches!(ev, NpcEvent::Combat(CombatEvent::GmKilled { .. }))),
+            "purge = destroy directo, sin animación (parity M2_DESTROY_CHARACTER)"
+        );
+        assert_eq!(w.npc_count(), 1);
+        assert!(w.npc_view(10_001).is_some(), "el lejano sobrevive");
+        // purge all: mata el resto del mapa.
+        let events = w.process_intent(
+            CombatIntent::GmPurge { player_vid: 2, map_index: 41, x: 0, y: 0, all: true }.into(),
+            1_000,
+        );
+        assert!(
+            events.iter().any(|ev| matches!(
+                ev,
+                NpcEvent::Combat(CombatEvent::Despawned { player_vid: 2, vid: 10_001 })
+            )),
+            "all mata el lejano: {events:?}"
+        );
+        assert_eq!(w.npc_count(), 0);
+    }
+
+    /// Lote 3 (GM `/stat` — parity SetPoint): el sync de stats llega al
+    /// componente Player del mundo (el AI las usa en player_def_grade y en
+    /// el ataque del jugador).
+    #[test]
+    fn gm_set_stats_syncs_player_component() {
+        let mut w = world_with(42);
+        join(&mut w);
+        w.process_intent(
+            CombatIntent::SetStats { player_vid: 2, st: 50, dx: 60, iq: 70, ht: 80 }.into(),
+            1_000,
+        );
+        let e = w.players.get(&2).copied().expect("jugador 2");
+        let ent = w.world.get_entity(e).expect("entidad");
+        let p = ent.get::<crate::ecs::components::Player>().expect("Player");
+        assert_eq!((p.st, p.dx, p.iq, p.ht), (50, 60, 70, 80));
     }
 }

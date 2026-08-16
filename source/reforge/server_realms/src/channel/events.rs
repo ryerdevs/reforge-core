@@ -137,6 +137,21 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                 .await
                 .map_err(|e| format!("enviando GC_CHARACTER_DEL: {e}"))?;
         }
+        NpcEvent::Combat(CombatEvent::GmKilled { vid, vnum, .. }) => {
+            // `/kill` de GM (lote 3 — parity SetDead): GC_DEAD — la
+            // animación de muerte del mob (el GC_CHARACTER_DEL lo manda el
+            // Despawned del mismo kill). SIN recompensa (parity: SetDead
+            // directo — no corre el flujo de kill normal).
+            eprintln!(
+                "server_realms: channel conn {}: GM mató al mob vnum {vnum} \
+                 (vid {vid}) — sin drop ni exp (parity SetDead)",
+                session.conn_id
+            );
+            session
+                .send(&protocol::world::TPacketGCDead::new(vid).to_bytes())
+                .await
+                .map_err(|e| format!("enviando GC_DEAD (GM kill): {e}"))?;
+        }
         NpcEvent::Combat(CombatEvent::AttackResult {
             victim_vid,
             packets,

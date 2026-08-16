@@ -120,6 +120,42 @@ pub enum CombatIntent {
         player_vid: u32,
         party_id: Option<u32>,
     },
+    /// `/mob` de GM — materializa `count` copias del mob en un rect
+    /// aleatorio alrededor del GM (parity do_mob cmd_gm.cpp:630-700 →
+    /// SpawnMobRange). El MobRow lo cargó la sesión (MobRepo::load_by_vnum —
+    /// el mundo no toca PG).
+    GmSpawn {
+        player_vid: u32,
+        map_index: u32,
+        x: i32,
+        y: i32,
+        count: u32,
+        mob: database::npc::MobRow,
+    },
+    /// `/kill` de GM — mata el mob del target del GM (parity do_kill →
+    /// `SetDead` directo: SIN drop ni exp; el mob se quita del mundo y se
+    /// emite GmKilled + Despawned). Sin mob para el vid (PC o inexistente)
+    /// → no-op (parity: los PCs no se matan — el subset solo apunta mobs).
+    GmKill { player_vid: u32, target_vid: u32 },
+    /// `/purge [all]` de GM — mata los mobs del área del GM (radio 1000
+    /// units sin `all`; todo el mapa con `all` — parity FuncPurge
+    /// cmd_gm.cpp:757). Sin drop ni exp (M2_DESTROY_CHARACTER directo).
+    GmPurge {
+        player_vid: u32,
+        map_index: u32,
+        x: i32,
+        y: i32,
+        all: bool,
+    },
+    /// `/stat` de GM — sync de las stats del jugador al mundo (el AI las
+    /// usa en `player_def_grade` y en el ataque del jugador).
+    SetStats {
+        player_vid: u32,
+        st: i32,
+        dx: i32,
+        iq: i32,
+        ht: i32,
+    },
 }
 
 /// C→S de MOVIMIENTO: el CG_MOVE aceptado por la validación del canal
@@ -525,6 +561,15 @@ pub enum CombatEvent {
     /// El mob se DESMATERIALIZÓ (lejos de todos los jugadores) —
     /// GC_CHARACTER_DEL.
     Despawned { player_vid: u32, vid: u32 },
+    /// El GM mató un mob (`/kill` — parity SetDead): el canal manda el
+    /// GC_DEAD (animación de muerte) al GM; el GC_CHARACTER_DEL para TODOS
+    /// los espectadores lo emite el `Despawned` del mismo kill (el mob se
+    /// quita del mundo). Sin recompensa (el flujo de kill normal NO corre).
+    GmKilled {
+        player_vid: u32,
+        vid: u32,
+        vnum: i64,
+    },
     /// Resultado del CG_ATTACK del jugador: los paquetes del golpe
     /// (GcAttack/GcDamageInfo — `handle_attack`) + el daño + el estado del
     /// objetivo. `victim = None` solo si el golpe no hizo daño (bloqueado).
@@ -776,6 +821,7 @@ impl CombatEvent {
             | CombatEvent::AggroOff { player_vid, .. }
             | CombatEvent::Spawned { player_vid, .. }
             | CombatEvent::Despawned { player_vid, .. }
+            | CombatEvent::GmKilled { player_vid, .. }
             | CombatEvent::AttackResult { player_vid, .. }
             | CombatEvent::TargetResult { player_vid, .. }
             | CombatEvent::PvPAttackResult { player_vid, .. }

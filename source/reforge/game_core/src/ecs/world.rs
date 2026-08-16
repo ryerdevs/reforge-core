@@ -239,6 +239,20 @@ impl WorldSim {
                     self.set_player_party(player_vid, party_id);
                     Vec::new()
                 }
+                // GM commands (lote 3, 2026-08-17) — spawn/kill/purge/stat.
+                CombatIntent::GmSpawn { player_vid, map_index, x, y, count, mob } => {
+                    self.spawn_gm_mob(player_vid, map_index, x, y, count, mob)
+                }
+                CombatIntent::GmKill { player_vid, target_vid } => {
+                    self.gm_kill(player_vid, target_vid)
+                }
+                CombatIntent::GmPurge { player_vid, map_index, x, y, all } => {
+                    self.gm_purge(player_vid, map_index, x, y, all)
+                }
+                CombatIntent::SetStats { player_vid, st, dx, iq, ht } => {
+                    self.set_player_stats(player_vid, st, dx, iq, ht);
+                    Vec::new()
+                }
             },
             Intent::Move(MoveIntent::Move { player_vid, x, y }) => {
                 self.set_player_position(player_vid, x, y);

@@ -88,6 +88,9 @@ async fn game_loop(session: &mut Session) -> Result<(), String> {
                     // antes: header sin arm en el dispatch — sin barra).
                     header::CG_TARGET => {
                         let vid = u32::from_le_bytes([pkt[1], pkt[2], pkt[3], pkt[4]]);
+                        // Lote 3 (GM): el `/kill` usa el último target
+                        // (parity m_dwTargetVID del CHARACTER).
+                        session.target_vid = Some(vid);
                         session.intent(Intent::Combat(CombatIntent::Target {
                             player_vid: session.player_vid(),
                             target_vid: vid,
