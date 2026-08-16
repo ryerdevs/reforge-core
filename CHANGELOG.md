@@ -7,6 +7,25 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-15] (60th part) — Party exp bonus
+
+> The party shared exp with no bonus. C++ parity (party.cpp:1495-1501,
+> 1643-1660, char_battle.cpp:2507-2536). Workspace **711 passed / 0 failed**,
+> pushed (`841dd0a`).
+
+- **distribute_exp**: bonus applied to the pool BEFORE splitting, only if the
+  kill fell near the leader (< 5000, IsPositionNearLeader); table
+  CHN_aiPartyBonusExpPercentByMemberCount [0,0,12,18,26,40,53,70,100]
+  indexed by near-member count (cap 8); +5% veteran party (> 60 min,
+  m_iLongTimeExpBonus parity); exp × (100 + bonus) / 100.
+- PartyState.created_at (parity m_dwPartyStartTime). Gold verified: the C++
+  drops gold to the killer's feet only — no party gold split exists.
+- 2 tests (bonus grows with members; split + veteran). Gaps: leader's +30%
+  item bonus (no equipment tracking), centralization 5%, near-leader same
+  map.
+- **Next block (ranked)**: events/raids/wedding, messenger/emotions,
+  belt/DS windows.
+
 ## [2026-08-15] (59th part) — USE_ABILITY_UP buffs + AUTOUSE_GOLD
 
 > The buff potions were cosmetic (only HP/MP flats worked); gold bags were

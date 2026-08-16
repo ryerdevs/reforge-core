@@ -323,3 +323,6 @@
 ### C44. [CERRADO — fix `6d26167`] Pociones de buff cosméticas + bolsas de oro no-op
 
 - USE_ABILITY_UP (7): switch APPLY_*literal (MOV/ATT_SPEED con AFF_*_POTION, STR/DEX/CON/INT, CAST_SPEED, ATT/DEF_GRADE) → affects reales + sync al mundo (combat los lee). AUTOUSE_GOLD (3): oro al usarlo (cap 2e9). Wire subtipos = orden del enum (4/7/3, no 5/3/8). Gaps: treasure box llave+grupo, ITEM_ELK 50026, buffs post-relog.
+
+### C45. [CERRADO — fix `841dd0a`] Party sin bonus de exp
+- bonus por tamaño (tabla CHN [0,0,12,18,26,40,53,70,100], cap 8) + 5% party veterana (>60 min); aplicado al pool antes del reparto, solo si el kill cerca del líder. Gold: el C++ no reparte (drop al suelo del killer). Gaps: +30% item del líder, centralización 5%.
