@@ -14,7 +14,7 @@ Last verified: 2026-08-13
 ## Document map
 
 | Document | Role |
-|---|---|
+| --- | --- |
 | **This document** (`docs/plans/client-rewrite.md`) | Canonical design and migration plan for the client |
 | [`../decisions/0013-client-rewrite.md`](../decisions/0013-client-rewrite.md) | ADR-0013 (Accepted 2026-08-13; amended 2026-08-13 after oracle review): the 14 decisions D1–D14 + minor technical notes |
 | [`../decisions/0007-no-partial-rust-in-legacy-client.md`](../decisions/0007-no-partial-rust-in-legacy-client.md) | Boundary this plan inherits: no Rust embedded in the legacy client during F0–F6 |
@@ -64,6 +64,8 @@ The server rewrite is largely done: the Rust stack (`source/reforge`) runs nativ
 ## 3. Context: the legacy client and why rewrite it
 
 - **Legacy state:** C++ client v40999 (S3llMetin2 v24, DX9), compiled from `source\client` (MSBuild Release|Win32). Proprietary pack formats (`root.epk`/`locale.epk`: TEA-ECB + LZO1X, MMPT0/MIPX), CP949 encoding traps, a crash history (0xC0000374 heap corruption from `string_replace_word`, resolved 2026-08-09 — see AGENTS.md), and client-validated gameplay logic that the server rewrite has made obsolete.
+- **32-bit address space (2026-08-16):** the client is a 32-bit PE (0x010B) with a 2 GB address space. The vcxproj's `<LargeAddressAware>true</LargeAddressAware>` never produced the PE bit (0x0010 without 0x0020) — the MSBuild flag does not map with the v145 toolset, and `/LARGEADDRESSAWARE` in AdditionalOptions also did not stick. Fixed 2026-08-16 by setting the DllCharacteristics bit directly (0x0010 → 0x0030) on the deployed exe → the 32-bit client now has **4 GB** on x64 Windows (original backed up as `metin2client.exe.bak-32bit`).
+- **x64 port rejected (2026-08-16):** (1) the client embeds **Python 2.7** (`Extern/include/Python27/Python.h`) which never had an official x64 Windows build; (2) the network packet structs do not use consistent `#pragma pack` — in x64 the pointer-sized fields grow 4→8 bytes and **every packet changes size**, breaking the byte-exact wire with the server (C++ frozen + Rust); (3) the x64 sln entries map to Win32 (never built); (4) legacy pointer truncation (`(DWORD)p`) would explode as crashes. The Rust client rewrite (ADR-0013) is x64-native by design — that is the 64-bit path, not a legacy port.
 - **Why rewrite:** (1) the server-authoritative model (ADR-0010/0011) makes the client a thin view — the legacy one carries 20 years of validation debt that must not be ported; (2) DX9 is end-of-life; (3) the scale vision (LOD, streaming, instancing, KTX2/meshopt — D13/D14) needs a modern render stack; (4) memory safety and a codebase that future agents can maintain.
 - **What we do NOT repeat** (same as the server's list, applied to the client): client-side validation of gameplay facts, near-symbolic encryption, CP949 text, pack formats as a runtime dependency, and the 6.6k-LOC god-object style (the legacy client's `PythonApplication`/`CPythonNetworkStream` monoliths).
 
@@ -82,7 +84,7 @@ The server rewrite is largely done: the Rust stack (`source/reforge`) runs nativ
 All 14 decisions are recorded in [`../decisions/0013-client-rewrite.md`](../decisions/0013-client-rewrite.md) (Accepted 2026-08-13; amended 2026-08-13 after oracle review). Summary:
 
 | # | Decision | Detail |
-|---|---|---|
+| --- | --- | --- |
 | **D1** | Engine | **Bevy 0.19** (wgpu 29, GPU-driven rendering, glTF native, multi-window) — not custom wgpu (m2rs-style), not macroquad |
 | **D2** | Legacy assets | Build-time conversion; runtime loads ONLY glTF, PNG/KTX2, JSON — no proprietary formats in the shipped client |
 | **D3** | Legacy client | Stays alive during the rewrite (coexistence until F5 parity) as playable reference; **do NOT freeze it** |
@@ -136,7 +138,7 @@ source/client_rust/assets/             glTF, PNG/KTX2, JSON — the ONLY
 The pipeline is **100% Rust** (D7) and runs at **build time** (D2) — the runtime never sees a proprietary format:
 
 | Legacy input | Converter | Output (runtime format) |
-|---|---|---|
+| --- | --- | --- |
 | `.epk` packs (TEA-ECB + LZO1X) | epk unpacker — **from scratch** (only LZO1X is already reverse-engineered in `game_core/src/map.rs`; TEA-ECB is a small well-known cipher: days, not weeks — amendment A) | raw files (models, textures, scripts) |
 | `gr2` models (Granny) | opengr2-rs + `gltf` crate — build-time only (D13); one-off Blender conversion allowed as escape hatch (implementation note 3) | glTF (skinning/animation translated) |
 | `icon.epk` (item/UI icons, TGA/BMP) | icon converter — F1 hotbar needs it (implementation note 4) | PNG |
@@ -157,7 +159,7 @@ The pipeline is **100% Rust** (D7) and runs at **build time** (D2) — the runti
 The map is **three independent layers** (D14) — the industry-standard decomposition (WoW ADT/MCNK + MDDF/MODF, UE5 World Partition):
 
 | Layer | Format | Content | Notes |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **1. Terrain** | Heightmap (PNG/EXR) | Elevation, chunked, LOD | **Generated from the legacy `.map` file** — the server collision grid is 2D attributes only; height is cosmetic/physics (implementation note 1). Streamed 5×5 around the player (F1 deliverable — amendment B); collision from the blocked/water attribute grid (LZO1X, server-attr parsing in `game_core/src/map.rs`) |
 | **2. Objects** | JSON placement layer | model ref + x/y/z/rot/scale | **The legacy `.map` file IS the placement data** — parse it directly into placements JSON for map 41; no manual authoring (implementation note 2). Instanced rendering: 1 draw call for many trees |
 | **3. Models** | glTF | Meshes, skins, animations | Produced by asset_tools from `gr2` (D7, D13) |
@@ -170,7 +172,7 @@ The map is **three independent layers** (D14) — the industry-standard decompos
 ## 9. Phases F0–F6
 
 | Phase | Goal | Deliverables | Verification |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **F0** Foundations + spike | `client_rust` workspace (4 crates), `protocol` path dependency, tokio network-thread scaffold, asset_tools skeleton; **slint-in-bevy spike FIRST (1–2 days)** before any real UI (D12) | Spike demo (slint panel inside a bevy window); epk unpacker (from scratch — amendment A) + first DDS→PNG + first gr2→glTF | Spike runs on the 4 GB host; one legacy model + one map chunk converted by asset_tools; `cargo test` green in `client_rust`; **slint license terms verified (D6)**; **DX12 backend confirmed on the dev GPU or GL fallback (implementation note 8)**; dev builds use `dynamic_linking` (implementation note 8). **Independent of the server** — runs offline. Re-evaluation point for D6 (slint vs egui) |
 | **F1** World entry | Map 41 (Venter) 3-layer rendering **including chunked terrain streaming 5×5 + LOD (amendment B)**, chars `lkjsnlfknlsk`/`ninja`, mobs #101 + #2101, minimal UI (chat + HP bar; hotbar optional — G2), real network (D4, D11) | F1 asset set converted (map 41 + player chars + 2–3 mobs + minimal icons, D8); **terrain heightmap + placements generated from the legacy `.map` file (implementation notes 1–2)**; tokio thread + `protocol` crate connected (handshake, phase machine, TimeSync — E) | Login → select → world → move **against the real Rust server** (`scripts/start_win.ps1`; `127.0.0.1:30001`/`30003`; `test`/`1234`); **move across map 41 with streaming — no load hitches**; mobs visible; chat + HP bar functional; **golden screenshots A/B vs the legacy client** (same account/actions — G5) |
 | **F2** Core gameplay | Movement + third-person legacy-style camera (winit+gilrs), combat + skills (server-authoritative), items/inventory, hotbar actions, NPC interaction, shops/trade; **client-side prediction/interpolation (implementation note 6)**; **IME spike for Korean/Chinese chat (implementation note 7)** | Gameplay systems over the F1 shell; prediction/interpolation (own-movement + other-entity); IME spike result | Full session vs the Rust server: kill mobs, loot, equip, shop, 2-player trade — no divergences (mirrors server F5.3 slices); no rubber-banding under the movement envelope |
@@ -186,7 +188,7 @@ Phase discipline mirrors the server plan: each phase ends with its documentation
 ## 10. Risks and mitigations
 
 | # | Risk | Mitigation |
-|---|---|---|
+| --- | --- | --- |
 | 1 | **slint×bevy integration is less mature** (D6) | F0 spike FIRST (1–2 days) gates any real UI; re-evaluation point at the spike; egui fallback is contained because UI is a leaf layer (§6) |
 | 2 | **slint license terms (oracle flagged GPLv3-or-commercial)** | License VERIFIED at the F0 spike (D6, user decision 2026-08-13: slint retained, free-with-logo-credit understanding); if the free/logo-credit terms do not hold → egui (MIT/Apache) fallback or a commercial license at distribution |
 | 3 | **opengr2-rs file-version gaps** (4★, dormant since 2023, D13) | Build-time only: gaps fail the build, never the shipped client; F1 scope is small (2–3 mobs + chars); glTF validation in asset_tools; per-file fallback path if a specific `gr2` does not convert; **one-off Blender conversion committed as glTF is acceptable** (implementation note 3 — D8 keeps outputs in the repo; the Rust tool remains the target, not the blocker) |
