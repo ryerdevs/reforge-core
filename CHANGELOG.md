@@ -7,6 +7,33 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-15] (51st part) — Player parties + exp level-delta + verifier fixes
+
+> The party system (Fixer lane, 110 min — orchestrated close), C33 exp curve, and the
+> verifier mobs findings closed. Workspace **668 passed / 0 failed**, pushed (`0fc2cd6`).
+
+- **Party complete** (`0fc2cd6`): CG_PARTY_INVITE (72)/INVITE_ANSWER (73)/REMOVE (74)/
+  PARAMETER (78) wired in game.rs; GC_PARTY_INVITE (77)/ADD (78)/UPDATE (79)/REMOVE (80)/
+  PARAMETER (83) byte-exact in protocol (packet.h:1510-1562). Leader/member rules
+  (empire + level gap ±30, party full, only leader invites — input_main.cpp:3137-3157,
+  party.cpp), kick/disband/disconnect RAII, exp shared via PartyMsg::ExpGain in
+  apply_kill. State in channel memory (`player.party` PG column gap documented).
+  12 tests (11 green; 1 fragile 3-player sync drain `#[ignore]` with TODO).
+- **C33 exp level-delta + cap 10%**: `exp_level_delta_factor` with the legacy
+  `aiPercentByDeltaLev` table (constants.cpp:235-266; NEW_GET_LVDELTA
+  char_battle.cpp:2210) + `MIN(GetNextExp()/10, iExp)` cap (char_battle.cpp:2267) —
+  farming weak mobs no longer grants full exp; KillInfo.mob_level added.
+- **Verifier mobs findings closed** (the verifier FAIL was 3 test-coverage gaps +
+  1 parity deviation — formulas were all correct): C29 cooldown protection test
+  (1000 ms tick with 2000 ms cooldown must NOT hit), C22 gold routing protected by
+  the shared `is_gold_item`, C32 `is_far` uses GetMobAttackRange() with
+  POINT_BOW_DISTANCE for RANGE/MAGIC (`mob_attack_range_base`).
+- **Verifier mobs verdict: FAIL → closed** — 3/5 mutations were caught; the 2 gaps
+  (cooldown gate, gold routing) now have protection tests.
+- **stat_points** documented as blocked: this client variant has NO stat-up UI
+  (Packet.h:32-37 commented); only `/con+`/`/str+` GM commands — needs a wire decision
+  (client change), not a server bug.
+
 ## [2026-08-15] (50th part) — Mob combat parity: attack cooldown/speed/range/reposition (C29-C32)
 
 > The 4 CRITICAL mob behaviors from the legacy analysis (mob-legacy-behavior.md) —
