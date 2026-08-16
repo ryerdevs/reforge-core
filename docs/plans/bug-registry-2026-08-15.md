@@ -311,3 +311,6 @@
 ### C41. [CERRADO — fix `c8f3bd5`+`9d6f101`] Buffs numéricos
 
 - CRITICAL_PCT/MOV_SPEED/ATT_SPEED alteran gameplay (no solo icono); melee crit ×2 + flag DAMAGE_CRITICAL del wire.
+
+### C42. [CERRADO — fix `0d33d86`] Daño de skills con tabla aproximada
+- skill_power real de PG (common.locale SKILL_POWER_BY_LEVEL + TYPE0..8): k = power(job, skillgroup, level) × max_level / 100 (parity GetSkillPowerByLevelFromType). Fail-open → aproximación previa.
