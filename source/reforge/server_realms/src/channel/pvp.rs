@@ -19,6 +19,7 @@
 //! C6a (firma uniforme): malformado → log + `Outcome::Continue`.
 
 use crate::channel::session::{Outcome, Session};
+use game_core::ecs::{CombatIntent, Intent};
 
 /// CG_PVP (41): flag pvp on/off. `mode != 0` → PvP activo. El paquete del
 /// framer es de 10 B (header + vidSrc + vidDst + mode — Packet.h:2014-2020);
@@ -38,10 +39,25 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
     };
     let on = mode != 0;
     session.pvp_mode = on;
+    // El mundo COMPARTIDO también lo necesita: el gate `battle_is_attackable`
+    // (process_attack — PvP) se evalúa donde están AMBOS jugadores (la
+    // sesión del atacante no ve la del objetivo). Error → log (no fatal —
+    // el handler es defensivo).
+    if let Err(e) = session.intent(Intent::Combat(CombatIntent::SetPvpMode {
+        player_vid: session.player_vid(),
+        on,
+    })) {
+        eprintln!(
+            "server_realms: channel conn {}: CG_PVP — sincronizando el \
+             mundo: {e}",
+            session.conn_id
+        );
+    }
     eprintln!(
         "server_realms: channel conn {}: {} — PvP {} (mode {mode}) — \
-         flag de sesión (sin columna en player.player, parity TPlayerTable; \
-         sin eco GC_PVP — el sistema de duelo no está desplegado)",
+         flag de sesión + mundo (sin columna en player.player, parity \
+         TPlayerTable; sin eco GC_PVP — el sistema de duelo no está \
+         desplegado)",
         session.conn_id,
         session.row().name,
         if on { "ON" } else { "OFF" }

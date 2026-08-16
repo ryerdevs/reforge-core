@@ -188,6 +188,82 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                 }
             }
         }
+        NpcEvent::Combat(CombatEvent::PvPAttackResult {
+            victim_vid,
+            packets,
+            damage,
+            dead,
+            victim_hp,
+            ..
+        }) => {
+            // PvP: los paquetes del golpe (GC_DAMAGE_INFO — `handle_attack`)
+            // van al atacante; la VÍCTIMA recibe el MISMO paquete por su
+            // propio evento (parity `SendDamagePacket`, char_battle.cpp:
+            // 1508-1527 — ambos descs). El daño ya está aplicado al Hp del
+            // PC en el mundo; la víctima sincroniza su row por `PvPVictimHit`.
+            for pkt in packets {
+                session
+                    .send(&pkt)
+                    .await
+                    .map_err(|e| format!("enviando combate (PvP): {e}"))?;
+            }
+            if damage > 0 {
+                eprintln!(
+                    "server_realms: channel conn {}: {} golpeó al jugador vid \
+                     {victim_vid} por {damage} (hp {victim_hp}){}",
+                    session.conn_id,
+                    session.row().name,
+                    if dead { " — MATÓ" } else { "" }
+                );
+            }
+        }
+        NpcEvent::Combat(CombatEvent::PvPVictimHit {
+            attacker_vid,
+            packets,
+            damage,
+            ..
+        }) => {
+            // PvP: la VÍCTIMA recibe el mismo GC_DAMAGE_INFO que el atacante
+            // (el número flota sobre ella — parity SendDamagePacket) + el
+            // daño al row + GC_POINTS (la barra). La MUERTE del PC (hp <= 0):
+            // GC_DEAD + puntos a 0 — el revive lo dispara el CG_SCRIPT_ANSWER
+            // del cliente (script.rs), el MISMO flujo que el MobAttack. El
+            // `dead` del evento (estado del mundo) no se usa aquí: la muerte
+            // la decide el hp del ROW (lo que el cliente ve en la barra —
+            // parity del flujo MobAttack).
+            for pkt in packets {
+                session
+                    .send(&pkt)
+                    .await
+                    .map_err(|e| format!("enviando combate (PvP): {e}"))?;
+            }
+            let hp = session.row().hp.saturating_sub(damage);
+            session.row_mut().hp = hp;
+            if hp <= 0 {
+                session.row_mut().hp = 0;
+                session
+                    .send(&protocol::world::TPacketGCDead::new(session.player_vid()).to_bytes())
+                    .await
+                    .map_err(|e| format!("enviando GC_DEAD: {e}"))?;
+                eprintln!(
+                    "server_realms: channel conn {}: {} MURIÓ en PvP (atacante \
+                     vid {attacker_vid}, {damage} de daño) — esperando revive \
+                     (CG_SCRIPT_ANSWER)",
+                    session.conn_id, session.row().name
+                );
+            } else {
+                eprintln!(
+                    "server_realms: channel conn {}: el jugador vid \
+                     {attacker_vid} atacó a {} por {damage} (hp {hp})",
+                    session.conn_id, session.row().name
+                );
+            }
+            session
+                .send(&packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
+                .await
+                .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
+            session.save();
+        }
         NpcEvent::Combat(CombatEvent::TargetResult { vid, hp, max_hp, .. }) => {
             // GC_TARGET (63) — la barra de vida del objetivo al apuntarlo
             // (parity `SetTarget`, char.cpp:5048-5094: bHPPercent =
