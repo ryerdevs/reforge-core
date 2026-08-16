@@ -575,7 +575,7 @@ fn skill_proto_from_row(r: &tokio_postgres::Row) -> Option<SkillProto> {
         attr_type: attr_type_from_text(r.get::<_, Option<String>>(11).as_deref().unwrap_or("")),
         max_hit: r.get::<_, i16>(12) as u16,
         target_range: r.get::<_, i32>(13) as u32,
-        splash_range: r.get::<_, i32>(14).max(0) as u32,
+        splash_range: r.get::<_, i64>(14).max(0) as u32,
         splash_adjust_poly: r.get::<_, Option<String>>(15).unwrap_or_default(),
     })
 }
