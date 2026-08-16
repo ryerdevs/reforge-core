@@ -7,6 +7,30 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-15] (56th part) — SPLASH area skills
+
+> Only single-target skills worked — area skills (most of the job attack
+> trees) hit nothing. Workspace **693 passed / 0 failed**, pushed
+> (`11a2f69`).
+
+- **process_skill → WorldSim::splash_damage**: the wire target defines the
+  center (mob/PC position, else caster — parity pkVictim null), radius
+  dwsplashrange (DISTANCE_APPROX), max lMaxHit victims (0 = unlimited),
+  per-victim poly re-evaluated (atk/ar vs victim, maxhp/maxsp of victim),
+  szSplashAroundDamageAdjustPoly for non-main victims (applied BEFORE the
+  attr adjustment — exact C++ order), attackability gate (mobs always, PCs
+  via battle_is_attackable, caster never a victim).
+- SP cost + cooldown paid once per use; SplashResult to caster + a
+  SplashVictimHit per PC hit (routing parity SendDamagePacket).
+- SkillProto + splash_range/splash_adjust_poly (dwsplashrange/
+  szsplasharounddamageadjustpoly). 3 new tests.
+- **FIX (found by the lane)**: single-target kill captured the view AFTER
+  remove_npc → KillInfo None → channel skipped exp/gold on skill kills;
+  now captured before the damage.
+- **Next block (ranked)**: skill_power.txt (real power table by
+  job/skillgroup), GM command remainder (mob/kill/purge/goto/stat),
+  PARTY/HORSE skills, events/raids/wedding.
+
 ## [2026-08-15] (55th part) — Random attributes + sockets on item creation
 
 > Items were born with empty attrs [(0,0);7] and sockets [0;3] — no magic
