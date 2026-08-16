@@ -14,7 +14,7 @@ use crate::combat::{
     CombatState, NpcState, PlayerState, PvpContext,
 };
 use crate::ecs::components::{
-    Affects, Aggro, AttackPos, Combat, Hp, LastAttack, Map, Mob, Mp, Player, Position, Pvp,
+    Affect, Affects, Aggro, AttackPos, Combat, Hp, LastAttack, Map, Mob, Mp, Player, Position, Pvp,
     SpawnRef, Vid,
 };
 use crate::ecs::events::{CombatEvent, KillInfo, MoveEvent, NpcEvent};
@@ -839,6 +839,40 @@ impl WorldSim {
             && let Some(mut p) = ent.get_mut::<Player>()
         {
             p.level = level;
+        }
+    }
+
+    /// Aplica un buff de ITEM (USE_ABILITY_UP — las pociones de buff del
+    /// lane; parity `AddAffect` con bOverride=true, char_affect.cpp:518-590):
+    /// mismo (dwType, bApplyOn) reemplaza al anterior y el nuevo entra al
+    /// componente `Affects` — el combate lee de ahí ATT_SPEED /
+    /// ATT_GRADE_BONUS / DEF_GRADE_BONUS / CRITICAL y el `affects_system` lo
+    /// expira (→ `AffectRemoved` → GC_AFFECT_REMOVE en el canal). Los pools
+    /// MAX_HP/MAX_SP no aplican: el switch USE_ABILITY_UP del C++ no los usa
+    /// (solo POINT_* de buffs numéricos).
+    pub(crate) fn set_player_affect(
+        &mut self,
+        player_vid: u32,
+        dw_type: u32,
+        point: u8,
+        value: i32,
+        flag: u32,
+        duration_secs: i32,
+    ) {
+        let Some(e) = self.players.get(&player_vid).copied() else { return };
+        if let Ok(mut ent) = self.world.get_entity_mut(e)
+            && let Some(mut aff) = ent.get_mut::<Affects>()
+        {
+            // Override del mismo (dwType, bApplyOn) — parity bOverride.
+            aff.0.retain(|a| !(a.skill_id == dw_type && a.point == point));
+            aff.0.push(Affect {
+                skill_id: dw_type,
+                point,
+                value,
+                flag,
+                duration_ms: u64::from(duration_secs.max(0) as u32) * 1000,
+                sp_cost: 0,
+            });
         }
     }
 

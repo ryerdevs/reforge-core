@@ -736,6 +736,28 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                 .send(&out)
                 .await
                 .map_err(|e| format!("enviando GC_AFFECT_REMOVE: {e}"))?;
+            // El mirror del canal (session.affects) se limpia — parity
+            // `ProcessAffect` (char_affect.cpp:273-281: `erase` + `ComputeAffect
+            // (false)`). Sin esto, el buff de item/skill expirado quedaría
+            // "activo" en el canal (velocidad sin revertir, fila fantasma).
+            session
+                .affects
+                .retain(|a| !(a.b_type == skill_id as i32 && a.b_apply_on == point as i16));
+            if point == game_core::skill::point::MOV_SPEED {
+                // Revertir la velocidad con los buffs RESTANTES (parity
+                // GetMoveSpeed — factor = base(100) + Σ POINT_MOV_SPEED;
+                // ComputeAffect(false) del C++ al expirar).
+                let total: i32 = 100
+                    + session
+                        .affects
+                        .iter()
+                        .filter(|a| a.b_apply_on == game_core::skill::point::MOV_SPEED as i16)
+                        .map(|a| a.l_apply_value)
+                        .sum::<i32>();
+                let dur = game_core::ai::calculate_duration(total, 10_000);
+                session.motion_mut().speed =
+                    (300u32.saturating_mul(10_000) / dur.max(1) as u32).max(1);
+            }
         }
         // Lanes futuros (C3 + N1): los emisores viven en sus archivos —
         // `social::emit` y `quest::emit` son async (envían GC + aplican la
