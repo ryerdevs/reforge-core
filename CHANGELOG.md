@@ -7,6 +7,30 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-15] (59th part) — USE_ABILITY_UP buffs + AUTOUSE_GOLD
+
+> The buff potions were cosmetic (only HP/MP flats worked); gold bags were
+> no-ops. Wire subtype = enum order (item_length.h:250-300): TREASURE_BOX=4,
+> ABILITY_UP=7, AUTOUSE_GOLD=3 (the task's 5/3/8 were wrong). Workspace
+> **710 passed / 0 failed**, pushed (`6d26167`).
+
+- **USE_ABILITY_UP**: value0 (APPLY_*) → (AFFECT_*, POINT_*, AFF_*) with the
+  literal switch char_item.cpp:4332-4388 (MOV/ATT_SPEED with AFF_*_POTION;
+  STR/DEX/CON/INT → POINT_ST/HT/DX/IQ; CAST_SPEED/ATT/DEF_GRADE_BONUS
+  without flag); override (GC_AFFECT_REMOVE + ADD), session.affects + PG
+  (AffectRepo::save), MOV_SPEED motion recompute, world sync via
+  CombatIntent::SetAffect (combat reads ATT_SPEED/ATT/DEF_GRADE/CRIT from
+  there, affects_system expires).
+- **AUTOUSE_GOLD**: value0 = gold → row.gold capped GOLD_MAX 2e9 + GC_POINTS
+  - save + consume (C++ treats ITEM_AUTOUSE as no-op; the real gold item is
+  ITEM_ELK_VNUM 50026 USE_SPECIAL — documented).
+- **USE_TREASURE_BOX**: C++ double-click is a no-op without the key
+  (char_item.cpp:4971-4973) — parity-exact no-op, gap documented.
+- AffectRemoved now cleans session.affects + reverts MOV_SPEED;
+  consume_one_use shared helper; 3 new tests.
+- Gaps: treasure box key+special group, ITEM_ELK 50026, buffs after relog.
+- **Next block (ranked)**: PARTY/HORSE skills, events/raids/wedding.
+
 ## [2026-08-15] (58th part) — High-value GM commands
 
 > 5 commands of the cmd_info[] remainder (95% was missing). Workspace
