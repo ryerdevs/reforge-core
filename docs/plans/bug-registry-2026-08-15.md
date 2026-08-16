@@ -319,3 +319,6 @@
 ### C43. [CERRADO — fix `3ea8f49`] GM commands faltantes (95% del cmd_info[])
 
 - mob/kill/purge/goto/stat implementados con parity (GmSpawn intent nuevo; target_vid; FuncPurge radio/mapa; find_player; stat cap 90 + stat- floor). Gaps: mob por nombre, kill-vs-PC, goto coords.
+
+### C44. [CERRADO — fix `6d26167`] Pociones de buff cosméticas + bolsas de oro no-op
+- USE_ABILITY_UP (7): switch APPLY_* literal (MOV/ATT_SPEED con AFF_*_POTION, STR/DEX/CON/INT, CAST_SPEED, ATT/DEF_GRADE) → affects reales + sync al mundo (combat los lee). AUTOUSE_GOLD (3): oro al usarlo (cap 2e9). Wire subtipos = orden del enum (4/7/3, no 5/3/8). Gaps: treasure box llave+grupo, ITEM_ELK 50026, buffs post-relog.
