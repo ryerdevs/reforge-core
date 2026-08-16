@@ -257,8 +257,23 @@ impl Affects {
         if pct <= 0 {
             return 0;
         }
-        let pct = if pct >= 10 { 5 + (pct - 10) / 4 } else { pct / 2 };
+        let pct = if pct >= 10 {
+            5 + (pct - 10) / 4
+        } else {
+            pct / 2
+        };
         pct.max(0)
+    }
+
+    /// La suma de los buffs ATT_SPEED (parity `POINT_ATT_SPEED` — el
+    /// bonus de velocidad de ataque que SUMA al denominador de
+    /// `GET_ATTACK_SPEED`, battle.cpp:762).
+    pub fn att_speed_bonus(&self) -> i32 {
+        self.0
+            .iter()
+            .filter(|a| a.point == crate::skill::point::ATT_SPEED)
+            .map(|a| a.value)
+            .sum()
     }
 }
 

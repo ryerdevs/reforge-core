@@ -229,8 +229,20 @@ pub mod weapon_subtype {
 /// `real_speed = 1000*100/(80 + 0 + 0)` = 1250 ms; DAGGER y CLAW → /2
 /// (battle.cpp:774-779). `weapon = None` → 1250 (manos desnudas).
 pub fn attack_speed_for_weapon(weapon: Option<&database::item::ProtoItem>) -> u32 {
+    attack_speed_for_weapon_bonus(weapon, 0)
+}
+
+/// `GET_ATTACK_SPEED` (battle.cpp:757-782): `(ani_speed × 100) / (
+/// SPEEDHACK_LIMIT_BONUS + POINT_ATT_SPEED + riding_bonus)` — el buff
+/// ATT_SPEED (POINT_ATT_SPEED) SUMA al denominador y ACELERA el ataque
+/// (parity `PointChange(POINT_ATT_SPEED, +x)` de las pociones/skills).
+pub fn attack_speed_for_weapon_bonus(
+    weapon: Option<&database::item::ProtoItem>,
+    att_speed_bonus: i32,
+) -> u32 {
     const ANI_SPEED_MS: u32 = 1000; // default del constructor ANI (ani.cpp:121)
-    let mut real = (ANI_SPEED_MS * 100) / SPEEDHACK_LIMIT_BONUS;
+    let denom = (SPEEDHACK_LIMIT_BONUS as i32 + att_speed_bonus).max(1) as u32;
+    let mut real = (ANI_SPEED_MS * 100) / denom;
     if let Some(w) = weapon
         && w.b_type == 1 /* ITEM_WEAPON (ItemData.h:72) */
             && (w.b_sub_type == weapon_subtype::DAGGER || w.b_sub_type == weapon_subtype::CLAW)
@@ -852,6 +864,27 @@ mod tests {
             weight: 0,
         };
         assert_eq!(attack_speed_for_weapon(Some(&armor)), 1250, "no-weapon: sin /2");
+    }
+
+    /// El buff ATT_SPEED (POINT_ATT_SPEED) SUMA al denominador de
+    /// GET_ATTACK_SPEED (battle.cpp:762): sin arma, bonus 20 →
+    /// (1000×100)/(80+20) = 1000 ms (era 1250).
+    #[test]
+    fn attack_speed_bonus_accelerates() {
+        assert_eq!(attack_speed_for_weapon_bonus(None, 0), 1250, "sin buff: (1000×100)/80");
+        assert_eq!(attack_speed_for_weapon_bonus(None, 20), 1000, "bonus 20: (1000×100)/(80+20)");
+        assert_eq!(attack_speed_for_weapon_bonus(None, 170), 400, "bonus 170: (1000×100)/250");
+        // DAGGER con bonus: el /2 se aplica DESPUÉS del denominador.
+        use database::item::ProtoItem;
+        let dagger = ProtoItem {
+            b_type: 1,
+            b_sub_type: weapon_subtype::DAGGER,
+            applies: [(0, 0); 3],
+            values: [0; 6],
+            wear_flag: 1 << 4,
+            weight: 0,
+        };
+        assert_eq!(attack_speed_for_weapon_bonus(Some(&dagger), 20), 500, "daga: 1000/2");
     }
 
     /// Rango (battle.cpp:144-167): `distance_approx > 300` → sin golpe;

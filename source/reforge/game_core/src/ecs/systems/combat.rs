@@ -9,7 +9,7 @@ use bevy_ecs::prelude::*;
 
 use crate::ai::{attack_damage, change_attack_dest, mob_move_speed, move_duration_ms, rotation_5deg, step_toward};
 use crate::combat::{
-    attack_speed_for_weapon, distance_approx, handle_attack,
+    attack_speed_for_weapon_bonus, distance_approx, handle_attack,
     mob_attack_max_range, mob_attack_range_base, player_def_grade, CombatState, NpcState, PlayerState,
 };
 use crate::ecs::components::{
@@ -457,12 +457,12 @@ impl WorldSim {
         let Some(pe) = self.players.get(&player_vid).copied() else {
             return Vec::new();
         };
-        let (px, py, level, ht, job, st, dx, iq, _armor, att_bonus, crit_pct) = {
+        let (px, py, level, ht, job, st, dx, iq, _armor, att_bonus, crit_pct, att_spd_bonus) = {
             let Ok(ent) = self.world.get_entity(pe) else { return Vec::new() };
             let Some(pos) = ent.get::<Position>() else { return Vec::new() };
             let Some(p) = ent.get::<Player>() else { return Vec::new() };
             let Some(aff) = ent.get::<Affects>() else { return Vec::new() };
-            (pos.x, pos.y, p.level, p.ht, p.job, p.st, p.dx, p.iq, p.armor, aff.att_grade_bonus(), aff.critical_pct())
+            (pos.x, pos.y, p.level, p.ht, p.job, p.st, p.dx, p.iq, p.armor, aff.att_grade_bonus(), aff.critical_pct(), aff.att_speed_bonus())
         };
         let player_state = PlayerState {
             vid: player_vid,
@@ -474,7 +474,8 @@ impl WorldSim {
             st,
             dx,
             iq,
-            attack_speed_ms: attack_speed_for_weapon(weapon),
+            // ATT_SPEED de los buffs (parity GET_ATTACK_SPEED battle.cpp:757-782).
+            attack_speed_ms: attack_speed_for_weapon_bonus(weapon, att_spd_bonus),
             // El bonus de ATT_GRADE de los buffs (parity POINT_ATT_GRADE_BONUS).
             att_grade_bonus: att_bonus,
             // El % de crítico REAL de los buffs (parity POINT_CRITICAL_PCT).
