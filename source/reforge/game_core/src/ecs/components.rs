@@ -107,6 +107,13 @@ pub struct Mob {
     /// C32: solo `rank < BOSS` hace change-attack-position
     /// (`GetMobRank() < MOB_RANK_BOSS`, char.cpp:5437).
     pub rank: i32,
+    /// AIFLAGs de combate (sp_* del mob_proto — HP% de activación; 0 =
+    /// inactivo). BERSERK: daño ×2 bajo sp_berserk% HP; STONESKIN: daño
+    /// recibido /2 bajo sp_stoneskin%; GODSPEED: ATT_SPEED 250 bajo
+    /// sp_godspeed% (char_state.cpp:1016-1023, char_battle.cpp:2082-2084).
+    pub sp_berserk: i32,
+    pub sp_stoneskin: i32,
+    pub sp_godspeed: i32,
 }
 
 impl Mob {
@@ -137,6 +144,9 @@ impl Mob {
             battle_type: row.battle_type as u8,
             attack_range: row.attack_range as u32,
             rank: row.rank,
+            sp_berserk: row.sp_berserk,
+            sp_stoneskin: row.sp_stoneskin,
+            sp_godspeed: row.sp_godspeed,
         }
     }
 }

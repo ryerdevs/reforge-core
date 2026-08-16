@@ -861,6 +861,10 @@ mod tests {
             aggressive_sight: 400,
             // C32: rank del mob 101 (0 = PAWN — cambia de posición).
             rank: 0,
+            // AIFLAGs de combate del mob 101 (0 = sin fase especial).
+            sp_berserk: 0,
+            sp_stoneskin: 0,
+            sp_godspeed: 0,
         }
     }
 
