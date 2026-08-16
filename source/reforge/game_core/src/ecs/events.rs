@@ -156,6 +156,26 @@ pub enum CombatIntent {
         iq: i32,
         ht: i32,
     },
+    /// Buff de ITEM (USE_ABILITY_UP — las pociones de buff del lane): el
+    /// canal aplica el affect en el MUNDO (el combate lee ATT_SPEED /
+    /// ATT_GRADE_BONUS / DEF_GRADE_BONUS / CRITICAL del componente
+    /// `Affects`; el `affects_system` lo expira y emite `AffectRemoved` —
+    /// GC_AFFECT_REMOVE en el canal). Parity `AddAffect` con bOverride=true:
+    /// mismo (dwType, bApplyOn) reemplaza al anterior (char_affect.cpp:
+    /// 518-590).
+    SetAffect {
+        player_vid: u32,
+        /// dwType del wire — el AFFECT_* del item (affect.h:22-54).
+        dw_type: u32,
+        /// bApplyOn del wire — el POINT_* que modifica.
+        point: u8,
+        /// lApplyValue — el valor del buff (value2 del item).
+        value: i32,
+        /// dwFlag del wire — el AFF_* (icono).
+        flag: u32,
+        /// lDuration — segundos del buff (value1 del item).
+        duration_secs: i32,
+    },
 }
 
 /// C→S de MOVIMIENTO: el CG_MOVE aceptado por la validación del canal

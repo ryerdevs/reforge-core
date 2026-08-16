@@ -15,11 +15,13 @@
 //! C6a (firma uniforme): malformado/rechazos → log + `Outcome::Continue`;
 //! errores PG/socket → Err (fatal).
 
+use database::affect::{AffectRepo, AffectRow};
 use database::item::ItemRepo;
 use protocol::world::{
-    RefineMaterial, TPacketCGItemDrop, TPacketCGItemDrop2, TPacketCGItemUse,
-    TPacketCGItemUseToItem, TPacketCGRefine, TPacketGCItemDelDeprecated,
-    TPacketGCItemSet, TPacketGCRefineInformation, TItemPos,
+    RefineMaterial, TPacketAffectElement, TPacketCGItemDrop, TPacketCGItemDrop2,
+    TPacketCGItemUse, TPacketCGItemUseToItem, TPacketCGRefine,
+    TPacketGCAffectAdd, TPacketGCItemDelDeprecated, TPacketGCItemSet,
+    TPacketGCRefineInformation, TItemPos,
 };
 use game_core::ecs::{CombatIntent, Intent, ItemIntent};
 use game_core::packets;
@@ -30,6 +32,100 @@ use crate::channel::session::{Outcome, Session};
 const ITEM_TYPE_USE: i16 = 3;
 /// `ITEM_TYPE_AUTOUSE = 4` (ItemData.h:78 — auto-poción, también consumible).
 const ITEM_TYPE_AUTOUSE: i16 = 4;
+
+// ---------------------------------------------------------------------------
+// Subtipos USE_* del lane (parity `EUseSubTypes`/`EAutoUseSubTypes`,
+// item_length.h:250-300): el switch del C++ `UseItem` por `GetSubType()`
+// (char_item.cpp:4172+). El número del wire es el ORDEN del enum legacy.
+// ---------------------------------------------------------------------------
+
+/// `USE_TREASURE_BOX = 4` (item_length.h:255) — los cofres.
+const USE_TREASURE_BOX: i16 = 4;
+/// `USE_ABILITY_UP = 7` (item_length.h:258) — las pociones de buff
+/// (char_item.cpp:4332-4388).
+const USE_ABILITY_UP: i16 = 7;
+/// `AUTOUSE_GOLD = 3` (item_length.h:298) — las bolsas de oro.
+const AUTOUSE_GOLD: i16 = 3;
+
+// ---------------------------------------------------------------------------
+// USE_ABILITY_UP: value0 = índice EApplyTypes (length.h:354-405 — el MISMO
+// catálogo de `database::attr::APPLY_NAMES`), value1 = duración (segundos),
+// value2 = cantidad (char_item.cpp:4332-4388). Solo los applies del switch
+// del C++ tienen case.
+// ---------------------------------------------------------------------------
+
+/// `APPLY_CON = 3` .. `APPLY_DEF_GRADE_BONUS = 54` (length.h:354-405).
+const APPLY_CON: i32 = 3;
+const APPLY_INT: i32 = 4;
+const APPLY_STR: i32 = 5;
+const APPLY_DEX: i32 = 6;
+const APPLY_ATT_SPEED: i32 = 7;
+const APPLY_MOV_SPEED: i32 = 8;
+const APPLY_CAST_SPEED: i32 = 9;
+const APPLY_ATT_GRADE_BONUS: i32 = 53;
+const APPLY_DEF_GRADE_BONUS: i32 = 54;
+
+/// `AFFECT_MOV_SPEED = 200` .. `AFFECT_DEF_GRADE = 226` (affect.h:22-54 —
+/// `EAffectTypes`): el dwType del affect (el icono del cliente).
+const AFFECT_MOV_SPEED: u32 = 200;
+const AFFECT_ATT_SPEED: u32 = 201;
+const AFFECT_ATT_GRADE: u32 = 202;
+const AFFECT_STR: u32 = 204;
+const AFFECT_DEX: u32 = 205;
+const AFFECT_CON: u32 = 206;
+const AFFECT_INT: u32 = 207;
+const AFFECT_CAST_SPEED: u32 = 217;
+const AFFECT_DEF_GRADE: u32 = 226;
+
+/// `AFF_MOV_SPEED_POTION = 12` / `AFF_ATT_SPEED_POTION = 13` (affect.h:137-138
+/// — `EAffectBits`, valores del enum legacy) — el dwFlag del affect (solo
+/// los buffs de velocidad llevan flag; el resto 0, parity literal del C++).
+const AFF_MOV_SPEED_POTION: u32 = 12;
+const AFF_ATT_SPEED_POTION: u32 = 13;
+
+/// `POINT_ST = 12` .. `POINT_IQ = 15` (char.h:148-151) — los POINT_* de las
+/// stats que `game_core::skill::point` no cubre (los demás POINT_* de este
+/// lane viven ahí: ATT_SPEED 17 / MOV_SPEED 19 / CASTING_SPEED 21 /
+/// ATT_GRADE_BONUS 95 / DEF_GRADE_BONUS 96).
+const POINT_ST: u8 = 12;
+const POINT_HT: u8 = 13;
+const POINT_DX: u8 = 14;
+const POINT_IQ: u8 = 15;
+
+/// `GOLD_MAX = 2000000000` (length.h:80) — el cap del oro del PointChange.
+const GOLD_MAX: i64 = 2_000_000_000;
+
+/// Mapeo del switch USE_ABILITY_UP (parity char_item.cpp:4332-4388):
+/// value0 (APPLY_*) → (AFFECT_*, POINT_*, AFF_*). `None` = apply sin case
+/// en el C++ → sin buff y SIN consumo.
+fn ability_up_apply(apply: i32) -> Option<(u32, u8, u32)> {
+    match apply {
+        APPLY_MOV_SPEED => Some((
+            AFFECT_MOV_SPEED,
+            game_core::skill::point::MOV_SPEED,
+            AFF_MOV_SPEED_POTION,
+        )),
+        APPLY_ATT_SPEED => Some((
+            AFFECT_ATT_SPEED,
+            game_core::skill::point::ATT_SPEED,
+            AFF_ATT_SPEED_POTION,
+        )),
+        APPLY_STR => Some((AFFECT_STR, POINT_ST, 0)),
+        APPLY_DEX => Some((AFFECT_DEX, POINT_DX, 0)),
+        APPLY_CON => Some((AFFECT_CON, POINT_HT, 0)),
+        APPLY_INT => Some((AFFECT_INT, POINT_IQ, 0)),
+        APPLY_CAST_SPEED => Some((AFFECT_CAST_SPEED, game_core::skill::point::CASTING_SPEED, 0)),
+        APPLY_ATT_GRADE_BONUS => Some((AFFECT_ATT_GRADE, game_core::skill::point::ATT_GRADE_BONUS, 0)),
+        APPLY_DEF_GRADE_BONUS => Some((AFFECT_DEF_GRADE, game_core::skill::point::DEF_GRADE_BONUS, 0)),
+        _ => None,
+    }
+}
+
+/// Cap del oro de la bolsa AUTOUSE_GOLD (parity `PointChange(POINT_GOLD)` —
+/// el C++ clamp a GOLD_MAX; el row.gold es i32 y no puede excederlo).
+fn gold_after_add(current: i32, add: i32) -> i32 {
+    (i64::from(current) + i64::from(add)).min(GOLD_MAX) as i32
+}
 
 /// El gate de consumibles (parity `UseItemEx`, char_item.cpp:1616+): SOLO
 /// los items ITEM_TYPE_USE/AUTOUSE se aplican y consumen con CG_ITEM_USE.
@@ -348,6 +444,36 @@ pub async fn handle_use(session: &mut Session, pkt: &[u8]) -> Result<Outcome, St
         );
         return Ok(Outcome::Continue);
     };
+    // Dispatch por SUBTIPO (parity `UseItem` — switch(item->GetSubType()),
+    // char_item.cpp:4172+): los subtipos con semántica PROPIA se manejan
+    // ANTES del heal genérico (el value0 de un buff es un APPLY_* — no HP
+    // flat; el de la bolsa de oro es la cantidad — tampoco).
+    match proto.b_sub_type {
+        s if s == USE_ABILITY_UP && proto.b_type == ITEM_TYPE_USE => {
+            return use_ability_up(session, idx, &proto).await;
+        }
+        s if s == USE_TREASURE_BOX && proto.b_type == ITEM_TYPE_USE => {
+            // Parity LITERAL: el USE_TREASURE_BOX por doble-click es NO-OP
+            // (char_item.cpp:4971-4973 — `case USE_MOVE: case
+            // USE_TREASURE_BOX: case USE_MONEYBAG: break;` — SIN consumo).
+            // El cofre se abre con la LLAVE (ITEM_TREASURE_KEY, UseItemEx
+            // char_item.cpp:1968-2051) que tira del grupo especial
+            // (`special_item_group.txt` — loader item_manager_read_tables
+            // .cpp:306; sin tablas PG). GAP documentado: el sistema de
+            // grupos no existe en el rewrite — gap parcial del lane.
+            eprintln!(
+                "server_realms: channel conn {}: item vnum {} — cofre \
+                 USE_TREASURE_BOX sin abrir (parity: no-op sin consumo; la \
+                 apertura es llave+cofre vía el grupo especial — gap)",
+                session.conn_id, session.inventory[idx].vnum
+            );
+            return Ok(Outcome::Continue);
+        }
+        s if s == AUTOUSE_GOLD && proto.b_type == ITEM_TYPE_AUTOUSE => {
+            return use_autouse_gold(session, idx, &proto).await;
+        }
+        _ => {}
+    }
     // TOGGLE del doble-click (parity UseItemEx char_item.cpp:1874-1938: si
     // el item está EQUIPADO → UnequipItem, si está en INVENTORY →
     // EquipItem). Fix 2026-08-15: antes el doble-click en equipado daba
@@ -473,6 +599,14 @@ pub async fn handle_use(session: &mut Session, pkt: &[u8]) -> Result<Outcome, St
         .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
     session.save();
     // Consumir 1 del stack (parity `item->SetCount(count-1)`).
+    consume_one_use(session, idx).await?;
+    Ok(Outcome::Continue)
+}
+
+/// Consume 1 del stack de un consumible usado (parity `item->SetCount(
+/// count-1)`, char_item.cpp): count-1 → GC_ITEM_UPDATE (38 B) + upsert si
+/// queda; GC_ITEM_DEL deprecated (42 B) + delete si se agota.
+async fn consume_one_use(session: &mut Session, idx: usize) -> Result<(), String> {
     session.inventory[idx].count -= 1;
     if session.inventory[idx].count <= 0 {
         // Se agotó: GC_ITEM_DEL deprecated (42 B) + delete.
@@ -521,6 +655,158 @@ pub async fn handle_use(session: &mut Session, pkt: &[u8]) -> Result<Outcome, St
             session.inventory[idx].count
         );
     }
+    Ok(())
+}
+
+/// USE_ABILITY_UP (7 — item_length.h:258): las pociones de buff (parity
+/// char_item.cpp:4332-4388). value0 = APPLY_* → (AFFECT_*, POINT_*, AFF_*),
+/// value1 = duración en segundos, value2 = cantidad. El buff se aplica con
+/// el sistema de affects EXISTENTE: override del mismo (type, applyOn) con
+/// GC_AFFECT_REMOVE + GC_AFFECT_ADD (parity `AddAffect` bOverride=true,
+/// char_affect.cpp:518-590), se guarda en session.affects + PG (parity
+/// TPacketGDAddAffect), y los numéricos entran al componente `Affects` del
+/// MUNDO (el combate lee ATT_SPEED/ATT_GRADE_BONUS/DEF_GRADE_BONUS/CRIT de
+/// ahí; el `affects_system` los expira → AffectRemoved). MOV_SPEED además
+/// recalcula la velocidad del motion (mismo cálculo que el buff de skill en
+/// events.rs). Apply sin case en el C++ → sin buff y SIN consumo.
+async fn use_ability_up(
+    session: &mut Session,
+    idx: usize,
+    proto: &database::item::ProtoItem,
+) -> Result<Outcome, String> {
+    let Some((dw_type, point, flag)) = ability_up_apply(proto.values[0]) else {
+        eprintln!(
+            "server_realms: channel conn {}: item vnum {} — pocion de buff \
+             con apply {} fuera del switch USE_ABILITY_UP — sin efecto, no \
+             consume (parity)",
+            session.conn_id, session.inventory[idx].vnum, proto.values[0]
+        );
+        return Ok(Outcome::Continue);
+    };
+    // value1 = duración (segundos); 0 → 1 (parity AddAffect :529-532 — el
+    // C++ clamp a 1 en vez de rechazar).
+    let duration = proto.values[1].max(1);
+    let amount = proto.values[2];
+    // Override del mismo (dwType, bApplyOn) — parity `FindAffect(dwType,
+    // bApplyOn)` + SendAffectRemovePacket (char_affect.cpp:541-547).
+    let mut overridden = false;
+    session.affects.retain(|a| {
+        if a.b_type == dw_type as i32 && a.b_apply_on == point as i16 {
+            overridden = true;
+            false
+        } else {
+            true
+        }
+    });
+    if overridden {
+        // GC_AFFECT_REMOVE (127, 6 B: header + dwType + bApplyOn — mismo
+        // patrón crudo que events.rs).
+        let mut out = Vec::with_capacity(6);
+        out.push(127);
+        out.extend_from_slice(&dw_type.to_le_bytes());
+        out.push(point);
+        session
+            .send(&out)
+            .await
+            .map_err(|e| format!("enviando GC_AFFECT_REMOVE (override): {e}"))?;
+    }
+    // GC_AFFECT_ADD (126, 22 B) — el icono del buff en el cliente.
+    session
+        .send(
+            &TPacketGCAffectAdd::new(TPacketAffectElement {
+                dw_type,
+                b_apply_on: point,
+                l_apply_value: amount,
+                dw_flag: flag,
+                l_duration: duration,
+                l_sp_cost: 0,
+            })
+            .to_bytes(),
+        )
+        .await
+        .map_err(|e| format!("enviando GC_AFFECT_ADD: {e}"))?;
+    // Mirror de la sesión + persistencia (parity TPacketGDAddAffect →
+    // QUERY_ADD_AFFECT — ClientManagerPlayer.cpp:1150-1160).
+    let row = AffectRow {
+        dw_pid: session.row().id,
+        b_type: dw_type as i32,
+        b_apply_on: point as i16,
+        l_apply_value: amount,
+        dw_flag: i64::from(flag),
+        l_duration: duration,
+        l_sp_cost: 0,
+    };
+    session.affects.push(row.clone());
+    AffectRepo::new(session.pool.clone()).save(&row).await?;
+    // MOV_SPEED: el buff SUMA al factor POINT_MOV_SPEED — recalcular la
+    // velocidad real del motion (parity GetMoveSpeed; mismo bloque que el
+    // buff de skill en events.rs).
+    if point == game_core::skill::point::MOV_SPEED {
+        let total: i32 = 100
+            + session
+                .affects
+                .iter()
+                .filter(|a| a.b_apply_on == game_core::skill::point::MOV_SPEED as i16)
+                .map(|a| a.l_apply_value)
+                .sum::<i32>();
+        let dur = game_core::ai::calculate_duration(total, 10_000);
+        session.motion_mut().speed =
+            (300u32.saturating_mul(10_000) / dur.max(1) as u32).max(1);
+    }
+    // El buff entra al MUNDO (componente `Affects` del jugador — el combate
+    // lee los numéricos de ahí; el affects_system lo expira).
+    session.intent(Intent::Combat(CombatIntent::SetAffect {
+        player_vid: session.player_vid(),
+        dw_type,
+        point,
+        value: amount,
+        flag,
+        duration_secs: duration,
+    }))?;
+    consume_one_use(session, idx).await?;
+    eprintln!(
+        "server_realms: channel conn {}: {} se buffeó con item vnum {} \
+         (apply {}, point {}, +{amount} durante {duration}s, flag {flag})",
+        session.conn_id, session.row().name, session.inventory[idx].vnum, proto.values[0], point
+    );
+    Ok(Outcome::Continue)
+}
+
+/// AUTOUSE_GOLD (3 — item_length.h:298): las bolsas de oro. VERIFICADO en
+/// el C++ congelado: el camino ITEM_AUTOUSE de `UseItem` es NO-OP
+/// (char_item.cpp:5152-5155) y el oro real de item vive en ITEM_ELK_VNUM
+/// (50026, USE_SPECIAL, socket0 — char_item.cpp:3788-3793, fuera del
+/// subset). Este lane implementa el contrato del item: value0 = oro →
+/// gold += value0 (cap GOLD_MAX — length.h:80) + GC_POINTS + consumir.
+async fn use_autouse_gold(
+    session: &mut Session,
+    idx: usize,
+    proto: &database::item::ProtoItem,
+) -> Result<Outcome, String> {
+    let amount = proto.values[0];
+    if amount <= 0 {
+        eprintln!(
+            "server_realms: channel conn {}: bolsa de oro vnum {} con \
+             value0 {amount} — sin oro, no consume",
+            session.conn_id, session.inventory[idx].vnum
+        );
+        return Ok(Outcome::Continue);
+    }
+    session.row_mut().gold = gold_after_add(session.row().gold, amount);
+    session
+        .send(&packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
+        .await
+        .map_err(|e| format!("enviando GC_POINTS (bolsa de oro): {e}"))?;
+    session.save();
+    consume_one_use(session, idx).await?;
+    eprintln!(
+        "server_realms: channel conn {}: {} abrió la bolsa de oro vnum {} \
+         (+{amount} oro, total {})",
+        session.conn_id,
+        session.row().name,
+        session.inventory[idx].vnum,
+        session.row().gold
+    );
     Ok(Outcome::Continue)
 }
 
@@ -1769,5 +2055,78 @@ mod tests {
         assert_eq!(count_material(&inv, 30053, &[0, 1, 2]), 0, "todo skip");
         assert_eq!(count_material(&inv, 999, &[]), 9, "otro vnum");
         assert_eq!(count_material(&inv, 111, &[]), 0, "vnum sin items");
+    }
+
+    /// Lane USE_*: el mapeo del switch USE_ABILITY_UP (parity
+    /// char_item.cpp:4332-4388 — cada case del C++ → (AFFECT_*, POINT_*,
+    /// AFF_*)). Los numéricos (MOV_SPEED 19 / ATT_SPEED 17 / ATT_GRADE_BONUS
+    /// 95 / DEF_GRADE_BONUS 96 / CASTING_SPEED 21) son los POINT_* que el
+    /// combate del mundo ya lee del componente `Affects`; ST/HT/DX/IQ son
+    /// los 12-15 de char.h:148-151. Apply sin case → None (sin buff, sin
+    /// consumo — parity literal).
+    #[test]
+    fn ability_up_apply_matches_cpp_switch() {
+        use game_core::skill::point;
+        // (apply, affect_type, point, flag) — el orden de char_item.cpp:4332.
+        let cases = [
+            (APPLY_MOV_SPEED, AFFECT_MOV_SPEED, point::MOV_SPEED, AFF_MOV_SPEED_POTION),
+            (APPLY_ATT_SPEED, AFFECT_ATT_SPEED, point::ATT_SPEED, AFF_ATT_SPEED_POTION),
+            (APPLY_STR, AFFECT_STR, POINT_ST, 0),
+            (APPLY_DEX, AFFECT_DEX, POINT_DX, 0),
+            (APPLY_CON, AFFECT_CON, POINT_HT, 0),
+            (APPLY_INT, AFFECT_INT, POINT_IQ, 0),
+            (APPLY_CAST_SPEED, AFFECT_CAST_SPEED, point::CASTING_SPEED, 0),
+            (APPLY_ATT_GRADE_BONUS, AFFECT_ATT_GRADE, point::ATT_GRADE_BONUS, 0),
+            (APPLY_DEF_GRADE_BONUS, AFFECT_DEF_GRADE, point::DEF_GRADE_BONUS, 0),
+        ];
+        for (apply, dw_type, point, flag) in cases {
+            assert_eq!(
+                ability_up_apply(apply),
+                Some((dw_type, point, flag)),
+                "APPLY {apply}"
+            );
+        }
+        // Fuera del switch del C++ (p. ej. APPLY_MAX_HP = 1, APPLY_HP_REGEN =
+        // 10, APPLY_CRITICAL_PCT = 14) → None → sin buff ni consumo.
+        assert_eq!(ability_up_apply(1), None, "APPLY_MAX_HP sin case");
+        assert_eq!(ability_up_apply(10), None, "APPLY_HP_REGEN sin case");
+        assert_eq!(ability_up_apply(14), None, "APPLY_CRITICAL_PCT sin case");
+        assert_eq!(ability_up_apply(0), None);
+        assert_eq!(ability_up_apply(-1), None);
+    }
+
+    /// Lane USE_*: los subtipos del wire son el ORDEN del enum legacy
+    /// (item_length.h:250-300) — USE_TREASURE_BOX 4, USE_ABILITY_UP 7
+    /// (EUseSubTypes) y AUTOUSE_GOLD 3 (EAutoUseSubTypes). El USE_TREASURE_BOX
+    /// por doble-click es NO-OP en el C++ congelado (char_item.cpp:4971-4973
+    /// — sin consumo; la apertura es llave+cofre vía `special_item_group`,
+    /// gap documentado del lane).
+    #[test]
+    fn use_subtype_constants_match_cpp_enums() {
+        assert_eq!(USE_TREASURE_BOX, 4, "item_length.h:255");
+        assert_eq!(USE_ABILITY_UP, 7, "item_length.h:258");
+        assert_eq!(AUTOUSE_GOLD, 3, "item_length.h:298");
+        assert_eq!(USE_TUNING, 2, "item_length.h:252 (refine — ya existente)");
+        // EAffectTypes/EAffectBits spot-checks (affect.h:22-54, 137-138).
+        assert_eq!(AFFECT_MOV_SPEED, 200);
+        assert_eq!(AFFECT_ATT_SPEED, 201);
+        assert_eq!(AFFECT_CAST_SPEED, 217);
+        assert_eq!(AFFECT_DEF_GRADE, 226);
+        assert_eq!(AFF_MOV_SPEED_POTION, 12);
+        assert_eq!(AFF_ATT_SPEED_POTION, 13);
+    }
+
+    /// Lane USE_*: la bolsa AUTOUSE_GOLD suma value0 al oro con el cap
+    /// GOLD_MAX = 2e9 (parity `PointChange(POINT_GOLD)` + length.h:80).
+    #[test]
+    fn autouse_gold_caps_at_gold_max() {
+        assert_eq!(gold_after_add(100, 50), 150, "suma normal");
+        assert_eq!(gold_after_add(0, 5000), 5000);
+        assert_eq!(gold_after_add(1_999_999_900, 500), 2_000_000_000, "cap");
+        assert_eq!(gold_after_add(2_000_000_000, 5), 2_000_000_000, "ya en el cap");
+        // El gate del handler rechaza amount <= 0 antes (no consume) — el
+        // helper puro se comporta bien igualmente.
+        assert_eq!(gold_after_add(100, 0), 100);
+        assert_eq!(gold_after_add(100, -50), 50);
     }
 }

@@ -253,6 +253,17 @@ impl WorldSim {
                     self.set_player_stats(player_vid, st, dx, iq, ht);
                     Vec::new()
                 }
+                CombatIntent::SetAffect {
+                    player_vid,
+                    dw_type,
+                    point,
+                    value,
+                    flag,
+                    duration_secs,
+                } => {
+                    self.set_player_affect(player_vid, dw_type, point, value, flag, duration_secs);
+                    Vec::new()
+                }
             },
             Intent::Move(MoveIntent::Move { player_vid, x, y }) => {
                 self.set_player_position(player_vid, x, y);
