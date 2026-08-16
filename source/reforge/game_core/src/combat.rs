@@ -103,6 +103,9 @@ pub struct PlayerState {
     /// Bonus de ATT_GRADE de los buffs (parity `POINT_ATT_GRADE_BONUS` —
     /// char.h:95; el total ATT_GRADE del legacy = base + bonus). 0 sin buffs.
     pub att_grade_bonus: i32,
+    /// % de crítico REAL del jugador (parity `POINT_CRITICAL_PCT`
+    /// procesado — 0..100; el roll `number(1,100) ≤ pct` duplica el daño).
+    pub critical_pct: i32,
 }
 
 impl PlayerState {
@@ -125,6 +128,7 @@ impl PlayerState {
             iq: i32::from(row.iq),
             attack_speed_ms: default_attack_speed(),
             att_grade_bonus: 0,
+            critical_pct: 0,
         }
     }
 }
@@ -386,6 +390,13 @@ pub fn melee_damage(
     if i_dam < 3 {
         i_dam = roll(1, 5);
     }
+    // CRÍTICO (parity char_battle.cpp:1661-1675): `number(1,100) ≤ pct`
+    // → `dam *= 2`. El pct ya viene PROCESADO (5+(pct-10)/4 o pct/2) por
+    // `Affects::critical_pct`; el RESIST_CRITICAL del objetivo es 0 en el
+    // subset de mobs (no tienen la resistencia en el rewrite).
+    if attacker.critical_pct > 0 && roll(1, 100) <= attacker.critical_pct {
+        i_dam *= 2;
+    }
     // battle_hit (:736-749): CalcDamBonus identidad (sin arma, :265-303);
     // attMul = 1.0 (char.cpp:411) → iDam = 1.0*iDam + 0.5 → trunc = iDam.
     i_dam
@@ -644,6 +655,7 @@ mod tests {
             iq: 30,
             attack_speed_ms: default_attack_speed(),
             att_grade_bonus: 0,
+            critical_pct: 0,
         }
     }
 
@@ -715,6 +727,7 @@ mod tests {
             iq: 4,
             attack_speed_ms: default_attack_speed(),
             att_grade_bonus: 0,
+            critical_pct: 0,
         };
         let m = mob101();
         let mut roll = roll_fixed(3);
@@ -724,6 +737,50 @@ mod tests {
         let att = attack_grade(a.level, a.job, a.st, a.dx, a.iq);
         assert_eq!(((att - a.level * 2) as f32 * f_ar) as i32 + a.level * 2, 7);
         assert_eq!(f_ar, 0.71, "(3+210)/300 - 0");
+    }
+
+    /// CRÍTICO (parity char_battle.cpp:1661-1675): `number(1,100) ≤ pct`
+    /// → `dam *= 2`. El pct ya viene procesado por `Affects::critical_pct`
+    /// (5+(pct-10)/4 si ≥10, pct/2 si no). roll_fixed(5) → number(1,100)
+    /// = 5 ≤ 100 → crítico SIEMPRE con pct alto.
+    #[test]
+    fn critical_doubles_damage_when_roll_hits() {
+        let mut a = ninja();
+        a.critical_pct = 100; // el roll number(1,100) ≤ 100 siempre
+        let m = mob101();
+        let mut roll = roll_fixed(5);
+        let normal = melee_damage(&PlayerState { critical_pct: 0, ..a }, &m, None, &mut roll);
+        let mut roll = roll_fixed(5);
+        let crit = melee_damage(&a, &m, None, &mut roll);
+        assert_eq!(crit, normal * 2, "crítico ×2: {normal} → {crit}");
+        // roll_fixed(5) → el roll(1,100)=5; el roll del floor (1,5)=5.
+        assert!(normal > 0, "daño base > 0");
+    }
+
+    /// `Affects::critical_pct`: la fórmula del C++ (char_battle.cpp:
+    /// 1665-1668) — pct ≥ 10 → 5+(pct-10)/4; pct < 10 → pct/2.
+    #[test]
+    fn critical_pct_formula_matches_cpp() {
+        use crate::ecs::components::{Affect, Affects};
+        let aff = |v: i32| Affect {
+            skill_id: 19,
+            point: crate::skill::point::CRITICAL_PCT,
+            value: v,
+            flag: 0,
+            duration_ms: 96_000,
+            sp_cost: 0,
+        };
+        let a = Affects(vec![aff(30)]);
+        assert_eq!(a.critical_pct(), 5 + (30 - 10) / 4, "30 → 5+20/4 = 10");
+        let a = Affects(vec![aff(8)]);
+        assert_eq!(a.critical_pct(), 4, "8 → 8/2 = 4");
+        let a = Affects(vec![aff(10)]);
+        assert_eq!(a.critical_pct(), 5, "10 → 5+0/4 = 5");
+        let a = Affects(vec![]);
+        assert_eq!(a.critical_pct(), 0, "sin buff → 0");
+        // Suma de múltiples buffs.
+        let a = Affects(vec![aff(10), aff(20)]);
+        assert_eq!(a.critical_pct(), 5 + (30 - 10) / 4, "10+20 = 30 → 10");
     }
 
     /// Cooldown (IS_SPEED_HACK parity, battle.cpp:808-838): intervalo base

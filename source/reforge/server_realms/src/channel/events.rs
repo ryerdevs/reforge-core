@@ -9,6 +9,7 @@
 //! mundo ya resolvió cooldown/rango/daño — server-authoritative); este
 //! handler solo los reenvía y aplica el estado PG-bound (row/inventory).
 
+use database::affect::AffectRow;
 use database::item::ItemRepo;
 use protocol::world::{
     TPacketGCAffectAdd, TPacketGCItemGroundAdd, TPacketGCItemGroundDel, TPacketGCItemOwnership,
@@ -469,12 +470,41 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                 session.save();
             }
             // Buff aplicado: GC_AFFECT_ADD (126) — el icono del cliente (el
-            // mundo ya lo tiene en `Affects`).
+            // mundo ya lo tiene en `Affects`). El canal guarda el buff en la
+            // sesión (afects activos) y, si es MOV_SPEED, recalcula la
+            // velocidad real del personaje (`GetMoveSpeed` =
+            // motion × 10000/CalculateDuration(POINT_MOV_SPEED, 10000),
+            // char.cpp:2751-2754 — el buff suma POINT_MOV_SPEED al factor).
             if let Some(elem) = buff {
                 session
                     .send(&TPacketGCAffectAdd::new(elem).to_bytes())
                     .await
                     .map_err(|e| format!("enviando GC_AFFECT_ADD: {e}"))?;
+                session.affects.retain(|a| a.b_type != elem.dw_type as i32);
+                session.affects.push(AffectRow {
+                    dw_pid: session.row().id,
+                    b_type: elem.dw_type as i32,
+                    b_apply_on: elem.b_apply_on as i16,
+                    l_apply_value: elem.l_apply_value,
+                    dw_flag: i64::from(elem.dw_flag),
+                    l_duration: elem.l_duration,
+                    l_sp_cost: 0,
+                });
+                if elem.b_apply_on == game_core::skill::point::MOV_SPEED {
+                    // El factor POINT_MOV_SPEED total = base(100) + buffs
+                    // (parity PointChange — el buff SUMA al punto). La
+                    // velocidad real = motion × 10000/CalculateDuration.
+                    let total: i32 = 100
+                        + session
+                            .affects
+                            .iter()
+                            .filter(|a| a.b_apply_on == game_core::skill::point::MOV_SPEED as i16)
+                            .map(|a| a.l_apply_value)
+                            .sum::<i32>();
+                    let dur = game_core::ai::calculate_duration(total, 10_000);
+                    session.motion_mut().speed =
+                        (300u32.saturating_mul(10_000) / dur.max(1) as u32).max(1);
+                }
             }
             if damage > 0 {
                 let Some(v) = victim else {

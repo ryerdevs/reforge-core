@@ -187,6 +187,7 @@ impl WorldSim {
                 iq,
                 attack_speed_ms: attack_speed_for_weapon(weapon),
                 att_grade_bonus: 0,
+                critical_pct: 0,
             };
             let (victim_dx, victim_lv) = match victim_mob {
                 Some((vdx, vlv, _, _)) => (vdx, vlv),

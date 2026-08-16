@@ -241,6 +241,25 @@ impl Affects {
             .map(|a| a.value)
             .sum()
     }
+
+    /// El % de crítico final del jugador (parity `POINT_CRITICAL_PCT`,
+    /// char_battle.cpp:1661-1675): `pct >= 10 → 5 + (pct-10)/4`, si no
+    /// `pct/2`, menos `POINT_RESIST_CRITICAL` del objetivo (0 en el subset
+    /// de mobs — los mobs no tienen resist-crit en el rewrite). Devuelve la
+    /// probabilidad REAL (0..100) para el roll `number(1,100)`.
+    pub fn critical_pct(&self) -> i32 {
+        let pct: i32 = self
+            .0
+            .iter()
+            .filter(|a| a.point == crate::skill::point::CRITICAL_PCT)
+            .map(|a| a.value)
+            .sum();
+        if pct <= 0 {
+            return 0;
+        }
+        let pct = if pct >= 10 { 5 + (pct - 10) / 4 } else { pct / 2 };
+        pct.max(0)
+    }
 }
 
 /// Mapa de la entidad (players y mobs). Las tablas de spawn y los sistemas

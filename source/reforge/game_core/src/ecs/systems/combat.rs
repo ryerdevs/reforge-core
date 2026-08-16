@@ -457,12 +457,12 @@ impl WorldSim {
         let Some(pe) = self.players.get(&player_vid).copied() else {
             return Vec::new();
         };
-        let (px, py, level, ht, job, st, dx, iq, _armor, att_bonus) = {
+        let (px, py, level, ht, job, st, dx, iq, _armor, att_bonus, crit_pct) = {
             let Ok(ent) = self.world.get_entity(pe) else { return Vec::new() };
             let Some(pos) = ent.get::<Position>() else { return Vec::new() };
             let Some(p) = ent.get::<Player>() else { return Vec::new() };
             let Some(aff) = ent.get::<Affects>() else { return Vec::new() };
-            (pos.x, pos.y, p.level, p.ht, p.job, p.st, p.dx, p.iq, p.armor, aff.att_grade_bonus())
+            (pos.x, pos.y, p.level, p.ht, p.job, p.st, p.dx, p.iq, p.armor, aff.att_grade_bonus(), aff.critical_pct())
         };
         let player_state = PlayerState {
             vid: player_vid,
@@ -477,6 +477,8 @@ impl WorldSim {
             attack_speed_ms: attack_speed_for_weapon(weapon),
             // El bonus de ATT_GRADE de los buffs (parity POINT_ATT_GRADE_BONUS).
             att_grade_bonus: att_bonus,
+            // El % de crítico REAL de los buffs (parity POINT_CRITICAL_PCT).
+            critical_pct: crit_pct,
         };
         let attack = protocol::combat::CgAttack {
             header: protocol::header::CG_ATTACK,
