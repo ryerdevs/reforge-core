@@ -7,6 +7,30 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-15] (58th part) — High-value GM commands
+
+> 5 commands of the cmd_info[] remainder (95% was missing). Workspace
+> **707 passed / 0 failed**, pushed (`3ea8f49`).
+
+- **mob `<vnum>`**: new minimal ECS path (CombatIntent::GmSpawn →
+  spawn_gm_mob, synthetic SpawnTable entry kind Group so the dynamic spawn
+  never re-materializes, time 0 = no respawn, SpawnMobRange jitter parity);
+  MobRow from PG, ADDs to GM + pase-B for new viewers.
+- **kill**: session.target_vid (set by CG_TARGET), world removes the mob
+  without reward (SetDead direct parity), GC_DEAD + broadcast DEL.
+- **purge [all]**: FuncPurge parity — radius 1000 or whole map, destroy
+  direct.
+- **goto `<name>`**: chat.rs find_player (case-insensitive FindPC parity),
+  persists row/motion before GC_WARP (fixes the C26 reload trap).
+- **stat `<point>` [amount] / stat-**: GM_PLAYER, cap 90, stat_point cost,
+  stat- floors at JobInitialPoints + consumes stat_reset_count, world sync
+  SetStats + GC_POINTS (max hp/sp recompute).
+- Levels per cmd.cpp: mob/kill HIGH_WIZARD, purge WIZARD, goto LOW_WIZARD,
+  stat PLAYER. 9 new tests. Gaps: mob by name, kill-vs-PC, goto coords form
+  (warp covers it).
+- **Next block (ranked)**: PARTY/HORSE skills, items USE_* (potion buffs,
+  gold bags, treasure boxes, bombs), events/raids/wedding.
+
 ## [2026-08-15] (57th part) — Real skill power table
 
 > Skill damage used k = level × max_level / 100 (documented deviation). The
