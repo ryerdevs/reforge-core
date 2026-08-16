@@ -7,6 +7,26 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-15] (57th part) — Real skill power table
+
+> Skill damage used k = level × max_level / 100 (documented deviation). The
+> C++ reads the real table from the DB: GetSkillPowerByLevelFromType (GetJob,
+> GetSkillGroup, level, bMob) — char.cpp:7200 / config.cpp:532-613. Workspace
+> **698 passed / 0 failed**, pushed (`0d33d86`).
+
+- **database/src/skill_power.rs** (new): SkillPowerRepo::load reads
+  SKILL_POWER_BY_LEVEL (base) + SKILL_POWER_BY_LEVEL_TYPE0..8 from
+  common.locale (missing type → base fallback, parity config.cpp:579-583),
+  41 values (levels 0..40); lookup: bMob → rows[0], job ≥ 4 ||
+  skillgroup == 0 → 0, idx = job×2 + (skillgroup-1), level clamped.
+- game_core: Player + PlayerJoin carry skill_group; SkillPowerTable world
+  resource (empty default = fail-open); process_skill k =
+  power(job, skill_group, level) × max_level / 100 with k_value fallback.
+- channel loads the table once at boot (Arc, fail-open like AttrTables).
+  5 new tests + 1 live-PG gated.
+- **Next block (ranked)**: GM command remainder (mob/kill/purge/goto/stat),
+  PARTY/HORSE skills, events/raids/wedding.
+
 ## [2026-08-15] (56th part) — SPLASH area skills
 
 > Only single-target skills worked — area skills (most of the job attack
