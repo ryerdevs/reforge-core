@@ -537,6 +537,205 @@ impl TPacketCGItemUse {
     }
 }
 
+/// `TPacketCGItemUseToItem` (7 B, header 60 — `Packet.h:549-554` +
+/// `packet.h:625-629`): usar un ITEM sobre OTRO item del inventario
+/// (`command_item_use_to_item` = header + TItemPos Cell + TItemPos
+/// TargetCell). El C++ lo procesa en `ItemToItem` (input_main.cpp) →
+/// `UseItem(Cell, TargetCell)` → `UseItemEx` (char_item.cpp:1616+) → para
+/// los USE_TUNING (scrolls de refine) `RefineItem` (char_item.cpp:1316) —
+/// el scroll sobre el arma/armadura abre la ventana de refine
+/// (GC_REFINE_INFORMATION).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketCGItemUseToItem {
+    pub header: u8,
+    /// El item que se USA (el scroll).
+    pub cell: TItemPos,
+    /// El item DESTINO (el que se refinea).
+    pub target_cell: TItemPos,
+}
+
+impl TPacketCGItemUseToItem {
+    /// 1 + 3 + 3 = 7 (packed).
+    pub const SIZE: usize = 7;
+    pub const HEADER: u8 = 60;
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        Ok(Self {
+            header: data[0],
+            cell: TItemPos {
+                window: data[1],
+                cell: u16::from_le_bytes([data[2], data[3]]),
+            },
+            target_cell: TItemPos {
+                window: data[4],
+                cell: u16::from_le_bytes([data[5], data[6]]),
+            },
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        b[1] = self.cell.window;
+        b[2..4].copy_from_slice(&self.cell.cell.to_le_bytes());
+        b[4] = self.target_cell.window;
+        b[5..7].copy_from_slice(&self.target_cell.cell.to_le_bytes());
+        b
+    }
+}
+
+/// `TPacketCGRefine` (3 B, header 96 — `Packet.h:976-982` +
+/// `packet.h:1898-1902`): confirmar (o cancelar) el refine del item del
+/// inventario. `SPacketCGRefine` = header + pos BYTE (indice INVENTORY) +
+/// type BYTE (`ERefineType` — item_length.h:419-426: NORMAL=0, SCROLL=2,
+/// HYUNIRON=3, MONEY_ONLY=4, MUSIN=5, BDRAGON=6; 255 = cancelar). El C++
+/// lo procesa en `CInputMain::Refine` (input_main.cpp:2831): NORMAL →
+/// `DoRefine`, SCROLL/HYUNIRON/MUSIN/BDRAGON → `DoRefineWithScroll`,
+/// 255 → `ClearRefineMode`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketCGRefine {
+    pub header: u8,
+    /// Indice del item en INVENTORY (BYTE, no TItemPos — parity
+    /// `TPacketCGRefine.pos`).
+    pub pos: u8,
+    /// `ERefineType` (0 = NORMAL, 2 = SCROLL, ...; 255 = cancelar).
+    pub r#type: u8,
+}
+
+impl TPacketCGRefine {
+    /// 1 + 1 + 1 = 3 (packed).
+    pub const SIZE: usize = 3;
+    pub const HEADER: u8 = 96;
+    /// `REFINE_TYPE_NORMAL` (item_length.h:419).
+    pub const TYPE_NORMAL: u8 = 0;
+    /// `REFINE_TYPE_SCROLL` (item_length.h:421).
+    pub const TYPE_SCROLL: u8 = 2;
+    /// Cancelar (input_main.cpp:2852 — `p->type == 255`).
+    pub const TYPE_CANCEL: u8 = 255;
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        Ok(Self {
+            header: data[0],
+            pos: data[1],
+            r#type: data[2],
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        [self.header, self.pos, self.r#type]
+    }
+}
+
+/// `TRefineMaterial` (8 B packed — `tables.h:919-922`): vnum DWORD + count
+/// int, el material del `SRefineTable`/`TPacketGCRefineInformation`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct RefineMaterial {
+    pub vnum: u32,
+    pub count: i32,
+}
+
+impl RefineMaterial {
+    /// 4 + 4 = 8 (packed).
+    pub const SIZE: usize = 8;
+}
+
+/// `TPacketGCRefineInformation` (60 B packed, header 119 —
+/// `packet.h:1908-1921`, dentro del `#pragma pack(1)` de packet.h:304):
+/// la ventana de refine del cliente (probabilidad, materiales, coste y vnum
+/// de resultado). `SPacketGCRefineInformaion` = header + type + pos BYTE +
+/// src_vnum + result_vnum DWORD + material_count BYTE + cost int + prob int
+/// + `TRefineMaterial materials[5]` (REFINE_MATERIAL_MAX_NUM = 5,
+/// item_length.h:29). El C++ lo manda en `RefineInformation`
+/// (char_item.cpp:1218) al usar un scroll sobre un item o al pedir el
+/// refine del herrero.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketGCRefineInformation {
+    pub header: u8,
+    pub r#type: u8,
+    /// Indice INVENTORY del item a refinar (BYTE).
+    pub pos: u8,
+    pub src_vnum: u32,
+    pub result_vnum: u32,
+    pub material_count: u8,
+    pub cost: i32,
+    pub prob: i32,
+    pub materials: [RefineMaterial; 5],
+}
+
+impl TPacketGCRefineInformation {
+    /// 1 + 1 + 1 + 4 + 4 + 1 + 4 + 4 + 5×8 = 60 (packed).
+    pub const SIZE: usize = 60;
+    pub const HEADER: u8 = 119;
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        let mut materials = [RefineMaterial { vnum: 0, count: 0 }; 5];
+        for (i, m) in materials.iter_mut().enumerate() {
+            m.vnum = u32::from_le_bytes([
+                data[20 + i * 8],
+                data[21 + i * 8],
+                data[22 + i * 8],
+                data[23 + i * 8],
+            ]);
+            m.count = i32::from_le_bytes([
+                data[24 + i * 8],
+                data[25 + i * 8],
+                data[26 + i * 8],
+                data[27 + i * 8],
+            ]);
+        }
+        Ok(Self {
+            header: data[0],
+            r#type: data[1],
+            pos: data[2],
+            src_vnum: u32::from_le_bytes([data[3], data[4], data[5], data[6]]),
+            result_vnum: u32::from_le_bytes([data[7], data[8], data[9], data[10]]),
+            material_count: data[11],
+            cost: i32::from_le_bytes([data[12], data[13], data[14], data[15]]),
+            prob: i32::from_le_bytes([data[16], data[17], data[18], data[19]]),
+            materials,
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        b[1] = self.r#type;
+        b[2] = self.pos;
+        b[3..7].copy_from_slice(&self.src_vnum.to_le_bytes());
+        b[7..11].copy_from_slice(&self.result_vnum.to_le_bytes());
+        b[11] = self.material_count;
+        b[12..16].copy_from_slice(&self.cost.to_le_bytes());
+        b[16..20].copy_from_slice(&self.prob.to_le_bytes());
+        for (i, m) in self.materials.iter().enumerate() {
+            b[20 + i * 8..24 + i * 8].copy_from_slice(&m.vnum.to_le_bytes());
+            b[24 + i * 8..28 + i * 8].copy_from_slice(&m.count.to_le_bytes());
+        }
+        b
+    }
+}
+
 /// `TPacketCGItemMove` (8 B, header 13 — `Packet.h:593-599` +
 /// `packet.h:631-636`): el MOVIMIENTO de un item del inventario
 /// (`command_item_move`): header + TItemPos origen + TItemPos destino +
@@ -988,6 +1187,12 @@ impl TPacketGCSafeboxSize {
 #[repr(C)]
 pub struct TPacketGCSafeboxWrongPassword {
     pub header: u8,
+}
+
+impl Default for TPacketGCSafeboxWrongPassword {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TPacketGCSafeboxWrongPassword {
@@ -2250,6 +2455,82 @@ mod tests {
         assert_eq!(TPacketGCPoints::SIZE, 1 + 255 * 4);
         assert_eq!(TPacketGCSkillLevel::SIZE, 1 + 255 * 6);
         assert_eq!(TLandPacketElement::SIZE, 24);
+    }
+
+    /// Lane R: tamaños wire exactos del refine (verificados contra
+    /// packet.h:625-629, 1898-1902, 1908-1921 + tables.h:919-922 — packed
+    /// x86).
+    #[test]
+    fn refine_wire_sizes() {
+        assert_eq!(
+            TPacketCGItemUseToItem::SIZE,
+            7,
+            "header + TItemPos Cell + TItemPos TargetCell"
+        );
+        assert_eq!(TPacketCGRefine::SIZE, 3, "header + pos BYTE + type BYTE");
+        assert_eq!(RefineMaterial::SIZE, 8, "vnum DWORD + count int");
+        assert_eq!(
+            TPacketGCRefineInformation::SIZE,
+            60,
+            "1+1+1+4+4+1+4+4+5×8 (packed — packet.h:304 pragma pack(1))"
+        );
+    }
+
+    /// Lane R: roundtrip byte-exacto de los 3 paquetes del refine.
+    #[test]
+    fn roundtrip_refine_packets() {
+        let uti = TPacketCGItemUseToItem {
+            header: TPacketCGItemUseToItem::HEADER,
+            cell: TItemPos {
+                window: TItemPos::WINDOW_INVENTORY,
+                cell: 7,
+            },
+            target_cell: TItemPos {
+                window: TItemPos::WINDOW_INVENTORY,
+                cell: 42,
+            },
+        };
+        assert_eq!(TPacketCGItemUseToItem::from_bytes(&uti.to_bytes()).unwrap(), uti);
+
+        let cr = TPacketCGRefine {
+            header: TPacketCGRefine::HEADER,
+            pos: 42,
+            r#type: TPacketCGRefine::TYPE_SCROLL,
+        };
+        assert_eq!(TPacketCGRefine::from_bytes(&cr.to_bytes()).unwrap(), cr);
+        assert_eq!(cr.to_bytes(), [96, 42, 2]);
+
+        let mut info = TPacketGCRefineInformation {
+            header: TPacketGCRefineInformation::HEADER,
+            r#type: TPacketCGRefine::TYPE_SCROLL,
+            pos: 42,
+            src_vnum: 30053,
+            result_vnum: 30054,
+            material_count: 1,
+            cost: 150000,
+            prob: 54,
+            materials: [RefineMaterial { vnum: 0, count: 0 }; 5],
+        };
+        info.materials[0] = RefineMaterial { vnum: 30053, count: 1 };
+        let bytes = info.to_bytes();
+        assert_eq!(bytes[0], 119);
+        assert_eq!(bytes[1], 2, "type SCROLL");
+        assert_eq!(bytes[2], 42, "pos");
+        assert_eq!(
+            u32::from_le_bytes([bytes[3], bytes[4], bytes[5], bytes[6]]),
+            30053,
+            "src_vnum"
+        );
+        assert_eq!(bytes[11], 1, "material_count");
+        assert_eq!(
+            u32::from_le_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]),
+            30053,
+            "materials[0].vnum"
+        );
+        assert_eq!(
+            TPacketGCRefineInformation::from_bytes(&bytes).unwrap(),
+            info
+        );
     }
 
     #[test]

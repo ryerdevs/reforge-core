@@ -17,8 +17,9 @@
 
 use database::item::ItemRepo;
 use protocol::world::{
-    TPacketCGItemDrop, TPacketCGItemDrop2, TPacketCGItemUse, TPacketGCItemDelDeprecated,
-    TPacketGCItemSet, TItemPos,
+    RefineMaterial, TPacketCGItemDrop, TPacketCGItemDrop2, TPacketCGItemUse,
+    TPacketCGItemUseToItem, TPacketCGRefine, TPacketGCItemDelDeprecated,
+    TPacketGCItemSet, TPacketGCRefineInformation, TItemPos,
 };
 use game_core::ecs::{CombatIntent, Intent, ItemIntent};
 use game_core::packets;
@@ -1048,9 +1049,607 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
     }
     Ok(Outcome::Continue)
 }
+
+// ---------------------------------------------------------------------------
+// REFINE / UPGRADE (lane R — parity char_item.cpp:1218-1345 + input_main
+// .cpp:2831-2900): el item sube de nivel por tabla (`refine_proto`).
+// ---------------------------------------------------------------------------
+
+/// `USE_TUNING = 2` (ItemData.h:253) — el subtipo de los SCROLLS de refine
+/// (el único camino del CG_ITEM_USE_TO_ITEM que abre la ventana).
+const USE_TUNING: i16 = 2;
+/// `MUSIN_SCROLL`/`BDRAGON_SCROLL` value0 (char_item.cpp:1322-1334) — el
+/// gate del BDRAGON exige refine_set 702; el resto va por el camino SCROLL
+/// genérico (501 rechazado, char_item.cpp:1341-1343).
+const BDRAGON_SCROLL: i32 = 6;
+/// `REFINE_SET_501` — los items de esa línea se rechazan con scroll genérico
+/// (char_item.cpp:1341).
+const REFINE_SET_501: i64 = 501;
+/// `REFINE_SET_702` — el set exigido por el BDRAGON_SCROLL
+/// (char_item.cpp:1329-1331).
+const REFINE_SET_702: i64 = 702;
+/// `number(1, 100)` del C++ — el roll del refine (parity `number(1, 100)`
+/// char_item.cpp:919). Determinista sin dependencias (patrón `rand32` de
+/// mod.rs — nanos + contador).
+fn roll_1_100() -> i32 {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let c = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    ((nanos ^ c.wrapping_mul(0x9E37_79B9_7F4A_7C15)) % 100) as i32 + 1
+}
+
+/// Load del (refine_set, refined_vnum) + receta — el gate común del refine
+/// (parity `GetRefineSet`/`GetRefinedVnum` item.h:137,157 + `GetRefineRecipe`
+/// refine.h:30). `None` = el vnum no refina (sin fila, sin receta o sin
+/// siguiente nivel).
+async fn load_refine(
+    session: &Session,
+    vnum: i64,
+) -> Result<Option<(database::item::RefineRecipe, i64)>, String> {
+    let repo = ItemRepo::new(session.pool.clone());
+    let Some((refine_set, refined_vnum)) = repo.load_refine_proto(vnum).await? else {
+        return Ok(None);
+    };
+    if refined_vnum == 0 {
+        return Ok(None);
+    }
+    let Some(recipe) = repo.load_refine_recipe(refine_set).await? else {
+        return Ok(None);
+    };
+    Ok(Some((recipe, refined_vnum)))
+}
+
+/// Conteo de un material por vnum en TODO el inventario (parity
+/// `CountSpecifyItem(char_item.cpp:926-936)` con el skipList del @fixme346 —
+/// el item destino y el scroll NO se cuentan).
+fn count_material(inventory: &[database::item::ItemRow], vnum: i64, skip: &[usize]) -> i64 {
+    inventory
+        .iter()
+        .enumerate()
+        .filter(|(i, r)| !skip.contains(i) && r.vnum == vnum)
+        .map(|(_, r)| r.count)
+        .sum()
+}
+
+/// Cobra la fee del refine (parity `PayRefineFee` char.cpp:6616 sin guild →
+/// `PointChange(POINT_GOLD, -fee)` — iRemain = fee entero): descuenta el oro,
+/// manda GC_POINTS y persiste. `fee` ya incluye el ×5 del `ComputeRefineFee`
+/// cuando corresponde (el NORMAL cobra cost×5; el SCROLL cobra cost —
+/// parity literal del C++).
+async fn pay_refine_fee(session: &mut Session, fee: i64) -> Result<(), String> {
+    {
+        let row = session.row_mut();
+        row.gold = row.gold.saturating_sub(fee as i32);
+    }
+    session
+        .send(&packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
+        .await
+        .map_err(|e| format!("enviando GC_POINTS (refine fee): {e}"))?;
+    session.save();
+    Ok(())
+}
+
+/// Remueve materiales del inventario (parity `RemoveSpecifyItem`
+/// char_item.cpp:945-963 — el conteo ya fue verificado): descuenta por
+/// stacks (GC_ITEM_UPDATE + upsert) y borra los que llegan a 0
+/// (GC_ITEM_DEL + delete). `skip` = índices intocables (el item destino y
+/// el scroll — @fixme346).
+async fn remove_materials(
+    session: &mut Session,
+    recipe: &database::item::RefineRecipe,
+    skip: &[usize],
+) -> Result<(), String> {
+    let repo = ItemRepo::new(session.pool.clone());
+    for &(mat_vnum, mat_count) in &recipe.materials {
+        if mat_vnum == 0 || mat_count <= 0 {
+            continue;
+        }
+        let mut need = i64::from(mat_count);
+        // El skip es por índice y remove() mueve los índices — recolectar
+        // los ids ANTES y re-buscar por id tras cada borrado (robusto).
+        let ids: Vec<i64> = session
+            .inventory
+            .iter()
+            .enumerate()
+            .filter(|(i, r)| !skip.contains(i) && r.vnum == mat_vnum)
+            .map(|(_, r)| r.id)
+            .collect();
+        for id in ids {
+            if need <= 0 {
+                break;
+            }
+            let Some(idx) = session.inventory.iter().position(|r| r.id == id) else {
+                continue;
+            };
+            let take = need.min(session.inventory[idx].count);
+            session.inventory[idx].count -= take;
+            need -= take;
+            if session.inventory[idx].count <= 0 {
+                let cell = TItemPos {
+                    window: TItemPos::WINDOW_INVENTORY,
+                    cell: session.inventory[idx].pos as u16,
+                };
+                session
+                    .send(&TPacketGCItemDelDeprecated::new(cell, 0, 0).to_bytes())
+                    .await
+                    .map_err(|e| format!("enviando GC_ITEM_DEL (material): {e}"))?;
+                repo.delete(session.inventory[idx].id).await?;
+                session.inventory.remove(idx);
+            } else {
+                let up = protocol::world::TPacketGCItemUpdate {
+                    header: protocol::world::TPacketGCItemUpdate::HEADER,
+                    cell: TItemPos {
+                        window: TItemPos::WINDOW_INVENTORY,
+                        cell: session.inventory[idx].pos as u16,
+                    },
+                    count: session.inventory[idx].count as u8,
+                    sockets: session.inventory[idx].sockets,
+                    attrs: session.inventory[idx].attrs,
+                };
+                session
+                    .send(&up.to_bytes())
+                    .await
+                    .map_err(|e| format!("enviando GC_ITEM_UPDATE (material): {e}"))?;
+                repo.upsert(&session.inventory[idx], session.row().id).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Consume 1 del scroll (parity `pkItemScroll->SetCount(count-1)`
+/// char_item.cpp:1152 — SIEMPRE, antes del roll): GC_ITEM_UPDATE si queda,
+/// GC_ITEM_DEL + delete si se agota.
+async fn consume_scroll(session: &mut Session, scroll_idx: usize) -> Result<(), String> {
+    let repo = ItemRepo::new(session.pool.clone());
+    session.inventory[scroll_idx].count -= 1;
+    if session.inventory[scroll_idx].count <= 0 {
+        let cell = TItemPos {
+            window: TItemPos::WINDOW_INVENTORY,
+            cell: session.inventory[scroll_idx].pos as u16,
+        };
+        let id = session.inventory[scroll_idx].id;
+        session
+            .send(&TPacketGCItemDelDeprecated::new(cell, 0, 0).to_bytes())
+            .await
+            .map_err(|e| format!("enviando GC_ITEM_DEL (scroll): {e}"))?;
+        repo.delete(id).await?;
+        session.inventory.remove(scroll_idx);
+    } else {
+        let up = protocol::world::TPacketGCItemUpdate {
+            header: protocol::world::TPacketGCItemUpdate::HEADER,
+            cell: TItemPos {
+                window: TItemPos::WINDOW_INVENTORY,
+                cell: session.inventory[scroll_idx].pos as u16,
+            },
+            count: session.inventory[scroll_idx].count as u8,
+            sockets: session.inventory[scroll_idx].sockets,
+            attrs: session.inventory[scroll_idx].attrs,
+        };
+        session
+            .send(&up.to_bytes())
+            .await
+            .map_err(|e| format!("enviando GC_ITEM_UPDATE (scroll): {e}"))?;
+        repo.upsert(&session.inventory[scroll_idx], session.row().id).await?;
+    }
+    Ok(())
+}
+
+/// Reemplaza el item del slot por el vnum refinado (parity
+/// `ITEM_MANAGER::RemoveItem` + `CreateItem(result_vnum)` +
+/// `AddToCharacter` — char_item.cpp:963-990): GC_ITEM_DEL (42 B legacy) +
+/// GC_ITEM_SET (51 B) en la MISMA celda; sockets/attrs se conservan
+/// (`CopyAllAttrTo` item.cpp). El id del row se mantiene (upsert — el wire
+/// no lleva id; el C++ crea uno nuevo, diferencia solo de logging).
+async fn replace_item(session: &mut Session, idx: usize, new_vnum: i64) -> Result<(), String> {
+    let repo = ItemRepo::new(session.pool.clone());
+    let cell = TItemPos {
+        window: TItemPos::WINDOW_INVENTORY,
+        cell: session.inventory[idx].pos as u16,
+    };
+    let old = session.inventory[idx].clone();
+    // GC_ITEM_DEL (layout legacy 42 B — ver TPacketGCItemDelDeprecated).
+    session
+        .send(&TPacketGCItemDelDeprecated::new(cell, old.vnum as u32, old.count as u8).to_bytes())
+        .await
+        .map_err(|e| format!("enviando GC_ITEM_DEL (refine OK): {e}"))?;
+    // Mutar el row in-place (misma celda/sockets/attrs) + GC_ITEM_SET.
+    session.inventory[idx].vnum = new_vnum;
+    session.inventory[idx].count = 1;
+    let set = TPacketGCItemSet {
+        header: TPacketGCItemSet::HEADER,
+        cell,
+        vnum: new_vnum as u32,
+        count: 1,
+        flags: 0,
+        anti_flags: 0,
+        highlight: 0,
+        sockets: session.inventory[idx].sockets,
+        attrs: session.inventory[idx].attrs,
+    };
+    session
+        .send(&set.to_bytes())
+        .await
+        .map_err(|e| format!("enviando GC_ITEM_SET (refine OK): {e}"))?;
+    repo.upsert(&session.inventory[idx], session.row().id).await?;
+    Ok(())
+}
+
+/// Destruye el item (parity `RemoveItem(item, "REMOVE (REFINE FAIL)")`
+/// char_item.cpp:991-997 — el FAIL del refine NORMAL): GC_ITEM_DEL + delete.
+async fn destroy_item(session: &mut Session, idx: usize) -> Result<(), String> {
+    let repo = ItemRepo::new(session.pool.clone());
+    let cell = TItemPos {
+        window: TItemPos::WINDOW_INVENTORY,
+        cell: session.inventory[idx].pos as u16,
+    };
+    let id = session.inventory[idx].id;
+    let vnum = session.inventory[idx].vnum;
+    session
+        .send(&TPacketGCItemDelDeprecated::new(cell, vnum as u32, 0).to_bytes())
+        .await
+        .map_err(|e| format!("enviando GC_ITEM_DEL (refine FAIL): {e}"))?;
+    repo.delete(id).await?;
+    session.inventory.remove(idx);
+    Ok(())
+}
+
+/// El roll + resultado del refine (parity `DoRefine` char_item.cpp:821-1011
+/// y `DoRefineWithScroll` :975-1217 — el núcleo compartido): verifica el
+/// oro (fee distinta por camino), remueve materiales, tira `number(1,100)`
+/// contra `prob`, y aplica el resultado. `scroll_idx` = Some → camino
+/// SCROLL (el scroll se consume SIEMPRE antes del roll; el FAIL BAJA el
+/// item al vnum anterior si existe — `GetRefineFromVnum` — en vez de
+/// destruirlo). Devuelve true si el refine se ejecutó.
+async fn refine_execute(
+    session: &mut Session,
+    target_idx: usize,
+    scroll_idx: Option<usize>,
+) -> Result<bool, String> {
+    let repo = ItemRepo::new(session.pool.clone());
+    let target_vnum = session.inventory[target_idx].vnum;
+    let Some((recipe, refined_vnum)) = load_refine(session, target_vnum).await? else {
+        eprintln!(
+            "server_realms: channel conn {}: refine de vnum {target_vnum} \
+             sin receta/siguiente nivel — rechazado",
+            session.conn_id
+        );
+        return Ok(false);
+    };
+    // @fixme346: el skip list del C++ — el item destino y el scroll no se
+    // tocan como material ni se cuentan.
+    let mut skip = vec![target_idx];
+    if let Some(si) = scroll_idx {
+        skip.push(si);
+    }
+    // Fee: NORMAL → ComputeRefineFee(cost) = cost×5 (char.cpp:6598, sin
+    // guild); SCROLL → prt->cost sin multiplicar (char_item.cpp:1093).
+    let fee = if scroll_idx.is_some() {
+        i64::from(recipe.cost)
+    } else {
+        i64::from(recipe.cost) * 5
+    };
+    if i64::from(session.row().gold) < fee {
+        eprintln!(
+            "server_realms: channel conn {}: refine de vnum {target_vnum} — \
+             oro insuficiente ({}/{} fee)",
+            session.conn_id, session.row().gold, fee
+        );
+        return Ok(false);
+    }
+    // Materiales: primero conteo (nada se toca si falta), luego remoción
+    // (parity DoRefine:950-963).
+    for &(mat_vnum, mat_count) in &recipe.materials {
+        if mat_vnum == 0 || mat_count <= 0 {
+            continue;
+        }
+        if count_material(&session.inventory, mat_vnum, &skip) < i64::from(mat_count) {
+            eprintln!(
+                "server_realms: channel conn {}: refine de vnum {target_vnum} — \
+                 falta material {mat_vnum} (×{mat_count})",
+                session.conn_id
+            );
+            return Ok(false);
+        }
+    }
+    // El SCROLL se consume SIEMPRE (antes del roll — parity :1152); el
+    // índice se re-busca por id tras las remociones (los índices se
+    // mueven).
+    let scroll_id = scroll_idx.map(|si| session.inventory[si].id);
+    remove_materials(session, &recipe, &skip).await?;
+    let scroll_idx = if let Some(sid) = scroll_id {
+        session.inventory.iter().position(|r| r.id == sid)
+    } else {
+        None
+    };
+    if let Some(si) = scroll_idx {
+        consume_scroll(session, si).await?;
+    }
+    let ok = roll_1_100() <= recipe.prob;
+    if ok {
+        // Éxito: el item se reemplaza por el vnum +1 (CopyAllAttrTo).
+        let cell = session.inventory[target_idx].pos;
+        replace_item(session, target_idx, refined_vnum).await?;
+        pay_refine_fee(session, fee).await?;
+        eprintln!(
+            "server_realms: channel conn {}: {} refine OK vnum {target_vnum} \
+             → {refined_vnum} (celda {})",
+            session.conn_id, session.row().name, cell
+        );
+    } else if let Some(_si) = scroll_idx {
+        // FAIL con scroll: baja al vnum ANTERIOR si existe (parity
+        // char_item.cpp:1103-1130 — `result_fail_vnum = GetRefineFromVnum`;
+        // sin vnum anterior el item se queda como está).
+        let cur_vnum = session.inventory[target_idx].vnum;
+        match repo.load_refine_from_vnum(cur_vnum).await? {
+            Some(fail_vnum) => {
+                replace_item(session, target_idx, fail_vnum).await?;
+                pay_refine_fee(session, fee).await?;
+                eprintln!(
+                    "server_realms: channel conn {}: {} refine FAIL (scroll) vnum \
+                     {cur_vnum} → {fail_vnum}",
+                    session.conn_id, session.row().name
+                );
+            }
+            None => {
+                pay_refine_fee(session, fee).await?;
+                eprintln!(
+                    "server_realms: channel conn {}: {} refine FAIL (scroll) vnum \
+                     {cur_vnum} sin nivel anterior — sin cambios",
+                    session.conn_id, session.row().name
+                );
+            }
+        }
+    } else {
+        // FAIL del refine NORMAL: el item se DESTRUYE (parity :991-997).
+        let cell = session.inventory[target_idx].pos;
+        destroy_item(session, target_idx).await?;
+        pay_refine_fee(session, fee).await?;
+        eprintln!(
+            "server_realms: channel conn {}: {} refine FAIL vnum {target_vnum} \
+             — item destruido (celda {})",
+            session.conn_id, session.row().name, cell
+        );
+    }
+    Ok(true)
+}
+
+/// CG_ITEM_USE_TO_ITEM (60, 7 B: header + TItemPos Cell + TItemPos
+/// TargetCell — Packet.h:549-554). Parity `ItemToItem` (input_main.cpp) →
+/// `UseItem` → `UseItemEx` (char_item.cpp:4468-4480) → `RefineItem`
+/// (char_item.cpp:1316): el SCROLL (ITEM_USE + USE_TUNING) sobre el item
+/// destino valida y abre la ventana de refine — GC_REFINE_INFORMATION
+/// (119, 56 B) con prob/materiales/coste/resultado + `SetRefineMode` (el
+/// scroll queda en `session.refine_scroll` para el CG_REFINE). GAP
+/// documentado: solo el camino SCROLL genérico (gates 501/702); los
+/// especiales MUSIN/HYUNIRON/YONGSIN/YAGONG/MEMO/BDRAGON (prob override) y
+/// el USE_DETACHMENT (desprender metin) no — subset del lane.
+pub async fn handle_use_to_item(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String> {
+    let d = match TPacketCGItemUseToItem::from_bytes(pkt) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!(
+                "server_realms: channel conn {}: CG_ITEM_USE_TO_ITEM malformado: {e}",
+                session.conn_id
+            );
+            return Ok(Outcome::Continue);
+        }
+    };
+    let Some(scroll_idx) = session.inventory.iter().position(|i| {
+        i.window == "INVENTORY" && i.pos as u16 == d.cell.cell && d.cell.window == TItemPos::WINDOW_INVENTORY
+    }) else {
+        eprintln!(
+            "server_realms: channel conn {}: use-to-item — celda {} sin item",
+            session.conn_id, d.cell.cell
+        );
+        return Ok(Outcome::Continue);
+    };
+    let Some(target_idx) = session.inventory.iter().position(|i| {
+        i.window == "INVENTORY"
+            && i.pos as u16 == d.target_cell.cell
+            && d.target_cell.window == TItemPos::WINDOW_INVENTORY
+    }) else {
+        eprintln!(
+            "server_realms: channel conn {}: use-to-item — destino {} sin item",
+            session.conn_id, d.target_cell.cell
+        );
+        return Ok(Outcome::Continue);
+    };
+    if scroll_idx == target_idx {
+        eprintln!(
+            "server_realms: channel conn {}: use-to-item — scroll == destino",
+            session.conn_id
+        );
+        return Ok(Outcome::Continue);
+    }
+    // El scroll debe ser USE_TUNING (parity RefineItem:1316-1345 — los
+    // demás subtipos devuelven false sin ventana).
+    let Some(proto) = ItemRepo::new(session.pool.clone())
+        .load_proto_use_values(session.inventory[scroll_idx].vnum)
+        .await?
+    else {
+        return Ok(Outcome::Continue);
+    };
+    if proto.b_type != ITEM_TYPE_USE || proto.b_sub_type != USE_TUNING {
+        eprintln!(
+            "server_realms: channel conn {}: use-to-item — item vnum {} no es \
+             scroll de refine (type {} sub {})",
+            session.conn_id,
+            session.inventory[scroll_idx].vnum,
+            proto.b_type,
+            proto.b_sub_type
+        );
+        return Ok(Outcome::Continue);
+    }
+    let target_vnum = session.inventory[target_idx].vnum;
+    let Some((recipe, refined_vnum)) = load_refine(session, target_vnum).await? else {
+        eprintln!(
+            "server_realms: channel conn {}: use-to-item — destino vnum \
+             {target_vnum} no refinable",
+            session.conn_id
+        );
+        return Ok(Outcome::Continue);
+    };
+    // Gates del scroll (RefineItem:1322-1343): BDRAGON exige el set 702;
+    // el scroll genérico rechaza el set 501.
+    if proto.values[0] == BDRAGON_SCROLL {
+        let Some((refine_set, _)) = ItemRepo::new(session.pool.clone())
+            .load_refine_proto(target_vnum)
+            .await?
+        else {
+            return Ok(Outcome::Continue);
+        };
+        if refine_set != REFINE_SET_702 {
+            eprintln!(
+                "server_realms: channel conn {}: use-to-item — BDRAGON sobre \
+                 set {refine_set} (exige 702)",
+                session.conn_id
+            );
+            return Ok(Outcome::Continue);
+        }
+    } else if let Some((refine_set, _)) = ItemRepo::new(session.pool.clone())
+        .load_refine_proto(target_vnum)
+        .await?
+        && refine_set == REFINE_SET_501
+    {
+        eprintln!(
+            "server_realms: channel conn {}: use-to-item — scroll genérico \
+             sobre set 501 rechazado",
+            session.conn_id
+        );
+        return Ok(Outcome::Continue);
+    }
+    // GC_REFINE_INFORMATION: la ventana del cliente (parity
+    // RefineInformation char_item.cpp:1236-1309 — `p.cost =
+    // ComputeRefineFee(prt->cost)` = cost×5; `p.prob = prt->prob`;
+    // materials del prt; material_count = slots no vacíos).
+    let mut materials = [RefineMaterial { vnum: 0, count: 0 }; 5];
+    let mut material_count = 0u8;
+    for (i, &(v, c)) in recipe.materials.iter().enumerate() {
+        if v != 0 && c > 0 {
+            materials[i] = RefineMaterial { vnum: v as u32, count: c };
+            material_count = i as u8 + 1;
+        }
+    }
+    let info = TPacketGCRefineInformation {
+        header: TPacketGCRefineInformation::HEADER,
+        r#type: TPacketCGRefine::TYPE_SCROLL,
+        pos: session.inventory[target_idx].pos as u8,
+        src_vnum: target_vnum as u32,
+        result_vnum: refined_vnum as u32,
+        material_count,
+        cost: recipe.cost * 5,
+        prob: recipe.prob,
+        materials,
+    };
+    session
+        .send(&info.to_bytes())
+        .await
+        .map_err(|e| format!("enviando GC_REFINE_INFORMATION: {e}"))?;
+    // SetRefineMode (char_item.cpp:1309 — el scroll para el CG_REFINE).
+    session.refine_scroll = Some(scroll_idx);
+    eprintln!(
+        "server_realms: channel conn {}: {} abrió refine de vnum {target_vnum} \
+         (→ {refined_vnum}, prob {}, scroll celda {})",
+        session.conn_id,
+        session.row().name,
+        recipe.prob,
+        d.cell.cell
+    );
+    Ok(Outcome::Continue)
+}
+
+/// CG_REFINE (96, 3 B: header + pos BYTE + type BYTE — Packet.h:976-982).
+/// Parity `CInputMain::Refine` (input_main.cpp:2831-2900): type 255 =
+/// cancelar (`ClearRefineMode`); NORMAL (0) → `DoRefine` (herrero — tabla,
+/// fee ×5, FAIL destruye); SCROLL (2) → `DoRefineWithScroll` (consume el
+/// scroll de `refine_scroll`, fee sin multiplicar, FAIL baja de nivel si
+/// hay vnum anterior). Resultado por wire: GC_ITEM_DEL + GC_ITEM_SET
+/// (éxito), GC_ITEM_DEL (fail NORMAL), GC_ITEM_UPDATE/DEL (materiales y
+/// scroll) + GC_POINTS (fee). GAP: sin los types HYUNIRON/MUSIN/BDRAGON/
+/// MONEY_ONLY (specials fuera del subset) ni las gates de exchange/safebox/
+/// shop del C++ (estados no expuestos en el rewrite).
+pub async fn handle_refine(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String> {
+    let d = match TPacketCGRefine::from_bytes(pkt) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!(
+                "server_realms: channel conn {}: CG_REFINE malformado: {e}",
+                session.conn_id
+            );
+            return Ok(Outcome::Continue);
+        }
+    };
+    if d.r#type == TPacketCGRefine::TYPE_CANCEL {
+        session.refine_scroll = None;
+        return Ok(Outcome::Continue);
+    }
+    if d.pos as u16 >= INVENTORY_MAX_NUM {
+        eprintln!(
+            "server_realms: channel conn {}: CG_REFINE pos {} fuera de rango",
+            session.conn_id, d.pos
+        );
+        session.refine_scroll = None;
+        return Ok(Outcome::Continue);
+    }
+    let Some(target_idx) = session
+        .inventory
+        .iter()
+        .position(|i| i.window == "INVENTORY" && i.pos as u16 == u16::from(d.pos))
+    else {
+        eprintln!(
+            "server_realms: channel conn {}: CG_REFINE celda {} sin item",
+            session.conn_id, d.pos
+        );
+        session.refine_scroll = None;
+        return Ok(Outcome::Continue);
+    };
+    let scroll_idx = match d.r#type {
+        TPacketCGRefine::TYPE_NORMAL => None,
+        TPacketCGRefine::TYPE_SCROLL => {
+            let Some(si) = session.refine_scroll.take() else {
+                eprintln!(
+                    "server_realms: channel conn {}: CG_REFINE SCROLL sin modo \
+                     de refine (usa primero el scroll sobre el item)",
+                    session.conn_id
+                );
+                return Ok(Outcome::Continue);
+            };
+            if si >= session.inventory.len()
+                || session.inventory[si].window != "INVENTORY"
+            {
+                eprintln!(
+                    "server_realms: channel conn {}: CG_REFINE SCROLL — scroll \
+                     inválido (slot cambiado)",
+                    session.conn_id
+                );
+                return Ok(Outcome::Continue);
+            }
+            Some(si)
+        }
+        other => {
+            eprintln!(
+                "server_realms: channel conn {}: CG_REFINE type {other} fuera \
+                 del subset (NORMAL/SCROLL/cancelar) — modo limpio",
+                session.conn_id
+            );
+            session.refine_scroll = None;
+            return Ok(Outcome::Continue);
+        }
+    };
+    if refine_execute(session, target_idx, scroll_idx).await? {
+        session.refine_scroll = None;
+    }
+    Ok(Outcome::Continue)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use database::item::ItemRow;
 
     /// El gate del uso (fix 2026-08-14): SOLO consumibles (USE=3/AUTOUSE=4)
     /// pasan — armas (1)/armaduras (2) se rechazan (el doble-click se las
@@ -1102,5 +1701,66 @@ mod tests {
     #[test]
     fn gold_drop_uses_vnum_1() {
         assert_eq!(ITEM_GOLD_VNUM, 1);
+    }
+
+    /// Lane R: el roll del refine es `number(1, 100)` (parity
+    /// char_item.cpp:919) — siempre en rango (el C++ compara `prob <=
+    /// prt->prob` con prob 1..100).
+    #[test]
+    fn refine_roll_is_1_to_100() {
+        for _ in 0..200 {
+            let r = roll_1_100();
+            assert!((1..=100).contains(&r), "roll {r} fuera de 1..=100");
+        }
+    }
+
+    /// Lane R: el conteo de materiales excluye el skipList (@fixme346 — el
+    /// item destino y el scroll no se cuentan como material) y suma los
+    /// stacks del mismo vnum.
+    #[test]
+    fn count_material_excludes_skip_and_sums_stacks() {
+        let inv = vec![
+            ItemRow {
+                id: 1,
+                window: "INVENTORY".into(),
+                pos: 0,
+                count: 2,
+                vnum: 30053,
+                sockets: [0; 3],
+                attrs: [(0, 0); 7],
+            },
+            ItemRow {
+                id: 2,
+                window: "INVENTORY".into(),
+                pos: 1,
+                count: 3,
+                vnum: 30053,
+                sockets: [0; 3],
+                attrs: [(0, 0); 7],
+            },
+            ItemRow {
+                id: 3,
+                window: "INVENTORY".into(),
+                pos: 2,
+                count: 5,
+                vnum: 30053,
+                sockets: [0; 3],
+                attrs: [(0, 0); 7],
+            },
+            ItemRow {
+                id: 4,
+                window: "INVENTORY".into(),
+                pos: 3,
+                count: 9,
+                vnum: 999,
+                sockets: [0; 3],
+                attrs: [(0, 0); 7],
+            },
+        ];
+        assert_eq!(count_material(&inv, 30053, &[]), 10, "2+3+5");
+        assert_eq!(count_material(&inv, 30053, &[1]), 7, "skip idx 1 → 2+5");
+        assert_eq!(count_material(&inv, 30053, &[0, 1, 2]), 0, "todo skip");
+        assert_eq!(count_material(&inv, 999, &[]), 9, "otro vnum");
+        assert_eq!(count_material(&inv, 111, &[]), 0, "vnum sin items");
     }
 }

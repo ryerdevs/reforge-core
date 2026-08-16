@@ -120,6 +120,26 @@ async fn game_loop(session: &mut Session) -> Result<(), String> {
                     header::CG_ITEM_USE => {
                         items::handle_use(session, &pkt).await?.into_result()?;
                     }
+                    // Lane R: REFINE — CG_ITEM_USE_TO_ITEM (60, 7 B:
+                    // header + TItemPos Cell + TItemPos TargetCell —
+                    // Packet.h:549-554). Parity `ItemToItem` → `UseItemEx`
+                    // → `RefineItem` (char_item.cpp:1316): el scroll
+                    // (USE_TUNING) sobre el item destino abre la ventana de
+                    // refine (GC_REFINE_INFORMATION 119) y guarda el modo.
+                    header::CG_ITEM_USE_TO_ITEM => {
+                        items::handle_use_to_item(session, &pkt).await?.into_result()?;
+                    }
+                    // Lane R: CONFIRMAR el refine — CG_REFINE (96, 3 B:
+                    // header + pos BYTE + type BYTE — Packet.h:976-982).
+                    // Parity `CInputMain::Refine` (input_main.cpp:2831):
+                    // NORMAL (0) → DoRefine (tabla refine_proto — fee ×5,
+                    // materiales, prob; FAIL destruye); SCROLL (2) →
+                    // DoRefineWithScroll (consume el scroll del modo, FAIL
+                    // baja de nivel); 255 → cancelar. Respuesta:
+                    // GC_ITEM_DEL+GC_ITEM_SET / GC_ITEM_DEL + GC_POINTS.
+                    header::CG_REFINE => {
+                        items::handle_refine(session, &pkt).await?.into_result()?;
+                    }
                     // F5.3: MOVER items del inventario — CG_ITEM_MOVE (13,
                     // 8 B: header + TItemPos origen + TItemPos destino +
                     // BYTE num — Packet.h:593-599). Parity `MoveItem`

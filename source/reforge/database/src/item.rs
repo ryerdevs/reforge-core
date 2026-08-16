@@ -135,6 +135,20 @@ pub struct ProtoItem {
     pub weight: i64,
 }
 
+/// Receta de refine (parity `TRefineTable` — `tables.h:924-933` + el load
+/// de `ClientManagerBoot.cpp:121`): la fila de `refine_proto` por
+/// `refine_set`. `cost` = fee base (el C++ la multiplica ×5 para el refine
+/// NORMAL — `ComputeRefineFee`, char.cpp:6598 — y la cobra SIN multiplicar
+/// en el refine con scroll), `prob` = probabilidad de éxito en %, y los
+/// materiales `(vnum, count)` hasta 5 slots (`REFINE_MATERIAL_MAX_NUM`,
+/// item_length.h:29; los no usados van con vnum 0).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefineRecipe {
+    pub cost: i32,
+    pub prob: i32,
+    pub materials: [(i64, i32); 5],
+}
+
 impl ItemRepo {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
@@ -244,6 +258,88 @@ impl ItemRepo {
             values,
             wear_flag: r.try_get(14).map_err(|e| format!("item_proto.wearflag: {e}"))?,
             weight: i64::from(weight),
+        }))
+    }
+
+    /// Subset REFINE del item_proto (parity `TItemTable` del C++ —
+    /// `GetRefineSet()` item.h:157 / `GetRefinedVnum()` item.h:137):
+    /// `(refine_set, refined_vnum)` del vnum. `refine_set` = el id de la
+    /// receta en `refine_proto` (`wRefineSet`); `refined_vnum` = el vnum del
+    /// item +1 de refine (`dwRefinedVnum` — 0 = sin siguiente nivel).
+    /// Columnas: `refine_set` smallint, `refined_vnum` int unsigned
+    /// (legacy-schema.md:175-176). `None` = vnum inexistente.
+    pub async fn load_refine_proto(&self, vnum: i64) -> Result<Option<(i64, i64)>, String> {
+        let client = self.connect().await?;
+        let rows = client
+            .query(
+                "SELECT refine_set, refined_vnum FROM player.item_proto \
+                 WHERE vnum = $1",
+                &[&vnum],
+            )
+            .await
+            .map_err(|e| pg_err("ITEM_PROTO_REFINE", &e))?;
+        let Some(r) = rows.first() else {
+            return Ok(None);
+        };
+        let refine_set: i16 = r.try_get(0).map_err(|e| format!("item_proto.refine_set: {e}"))?;
+        let refined_vnum: i32 = r.try_get(1).map_err(|e| format!("item_proto.refined_vnum: {e}"))?;
+        Ok(Some((i64::from(refine_set), i64::from(refined_vnum))))
+    }
+
+    /// Reverse del refine (parity `ITEM_MANAGER::GetRefineFromVnum`,
+    /// item_manager.cpp:1494-1501 + :76 — el mapa `refined_vnum → vnum`
+    /// construido de TODOS los protos): el vnum que refine HACIA el dado
+    /// (el nivel anterior). Lo usa el FAIL del refine con scroll
+    /// (`GetRefineFromVnum`, char_item.cpp:1349-1352) para BAJAR el item
+    /// (`result_fail_vnum`) en vez de destruirlo. `None` = el vnum no es
+    /// el resultado de ningún refine.
+    pub async fn load_refine_from_vnum(&self, vnum: i64) -> Result<Option<i64>, String> {
+        let client = self.connect().await?;
+        let rows = client
+            .query(
+                "SELECT vnum FROM player.item_proto WHERE refined_vnum = $1 \
+                 LIMIT 1",
+                &[&vnum],
+            )
+            .await
+            .map_err(|e| pg_err("ITEM_PROTO_REFINE_FROM", &e))?;
+        let Some(r) = rows.first() else {
+            return Ok(None);
+        };
+        let v: i32 = r.try_get(0).map_err(|e| format!("item_proto.vnum: {e}"))?;
+        Ok(Some(i64::from(v)))
+    }
+
+    /// Receta de refine por `refine_set` (parity `CRefineManager::
+    /// GetRefineRecipe` + el load de `ClientManagerBoot.cpp:121`:
+    /// `SELECT id, cost, prob, vnum0, count0, ..., vnum4, count4 FROM
+    /// refine_proto`): id = refine_set del item, cost = fee base, prob =
+    /// probabilidad de éxito (%), y los 5 slots de material (vnum, count).
+    /// `None` = sin receta para ese set.
+    pub async fn load_refine_recipe(&self, id: i64) -> Result<Option<RefineRecipe>, String> {
+        let client = self.connect().await?;
+        let rows = client
+            .query(
+                "SELECT id, cost, prob, \
+                 vnum0, count0, vnum1, count1, vnum2, count2, \
+                 vnum3, count3, vnum4, count4 \
+                 FROM player.refine_proto WHERE id = $1",
+                &[&id],
+            )
+            .await
+            .map_err(|e| pg_err("REFINE_PROTO", &e))?;
+        let Some(r) = rows.first() else {
+            return Ok(None);
+        };
+        let mut materials = [(0i64, 0i32); 5];
+        for (i, m) in materials.iter_mut().enumerate() {
+            m.0 = r.try_get(3 + 2 * i).map_err(|e| format!("refine_proto.vnum{i}: {e}"))?;
+            m.1 = r.try_get(4 + 2 * i).map_err(|e| format!("refine_proto.count{i}: {e}"))?;
+        }
+        Ok(Some(RefineRecipe {
+            cost: r.try_get(1).map_err(|e| format!("refine_proto.cost: {e}"))?,
+            prob: r.try_get(2).map_err(|e| format!("refine_proto.prob: {e}"))?,
+            materials,
         }))
     }
 
