@@ -10,7 +10,7 @@ use crate::combat::{
 };
 use crate::ecs::components::{Affect, Affects, Hp, Mp, Player, Position, SkillCooldowns, SkillLevels};
 use crate::ecs::events::{KillInfo, NpcEvent, SkillEvent, SplashVictimInfo};
-use crate::ecs::resources::{NpcIndex, NpcOutbox, Rand, SkillTable, Tick};
+use crate::ecs::resources::{NpcIndex, NpcOutbox, Rand, SkillPowerTable, SkillTable, Tick};
 use crate::ecs::world::WorldSim;
 use crate::skill::{
     attr_type, damage_flag_for_attr, eval_poly, k_value, skill_damage, skill_level_from_blob,
@@ -105,7 +105,7 @@ impl WorldSim {
         let Some(proto) = self.world.resource::<SkillTable>().0.get(&skill_id).cloned() else {
             return Vec::new(); // skill desconocida (o tabla sin cargar)
         };
-        let (px, py, level, job, st, dx, iq, ht, armor, hp, mp, max_hp, max_mp, skill_blob) = {
+        let (px, py, level, job, skill_group, st, dx, iq, ht, armor, hp, mp, max_hp, max_mp, skill_blob) = {
             let Ok(ent) = self.world.get_entity(pe) else { return Vec::new() };
             let Some(pos) = ent.get::<Position>() else { return Vec::new() };
             let Some(p) = ent.get::<Player>() else { return Vec::new() };
@@ -113,7 +113,7 @@ impl WorldSim {
             let Some(m) = ent.get::<Mp>() else { return Vec::new() };
             let Some(sk) = ent.get::<SkillLevels>() else { return Vec::new() };
             (
-                pos.x, pos.y, p.level, p.job, p.st, p.dx, p.iq, p.ht, p.armor,
+                pos.x, pos.y, p.level, p.job, p.skill_group, p.st, p.dx, p.iq, p.ht, p.armor,
                 h.hp, m.mp, h.max_hp, m.max_mp, sk.0.clone(),
             )
         };
@@ -122,7 +122,20 @@ impl WorldSim {
         if sk_level == 0 {
             return Vec::new();
         }
-        let k = k_value(sk_level, proto.max_level);
+        // `k` del poly, parity char_skill.cpp:1632 (`k = GetSkillPower(vnum,
+        // level) * bMaxLevel / 100`): el poder REAL por job/skillgroup/nivel
+        // de la tabla `common.locale` (skill_power). Fail-open: sin tabla
+        // cargada → la aproximación `level × max_level / 100` (desviación
+        // documentada, F6 balance) — el server nunca rompe por esto.
+        let k = {
+            let table = self.world.resource::<SkillPowerTable>().0.clone();
+            if table.loaded() {
+                let power = table.skill_power(job, skill_group, i32::from(sk_level), false);
+                f64::from(power) * f64::from(proto.max_level) / 100.0
+            } else {
+                k_value(sk_level, proto.max_level)
+            }
+        };
 
         // (2) objetivo + rango. Daño single-target → el mob del NpcIndex;
         // SPLASH (área) → el CENTRO = la posición del target del wire (mob
@@ -958,6 +971,57 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    /// El `k` del poly con la tabla REAL cargada (parity char_skill.cpp:1632
+    /// — `k = GetSkillPower(vnum, level) * bMaxLevel / 100`): con la tabla
+    /// inyectada, el k del assassin (job 1) group 2 (idx = 1×2+1 = 3) es
+    /// 1003×40/100 = 401.2 — el daño del skill 1 deja de ser el de la
+    /// aproximación (80-82) y refleja el poder de la tabla. Sin tabla
+    /// (fail-open) → la aproximación (el test `use_skill_attack_...` ya lo
+    /// cubre).
+    #[test]
+    fn skill_power_table_drives_k_in_poly() {
+        let mut w = world_with(42);
+        load(&mut w, vec![(entry(101, 0, 0, 1), mob_row(101))]);
+        join_with_skills_group(&mut w, 2, &[(1, 1)], 2); // job 1 (assassin) group 2
+        // El coste SP del poly sube con el k real (80+220×401.2 ≈ 88k).
+        w.set_player_mp(2, 200_000);
+        load_skills(&mut w, vec![skill1_proto()]);
+        // Tabla real: fila i → 1000+i en cada nivel (idx 3 → 1003).
+        let rows: Vec<[i32; 41]> = (0..9).map(|i| [1000 + i as i32; 41]).collect();
+        w.world.resource_mut::<SkillPowerTable>().0 =
+            std::sync::Arc::new(database::skill_power::SkillPowerTable::from_rows(rows));
+        let events = w.process_intent(
+            SkillIntent::UseSkill { player_vid: 2, skill_id: 1, target_vid: 10_000, weapon: None }.into(),
+            1_000,
+        );
+        let damage = events.iter().find_map(|e| match e {
+            NpcEvent::Skill(SkillEvent::SkillResult { damage, .. }) => Some(*damage),
+            _ => None,
+        });
+        let damage = damage.expect("SkillResult");
+        // k = 1003 × 40 / 100 = 401.2 → (0.5×atk + 1.5×30)×401 ≫ el daño de
+        // la aproximación (k = 0.4 → 80-82). La tabla real DOMINA el poly.
+        assert!(
+            damage > 1_000,
+            "el k de la tabla (401.2) debe dominar el daño, no la aproximación: {damage}"
+        );
+        // Contraste: sin tabla (fail-open) el mismo escenario da 80-82.
+        let mut w2 = world_with(42);
+        load(&mut w2, vec![(entry(101, 0, 0, 1), mob_row(101))]);
+        join_with_skills_group(&mut w2, 2, &[(1, 1)], 2);
+        w2.set_player_mp(2, 500);
+        load_skills(&mut w2, vec![skill1_proto()]);
+        let events = w2.process_intent(
+            SkillIntent::UseSkill { player_vid: 2, skill_id: 1, target_vid: 10_000, weapon: None }.into(),
+            1_000,
+        );
+        let damage = events.iter().find_map(|e| match e {
+            NpcEvent::Skill(SkillEvent::SkillResult { damage, .. }) => Some(*damage),
+            _ => None,
+        });
+        assert!((80..=82).contains(&damage.expect("SkillResult sin tabla")), "fail-open → aproximación");
     }
 
     /// SPLASH (área — skill 1 con flag SPLASH, radio 250, lMaxHit 4): el
