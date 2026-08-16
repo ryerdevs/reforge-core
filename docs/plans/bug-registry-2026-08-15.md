@@ -317,4 +317,5 @@
 - skill_power real de PG (common.locale SKILL_POWER_BY_LEVEL + TYPE0..8): k = power(job, skillgroup, level) × max_level / 100 (parity GetSkillPowerByLevelFromType). Fail-open → aproximación previa.
 
 ### C43. [CERRADO — fix `3ea8f49`] GM commands faltantes (95% del cmd_info[])
+
 - mob/kill/purge/goto/stat implementados con parity (GmSpawn intent nuevo; target_vid; FuncPurge radio/mapa; find_player; stat cap 90 + stat- floor). Gaps: mob por nombre, kill-vs-PC, goto coords.
