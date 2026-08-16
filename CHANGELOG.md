@@ -7,6 +7,30 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-15] (52nd part) — Numeric buffs + death penalty + safebox
+
+> Buffs that alter gameplay (CRITICAL/MOV_SPEED/ATT_SPEED), death penalty, and the
+> player bank. Workspace **676 passed / 0 failed**, pushed (`7aac132`).
+
+- **Numeric buffs** (`c8f3bd5` + `9d6f101`): buffs were cosmetic (icon only) — now
+  CRITICAL_PCT doubles melee damage (`Affects::critical_pct`, parity char_battle.cpp:
+  1661-1675: pct≥10 → 5+(pct-10)/4, else pct/2; roll number(1,100)≤pct → ×2); MOV_SPEED
+  recomputes the player's real speed (GetMoveSpeed = motion × 10000/CalculateDuration,
+  char.cpp:2751-2754); ATT_SPEED adds to the GET_ATTACK_SPEED denominator
+  (battle.cpp:757-782 — interval = (1000×100)/(80+bonus), dagger/claw halve).
+- **Death penalty** (`21b25f0`): dying on RestartAtSamePos loses `MIN(800000, next_exp ×
+  aiExpLossPercents% / 100)` (char_battle.cpp:310-337; constants.cpp:768 — 5% lvl 1-10,
+  4% 11-30, 3% 31-40, 2% 41-60, 1% 61+); town revive exempt. Dying now costs.
+- **Safebox** (`7aac132`): the player bank — `/safebox_password <pass>` opens (password
+  validation, 10 s cooldown, GC_SAFEBOX_WRONG_PASSWORD 87), `/safebox_close`/disconnect
+  persists (CHAT COMMAND CloseSafebox); CG_SAFEBOX_CHECKIN (70)/CHECKOUT (71)/ITEM_MOVE
+  (77) move items inventory↔SAFEBOX (grid 5×size, owner = account); CG_SAFEBOX_MONEY (79)
+  deposit/withdraw gold; `/safebox <0..3>` GM set_size. SafeboxRepo wired (was 4 fns, zero
+  callers). Wire byte-exact (headers 79/84-88, framer 79 → 6 B). Gaps: no grid 2×2,
+  no antiflag gates, no change_password, no mall.
+- **Next block (ranked)**: AUTOUSE_GOLD/treasure boxes (SpecialItemGroup), CASTING_SPEED,
+  GM command remainder (95% of cmd_info[]), then events/raids/wedding content.
+
 ## [2026-08-15] (51st part) — Player parties + exp level-delta + verifier fixes
 
 > The party system (Fixer lane, 110 min — orchestrated close), C33 exp curve, and the
