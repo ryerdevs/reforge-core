@@ -299,3 +299,6 @@
 ### C38. [CERRADO — fix `28f4395`] PvP/PK: atacar a otro PC no hace nada
 
 - battle_is_attackable gate (parity battle.cpp:107-139): muerto/misma-party → false; PK ON (víctima o atacante PK_MODE_FREE) → true. Daño al Hp del PC + 2 eventos (atacante/víctima, parity SendDamagePacket). Muerte → GC_DEAD + revive. Gaps: ATTR_BANPK, guilds/duelos/arena, alignment, broadcast.
+
+### C39. [CERRADO — fix `79ae59e`] Items sin atributos mágicos ni sockets
+- attribute_set_index + alter_to_magic_item + add_rare_attribute + roll_creation_bonus (parity item_attribute.cpp); tablas item_attr/item_attr_rare wired; drops/GM/quest pueblan attrs+sockets. Gaps: engarce de gems (USE), addon, iRarePct.

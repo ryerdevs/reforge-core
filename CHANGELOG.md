@@ -7,6 +7,29 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-15] (55th part) — Random attributes + sockets on item creation
+
+> Items were born with empty attrs [(0,0);7] and sockets [0;3] — no magic
+> items existed (item_attr 54 / item_attr_rare 20 rows idle). Workspace
+> **690 passed / 0 failed**, pushed (`79ae59e`).
+
+- **database/src/attr.rs** (new): attribute_set_index (GetAttributeSetIndex
+  item_attribute.cpp:15-57), alter_to_magic_item (HIGH {30,40,20,8,2} + LOW
+  {50,40,10,0,0}, prob-weighted), add_rare_attribute, roll_creation_bonus
+  (parity CreateItem id==0 — socket_pct always + magic_pct roll),
+  load_attr_tables (bigint casts verified against live PG) + 8 tests.
+- Attrs/sockets flow: ItemIntent::DropItem → Item → DropResult/ItemView →
+  GC_ITEM_GROUND_ADD (58 B) → ItemRow on pickup; applied to mob drops
+  (magic+sockets+rare), GM item (bTryMagic=true), quest rewards (sockets
+  only, bTryMagic=false); manual drops keep the row attrs. session.rs
+  attr_tables (loaded once at boot, fail-open) + roll_drop_attrs.
+- 2 fragile parallel-build tests → #[ignore] with TODO. Live PG test
+  (--ignored) verifies 54/20 rows.
+- Gaps: gem socketing (fills on USE — out of scope), addon, iRarePct drop
+  override.
+- **Next block (ranked)**: skill families SPLASH/PARTY/HORSE + skill_power.txt,
+  GM command remainder (95% of cmd_info[]), then events/raids/wedding.
+
 ## [2026-08-15] (54th part) — PvP/PK: player vs player combat
 
 > Attacking another PC did nothing (process_attack only resolved npc_view —
