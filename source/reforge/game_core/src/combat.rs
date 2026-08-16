@@ -385,12 +385,16 @@ pub fn attack_power(
 /// `roll(min, max)` = el `number(min, max)` del C++ (inclusive; `number(0,1)`
 /// del arma y el floor `number(1,5)` de `CalcBattleDamage`). El canal provee
 /// uno con su RNG; los tests uno fijo (determinismo byte-exacto).
+/// Daño melee + si hubo CRÍTICO (parity `battle_melee_attack` +
+/// `CalcBattleDamage` — battle.cpp:199-206 + el flag en char_battle.cpp:
+/// 2117-2120: `IsCritical → damageFlag |= DAMAGE_CRITICAL`). Devuelve
+/// `(daño, crítico)` — el canal pone el flag del wire.
 pub fn melee_damage(
     attacker: &PlayerState,
     victim: &NpcState,
     weapon: Option<&database::item::ProtoItem>,
     roll: &mut dyn FnMut(i32, i32) -> i32,
-) -> i32 {
+) -> (i32, bool) {
     let i_atk = attack_power(attacker, victim.dx, victim.level, weapon, roll);
 
     // iDef = DEF_GRADE * (100 + DEF_BONUS)/100 = DEF_GRADE (battle.cpp:564).
@@ -406,12 +410,14 @@ pub fn melee_damage(
     // → `dam *= 2`. El pct ya viene PROCESADO (5+(pct-10)/4 o pct/2) por
     // `Affects::critical_pct`; el RESIST_CRITICAL del objetivo es 0 en el
     // subset de mobs (no tienen la resistencia en el rewrite).
+    let mut critical = false;
     if attacker.critical_pct > 0 && roll(1, 100) <= attacker.critical_pct {
         i_dam *= 2;
+        critical = true;
     }
     // battle_hit (:736-749): CalcDamBonus identidad (sin arma, :265-303);
     // attMul = 1.0 (char.cpp:411) → iDam = 1.0*iDam + 0.5 → trunc = iDam.
-    i_dam
+    (i_dam, critical)
 }
 
 // ---------------------------------------------------------------------------
@@ -497,7 +503,7 @@ pub fn handle_attack(
     }
 
     // (5) Daño (battle.cpp:731-755).
-    let damage = melee_damage(attacker, target, weapon, roll);
+    let (damage, critical) = melee_damage(attacker, target, weapon, roll);
     // FIX 2026-08-14 (el cliente se cerraba al dañar a un mob): el `GcAttack`
     // (header 12) NO se manda — el cliente S3llMetin2 v24 NO tiene case para
     // HEADER_GC_ATTACK en su dispatch (PythonNetworkStreamPhaseGame.cpp —
@@ -508,8 +514,15 @@ pub fn handle_attack(
     // canal para los MOBS).
     let mut packets = Vec::new();
     if damage > 0 {
+        // Flag del wire: NORMAL + CRITICAL si el golpe fue crítico (parity
+        // `damageFlag |= DAMAGE_CRITICAL`, char_battle.cpp:2117-2120).
+        let flag = if critical {
+            damage_flag::NORMAL | damage_flag::CRITICAL
+        } else {
+            damage_flag::NORMAL
+        };
         packets.push(
-            GcDamageInfo::new(target.vid, damage_flag::NORMAL, damage).to_bytes().to_vec(),
+            GcDamageInfo::new(target.vid, flag, damage).to_bytes().to_vec(),
         );
     }
     CombatResult { packets, damage }
@@ -703,10 +716,10 @@ mod tests {
         assert_eq!(job_stat_attack(job::ASSASSIN, 30, 30, 30), 60);
         // roll(0,1) = 0 → iDam = 0 → iAtk = (70+0-10)*0.77+10 = 56 → dam 46.
         let mut roll = roll_fixed(0);
-        assert_eq!(melee_damage(&a, &m, None, &mut roll), 46);
+        assert_eq!(melee_damage(&a, &m, None, &mut roll).0, 46);
         // roll(0,1) = 1 → iDam = 2 → iAtk = (62)*0.77+10 = 57 → dam 47.
         let mut roll = roll_fixed(1);
-        assert_eq!(melee_damage(&a, &m, None, &mut roll), 47);
+        assert_eq!(melee_damage(&a, &m, None, &mut roll).0, 47);
     }
 
     /// La división ENTERA del C++ se respeta: assassin st=1, dx=2 →
@@ -743,7 +756,7 @@ mod tests {
         };
         let m = mob101();
         let mut roll = roll_fixed(3);
-        assert_eq!(melee_damage(&a, &m, None, &mut roll), 3, "0 < 3 → number(1,5) = 3");
+        assert_eq!(melee_damage(&a, &m, None, &mut roll).0, 3, "0 < 3 → number(1,5) = 3");
         // El cálculo previo al floor: 7 - 10 = max(0, -3) = 0.
         let f_ar = calc_attack_rating(a.dx, a.level, m.dx, m.level);
         let att = attack_grade(a.level, a.job, a.st, a.dx, a.iq);
@@ -761,9 +774,9 @@ mod tests {
         a.critical_pct = 100; // el roll number(1,100) ≤ 100 siempre
         let m = mob101();
         let mut roll = roll_fixed(5);
-        let normal = melee_damage(&PlayerState { critical_pct: 0, ..a }, &m, None, &mut roll);
+        let normal = melee_damage(&PlayerState { critical_pct: 0, ..a }, &m, None, &mut roll).0;
         let mut roll = roll_fixed(5);
-        let crit = melee_damage(&a, &m, None, &mut roll);
+        let crit = melee_damage(&a, &m, None, &mut roll).0;
         assert_eq!(crit, normal * 2, "crítico ×2: {normal} → {crit}");
         // roll_fixed(5) → el roll(1,100)=5; el roll del floor (1,5)=5.
         assert!(normal > 0, "daño base > 0");
