@@ -249,6 +249,12 @@ pub struct Session {
     /// vuelve por la cola — el set evita duplicar el mismo vid mientras el
     /// primer pickup se resuelve (parity del flujo síncrono previo).
     pub pending_pickups: std::collections::HashSet<u32>,
+    /// Modo de refine (parity `SetRefineMode`/`ClearRefineMode` del C++ —
+    /// char_item.cpp:1309): el índice en `inventory` del SCROLL usado sobre
+    /// el item destino (CG_ITEM_USE_TO_ITEM → RefineInformation). El
+    /// CG_REFINE con type SCROLL lo consume; 255 lo limpia. `None` = sin
+    /// ventana de refine abierta.
+    pub refine_scroll: Option<usize>,
     /// Deadline de inactividad PERSISTENTE (último paquete del cliente: el
     /// select! cancela los brazos al ganar uno, así que el timer del idle se
     /// recrea por iteración — pero con el MISMO deadline, que solo cambia al
@@ -394,6 +400,7 @@ impl Session {
             walking: false,
             next_exp: 0,
             inventory: Vec::new(),
+            refine_scroll: None,
             battle: game_core::packets::BattlePoints::default(),
             mov_speed: 100, // sin botas (se computa en el entry)
             affects: Vec::new(),
