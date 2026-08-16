@@ -20,7 +20,7 @@ use game_core::ecs::{
 use game_core::packets;
 
 use crate::channel::session::Session;
-use crate::channel::{now32, INVENTORY_MAX_NUM, ITEM_COUNT_LIMIT};
+use crate::channel::{is_gold_item, now32, INVENTORY_MAX_NUM, ITEM_COUNT_LIMIT};
 
 /// Un evento S→C del mundo → paquetes GC + estado de la sesión. `Err` =
 /// fatal (socket/PG); los rechazos internos (sin víctima, fuera de rango,
@@ -230,7 +230,7 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
             // inventario: suma al monedero (`row.gold`) + GC_POINTS + save.
             // El cliente pinta el oro en el suelo con vnum 1 (el kill-drop
             // y el drop manual usan vnum 1 — parity DropGold).
-            if gi.vnum == 1 {
+            if is_gold_item(i64::from(gi.vnum)) {
                 let row = session.row_mut();
                 row.gold = row.gold.saturating_add(gi.count as i32);
                 session
@@ -524,4 +524,19 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
         NpcEvent::Quest(q) => super::quest::emit(session, q).await?,
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::channel::is_gold_item;
+
+    /// C22 (test de PROTECCIÓN — hallazgo del verifier): el vnum 1 es el
+    /// ORO del suelo (no un item normal); el resto NO. La mutación de\n    /// \"vnum == 999999\" hace fallar este test.\n    #[test]
+    fn gold_item_is_vnum_1_only() {
+        assert!(is_gold_item(1), "vnum 1 = oro (ITEM_ELK)");
+        assert!(!is_gold_item(2), "vnum 2 no es oro");
+        assert!(!is_gold_item(101), "un item normal no es oro");
+        assert!(!is_gold_item(0), "0 no es oro");
+    }
 }

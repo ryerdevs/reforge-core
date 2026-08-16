@@ -28,7 +28,10 @@ pub fn step_toward(x: i32, y: i32, tx: i32, ty: i32, speed: i32, dt_ms: u64) -> 
         return (tx, ty);
     }
     let f = step / dist;
-    (x + (dx as f64 * f).round() as i32, y + (dy as f64 * f).round() as i32)
+    (
+        x + (dx as f64 * f).round() as i32,
+        y + (dy as f64 * f).round() as i32,
+    )
 }
 
 /// Duración del `GC_MOVE` de un paso de mob en ms (parity
@@ -165,7 +168,10 @@ pub fn patrol_step(
     let d = (hx * hx + hy * hy).sqrt();
     if d > spawn_radius as f64 && d > f64::EPSILON {
         let f = spawn_radius as f64 / d;
-        let (cx, cy) = (home_x + (hx * f).round() as i32, home_y + (hy * f).round() as i32);
+        let (cx, cy) = (
+            home_x + (hx * f).round() as i32,
+            home_y + (hy * f).round() as i32,
+        );
         if (cx, cy) == (x, y) {
             return None; // ya en el borde — sin movimiento este tick
         }
@@ -196,7 +202,10 @@ pub fn change_attack_dest(
     roll: &mut dyn FnMut(i32, i32) -> i32,
 ) -> (i32, i32) {
     let dist = ((mob_x - victim_x).pow(2) as f64 + (mob_y - victim_y).pow(2) as f64).sqrt();
-    let f_min = if matches!(battle_type, crate::combat::BATTLE_TYPE_RANGE | crate::combat::BATTLE_TYPE_MAGIC) {
+    let f_min = if matches!(
+        battle_type,
+        crate::combat::BATTLE_TYPE_RANGE | crate::combat::BATTLE_TYPE_MAGIC
+    ) {
         attack_range as f64 * 0.8
     } else {
         attack_range as f64 * 0.9
@@ -283,8 +292,8 @@ mod tests {
         let mut roll = |_lo: i32, _hi: i32| 0; // el mínimo del rango
         assert_eq!(attack_damage(3, 8, 0, &mut roll), 3);
         let mut roll = |lo: i32, hi: i32| match (lo, hi) {
-            (0, 5) => 5,     // sorteo del rango (3..8 → +5 = 8)
-            (1, 5) => 1,     // floor (no aplica aquí)
+            (0, 5) => 5, // sorteo del rango (3..8 → +5 = 8)
+            (1, 5) => 1, // floor (no aplica aquí)
             _ => panic!("roll inesperado ({lo},{hi})"),
         };
         assert_eq!(attack_damage(3, 8, 0, &mut roll), 8);
@@ -312,7 +321,11 @@ mod tests {
             (1, 5) => 2, // floor
             _ => panic!("roll inesperado ({lo},{hi})"),
         };
-        assert_eq!(attack_damage(3, 8, 5, &mut roll), 2, "MAX(0,3−5)=0 → floor 2");
+        assert_eq!(
+            attack_damage(3, 8, 5, &mut roll),
+            2,
+            "MAX(0,3−5)=0 → floor 2"
+        );
         // atk 4 − def 5 → 0 → floor 5.
         let mut roll = |lo: i32, hi: i32| match (lo, hi) {
             (0, 5) => 1, // sorteo → atk 4
@@ -352,9 +365,9 @@ mod tests {
     fn patrol_step_clamps_to_spawn_radius() {
         // roll: prob=0 (patrulla), deg=0 (este), dist=700 → destino x+700.
         let mut roll = |lo: i32, hi: i32| match (lo, hi) {
-            (0, 6) => 0,           // probabilidad 1/7
-            (0, 359) => 0,         // 0° → +x
-            (300, 700) => 700,     // paso máximo
+            (0, 6) => 0,       // probabilidad 1/7
+            (0, 359) => 0,     // 0° → +x
+            (300, 700) => 700, // paso máximo
             _ => panic!("roll inesperado ({lo},{hi})"),
         };
         // Spawn en (0,0), mob en (0,0), radio 500 → el destino (700,0) se
@@ -368,7 +381,11 @@ mod tests {
             (300, 700) => 700,
             _ => panic!("roll inesperado"),
         };
-        assert_eq!(patrol_step(500, 0, 0, 0, 500, &mut roll), None, "en el borde");
+        assert_eq!(
+            patrol_step(500, 0, 0, 0, 500, &mut roll),
+            None,
+            "en el borde"
+        );
     }
 
     /// Destino DENTRO del radio: se usa tal cual (sin clamp).
@@ -376,7 +393,7 @@ mod tests {
     fn patrol_step_keeps_nearby_target() {
         let mut roll = |lo: i32, hi: i32| match (lo, hi) {
             (0, 6) => 0,
-            (0, 359) => 0,   // este
+            (0, 359) => 0,     // este
             (300, 700) => 300, // paso mínimo
             _ => panic!("roll inesperado ({lo},{hi})"),
         };
@@ -392,8 +409,16 @@ mod tests {
     fn move_duration_is_dist_over_speed() {
         assert_eq!(move_duration_ms(50, 0, 100), 500, "50 u a 100 u/s = 500 ms");
         assert_eq!(move_duration_ms(0, 50, 100), 500, "dy también");
-        assert_eq!(move_duration_ms(500, 0, 100), 5_000, "paso largo del patrulla");
-        assert_eq!(move_duration_ms(50, 0, 300), 166, "50×1000/300 = 166.67 — el C++ TRUNCA ((int) fDist/motionSpeed×1000, char.cpp:2767)");
+        assert_eq!(
+            move_duration_ms(500, 0, 100),
+            5_000,
+            "paso largo del patrulla"
+        );
+        assert_eq!(
+            move_duration_ms(50, 0, 300),
+            166,
+            "50×1000/300 = 166.67 — el C++ TRUNCA ((int) fDist/motionSpeed×1000, char.cpp:2767)"
+        );
         assert_eq!(move_duration_ms(0, 0, 0), 1, "floor 1 ms (nunca 0)");
     }
 
@@ -406,7 +431,11 @@ mod tests {
         // i = 100 - 100 = 0 → i = 100 → 2000 × 100 / 100 = 2000 ms
         assert_eq!(mob_attack_cooldown_ms(100), 2_000, "default attack_speed");
         // i = 100 - 200 = -100 → i = 10000/(100+100) = 50 → 2000×50/100 = 1000
-        assert_eq!(mob_attack_cooldown_ms(200), 1_000, "doble velocidad → mitad");
+        assert_eq!(
+            mob_attack_cooldown_ms(200),
+            1_000,
+            "doble velocidad → mitad"
+        );
         // i = 100 - 50 = 50 → i = 150 → 2000×150/100 = 3000
         assert_eq!(mob_attack_cooldown_ms(50), 3_000, "media velocidad → 1.5×");
         // i = 100 - 80 = 20 → i = 120 → 2000×120/100 = 2400
@@ -443,10 +472,17 @@ mod tests {
         // GetDeltaByDegree(90°, 157.5) = (157.5×sin90, 157.5×cos90) = (157.5, 0)
         // → destino (157, 0). (fMin melee = 175×0.9 = 157.5 → round 158.)
         let (x, y) = change_attack_dest(100, 0, 0, 0, BATTLE_TYPE_MELEE, 175, &mut |lo, hi| {
-            assert!((-90..=90).contains(&lo) || (0..=359).contains(&lo), "roll({lo},{hi})");
+            assert!(
+                (-90..=90).contains(&lo) || (0..=359).contains(&lo),
+                "roll({lo},{hi})"
+            );
             0 // desvío 0
         });
-        assert_eq!((x, y), (158, 0), "a 157.5 u de la víctima en la dirección del mob");
+        assert_eq!(
+            (x, y),
+            (158, 0),
+            "a 157.5 u de la víctima en la dirección del mob"
+        );
         // RANGE: fMin = 175×0.8 = 140.
         let (x, y) = change_attack_dest(100, 0, 0, 0, BATTLE_TYPE_RANGE, 175, &mut |lo, hi| 0);
         assert_eq!((x, y), (140, 0), "fMin rango = ×0.8");

@@ -445,6 +445,24 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
         session.motion().y,
         session.chat_tx.clone(),
     ));
+    // PARTY (lane 2026-08-16): registro del peer de party del jugador — las
+    // invitaciones (por vid), los chequeos de imperio/nivel y el outbox de
+    // mensajes del party (GC_PARTY_* / exp compartida); se libera al cerrar
+    // la conexión (RAII — el guard vive en la sesión; el líder desconectado
+    // disuelve la party, parity P2PQuit). La posición la sincroniza el MOVE
+    // (movement.rs).
+    session.party_guard = Some(crate::channel::party::register_session(
+        session.player_vid(),
+        session.row().id as u32,
+        session.row().name.clone(),
+        session.row().level,
+        session.empire,
+        session.row().map_index,
+        session.motion().x,
+        session.motion().y,
+        crate::channel::party::hp_percent(session.row()),
+        session.party_tx.clone(),
+    ));
     eprintln!(
         "server_realms: channel conn {}: {} en el mundo compartido (mapa {}) — \
          los adds de los mobs visibles llegan por la cola",

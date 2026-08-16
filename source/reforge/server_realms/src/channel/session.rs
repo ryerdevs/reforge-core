@@ -298,6 +298,22 @@ pub struct Session {
     /// Sitdown/Standup. En memoria (parity: `m_pointsInstant.position` del
     /// C++ — no se persiste).
     pub sitting: bool,
+    /// Party (lane 2026-08-16): id del party del jugador (= pid del LÍDER —
+    /// parity `CPartyManager` keyed por líder) o `None`. Es un CACHE: la
+    /// fuente de verdad es el registro de `channel/party.rs` (una sesión no
+    /// puede mutar la fila de OTRA conexión — el sync llega por el outbox
+    /// `party_tx` → `PartyMsg::Joined/LeftParty`, que el game loop drena).
+    pub party_id: Option<u32>,
+    /// Outbox del party de la sesión (lo registra `party::register_session`
+    /// en el world join — OTROS jugadores entregan aquí los GC_PARTY_* y la
+    /// exp compartida).
+    pub party_tx: UnboundedSender<crate::channel::party::PartyMsg>,
+    /// Cola de mensajes del party (la drena el game loop — game.rs →
+    /// `party::handle_msg`).
+    pub party_rx: UnboundedReceiver<crate::channel::party::PartyMsg>,
+    /// RAII del peer de party (registro de sesiones — patrón ChatPeerGuard;
+    /// al cerrar la conexión saca al jugador de su party).
+    pub party_guard: Option<crate::channel::party::PartyPeerGuard>,
 }
 
 /// `g_iStatusPointGetLevelLimit` (config.cpp:47 — 90): el nivel hasta el que
@@ -339,6 +355,7 @@ impl Session {
     ) -> Self {
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
         let (chat_tx, chat_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (party_tx, party_rx) = tokio::sync::mpsc::unbounded_channel();
         let ping_timer = tokio::time::interval_at(
             tokio::time::Instant::now() + Duration::from_millis(config.ping_interval_ms),
             Duration::from_millis(config.ping_interval_ms),
@@ -382,6 +399,10 @@ impl Session {
             pending_arrow_shot: false,
             pvp_mode: false,
             sitting: false,
+            party_id: None,
+            party_tx,
+            party_rx,
+            party_guard: None,
         }
     }
 
@@ -464,33 +485,36 @@ impl Session {
             },
         );
         let (exp_gain, gold_gain) = (reward.exp_gain, reward.gold_gain);
+        // C33: factor de exp por level-delta (parity `GiveExp`,
+        // char_battle.cpp:2210-2220 — `NEW_GET_LVDELTA`: el índice clamp
+        // (mob_level+15) − player_level sobre `aiPercentByDeltaLev`). Matar
+        // mobs mucho más débiles da 1% de la exp (antes: exp llena).
+        let delta_factor = game_core::combat::exp_level_delta_factor(
+            i32::from(self.row().level),
+            v.mob_level,
+        );
+        let mut exp_gain = exp_gain.saturating_mul(i64::from(delta_factor)) / 100;
+        // C33: cap 10% del next_exp por kill (parity `iExp = MIN(
+        // GetNextExp() / 10, iExp)` — char_battle.cpp:2267; se necesitan al
+        // menos 10 kills del mismo mob para subir de nivel).
+        if self.next_exp > 0 {
+            let cap = self.next_exp / 10;
+            exp_gain = exp_gain.min(cap);
+        }
+        // Party (lane 2026-08-16): reparto de la exp del kill entre los
+        // miembros del party PRESENTES (mismo mapa + ≤ PARTY_DEFAULT_RANGE
+        // 5000 del punto del kill — parity `DistributeExp`/
+        // `FPartyDistributor`, char_battle.cpp:2465-2488, simplificado). La
+        // parte de ESTE jugador se aplica aquí (`gain_exp`); la de los demás
+        // viaja por su outbox (`PartyMsg::ExpGain` → `gain_exp` de cada
+        // sesión). El oro NO se reparte (el subset — el C++ solo reparte la
+        // exp).
+        let exp_gain = crate::channel::party::distribute_exp(self, exp_gain, v.x, v.y);
         {
             let row = self.row_mut();
-            row.exp = row.exp.saturating_add(exp_gain.min(i32::MAX as i64) as i32);
             row.gold = row.gold.saturating_add(gold_gain.min(i32::MAX as i64) as i32);
         }
-        // Level-up (parity char.cpp `GetNextExp` — exp_table por nivel; el
-        // next_exp se recarga de la DB al subir).
-        let mut leveled = false;
-        while self.next_exp > 0 && i64::from(self.row().exp) >= self.next_exp {
-            let next = self.next_exp;
-            let level = level_up_step(self.row_mut(), next);
-            leveled = true;
-            self.next_exp =
-                CommonRepo::new(self.pool.clone()).next_exp(level).await.unwrap_or(0);
-        }
-        if leveled {
-            // El nivel del mundo COMPARTIDO (la DEF del ataque del mob lo usa).
-            self.intent(Intent::Combat(CombatIntent::SetLevel {
-                player_vid: self.player_vid(),
-                level: i32::from(self.row().level),
-            }))?;
-        }
-        // GC_POINTS actualizado (el cliente muestra exp/gold/nivel) + persistencia.
-        self.send(&game_core::packets::points_packet(self.row(), self.next_exp, &self.battle).to_bytes())
-            .await
-            .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
-        self.save();
+        let leveled = self.gain_exp(exp_gain).await?;
         // F5.3: DROP del mob — el drop primario (`mob_proto.drop_item`), con
         // la probabilidad del `drop_rate` del config. (El C++ además usa
         // etc_drop_item.txt por nombre — TRAP AGENTS.md §17 — el subset base
@@ -517,6 +541,46 @@ impl Session {
             self.row().level
         );
         Ok(())
+    }
+
+    /// Aplica exp al row del jugador (level-up + GC_POINTS + save) — el
+    /// camino ÚNICO de ganar exp: el kill propio (`apply_kill`) y la exp
+    /// compartida del party (`PartyMsg::ExpGain` — party.rs). Parity
+    /// `GiveExp`/`PointChange(POINT_EXP)` (char_battle.cpp:2500+ →
+    /// char.cpp:3064-3136) — sin `AdjustExpByLevel` (el subset tampoco lo
+    /// aplica en `kill_reward`). Devuelve si hubo level-up (el log del
+    /// killer lo pinta).
+    pub async fn gain_exp(&mut self, amount: i64) -> Result<bool, String> {
+        {
+            let row = self.row_mut();
+            row.exp = row.exp.saturating_add(amount.min(i32::MAX as i64) as i32);
+        }
+        // Level-up (parity char.cpp `GetNextExp` — exp_table por nivel; el
+        // next_exp se recarga de la DB al subir).
+        let mut leveled = false;
+        while self.next_exp > 0 && i64::from(self.row().exp) >= self.next_exp {
+            let next = self.next_exp;
+            let level = level_up_step(self.row_mut(), next);
+            leveled = true;
+            self.next_exp =
+                CommonRepo::new(self.pool.clone()).next_exp(level).await.unwrap_or(0);
+        }
+        if leveled {
+            // El nivel del mundo COMPARTIDO (la DEF del ataque del mob lo usa).
+            self.intent(Intent::Combat(CombatIntent::SetLevel {
+                player_vid: self.player_vid(),
+                level: i32::from(self.row().level),
+            }))?;
+            // El peso del reparto NON_PARITY (party_exp_distribute_table) y
+            // el chequeo ±30 de las invitaciones usan el nivel VIVO.
+            crate::channel::party::update_member_level(self.player_vid(), self.row().level);
+        }
+        // GC_POINTS actualizado (el cliente muestra exp/gold/nivel) + persistencia.
+        self.send(&game_core::packets::points_packet(self.row(), self.next_exp, &self.battle).to_bytes())
+            .await
+            .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
+        self.save();
+        Ok(leveled)
     }
 
     /// Snapshot de counts del inventario (las condiciones `count_item` del

@@ -169,6 +169,13 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
                 session.motion().x,
                 session.motion().y,
             );
+            // El peer/miembro del party persigue la posición (el rango del
+            // reparto de exp usa la posición VIVA — lane 2026-08-16).
+            crate::channel::party::update_position(
+                session.player_vid(),
+                session.motion().x,
+                session.motion().y,
+            );
             Ok(Outcome::Continue)
         }
         Err(game_core::movement::MoveError::NotMove) => {

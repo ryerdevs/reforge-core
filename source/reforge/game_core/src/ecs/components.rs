@@ -132,10 +132,7 @@ impl Mob {
             damage_max: row.damage_max,
             home_x: entry.x,
             home_y: entry.y,
-            nomove: row
-                .ai_flag
-                .as_deref()
-                .is_some_and(|f| f.contains("NOMOVE")),
+            nomove: row.ai_flag.as_deref().is_some_and(|f| f.contains("NOMOVE")),
             aggressive_sight: row.aggressive_sight,
             aggressive: crate::ai::is_aggressive(row.ai_flag.as_deref()),
             level: row.level,
