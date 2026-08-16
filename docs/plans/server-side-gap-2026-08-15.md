@@ -76,3 +76,15 @@
 6. **Safebox** (CG_SAFEBOX_* + repos).
 7. **Exp level-delta + cap 10%** (curva de progresión).
 8. **AIFLAGs BERSERK/COWARD/GODSPEED/STONESKIN** (mobs, del análisis legacy).
+
+## Actualización 2026-08-15 (2ª tanda)
+
+- **AIFLAGs de mob (BERSERK ×2, STONESKIN /2, GODSPEED ATT_SPEED 250)** — DONE
+  (feat(combat), columnas sp_berserk/sp_stoneskin/sp_godspeed del mob_proto, 3 tests;
+  item #11 del ranking).
+- **C22 oro del suelo → monedero** — DONE (fix(items), vnum 1 → row.gold + GC_POINTS).
+- **Party (invite/answer/remove/parameter + exp repartida)** — IN PROGRESS (Fixer lane).
+- **Verifier de mobs (C29-C32 + AIFLAGs + C22)** — IN PROGRESS (independiente).
+- **stat_points** — SIN wire en esta variante del cliente (Packet.h:32-37 comentado;
+  solo `/con+`/`/str+` como GM). Documentado: la progresión de stats requiere una
+  decisión de wire (modificar el cliente) — bloqueado, no un bug del server.
