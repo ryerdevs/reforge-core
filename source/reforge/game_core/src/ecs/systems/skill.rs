@@ -9,12 +9,12 @@ use crate::combat::{
     player_def_grade, PlayerState,
 };
 use crate::ecs::components::{Affect, Affects, Hp, Mp, Player, Position, SkillCooldowns, SkillLevels};
-use crate::ecs::events::{KillInfo, NpcEvent, SkillEvent};
-use crate::ecs::resources::{NpcOutbox, Rand, SkillTable, Tick};
+use crate::ecs::events::{KillInfo, NpcEvent, SkillEvent, SplashVictimInfo};
+use crate::ecs::resources::{NpcIndex, NpcOutbox, Rand, SkillTable, Tick};
 use crate::ecs::world::WorldSim;
 use crate::skill::{
-    damage_flag_for_attr, eval_poly, k_value, skill_damage, skill_level_from_blob, point,
-    SkillRepo, skill_flag,
+    attr_type, damage_flag_for_attr, eval_poly, k_value, skill_damage, skill_level_from_blob,
+    point, SkillProto, SkillRepo, skill_flag,
 };
 use database::item::ProtoItem;
 
@@ -124,22 +124,48 @@ impl WorldSim {
         }
         let k = k_value(sk_level, proto.max_level);
 
-        // (2) objetivo + rango. Daño → el mob del NpcIndex; buff → self
-        // (SELFONLY o target propio) u otro jugador.
+        // (2) objetivo + rango. Daño single-target → el mob del NpcIndex;
+        // SPLASH (área) → el CENTRO = la posición del target del wire (mob
+        // o PC del mundo) o la del caster sin target válido (parity
+        // UseSkill → ComputeSkill: `FuncSplashDamage f(pkVictim->GetX(),
+        // pkVictim->GetY(), ...)` — el target define el centro); buff →
+        // self (SELFONLY o target propio) u otro jugador.
         let mut victim_mob: Option<(i32, i32, i32, i32)> = None; // (dx, lv, def, max_hp)
         let mut buff_target = pe;
+        let mut splash_center: Option<(i32, i32)> = None;
         if proto.is_attack() {
-            let Some(view) = self.npc_view(target_vid) else { return Vec::new() };
-            let dist = distance_approx(px - view.state.x, py - view.state.y);
-            if proto.target_range > 0 && dist > proto.target_range as i32 + 50 {
-                return Vec::new();
+            if proto.flag & skill_flag::SPLASH != 0 {
+                // Centro del área (parity ComputeSkillAtPosition posTarget).
+                let center = if let Some(v) = self.npc_view(target_vid) {
+                    (v.state.x, v.state.y)
+                } else if let Some(&e) = self.players.get(&target_vid)
+                    && let Ok(ent) = self.world.get_entity(e)
+                    && let Some(pos) = ent.get::<Position>()
+                {
+                    (pos.x, pos.y)
+                } else {
+                    (px, py) // sin target válido → el caster
+                };
+                // Rango al CENTRO (parity ComputeSkill — el check del
+                // dwTargetRange contra el objetivo).
+                let dist = distance_approx(px - center.0, py - center.1);
+                if proto.target_range > 0 && dist > proto.target_range as i32 + 50 {
+                    return Vec::new();
+                }
+                splash_center = Some(center);
+            } else {
+                let Some(view) = self.npc_view(target_vid) else { return Vec::new() };
+                let dist = distance_approx(px - view.state.x, py - view.state.y);
+                if proto.target_range > 0 && dist > proto.target_range as i32 + 50 {
+                    return Vec::new();
+                }
+                victim_mob = Some((
+                    view.state.dx,
+                    view.state.level,
+                    def_grade_npc(view.state.level, view.state.ht, view.state.wdef),
+                    view.max_hp,
+                ));
             }
-            victim_mob = Some((
-                view.state.dx,
-                view.state.level,
-                def_grade_npc(view.state.level, view.state.ht, view.state.wdef),
-                view.max_hp,
-            ));
         } else {
             if proto.flag & skill_flag::SELFONLY != 0 || target_vid == player_vid {
                 buff_target = pe;
@@ -255,6 +281,29 @@ impl WorldSim {
 
         let mut events = Vec::new();
         if proto.is_attack() {
+            if let Some(center) = splash_center {
+                // SPLASH (área): el daño a CADA víctima dentro del radio
+                // (el coste SP/cooldown ya se pagó UNA vez arriba).
+                events = self.splash_damage(
+                    player_vid,
+                    pe,
+                    skill_id,
+                    &proto,
+                    center,
+                    target_vid,
+                    weapon,
+                    sp_cost,
+                    hp_cost,
+                    k,
+                    level,
+                    job,
+                    st,
+                    dx,
+                    iq,
+                    ht,
+                    armor,
+                );
+            } else {
             // Daño del skill (parity FuncSplashDamage::OnHit): la DB da el
             // poly en NEGATIVO → `iAmount = -iAmount` → CalcBattleDamage
             // floor → ajuste por attr (MELEE: -victim DEF).
@@ -268,6 +317,12 @@ impl WorldSim {
                 let pkt = protocol::combat::GcDamageInfo::new(target_vid, flag, damage).to_bytes().to_vec();
                 let mut dead = false;
                 let mut hp_after = 0;
+                // La vista del mob ANTES del daño (parity FuncSplashDamage:
+                // el KillInfo del kill se captura antes de destruir el mob —
+                // si no, `remove_npc` la borra y el canal salta la recompensa
+                // de exp/gold del kill single-target; el splash ya lo hace
+                // bien).
+                let view = self.npc_view(target_vid);
                 if let Some(dmg) = self.damage_npc(target_vid, damage, Some(pe)) {
                     dead = dmg.dead;
                     hp_after = dmg.hp;
@@ -275,7 +330,6 @@ impl WorldSim {
                         self.remove_npc(target_vid);
                     }
                 }
-                let view = self.npc_view(target_vid);
                 let victim = view.map(|v| KillInfo {
                     vnum: v.vnum,
                     x: v.state.x,
@@ -316,6 +370,7 @@ impl WorldSim {
                     buff: None,
                 }.into());
             }
+            } // cierra la rama single-target (rama else del SPLASH)
         } else {
             // Buff (parity ComputeSkill: iDur > 0 → AddAffect; el valor del
             // poly se aplica y el icono se manda al cliente).
@@ -387,12 +442,257 @@ impl WorldSim {
         }
         events
     }
+
+    /// Modo SPLASH (área — flag SKILL_FLAG_SPLASH; parity `ComputeSkill`
+    /// char_skill.cpp:2095-2104 + `FuncSplashDamage::OnHit` 1028-1468 +
+    /// `ComputeSkillAtPosition` 1599-1735): el centro ya resuelto, el radio
+    /// `iSplashRange` y el máx `lMaxHit` (0 = sin límite — parity
+    /// `lMaxHit ? lMaxHit : -1`, char_skill.cpp:2464-2465). Cada víctima
+    /// dentro del radio (mob vivo o PC atacable) recibe SU daño: el poly se
+    /// re-evalúa con SUS vars (`atk` vs víctima, `ar` vs víctima, `maxhp`/
+    /// `maxsp` DE la víctima — parity FuncSplashDamage 1097-1121); las
+    /// víctimas que NO son el main target se multiplican por
+    /// `kSplashAroundDamageAdjustPoly` (char_skill.cpp:1206-1209 — ANTES
+    /// del ajuste por attr). Mobs SIEMPRE atacables (parity
+    /// `battle_is_attackable`: `pkVictim->IsNPC() || pkChr->IsNPC()` →
+    /// true, pvp.cpp:430); PCs → el gate PvP del mundo; el caster nunca es
+    /// víctima (`pkChr == pkVictim` → false, pvp.cpp:383-384). El orden de
+    /// iteración es vid ASC (desviación documentada: el ForEachAround del
+    /// C++ no garantiza orden — el orden estable hace el `lMaxHit`
+    /// determinista). El coste SP/cooldown ya se pagó UNA vez (el caller).
+    /// Emite `SplashResult` (al caster: TODOS los paquetes + los kills) y
+    /// un `SplashVictimHit` por PC golpeado (routing a la víctima — parity
+    /// SendDamagePacket, char_battle.cpp:1508-1527).
+    #[allow(clippy::too_many_arguments)]
+    fn splash_damage(
+        &mut self,
+        player_vid: u32,
+        pe: Entity,
+        skill_id: u32,
+        proto: &SkillProto,
+        center: (i32, i32),
+        main_target_vid: u32,
+        weapon: Option<&ProtoItem>,
+        sp_cost: i32,
+        hp_cost: i32,
+        k: f64,
+        level: i32,
+        job: u8,
+        st: i32,
+        dx: i32,
+        iq: i32,
+        ht: i32,
+        armor: i32,
+    ) -> Vec<NpcEvent> {
+        // Candidatos: mobs materializados vivos + jugadores vivos (el
+        // caster NO — parity `pkChr == pkVictim → false`). (vid, x, y, pc).
+        let mut candidates: Vec<(u32, i32, i32, bool)> = Vec::new();
+        for (&vid, &e) in &self.world.resource::<NpcIndex>().0 {
+            let Ok(ent) = self.world.get_entity(e) else { continue };
+            let (Some(pos), Some(hp)) = (ent.get::<Position>(), ent.get::<Hp>()) else { continue };
+            if hp.hp > 0 {
+                candidates.push((vid, pos.x, pos.y, false));
+            }
+        }
+        for (&vid, &e) in &self.players {
+            if vid == player_vid {
+                continue;
+            }
+            let Ok(ent) = self.world.get_entity(e) else { continue };
+            let (Some(pos), Some(hp)) = (ent.get::<Position>(), ent.get::<Hp>()) else { continue };
+            if hp.hp > 0 {
+                candidates.push((vid, pos.x, pos.y, true));
+            }
+        }
+        candidates.sort_unstable_by_key(|c| c.0);
+
+        let player_state = PlayerState {
+            vid: player_vid,
+            x: center.0,
+            y: center.1,
+            level,
+            ht,
+            job,
+            st,
+            dx,
+            iq,
+            attack_speed_ms: attack_speed_for_weapon(weapon),
+            att_grade_bonus: 0,
+            critical_pct: 0,
+        };
+        let def = f64::from(player_def_grade(level, ht, armor));
+        let odef = def;
+        let splash_range = proto.splash_range as i32;
+        let max_hit = if proto.max_hit == 0 { usize::MAX } else { proto.max_hit as usize };
+        let adjust_around = !proto.splash_adjust_poly.trim().is_empty();
+        let mut hits = 0usize;
+        let mut victims: Vec<SplashVictimInfo> = Vec::new();
+        let mut events: Vec<NpcEvent> = Vec::new();
+
+        for (vid, vx, vy, is_pc) in candidates {
+            if hits >= max_hit {
+                break;
+            }
+            // Radio (parity FuncSplashDamage 1041-1046: `dist > range` → no).
+            if distance_approx(center.0 - vx, center.1 - vy) > splash_range {
+                continue;
+            }
+            // Gate de atacabilidad: mob → siempre (pvp.cpp:430 — `IsNPC()`
+            // del C++); PC → el gate PvP del mundo (pk mode/party/muerto).
+            let ve = if is_pc { self.players.get(&vid).copied() } else { None };
+            if let Some(ve) = ve
+                && !self.pvp_attackable(pe, ve) {
+                    continue;
+                }
+            hits += 1; // el slot del lMaxHit se consume (parity HitOnce)
+
+            // Stats de la víctima (las vars del poly — parity
+            // FuncSplashDamage 1097-1121: `atk`/`ar` contra la víctima,
+            // `maxhp`/`maxsp` DE la víctima).
+            let (victim_dx, victim_lv, victim_def, vmax_hp, vmax_sp) = if let Some(ve) = ve {
+                let Ok(ent) = self.world.get_entity(ve) else { continue };
+                let (Some(p), Some(h), Some(m)) =
+                    (ent.get::<Player>(), ent.get::<Hp>(), ent.get::<Mp>())
+                else { continue };
+                (p.dx, p.level, player_def_grade(p.level, p.ht, p.armor), h.max_hp, m.max_mp)
+            } else {
+                let Some(view) = self.npc_view(vid) else { continue };
+                let s = view.state;
+                (s.dx, s.level, def_grade_npc(s.level, s.ht, s.wdef), view.max_hp, 0)
+            };
+
+            // Daño del poly re-evaluado con las vars de la víctima + el
+            // ajuste del splash (el main target NO se ajusta).
+            let damage = {
+                let mut rng = self.world.resource_mut::<Rand>();
+                let mut roll = |lo: i32, hi: i32| rng.roll(lo, hi);
+                let atk = attack_power(&player_state, victim_dx, victim_lv, weapon, &mut roll) as f64;
+                let ar = calc_attack_rating(dx, level, victim_dx, victim_lv) as f64;
+                let var = |name: &str| -> Option<f64> {
+                    match name {
+                        "k" => Some(k),
+                        "atk" => Some(atk),
+                        "lv" => Some(f64::from(level)),
+                        "iq" => Some(f64::from(iq)),
+                        "str" => Some(f64::from(st)),
+                        "dex" => Some(f64::from(dx)),
+                        "con" => Some(f64::from(ht)),
+                        "maxhp" => Some(f64::from(vmax_hp)),
+                        "maxsp" => Some(f64::from(vmax_sp)),
+                        "ar" => Some(ar),
+                        "def" => Some(def),
+                        "odef" => Some(odef),
+                        _ => None,
+                    }
+                };
+                let amount = eval_poly(&proto.point_poly, &var, &mut roll).unwrap_or(0.0) as i32;
+                // CalcBattleDamage floor (battle.cpp:199-206).
+                let mut damage = (-amount).max(0);
+                if damage < 3 {
+                    damage = roll(1, 5);
+                }
+                // kSplashAroundDamageAdjustPoly (char_skill.cpp:1206-1209 —
+                // ANTES del ajuste por attr).
+                if vid != main_target_vid && adjust_around {
+                    let adj = eval_poly(&proto.splash_adjust_poly, &var, &mut roll).unwrap_or(1.0);
+                    damage = (damage as f64 * adj) as i32;
+                }
+                damage
+            };
+            // Ajuste por attr (parity char_skill.cpp:1211-1246): MELEE →
+            // -victim DEF_GRADE (RANGE/MAGIC: resistencias 0 — identidad).
+            let damage = if proto.attr_type == attr_type::MELEE {
+                damage.saturating_sub(victim_def).max(0)
+            } else {
+                damage
+            };
+            if damage <= 0 {
+                continue; // bloqueado — el slot del lMaxHit ya se consumió
+            }
+
+            let flag = damage_flag_for_attr(proto.attr_type);
+            let pkt = protocol::combat::GcDamageInfo::new(vid, flag, damage).to_bytes().to_vec();
+            if let Some(ve) = ve {
+                // PC: el daño va al Hp del mundo y la víctima recibe su
+                // evento (GC_DAMAGE_INFO + GC_POINTS/GC_DEAD en el canal).
+                let hp_after = {
+                    let Ok(mut ent) = self.world.get_entity_mut(ve) else { continue };
+                    let Some(mut h) = ent.get_mut::<Hp>() else { continue };
+                    h.hp = (h.hp - damage).max(0);
+                    h.hp
+                };
+                let dead = hp_after <= 0;
+                events.push(
+                    SkillEvent::SplashVictimHit {
+                        player_vid: vid,
+                        attacker_vid: player_vid,
+                        packets: vec![pkt.clone()],
+                        damage,
+                        dead,
+                    }
+                    .into(),
+                );
+                victims.push(SplashVictimInfo {
+                    victim_vid: vid,
+                    packets: vec![pkt],
+                    damage,
+                    dead,
+                    victim: None,
+                });
+            } else {
+                // Mob: la vista ANTES del daño (el KillInfo del kill — el
+                // despawn la invalidaría).
+                let view = self.npc_view(vid);
+                let mut dead = false;
+                let mut hp_after = 0;
+                if let Some(dmg) = self.damage_npc(vid, damage, Some(pe)) {
+                    dead = dmg.dead;
+                    hp_after = dmg.hp;
+                    if dead {
+                        self.remove_npc(vid);
+                    }
+                }
+                let victim = view.map(|v| KillInfo {
+                    vnum: v.vnum,
+                    x: v.state.x,
+                    y: v.state.y,
+                    hp: hp_after,
+                    max_hp: v.max_hp,
+                    exp: v.exp,
+                    gold_min: v.gold_min,
+                    gold_max: v.gold_max,
+                    drop_item: v.drop_item,
+                    mob_level: v.state.level,
+                });
+                victims.push(SplashVictimInfo {
+                    victim_vid: vid,
+                    packets: vec![pkt],
+                    damage,
+                    dead,
+                    victim,
+                });
+            }
+        }
+        // El caster ve TODOS los paquetes y paga el coste UNA vez (el
+        // canal aplica el SP/cooldown con este evento).
+        events.push(
+            SkillEvent::SplashResult {
+                player_vid,
+                skill_id,
+                victims,
+                sp_cost,
+                hp_cost,
+            }
+            .into(),
+        );
+        events
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecs::events::{CombatEvent, NpcEvent, SkillEvent, SkillIntent};
+    use crate::ecs::events::{CombatEvent, CombatIntent, NpcEvent, SkillEvent, SkillIntent};
     use crate::ecs::test_util::*;
     use crate::skill::SkillProto;
 
@@ -413,6 +713,33 @@ mod tests {
             attr_type: crate::skill::attr_type::MELEE,
             max_hit: 1,
             target_range: 0,
+            splash_range: 0,
+            splash_adjust_poly: String::new(),
+        }
+    }
+
+    /// El proto REAL del skill 1 (삼연참) en modo SPLASH — los valores del
+    /// skill_proto del runtime: `dwsplashrange` 250, `imaxhit` 4,
+    /// `szsplasharounddamageadjustpoly` "0.5" (el daño de las víctimas
+    /// alrededor del main target se reduce a la mitad).
+    fn skill1_splash_proto() -> SkillProto {
+        SkillProto {
+            vnum: 1,
+            b_type: 0,
+            level_step: 1,
+            max_level: 40,
+            point_on: crate::skill::point_from_text("HP").unwrap(),
+            point_poly: "-( 1.1*atk + (0.5*atk +  1.5 * str)*k)".into(),
+            sp_cost_poly: "80+220*k".into(),
+            duration_poly: String::new(),
+            cooldown_poly: "12".into(),
+            flag: crate::skill::skill_flags_from_text("ATTACK,USE_MELEE_DAMAGE,SPLASH"),
+            affect_flag: 0,
+            attr_type: crate::skill::attr_type::MELEE,
+            max_hit: 4,
+            target_range: 0,
+            splash_range: 250,
+            splash_adjust_poly: "0.5".into(),
         }
     }
 
@@ -433,6 +760,8 @@ mod tests {
             attr_type: crate::skill::attr_type::NORMAL,
             max_hit: 1,
             target_range: 0,
+            splash_range: 0,
+            splash_adjust_poly: String::new(),
         }
     }
 
@@ -628,6 +957,179 @@ mod tests {
                 1_000,
             )
             .is_empty()
+        );
+    }
+
+    /// SPLASH (área — skill 1 con flag SPLASH, radio 250, lMaxHit 4): el
+    /// target del wire define el CENTRO — 3 mobs a (0,0), (100,0) y (300,0):
+    /// los 2 primeros caen dentro del radio, el tercero fuera. Cada víctima
+    /// recibe su GC_DAMAGE_INFO (el main target SIN el ajuste del splash;
+    /// las demás ×0.5 — `szSplashAroundDamageAdjustPoly` — ANTES de la DEF)
+    /// y el SP/cooldown se pagan UNA vez por uso (el segundo uso inmediato
+    /// se rechaza — parity TSkillUseInfo).
+    #[test]
+    fn splash_hits_all_mobs_in_radius_and_pays_cost_once() {
+        let mut w = world_with(42);
+        let nomove = |v: i64| {
+            let mut r = mob_row(v);
+            r.ai_flag = Some("NOMOVE".into()); // determinista: no patrullan
+            r
+        };
+        load(&mut w, vec![
+            (entry(101, 0, 0, 1), nomove(101)),
+            (entry(102, 100, 0, 1), nomove(102)),
+            (entry(103, 300, 0, 1), nomove(103)), // a ~288 del centro: fuera del radio 250
+        ]);
+        join_with_skills(&mut w, 2, &[(1, 1)]);
+        w.set_player_mp(2, 500);
+        load_skills(&mut w, vec![skill1_splash_proto()]);
+        let events = w.process_intent(
+            SkillIntent::UseSkill { player_vid: 2, skill_id: 1, target_vid: 10_000, weapon: None }.into(),
+            1_000,
+        );
+        let result = events.iter().find_map(|e| match e {
+            NpcEvent::Skill(SkillEvent::SplashResult { skill_id, victims, sp_cost, hp_cost, .. }) => {
+                Some((*skill_id, victims.clone(), *sp_cost, *hp_cost))
+            }
+            _ => None,
+        });
+        let (sid, victims, sp_cost, hp_cost) = result.expect("SplashResult");
+        assert_eq!(sid, 1);
+        assert_eq!(
+            victims.len(),
+            2,
+            "mobs 101 y 102 dentro del radio; el 103 a ~288 > 250: {victims:?}"
+        );
+        assert!(sp_cost > 0, "SP coste UNA vez: {sp_cost}");
+        assert_eq!(hp_cost, 0);
+        // Orden estable por vid: 10_000 (main target — sin ajuste) y 10_001.
+        let v0 = &victims[0];
+        let v1 = &victims[1];
+        assert_eq!(v0.victim_vid, 10_000);
+        assert_eq!(v1.victim_vid, 10_001);
+        assert_eq!(v0.packets.len(), 1);
+        assert_eq!(v0.packets[0][0], 135, "GC_DAMAGE_INFO");
+        assert_eq!(v0.packets[0][1..5], 10_000u32.to_le_bytes(), "dwVID");
+        assert_eq!(v0.packets[0][5], crate::skill::damage_type::MELEE, "flag MELEE");
+        // El main target: el MISMO daño que el single-target (mismo atk vs
+        // el mob 101 — 80-82). Las demás: floor × 0.5 ANTES de −DEF 10
+        // (90-92 → 45-46 → 35-36).
+        assert!((80..=82).contains(&v0.damage), "main target sin ajuste: {}", v0.damage);
+        assert!((35..=36).contains(&v1.damage), "ajuste 0.5 antes de la DEF: {}", v1.damage);
+        assert!(!v0.dead && !v1.dead);
+        let k0 = v0.victim.expect("kill info del mob 101");
+        assert_eq!(k0.vnum, 101);
+        assert_eq!(k0.hp, 126 - v0.damage);
+        let k1 = v1.victim.expect("kill info del mob 102");
+        assert_eq!(k1.vnum, 102);
+        assert_eq!(k1.hp, 126 - v1.damage);
+        // Cooldown 12 s: el segundo uso inmediato → rechazo silencioso
+        // (el cooldown se paga UNA vez por uso, no por víctima).
+        assert!(
+            w.process_intent(
+                SkillIntent::UseSkill { player_vid: 2, skill_id: 1, target_vid: 10_000, weapon: None }.into(),
+                1_100,
+            )
+            .is_empty(),
+            "cooldown activo"
+        );
+    }
+
+    /// SPLASH con `lMaxHit` 2 (el imaxhit del skill_proto): solo las 2
+    /// primeras víctimas (orden por vid — desviación documentada vs el
+    /// ForEachAround sin orden) reciben daño; el mob restante queda intacto.
+    #[test]
+    fn splash_max_hit_limits_victims() {
+        let mut w = world_with(42);
+        let nomove = |v: i64| {
+            let mut r = mob_row(v);
+            r.ai_flag = Some("NOMOVE".into());
+            r
+        };
+        load(&mut w, vec![
+            (entry(101, 0, 0, 1), nomove(101)),
+            (entry(102, 50, 0, 1), nomove(102)),
+            (entry(103, 100, 0, 1), nomove(103)),
+        ]);
+        join_with_skills(&mut w, 2, &[(1, 1)]);
+        w.set_player_mp(2, 500);
+        let mut proto = skill1_splash_proto();
+        proto.max_hit = 2;
+        load_skills(&mut w, vec![proto]);
+        let events = w.process_intent(
+            SkillIntent::UseSkill { player_vid: 2, skill_id: 1, target_vid: 10_000, weapon: None }.into(),
+            1_000,
+        );
+        let victims = events.iter().find_map(|e| match e {
+            NpcEvent::Skill(SkillEvent::SplashResult { victims, .. }) => Some(victims.clone()),
+            _ => None,
+        });
+        let victims = victims.expect("SplashResult");
+        assert_eq!(victims.len(), 2, "lMaxHit 2: la tercera víctima no recibe daño");
+        assert_eq!(victims[0].victim_vid, 10_000);
+        assert_eq!(victims[1].victim_vid, 10_001);
+        assert_eq!(w.npc_view(10_002).expect("mob 103").hp, 126, "intacto");
+    }
+
+    /// SPLASH: (a) sin target válido el CENTRO es el caster (parity —
+    /// `pkVictim` null → la posición del caster): el mob 101 a (0,0) cae
+    /// dentro; (b) el gate PvP del mundo: un PC con PK ON dentro del radio
+    /// recibe su `SplashVictimHit` (routing a la VÍCTIMA — parity
+    /// SendDamagePacket) y un PC con PK OFF no; (c) el caster NUNCA es
+    /// víctima (parity `pkChr == pkVictim` → false, pvp.cpp:383-384).
+    #[test]
+    fn splash_center_fallback_and_pvp_gate() {
+        let mut w = world_with(42);
+        let mut row = mob_row(101);
+        row.ai_flag = Some("NOMOVE".into());
+        load(&mut w, vec![(entry(101, 0, 0, 1), row)]);
+        join_with_skills(&mut w, 2, &[(1, 1)]); // caster en (0,0)
+        join_at(&mut w, 3, 0, 100); // PC víctima cerca (PK on)
+        join_at(&mut w, 4, 0, 200); // PC víctima (PK off — no atacable)
+        w.set_player_mp(2, 500);
+        w.process_intent(
+            CombatIntent::SetPvpMode { player_vid: 3, on: true }.into(),
+            1_000,
+        );
+        load_skills(&mut w, vec![skill1_splash_proto()]);
+        // target_vid inválido (9999): centro = caster (0,0).
+        let events = w.process_intent(
+            SkillIntent::UseSkill { player_vid: 2, skill_id: 1, target_vid: 9_999, weapon: None }.into(),
+            2_000,
+        );
+        let victims = events.iter().find_map(|e| match e {
+            NpcEvent::Skill(SkillEvent::SplashResult { victims, .. }) => Some(victims.clone()),
+            _ => None,
+        });
+        let victims = victims.expect("SplashResult");
+        let vids: Vec<u32> = victims.iter().map(|v| v.victim_vid).collect();
+        assert_eq!(
+            vids,
+            vec![3, 10_000],
+            "PC 3 (PK on) + mob 101 — orden por vid (3 < 10_000)"
+        );
+        // El golpe al PC 3: evento con routing a la VÍCTIMA + el mundo ya
+        // aplicó el daño a su Hp.
+        let hit = events.iter().find_map(|e| match e {
+            NpcEvent::Skill(SkillEvent::SplashVictimHit { player_vid, attacker_vid, damage, dead, .. }) => {
+                Some((*player_vid, *attacker_vid, *damage, *dead))
+            }
+            _ => None,
+        });
+        let (victim_pvid, attacker, damage, dead) = hit.expect("SplashVictimHit");
+        assert_eq!(victim_pvid, 3, "routing a la víctima");
+        assert_eq!(attacker, 2);
+        assert!(damage > 0);
+        assert!(!dead, "hp 100 del PC 3");
+        assert_eq!(w.player_hp(3), 100 - damage, "el mundo aplicó el daño al PC");
+        // Sin evento para el PC 4 (PK off) ni para el caster.
+        assert!(
+            !events.iter().any(|e| matches!(e, NpcEvent::Skill(SkillEvent::SplashVictimHit { player_vid: 4, .. }))),
+            "PK off: no atacable"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(e, NpcEvent::Skill(SkillEvent::SplashVictimHit { player_vid: 2, .. }))),
+            "el caster no es víctima"
         );
     }
 }

@@ -613,6 +613,102 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                 );
             }
         }
+        NpcEvent::Skill(SkillEvent::SplashResult {
+            skill_id,
+            victims,
+            sp_cost,
+            hp_cost,
+            ..
+        }) => {
+            // dw_arrow: mismo consumo que el SkillResult (el disparo del
+            // skill de arco se RESOLVIÓ).
+            if session.pending_arrow_shot {
+                session.pending_arrow_shot = false;
+                super::consume_arrow(session).await?;
+            }
+            // SPLASH (área): el caster ve TODOS los GC_DAMAGE_INFO del
+            // área (los construyó el mundo — uno por víctima).
+            for v in &victims {
+                for pkt in &v.packets {
+                    session
+                        .send(pkt)
+                        .await
+                        .map_err(|e| format!("enviando combate (skill splash): {e}"))?;
+                }
+            }
+            // Coste SP/HP UNA vez por uso (parity PointChange(SP/-HP) en
+            // UseSkill — el mundo ya lo descontó de su componente).
+            if sp_cost > 0 || hp_cost > 0 {
+                {
+                    let row = session.row_mut();
+                    row.mp = row.mp.saturating_sub(sp_cost);
+                    row.hp = row.hp.saturating_sub(hp_cost);
+                }
+                session
+                    .send(&packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
+                    .await
+                    .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
+                session.save();
+            }
+            // Kill/recompensa POR víctima (mobs muertos del área).
+            for v in victims {
+                if v.dead {
+                    if let Some(kill) = v.victim {
+                        session.apply_kill(v.victim_vid, kill).await?;
+                    }
+                } else if v.damage > 0 {
+                    eprintln!(
+                        "server_realms: channel conn {}: {} golpeó con el skill \
+                         {skill_id} (área) a vid {} por {}",
+                        session.conn_id, session.row().name, v.victim_vid, v.damage
+                    );
+                }
+            }
+        }
+        NpcEvent::Skill(SkillEvent::SplashVictimHit {
+            attacker_vid,
+            packets,
+            damage,
+            ..
+        }) => {
+            // La VÍCTIMA del splash recibe el mismo GC_DAMAGE_INFO que el
+            // caster (el número flota sobre ella — parity SendDamagePacket,
+            // char_battle.cpp:1508-1527) + el daño al row + GC_POINTS (la
+            // barra) + GC_DEAD si murió (el flujo compartido con el PvP — la
+            // muerte la decide el hp del ROW).
+            for pkt in packets {
+                session
+                    .send(&pkt)
+                    .await
+                    .map_err(|e| format!("enviando combate (skill splash): {e}"))?;
+            }
+            let hp = session.row().hp.saturating_sub(damage);
+            session.row_mut().hp = hp;
+            if hp <= 0 {
+                session.row_mut().hp = 0;
+                session
+                    .send(&protocol::world::TPacketGCDead::new(session.player_vid()).to_bytes())
+                    .await
+                    .map_err(|e| format!("enviando GC_DEAD: {e}"))?;
+                eprintln!(
+                    "server_realms: channel conn {}: {} MURIÓ por el skill splash \
+                     de vid {attacker_vid} ({damage} de daño) — esperando revive \
+                     (CG_SCRIPT_ANSWER)",
+                    session.conn_id, session.row().name
+                );
+            } else {
+                eprintln!(
+                    "server_realms: channel conn {}: el skill splash de vid \
+                     {attacker_vid} golpeó a {} por {damage} (hp {hp})",
+                    session.conn_id, session.row().name
+                );
+            }
+            session
+                .send(&packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
+                .await
+                .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
+            session.save();
+        }
         NpcEvent::Skill(SkillEvent::AffectRemoved { skill_id, point, .. }) => {
             // GC_AFFECT_REMOVE (127, 6 B: header + dwType + bApplyOn —
             // Packet.h:2536-2543). Se emite crudo (el protocol crate no

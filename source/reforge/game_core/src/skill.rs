@@ -40,10 +40,13 @@
 //!
 //! # Subset documentado
 //!
-//! - Skills de daño single-target (flags ATTACK + USE_MELEE_DAMAGE) y
-//!   self-buffs (SELFONLY). SPLASH, PARTY, HORSE, arco (USE_ARROW_DAMAGE se
-//!   resuelve con el ataque melee — desviación documentada) y el grand
-//!   master (kMasterBonusPoly) quedan fuera.
+//! - Skills de daño single-target (flags ATTACK + USE_MELEE_DAMAGE),
+//!   self-buffs (SELFONLY) y el modo ÁREA (flag SPLASH — `iSplashRange` =
+//!   radio, `lMaxHit` = máx víctimas, `kSplashAroundDamageAdjustPoly` =
+//!   ajuste del daño de las víctimas alrededor — parity `ComputeSkill` +
+//!   `FuncSplashDamage` + `ComputeSkillAtPosition`). PARTY, HORSE, arco
+//!   (USE_ARROW_DAMAGE se resuelve con el ataque melee — desviación
+//!   documentada) y el grand master (kMasterBonusPoly) quedan fuera.
 //! - `ar` del poly = `combat::calc_attack_rating` del PC contra el mob.
 //! - `def`/`odef` = la DEF del PC (`player_def_grade` + bonus / sin bonus).
 //! - `skill_power.txt` no se carga (k = level × max_level / 100).
@@ -146,8 +149,18 @@ pub struct SkillProto {
     pub affect_flag: u32,
     /// `eskilltype` — SKILL_ATTR_TYPE_* (ajuste del daño + flag wire).
     pub attr_type: u8,
-    /// `imaxhit` — hits máximos del splash (no participa en el subset).
+    /// `imaxhit` — hits máximos del splash (0 = SIN límite — parity
+    /// `UseSkill`: `lMaxHit = pkSk->lMaxHit ? pkSk->lMaxHit : -1`,
+    /// char_skill.cpp:2464-2465 — el `HitOnce` del TSkillUseInfo consume
+    /// uno por víctima).
     pub max_hit: u16,
+    /// `dwsplashrange` — el RADIO del modo SPLASH (`iSplashRange` — la
+    /// distancia máxima del centro a cada víctima, `DISTANCE_APPROX`).
+    pub splash_range: u32,
+    /// `szsplasharounddamageadjustpoly` — el multiplicador del daño de las
+    /// víctimas que NO son el main target (`kSplashAroundDamageAdjustPoly`,
+    /// char_skill.cpp:1206-1209). Vacío → 1.0 (sin ajuste).
+    pub splash_adjust_poly: String,
     /// `dwtargetrange` — rango del objetivo (0 = sin check — parity
     /// ComputeSkill: `dwTargetRange && dist >= range + 50` → rechazo).
     pub target_range: u32,
@@ -497,7 +510,8 @@ impl SkillRepo {
             .query(
                 "SELECT dwvnum, btype, blevelstep, bmaxlevel, szpointon, szpointpoly, \
                  szspcostpoly, szdurationpoly, szcooldownpoly, setflag, setaffectflag, \
-                 eskilltype, imaxhit, dwtargetrange \
+                 eskilltype, imaxhit, dwtargetrange, dwsplashrange, \
+                 szsplasharounddamageadjustpoly \
                  FROM player.skill_proto ORDER BY dwvnum",
                 &[],
             )
@@ -553,6 +567,8 @@ fn skill_proto_from_row(r: &tokio_postgres::Row) -> Option<SkillProto> {
         attr_type: attr_type_from_text(r.get::<_, Option<String>>(11).as_deref().unwrap_or("")),
         max_hit: r.get::<_, i16>(12) as u16,
         target_range: r.get::<_, i32>(13) as u32,
+        splash_range: r.get::<_, i32>(14).max(0) as u32,
+        splash_adjust_poly: r.get::<_, Option<String>>(15).unwrap_or_default(),
     })
 }
 
@@ -749,6 +765,8 @@ mod tests {
             attr_type: attr_type::MELEE,
             max_hit: 1,
             target_range: 0,
+            splash_range: 0,
+            splash_adjust_poly: String::new(),
         };
         assert!(atk.is_attack());
         let buff = SkillProto { flag: skill_flag::SELFONLY, point_on: point::DEF_GRADE_BONUS, ..atk };
@@ -775,6 +793,8 @@ mod tests {
             attr_type: attr_type_from_text("MELEE"),
             max_hit: 1,
             target_range: 0,
+            splash_range: 0,
+            splash_adjust_poly: String::new(),
         };
         assert!(s1.is_attack());
         assert_eq!(s1.attr_type, attr_type::MELEE);
@@ -795,6 +815,8 @@ mod tests {
             attr_type: attr_type_from_text("NORMAL"),
             max_hit: 1,
             target_range: 0,
+            splash_range: 0,
+            splash_adjust_poly: String::new(),
         };
         assert!(!s19.is_attack());
         assert_eq!(s19.point_on, point::DEF_GRADE_BONUS);
