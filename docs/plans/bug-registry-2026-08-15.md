@@ -272,3 +272,8 @@
 
 - El legacy reparte a los mobs alrededor del jugador con reposicionamiento aleatorio cada 10 s/1 s (char.cpp:5436-5462, 5869-5881). El rewrite tiene separate_landing (parche) pero no el change attack position → convergen al rango y se quedan pegados.
 - Referencia: mob-legacy-behavior.md §8.12.
+
+### C33. [ABIERTO → CERRADO — fix en curso] Exp sin level-delta ni cap 10%
+
+- El rewrite daba `mob_exp × rate` sin importar la diferencia de nivel (farmear mobs bajos daba exp llena). El C++ usa `NEW_GET_LVDELTA` (`aiPercentByDeltaLev`, constants.cpp:235-266) + cap `MIN(GetNextExp()/10, iExp)` (char_battle.cpp:2210-2267).
+- Fix: `exp_level_delta_factor` (tabla 31 valores, índice clamp `(mob+15)−player`) + cap 10% en `apply_kill`. mob_level en KillInfo.

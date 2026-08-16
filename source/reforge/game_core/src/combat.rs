@@ -303,6 +303,17 @@ pub fn melee_max_range(victim: &NpcState) -> i32 {
     max
 }
 
+/// `GetMobAttackRange()` del mob (char.cpp:2010-2020): RANGE/MAGIC suman
+/// POINT_BOW_DISTANCE (300 default); el resto usa wAttackRange. Base SIN el
+/// ×1.15 del ataque (C31) y SIN el floor del PC.
+pub fn mob_attack_range_base(mob: &NpcState) -> i32 {
+    if matches!(mob.battle_type, BATTLE_TYPE_RANGE | BATTLE_TYPE_MAGIC) {
+        mob.attack_range as i32 + BOW_DISTANCE_DEFAULT
+    } else {
+        mob.attack_range as i32
+    }
+}
+
 /// El rango máximo del ataque del MOB contra el PC (`battle.cpp:147-152`):
 /// un atacante NO-PC usa SOLO su `GetMobAttackRange() * 1.15f` — SIN el
 /// floor de 300 del PC. C31: el rewrite usaba `melee_max_range` (con floor
@@ -311,14 +322,7 @@ pub fn melee_max_range(victim: &NpcState) -> i32 {
 /// RANGE/MAGIC atacaban a 300 en vez de `(wAttackRange + BOW_DISTANCE)*1.15`
 /// (char.cpp:2010-2020 — GetMobAttackRange añade POINT_BOW_DISTANCE).
 pub fn mob_attack_max_range(mob: &NpcState) -> i32 {
-    // GetMobAttackRange (char.cpp:2010-2020): RANGE/MAGIC suman
-    // POINT_BOW_DISTANCE (300 default); el resto usa wAttackRange.
-    let base = if matches!(mob.battle_type, BATTLE_TYPE_RANGE | BATTLE_TYPE_MAGIC) {
-        mob.attack_range as i32 + BOW_DISTANCE_DEFAULT
-    } else {
-        mob.attack_range as i32
-    };
-    (base as f32 * 1.15) as i32
+    (mob_attack_range_base(mob) as f32 * 1.15) as i32
 }
 
 /// El `iAtk` del melee — la parte de ATAQUE de `melee_damage` SIN la DEF
@@ -521,6 +525,23 @@ pub fn kill_reward(
     KillReward { exp_gain, gold_gain }
 }
 
+/// `aiPercentByDeltaLev_euckr` (constants.cpp:235-266) — el factor de exp
+/// por diferencia de nivel mob↔jugador (locale_service.cpp:1208 asigna esta
+/// tabla para el runtime; índice = clamp(0, (mob_level + 15) - player_level,
+/// 30) — `NEW_GET_LVDELTA`, char_battle.cpp:2210). Matar mobs mucho más
+/// débiles da 1% (en vez de exp llena — C33); el mismo nivel da 100%;
+/// mobs 15+ niveles superiores dan 170%.
+const AI_PERCENT_BY_DELTA_LEV: [i32; 31] = [
+    1, 5, 10, 20, 30, 50, 70, 80, 85, 90, 92, 94, 96, 98, 100, 100, 105,
+    110, 115, 120, 125, 130, 135, 140, 145, 150, 155, 160, 165, 170, 170,
+];
+
+/// El factor de exp por level-delta (`NEW_GET_LVDELTA`, char_battle.cpp:2210).
+pub fn exp_level_delta_factor(player_level: i32, mob_level: i32) -> i32 {
+    let idx = ((mob_level + 15) - player_level).clamp(0, 30) as usize;
+    AI_PERCENT_BY_DELTA_LEV[idx]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -532,6 +553,26 @@ mod tests {
         let r = kill_reward(22, 15, 45, 100, 100, &mut roll);
         assert_eq!(r.exp_gain, 22);
         assert_eq!(r.gold_gain, 15, "roll = min → gold_min");
+    }
+
+    /// C33: el factor de exp por level-delta (parity `aiPercentByDeltaLev`,
+    /// constants.cpp:235-266 + NEW_GET_LVDELTA char_battle.cpp:2210):
+    /// mismo nivel → 100%; mob 15+ niveles por encima → 170%; mob mucho más
+    /// débil (8+ niveles abajo) → 1%.
+    #[test]
+    fn exp_level_delta_matches_cpp_table() {
+        // Índice = (mob + 15) − player; mob 15 niveles ARRIBA del player →
+        // (mob+15)−player = 15 → 100% (el mismo nivel).
+        assert_eq!(exp_level_delta_factor(40, 40), 100, "mismo nivel");
+        assert_eq!(exp_level_delta_factor(30, 45), 170, "mob 15+ niveles arriba → 170 (índice 30)");
+        assert_eq!(exp_level_delta_factor(50, 50), 100, "mismo nivel alto");
+        // Player 8 niveles por encima del mob → (mob+15)−player = 7 → 80.
+        assert_eq!(exp_level_delta_factor(40, 32), 80, "índice 7 = 80 (constants.cpp:242)");
+        // Player 15+ niveles por encima → (mob+15)−player ≤ 0 → 1%.
+        assert_eq!(exp_level_delta_factor(40, 25), 1, "índice 0 = 1% — el mob es basura");
+        assert_eq!(exp_level_delta_factor(40, 20), 1, "clamp inferior");
+        // Mob muy superior (índice > 30) → clamp a 170.
+        assert_eq!(exp_level_delta_factor(20, 50), 170, "clamp superior (índice 30)");
     }
 
     /// Rates aplicados: exp_rate 150 → 22*1.5 = 33; gold_rate 200 → 30*2 = 60.

@@ -16,7 +16,9 @@
 //! Little-endian, packed, sin padding (mismo contrato que el resto del crate).
 
 use crate::header;
-use crate::{rd_arr, rd_u32, wr_u32, ProtocolError, Result};
+use crate::{
+    cstr_str, from_cstr, rd_arr, rd_u32, wr_u32, ProtocolError, Result, CHARACTER_NAME_MAX_LEN,
+};
 
 /// `TPlayerSkill` (6 B packed x86: `tables.h:351-356` — bMasterType BYTE,
 /// bLevel BYTE, tNextRead time_t = DWORD en el build x86 del server).
@@ -976,6 +978,417 @@ impl TPacketGCItemOwnership {
         b[1..5].copy_from_slice(&self.vid.to_le_bytes());
         b[5..30].copy_from_slice(&self.name);
         b
+    }
+}
+
+// ============================================================================
+// PARTY (grupos) — wire byte-exacto contra packet.h (server) y Packet.h
+// (cliente, mismos campos/orden). Sizes packed veriificados contra el
+// sizeof del C++ (verificacion empirica gcc -m32 del crate).
+// ============================================================================
+
+/// `TPacketCGPartyInvite` (5 B, header 72 — `Packet.h:856-860`): invitar a
+/// un personaje por su VID.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketCGPartyInvite {
+    pub header: u8,
+    pub vid: u32,
+}
+
+impl TPacketCGPartyInvite {
+    pub const SIZE: usize = 5;
+    pub const HEADER: u8 = header::CG_PARTY_INVITE;
+
+    pub fn new(vid: u32) -> Self {
+        Self {
+            header: Self::HEADER,
+            vid,
+        }
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        Ok(Self {
+            header: data[0],
+            vid: rd_u32(data, 1),
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        b[1..5].copy_from_slice(&self.vid.to_le_bytes());
+        b
+    }
+}
+
+/// `TPacketCGPartyInviteAnswer` (6 B, header 73 — `Packet.h:862-867`): la
+/// respuesta del invitado. `leader_vid` es el VID del líder (el del
+/// `TPacketGCPartyInvite` — el cliente lo reenvía tal cual,
+/// `SendPartyInviteAnswerPacket(dwLeaderVID)`), NO su pid.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketCGPartyInviteAnswer {
+    pub header: u8,
+    pub leader_vid: u32,
+    pub accept: u8,
+}
+
+impl TPacketCGPartyInviteAnswer {
+    pub const SIZE: usize = 6;
+    pub const HEADER: u8 = header::CG_PARTY_INVITE_ANSWER;
+
+    pub fn new(leader_vid: u32, accept: u8) -> Self {
+        Self {
+            header: Self::HEADER,
+            leader_vid,
+            accept,
+        }
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        Ok(Self {
+            header: data[0],
+            leader_vid: rd_u32(data, 1),
+            accept: data[5],
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        b[1..5].copy_from_slice(&self.leader_vid.to_le_bytes());
+        b[5] = self.accept;
+        b
+    }
+}
+
+/// `TPacketCGPartyRemove` (5 B, header 74 — `Packet.h:869-873`): salir de
+/// la party / expulsar a un miembro por su pid.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketCGPartyRemove {
+    pub header: u8,
+    pub pid: u32,
+}
+
+impl TPacketCGPartyRemove {
+    pub const SIZE: usize = 5;
+    pub const HEADER: u8 = header::CG_PARTY_REMOVE;
+
+    pub fn new(pid: u32) -> Self {
+        Self {
+            header: Self::HEADER,
+            pid,
+        }
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        Ok(Self {
+            header: data[0],
+            pid: rd_u32(data, 1),
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        b[1..5].copy_from_slice(&self.pid.to_le_bytes());
+        b
+    }
+}
+
+/// `TPacketCGPartyParameter` (2 B, header 78 — `Packet.h:1012-1016`): modo
+/// de reparto de exp (`b_distribute_mode` — `EPartyExpDistributionModes`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketCGPartyParameter {
+    pub header: u8,
+    pub b_distribute_mode: u8,
+}
+
+impl TPacketCGPartyParameter {
+    pub const SIZE: usize = 2;
+    pub const HEADER: u8 = header::CG_PARTY_PARAMETER;
+
+    pub fn new(b_distribute_mode: u8) -> Self {
+        Self {
+            header: Self::HEADER,
+            b_distribute_mode,
+        }
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        Ok(Self {
+            header: data[0],
+            b_distribute_mode: data[1],
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        [self.header, self.b_distribute_mode]
+    }
+}
+
+/// `TPacketGCPartyInvite` (5 B, header 77 — `packet.h:1529-1533` +
+/// `Packet.h:2051-2055`): la invitación al objetivo. `leader_vid` = el VID
+/// del líder (el cliente busca la instancia por ESE vid para pintar la
+/// ventana, `RecvPartyInvite`, y lo devuelve en el answer).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketGCPartyInvite {
+    pub header: u8,
+    pub leader_vid: u32,
+}
+
+impl TPacketGCPartyInvite {
+    pub const SIZE: usize = 5;
+    pub const HEADER: u8 = header::GC_PARTY_INVITE;
+
+    pub fn new(leader_vid: u32) -> Self {
+        Self {
+            header: Self::HEADER,
+            leader_vid,
+        }
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        Ok(Self {
+            header: data[0],
+            leader_vid: rd_u32(data, 1),
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        b[1..5].copy_from_slice(&self.leader_vid.to_le_bytes());
+        b
+    }
+}
+
+/// `TPacketGCPartyAdd` (30 B, header 78 — `packet.h:1516-1521` +
+/// `Packet.h:2057-2064`): un miembro NUEVO en la party (pid + nombre).
+/// OBLIGATORIO antes del UPDATE: el cliente ignora el GC_PARTY_UPDATE de un
+/// pid que no existe en su mapa (`GetPartyMemberPtr` falla → return,
+/// `RecvPartyUpdate` — PythonNetworkStreamPhaseGame.cpp:3004-3006).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketGCPartyAdd {
+    pub header: u8,
+    pub pid: u32,
+    pub name: [u8; CHARACTER_NAME_MAX_LEN + 1],
+}
+
+impl TPacketGCPartyAdd {
+    pub const SIZE: usize = 30;
+    pub const HEADER: u8 = header::GC_PARTY_ADD;
+
+    pub fn new(pid: u32, name: &str) -> Self {
+        Self {
+            header: Self::HEADER,
+            pid,
+            name: from_cstr(name),
+        }
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        Ok(Self {
+            header: data[0],
+            pid: rd_u32(data, 1),
+            name: rd_arr(data, 5),
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        b[1..5].copy_from_slice(&self.pid.to_le_bytes());
+        b[5..30].copy_from_slice(&self.name);
+        b
+    }
+
+    /// Nombre del miembro como `&str` (hasta el primer NUL).
+    pub fn name(&self) -> std::borrow::Cow<'_, str> {
+        cstr_str(&self.name)
+    }
+}
+
+/// `TPacketGCPartyUpdate` (21 B, header 79 — `packet.h:1540-1549` +
+/// `Packet.h:2066-2073`): estado de UN miembro. `role` =
+/// `PARTY_ROLE_NORMAL` (0) / `PARTY_ROLE_LEADER` (1); `percent_hp` =
+/// hp×100/max (0..100 — parity `BuildUpdatePartyPacket`, char.cpp:5696-5719);
+/// `affects[7]` = bonos de party (el subset los manda a 0 — memset del C++
+/// fuera de rango del líder).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketGCPartyUpdate {
+    pub header: u8,
+    pub pid: u32,
+    pub role: u8,
+    pub percent_hp: u8,
+    pub affects: [i16; 7],
+}
+
+impl TPacketGCPartyUpdate {
+    pub const SIZE: usize = 21;
+    pub const HEADER: u8 = header::GC_PARTY_UPDATE;
+
+    pub fn new(pid: u32, role: u8, percent_hp: u8) -> Self {
+        Self {
+            header: Self::HEADER,
+            pid,
+            role,
+            percent_hp,
+            affects: [0; 7],
+        }
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        let mut affects = [0i16; 7];
+        for (i, a) in affects.iter_mut().enumerate() {
+            *a = i16::from_le_bytes([data[7 + i * 2], data[8 + i * 2]]);
+        }
+        Ok(Self {
+            header: data[0],
+            pid: rd_u32(data, 1),
+            role: data[5],
+            percent_hp: data[6],
+            affects,
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        b[1..5].copy_from_slice(&self.pid.to_le_bytes());
+        b[5] = self.role;
+        b[6] = self.percent_hp;
+        for (i, a) in self.affects.iter().enumerate() {
+            b[7 + i * 2..9 + i * 2].copy_from_slice(&a.to_le_bytes());
+        }
+        b
+    }
+}
+
+/// `TPacketGCPartyRemove` (5 B, header 80 — `packet.h:1551-1555` +
+/// `Packet.h:2075-2079`): el pid del miembro que sale / es expulsado.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketGCPartyRemove {
+    pub header: u8,
+    pub pid: u32,
+}
+
+impl TPacketGCPartyRemove {
+    pub const SIZE: usize = 5;
+    pub const HEADER: u8 = header::GC_PARTY_REMOVE;
+
+    pub fn new(pid: u32) -> Self {
+        Self {
+            header: Self::HEADER,
+            pid,
+        }
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        Ok(Self {
+            header: data[0],
+            pid: rd_u32(data, 1),
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        b[1..5].copy_from_slice(&self.pid.to_le_bytes());
+        b
+    }
+}
+
+/// `TPacketGCPartyParameter` (2 B, header 83 — `packet.h:1510-1514` +
+/// `Packet.h`): el modo de reparto de exp actual de la party.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketGCPartyParameter {
+    pub header: u8,
+    pub b_distribute_mode: u8,
+}
+
+impl TPacketGCPartyParameter {
+    pub const SIZE: usize = 2;
+    pub const HEADER: u8 = header::GC_PARTY_PARAMETER;
+
+    pub fn new(b_distribute_mode: u8) -> Self {
+        Self {
+            header: Self::HEADER,
+            b_distribute_mode,
+        }
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        Ok(Self {
+            header: data[0],
+            b_distribute_mode: data[1],
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        [self.header, self.b_distribute_mode]
     }
 }
 
@@ -2084,5 +2497,106 @@ mod tests {
         assert!(TPacketGCItemGroundAdd::from_bytes(&b[..20]).is_err());
         assert!(TPacketGCItemGroundDel::from_bytes(&[27]).is_err());
         assert!(TPacketGCItemOwnership::from_bytes(&[31, 0]).is_err());
+    }
+
+    /// PARTY — tamaños byte-exactos contra packet.h (server) y Packet.h
+    /// (cliente — mismos campos/orden) + roundtrips LE.
+    #[test]
+    fn party_packets_roundtrip_and_sizes() {
+        // C→S (Packet.h del cliente).
+        let inv = TPacketCGPartyInvite::new(50_001);
+        assert_eq!(TPacketCGPartyInvite::SIZE, 5, "BYTE header + DWORD vid");
+        let b = inv.to_bytes();
+        assert_eq!(b[0], 72, "CG_PARTY_INVITE");
+        assert_eq!(&b[1..5], &50_001u32.to_le_bytes());
+        assert_eq!(TPacketCGPartyInvite::from_bytes(&b).unwrap(), inv);
+
+        let ans = TPacketCGPartyInviteAnswer::new(50_001, 1);
+        assert_eq!(
+            TPacketCGPartyInviteAnswer::SIZE,
+            6,
+            "BYTE + DWORD leader_vid + BYTE accept"
+        );
+        let b = ans.to_bytes();
+        assert_eq!(b[0], 73, "CG_PARTY_INVITE_ANSWER");
+        assert_eq!(
+            &b[1..5],
+            &50_001u32.to_le_bytes(),
+            "leader_vid = el VID del líder"
+        );
+        assert_eq!(b[5], 1, "accept");
+        assert_eq!(TPacketCGPartyInviteAnswer::from_bytes(&b).unwrap(), ans);
+
+        let rm = TPacketCGPartyRemove::new(7);
+        assert_eq!(TPacketCGPartyRemove::SIZE, 5);
+        let b = rm.to_bytes();
+        assert_eq!(b[0], 74, "CG_PARTY_REMOVE");
+        assert_eq!(&b[1..5], &7u32.to_le_bytes());
+        assert_eq!(TPacketCGPartyRemove::from_bytes(&b).unwrap(), rm);
+
+        let par = TPacketCGPartyParameter::new(1);
+        assert_eq!(TPacketCGPartyParameter::SIZE, 2);
+        assert_eq!(par.to_bytes(), [78, 1], "CG_PARTY_PARAMETER + modo");
+        assert_eq!(TPacketCGPartyParameter::from_bytes(&[78, 1]).unwrap(), par);
+
+        // S→C (packet.h del server).
+        let ginv = TPacketGCPartyInvite::new(50_001);
+        assert_eq!(TPacketGCPartyInvite::SIZE, 5);
+        let b = ginv.to_bytes();
+        assert_eq!(b[0], 77, "GC_PARTY_INVITE");
+        assert_eq!(&b[1..5], &50_001u32.to_le_bytes(), "leader_vid");
+        assert_eq!(TPacketGCPartyInvite::from_bytes(&b).unwrap(), ginv);
+
+        let add = TPacketGCPartyAdd::new(7, "ninja");
+        assert_eq!(
+            TPacketGCPartyAdd::SIZE,
+            30,
+            "BYTE + DWORD pid + char name[25]"
+        );
+        let b = add.to_bytes();
+        assert_eq!(b[0], 78, "GC_PARTY_ADD");
+        assert_eq!(&b[1..5], &7u32.to_le_bytes());
+        assert_eq!(&b[5..10], b"ninja", "nombre sin NUL");
+        assert_eq!(b[10], 0, "resto zeroed");
+        assert_eq!(b.len(), 30);
+        assert_eq!(TPacketGCPartyAdd::from_bytes(&b).unwrap(), add);
+        assert_eq!(add.name(), "ninja");
+
+        let up = TPacketGCPartyUpdate::new(7, 1, 42);
+        assert_eq!(
+            TPacketGCPartyUpdate::SIZE,
+            21,
+            "BYTE + DWORD pid + BYTE role + BYTE percent_hp + short affects[7]"
+        );
+        let mut b = up.to_bytes();
+        assert_eq!(b[0], 79, "GC_PARTY_UPDATE");
+        assert_eq!(&b[1..5], &7u32.to_le_bytes(), "pid");
+        assert_eq!(b[5], 1, "role = PARTY_ROLE_LEADER");
+        assert_eq!(b[6], 42, "percent_hp");
+        assert_eq!(&b[7..9], &0i16.to_le_bytes(), "affects[0]");
+        assert_eq!(TPacketGCPartyUpdate::from_bytes(&b).unwrap(), up);
+        // affects viajan LE (short) — mutar el slot 6 y roundtrip.
+        b[7 + 6 * 2..9 + 6 * 2].copy_from_slice(&(-7i16).to_le_bytes());
+        let up2 = TPacketGCPartyUpdate::from_bytes(&b).unwrap();
+        assert_eq!(up2.affects[6], -7);
+        assert_eq!(up2.pid, 7);
+
+        let grm = TPacketGCPartyRemove::new(7);
+        assert_eq!(TPacketGCPartyRemove::SIZE, 5);
+        let b = grm.to_bytes();
+        assert_eq!(b[0], 80, "GC_PARTY_REMOVE");
+        assert_eq!(&b[1..5], &7u32.to_le_bytes());
+        assert_eq!(TPacketGCPartyRemove::from_bytes(&b).unwrap(), grm);
+
+        let gpar = TPacketGCPartyParameter::new(1);
+        assert_eq!(TPacketGCPartyParameter::SIZE, 2);
+        assert_eq!(gpar.to_bytes(), [83, 1], "GC_PARTY_PARAMETER + modo");
+        assert_eq!(TPacketGCPartyParameter::from_bytes(&[83, 1]).unwrap(), gpar);
+
+        // Longitudes malas → Err.
+        assert!(TPacketCGPartyInviteAnswer::from_bytes(&[73, 0, 0, 0]).is_err());
+        assert!(TPacketGCPartyUpdate::from_bytes(&[79, 0, 0, 0, 0, 0]).is_err());
+        assert!(TPacketGCPartyAdd::from_bytes(&[78]).is_err());
+        assert!(TPacketGCPartyParameter::from_bytes(&[83]).is_err());
     }
 }

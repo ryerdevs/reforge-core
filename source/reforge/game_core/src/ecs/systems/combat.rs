@@ -10,7 +10,7 @@ use bevy_ecs::prelude::*;
 use crate::ai::{attack_damage, change_attack_dest, mob_move_speed, move_duration_ms, rotation_5deg, step_toward};
 use crate::combat::{
     attack_speed_for_weapon, distance_approx, handle_attack,
-    mob_attack_max_range, player_def_grade, CombatState, NpcState, PlayerState,
+    mob_attack_max_range, mob_attack_range_base, player_def_grade, CombatState, NpcState, PlayerState,
 };
 use crate::ecs::components::{
     Affects, Aggro, AttackPos, Combat, Hp, LastAttack, Map, Mob, Mp, Player, Position, SpawnRef, Vid,
@@ -216,7 +216,11 @@ pub(crate) fn chase_attack_system(
         // el punto más cercano). Solo `rank < MOB_RANK_BOSS` (char.cpp:5437).
         // Al llegar al destino lateral (o vencer el timer sin destino)
         // vuelve a perseguir a la víctima.
-        let is_far = dist > 100 + mob.attack_range as i32;
+        // C32: el umbral lejos/cerca del timer usa `GetMobAttackRange()`
+        // (char.cpp:5875-5878 — `AI_CHANGE_ATTACK_POISITION_DISTANCE +
+        // GetMobAttackRange()`); para RANGE/MAGIC suma POINT_BOW_DISTANCE
+        // (char.cpp:2010-2020) — un arco a 300 u está NEAR (10 s), no FAR.
+        let is_far = dist > 100 + mob_attack_range_base(&state);
         let change_time = if is_far { CHANGE_ATTACK_POS_TIME_FAR } else { CHANGE_ATTACK_POS_TIME_NEAR };
         let mut dest = attack_pos.dest;
         if mob.rank < MOB_RANK_BOSS && now.0.saturating_sub(attack_pos.last_change_ms) >= change_time {
@@ -539,6 +543,7 @@ impl WorldSim {
             gold_min: view.gold_min,
             gold_max: view.gold_max,
             drop_item: view.drop_item,
+            mob_level: view.state.level,
         });
         vec![CombatEvent::AttackResult {
             player_vid,
@@ -762,6 +767,32 @@ mod tests {
         assert!(
             events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::MobAttack { .. }))),
             "godspeed: cooldown 1000 ms con att_speed 250 — el tick de 1000 dispara"
+        );
+    }
+
+    /// C29 (test de PROTECCIÓN — hallazgo del verifier): el cooldown del
+    /// golpe del mob DEBE silenciar los ticks < cooldown. Un mob en rango
+    /// con att_speed 100 (cooldown 2000 ms) NO ataca con un tick de 1000 ms
+    /// (la mutación "quitar el continue" hace fallar ESTE test).
+    #[test]
+    fn mob_attack_respects_cooldown_silently() {
+        let mut w = world_with(42);
+        let mut row = mob_row(101);
+        row.ai_flag = Some("AGGR".into());
+        row.attack_speed = 100; // cooldown 2000 ms
+        load(&mut w, vec![(entry(101, 0, 0, 1), row)]);
+        join(&mut w); // spawn + AggroOn (mob EN RANGO)
+        // Tick de 1000 ms: MENOR que el cooldown (2000) → SIN golpe.
+        let events = w.update(1_000);
+        assert!(
+            !events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::MobAttack { .. }))),
+            "cooldown 2000 ms: el tick de 1000 NO dispara el golpe — {events:?}"
+        );
+        // Tick adicional de 1000 ms: ahora 2000 ≥ cooldown → SÍ golpea.
+        let events = w.update(1_000);
+        assert!(
+            events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::MobAttack { .. }))),
+            "tras 2000 ms acumulados el mob golpea"
         );
     }
 

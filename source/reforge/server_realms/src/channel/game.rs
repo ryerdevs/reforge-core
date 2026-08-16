@@ -19,7 +19,7 @@ use protocol::header;
 use game_core::ecs::{CombatIntent, Intent};
 
 use crate::channel::session::Session;
-use crate::channel::{chat, combat, events, items, movement, pvp, quest, quickslot, script, shop, skills, trade};
+use crate::channel::{chat, combat, events, items, movement, party, pvp, quest, quickslot, script, shop, skills, trade};
 
 /// Loop de juego de la conexión: corre SOLO con la sesión llena (las fases
 /// 1-7 las hizo `entry::run`). `Err` = cierre con razón (fatal o protocolario
@@ -210,6 +210,23 @@ async fn game_loop(session: &mut Session) -> Result<(), String> {
                         shop::handle(session, &pkt).await?.into_result()?;
                     }
                     header::CG_EXCHANGE => trade::handle(session, &pkt).await?.into_result()?,
+                    // PARTY (lane 2026-08-16 — `channel/party.rs`): invitación
+                    // (72), respuesta (73), expulsión/salida (74) y modo de
+                    // reparto de exp (78). CG_PARTY_SET_STATE (75) y
+                    // CG_PARTY_USE_SKILL (76) siguen fuera del subset (caen
+                    // en `other`).
+                    header::CG_PARTY_INVITE => {
+                        party::handle_invite(session, &pkt).await?.into_result()?;
+                    }
+                    header::CG_PARTY_INVITE_ANSWER => {
+                        party::handle_invite_answer(session, &pkt).await?.into_result()?;
+                    }
+                    header::CG_PARTY_REMOVE => {
+                        party::handle_remove(session, &pkt).await?.into_result()?;
+                    }
+                    header::CG_PARTY_PARAMETER => {
+                        party::handle_parameter(session, &pkt).await?.into_result()?;
+                    }
                     // TODO(F5 npcs): game_core::npc::... para los NPCs/mobs
                     //
                     // SUBIR STATS (lane D — documentado, sin paquete): el
@@ -268,6 +285,16 @@ async fn game_loop(session: &mut Session) -> Result<(), String> {
                     .send(&bytes)
                     .await
                     .map_err(|e| format!("enviando chat de otra sesión: {e}"))?;
+            }
+            // PARTY (lane 2026-08-16): mensajes de OTROS jugadores (GC_PARTY_*,
+            // exp compartida, Joined/LeftParty) — el outbox `party_rx`; los
+            // aplica `party::handle_msg` (bytes al socket / exp al row /
+            // party_id).
+            msg = session.party_rx.recv() => {
+                let Some(msg) = msg else {
+                    return Err("canal de party de la sesión cerrado".into());
+                };
+                party::handle_msg(session, msg).await?;
             }
         }
     }

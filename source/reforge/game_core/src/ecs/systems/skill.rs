@@ -285,6 +285,7 @@ impl WorldSim {
                     gold_min: v.gold_min,
                     gold_max: v.gold_max,
                     drop_item: v.drop_item,
+                    mob_level: v.state.level,
                 });
                 events.push(SkillEvent::SkillResult {
                     player_vid,

@@ -56,6 +56,8 @@ pub struct KillInfo {
     pub gold_min: i32,
     pub gold_max: i32,
     pub drop_item: i64,
+    /// Nivel del mob (C33 — el factor de exp por level-delta).
+    pub mob_level: i32,
 }
 
 /// Estado de un item del suelo que el pickup consume (mismo shape que el

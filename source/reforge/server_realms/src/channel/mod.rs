@@ -52,6 +52,7 @@ mod game;
 mod gm;
 mod items;
 mod movement;
+mod party;
 mod pvp;
 mod quest;
 mod quickslot;
@@ -447,6 +448,13 @@ pub(crate) async fn consume_arrow(session: &mut Session) -> Result<(), String> {
         session.conn_id, session.row().name, session.inventory[idx].count
     );
     Ok(())
+}
+
+/// ¿El item del suelo es ORO? (vnum 1 — parity `GetType() == ITEM_ELK`,
+/// char_item.cpp:5919-5926; el kill-drop y el drop manual usan vnum 1 —
+/// parity DropGold). Helper del pickup (C22) — la usa events.rs.
+pub(crate) fn is_gold_item(vnum: i64) -> bool {
+    vnum == 1
 }
 
 /// El dir de quests por defecto (derivado del `map_path`): el `quest`

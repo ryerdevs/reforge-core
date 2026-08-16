@@ -49,7 +49,16 @@ pub fn mob_row(vnum: i64) -> MobRow {
 }
 
 pub fn entry(vnum: u32, x: i32, y: i32, count: u32) -> SpawnEntry {
-    SpawnEntry { vnum, x, y, count, kind: SpawnKind::Mob, w_x: 0, w_y: 0, time: 0 }
+    SpawnEntry {
+        vnum,
+        x,
+        y,
+        count,
+        kind: SpawnKind::Mob,
+        w_x: 0,
+        w_y: 0,
+        time: 0,
+    }
 }
 
 pub fn world_with(seed: u64) -> WorldSim {

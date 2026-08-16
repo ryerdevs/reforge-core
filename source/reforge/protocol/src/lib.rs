@@ -293,6 +293,23 @@ pub mod header {
     /// `HEADER_GC_ITEM_OWNERSHIP` (cliente `Packet.h:175`, server
     /// `packet.h` — 31): el dueño de un item del suelo.
     pub const GC_ITEM_OWNERSHIP: u8 = 31;
+    /// `HEADER_GC_PARTY_INVITE` (packet.h:180 — 77): la invitación del líder
+    /// al objetivo (`TPacketGCPartyInvite` 5 B — packet.h:1529-1533).
+    pub const GC_PARTY_INVITE: u8 = 77;
+    /// `HEADER_GC_PARTY_ADD` (packet.h:181 — 78): un miembro nuevo en la
+    /// party (`TPacketGCPartyAdd` 30 B — packet.h:1516-1521). El cliente
+    /// NO procesa el GC_PARTY_UPDATE de un pid que no existe en su mapa —
+    /// el ADD es el que crea la entrada (RecvPartyAdd).
+    pub const GC_PARTY_ADD: u8 = 78;
+    /// `HEADER_GC_PARTY_UPDATE` (packet.h:182 — 79): estado de un miembro
+    /// (`TPacketGCPartyUpdate` 21 B — packet.h:1540-1549).
+    pub const GC_PARTY_UPDATE: u8 = 79;
+    /// `HEADER_GC_PARTY_REMOVE` (packet.h:183 — 80): expulsión/salida
+    /// (`TPacketGCPartyRemove` 5 B — packet.h:1551-1555).
+    pub const GC_PARTY_REMOVE: u8 = 80;
+    /// `HEADER_GC_PARTY_PARAMETER` (packet.h:186 — 83): modo de reparto de
+    /// exp (`TPacketGCPartyParameter` 2 B — packet.h:1510-1514).
+    pub const GC_PARTY_PARAMETER: u8 = 83;
     /// `HEADER_GC_ITEM_UPDATE` (cliente `Packet.h:169`, server
     /// `packet.h:137` — 25): el UPDATE de un item del inventario (cantidad
     /// al apilar — `AutoStackItem`).
