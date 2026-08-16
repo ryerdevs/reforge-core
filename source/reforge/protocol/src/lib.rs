@@ -171,6 +171,15 @@ pub mod header {
     /// dentro de la safebox — `TPacketCGItemMove` 8 B (mismo shape que
     /// `CG_ITEM_MOVE` 13; Packet.h:593-599).
     pub const CG_SAFEBOX_ITEM_MOVE: u8 = 77;
+    /// `HEADER_CG_SAFEBOX_MONEY` (packet.h:1627-1632 — 79): depositar/
+    /// retirar oro de la safebox — `TPacketCGSafeboxMoney` 6 B (header +
+    /// bState + long lMoney). OJO (evidencia del C++ congelado): el 79 NO
+    /// está en el `CPacketInfoCG` (packet_info.cpp:191-234) y el cliente de
+    /// la variante nunca lo envía (`SendSafeBoxMoneyPacket` es un
+    /// `assert(!"Don't use this function")` — PythonNetworkStreamPhaseGameItem.cpp:14-17).
+    /// El handler del canal es DEFENSIVO (wire byte-exacto por si un cliente
+    /// lo manda).
+    pub const CG_SAFEBOX_MONEY: u8 = 79;
     /// `HEADER_CG_PARTY_PARAMETER` (Packet.h:90 — 78) —
     /// `TPacketCGPartyParameter` 2 B (header+bDistributeMode;
     /// Packet.h:1012-1016).
@@ -310,6 +319,28 @@ pub mod header {
     /// `HEADER_GC_PARTY_PARAMETER` (packet.h:186 — 83): modo de reparto de
     /// exp (`TPacketGCPartyParameter` 2 B — packet.h:1510-1514).
     pub const GC_PARTY_PARAMETER: u8 = 83;
+    /// `HEADER_GC_SAFEBOX_MONEY_CHANGE` (packet.h:190 — 84; cliente
+    /// Packet.h:219): el oro de la caja cambió — `TPacketGCSafeboxMoneyChange`
+    /// 5 B (header + long lMoney; el cliente lo lee como DWORD dwMoney —
+    /// PythonNetworkStreamPhaseGameItem.cpp:123-133).
+    pub const GC_SAFEBOX_MONEY_CHANGE: u8 = 84;
+    /// `HEADER_GC_SAFEBOX_SET` (packet.h:188 — 85; cliente Packet.h:220):
+    /// item nuevo/actualizado en la caja — MISMO shape que `TPacketGCItemSet`
+    /// (51 B, el cliente lo registra con `sizeof(TPacketGCItemSet)` —
+    /// PythonNetworkStream.cpp:132), con `Cell.window = SAFEBOX` (3).
+    pub const GC_SAFEBOX_SET: u8 = 85;
+    /// `HEADER_GC_SAFEBOX_DEL` (packet.h:189 — 86; cliente Packet.h:221):
+    /// item borrado de la caja — `TPacketGCItemDel` 2 B (header + BYTE pos;
+    /// safebox.cpp:109-113).
+    pub const GC_SAFEBOX_DEL: u8 = 86;
+    /// `HEADER_GC_SAFEBOX_WRONG_PASSWORD` (packet.h:190 — 87; cliente
+    /// Packet.h:222): password incorrecta — 1 B (solo header;
+    /// input_db.cpp:1165-1175).
+    pub const GC_SAFEBOX_WRONG_PASSWORD: u8 = 87;
+    /// `HEADER_GC_SAFEBOX_SIZE` (packet.h:191 — 88; cliente Packet.h:223):
+    /// tamaño de la caja (páginas) — `TPacketGCSafeboxSize` 2 B
+    /// (header + bSize; char.cpp:5553-5558).
+    pub const GC_SAFEBOX_SIZE: u8 = 88;
     /// `HEADER_GC_ITEM_UPDATE` (cliente `Packet.h:169`, server
     /// `packet.h:137` — 25): el UPDATE de un item del inventario (cantidad
     /// al apilar — `AutoStackItem`).

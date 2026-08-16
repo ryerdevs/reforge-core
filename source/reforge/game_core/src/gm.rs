@@ -96,11 +96,22 @@ pub enum GmCommand {
     // 'not implemented' (regla 3 del lane: el comando EXISTE en el
     // cmd_info[] — no es 'No such command').
     /// `/safebox [tamaño]` — tamaño de la safebox (parity do_safebox_size
-    /// cmd_gm.cpp:1857-1871: arg 0..3 → ChangeSafeboxSize). Sin sistema
-    /// (la safebox vive en tablas + paquetes propios — GAP) → INFO.
-    Safebox,
+    /// cmd_gm.cpp:1857-1871: arg 0..3, clamp a 0 — GM_HIGH_WIZARD en el
+    /// cmd.cpp:351). REAL (channel/safebox.rs: GC_SAFEBOX_SIZE + grid +
+    /// SafeboxRepo::set_size — divergencia: el C++ GM command no persiste).
+    Safebox {
+        size: u8,
+    },
+    /// `/safebox_password <password>` — abrir la safebox (parity
+    /// do_safebox_password cmd_general.cpp:805-810 → ReqSafeboxLoad —
+    /// GM_PLAYER, cmd.cpp:354). REAL (channel/safebox.rs: validación de la
+    /// password + GC_SAFEBOX_SIZE + GC_SAFEBOX_SET por item).
+    SafeboxPassword {
+        password: String,
+    },
     /// `/safebox_close` — cierra la safebox (do_safebox_close
-    /// cmd_general.cpp:796-799 → CloseSafebox). INFO (GAP).
+    /// cmd_general.cpp:796-799 → CloseSafebox). REAL (channel/safebox.rs:
+    /// oro persistido + CHAT COMMAND "CloseSafebox").
     SafeboxClose,
     /// `/mount` — parity do_mount cmd_general.cpp:381-383: STUB VACÍO en el
     /// C++ (no hace nada). INFO.
@@ -231,8 +242,22 @@ pub fn parse_command(cmd: &str) -> Option<GmCommand> {
         // Lote 2 GM_PLAYER — nombres EXACTOS del cmd.cpp:339-466 (parity;
         // el lookup del C++ es strcmp case-sensitive). Argumentos extra se
         // ignoran (parity: do_emotion ni lee el argumento; los demás solo el
-        // primero).
-        "safebox" => Some(GmCommand::Safebox),
+        // primero). EXCEPCIONES: `safebox` (size — HIGH_WIZARD, cmd.cpp:351)
+        // y `safebox_password` (password — el cliente abre la caja con
+        // `/safebox_password <pass>`, cmd.cpp:354).
+        "safebox" => {
+            // Parity do_safebox_size cmd_gm.cpp:1857-1871: arg opcional
+            // 0..3 (sin arg → 0); `size > 3 || size < 0 → 0` (NO clamp).
+            let size = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+            let size = if size > 3 { 0 } else { size };
+            Some(GmCommand::Safebox { size })
+        }
+        // Parity do_safebox_password cmd_general.cpp:805-806 (one_argument:
+        // sin argumento → cadena vacía → el handler responde "wrong
+        // password").
+        "safebox_password" => Some(GmCommand::SafeboxPassword {
+            password: it.next().unwrap_or("").to_string(),
+        }),
         "safebox_close" => Some(GmCommand::SafeboxClose),
         "mount" => Some(GmCommand::Mount),
         "horse_state" => Some(GmCommand::HorseState),
@@ -286,15 +311,20 @@ pub fn required_level(cmd: &GmCommand) -> i16 {
         GmCommand::Warp { .. } | GmCommand::SetLevel { .. } => gm_level::LOW_WIZARD,
         GmCommand::GiveItem { .. } => gm_level::GOD,
         GmCommand::Notice { .. } => gm_level::HIGH_WIZARD,
+        // Safebox (tamaño): GM_HIGH_WIZARD (parity cmd.cpp:351).
+        GmCommand::Safebox { .. } => gm_level::HIGH_WIZARD,
         GmCommand::RestartHere
         | GmCommand::RestartTown
         | GmCommand::Logout
         | GmCommand::Quit
         | GmCommand::PhaseSelect
         // Lote 2 (lane B — regla 4: TODOS nivel PLAYER; el C++ congelado
-        // tiene safebox/horse_*/observer en HIGH_WIZARD/IMPLEMENTOR —
-        // divergencia deliberada documentada en el enum).
-        | GmCommand::Safebox
+        // tiene horse_*/observer en HIGH_WIZARD/IMPLEMENTOR — divergencia
+        // deliberada documentada en el enum). EXCEPCIONES REALES: `safebox`
+        // (tamaño — HIGH_WIZARD, parity cmd.cpp:351) y
+        // `safebox_password`/`safebox_close` (abrir/cerrar — PLAYER,
+        // cmd.cpp:352,354).
+        | GmCommand::SafeboxPassword { .. }
         | GmCommand::SafeboxClose
         | GmCommand::Mount
         | GmCommand::HorseState
@@ -494,11 +524,29 @@ mod tests {
         ));
     }
 
-    /// Lote 2 (lane B): parseo de los 30 comandos nuevos con los nombres
+    /// Lote 2 (lane B): parseo de los comandos nuevos con los nombres
     /// EXACTOS del cmd.cpp:339-466 (parity).
     #[test]
     fn parse_gm_player_batch_names() {
-        assert_eq!(parse_command("safebox"), Some(GmCommand::Safebox));
+        assert_eq!(
+            parse_command("safebox"),
+            Some(GmCommand::Safebox { size: 0 }),
+            "sin arg → 0 (parity do_safebox_size)"
+        );
+        assert_eq!(
+            parse_command("safebox_password 1234"),
+            Some(GmCommand::SafeboxPassword {
+                password: "1234".into()
+            }),
+            "el cliente abre con /safebox_password <pass>"
+        );
+        assert_eq!(
+            parse_command("safebox_password"),
+            Some(GmCommand::SafeboxPassword {
+                password: "".into()
+            }),
+            "sin password → cadena vacía (one_argument; el handler la rechaza)"
+        );
         assert_eq!(
             parse_command("safebox_close"),
             Some(GmCommand::SafeboxClose)
@@ -563,10 +611,27 @@ mod tests {
 
     /// Lote 2: argumentos extra ignorados (parity — do_emotion ni siquiera
     /// lee el argumento, cmd_emotion.cpp:96-110; los demás solo el primero)
-    /// y case-sensitive (parity strcmp del interpret_command).
+    /// y case-sensitive (parity strcmp del interpret_command). EXCEPCIÓN:
+    /// `safebox` (el arg ES el tamaño, cmd_gm.cpp:1857-1871) y
+    /// `safebox_password` (el arg ES la password).
     #[test]
     fn parse_gm_player_batch_extra_args_ignored() {
-        assert_eq!(parse_command("safebox 2"), Some(GmCommand::Safebox));
+        assert_eq!(
+            parse_command("safebox 2"),
+            Some(GmCommand::Safebox { size: 2 })
+        );
+        assert_eq!(
+            parse_command("safebox 9"),
+            Some(GmCommand::Safebox { size: 0 }),
+            "clamp 0..3 (parity `size > 3 || size < 0 → 0`)"
+        );
+        assert_eq!(
+            parse_command("safebox_password abc def"),
+            Some(GmCommand::SafeboxPassword {
+                password: "abc".into()
+            }),
+            "solo el primer token (one_argument)"
+        );
         assert_eq!(parse_command("kiss 7"), Some(GmCommand::Kiss));
         assert_eq!(parse_command("dance1 0"), Some(GmCommand::Dance1));
         assert_eq!(
@@ -620,13 +685,17 @@ mod tests {
     }
 
     /// Lote 2: TODOS nivel PLAYER (regla 4 del lane B) — accesibles sin
-    /// gmlist. (El C++ congelado difiere en safebox/horse_*/observer —
-    /// divergencia deliberada documentada en el enum.)
+    /// gmlist. (El C++ congelado difiere en horse_*/observer — divergencia
+    /// deliberada documentada en el enum; safebox_password/safebox_close son
+    /// PLAYER por parity cmd.cpp:352,354.)
     #[test]
     fn gm_player_batch_required_level_and_gate() {
         for cmd in [
-            GmCommand::Safebox,
             GmCommand::SafeboxClose,
+            GmCommand::SafeboxPassword {
+                password: "1234".into(),
+            },
+            GmCommand::Mount,
             GmCommand::Mount,
             GmCommand::HorseState,
             GmCommand::HorseLevel,

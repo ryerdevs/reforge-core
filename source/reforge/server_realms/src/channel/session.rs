@@ -314,6 +314,15 @@ pub struct Session {
     /// RAII del peer de party (registro de sesiones — patrón ChatPeerGuard;
     /// al cerrar la conexión saca al jugador de su party).
     pub party_guard: Option<crate::channel::party::PartyPeerGuard>,
+    /// Safebox ABIERTA (channel/safebox.rs): items cargados + size + gold —
+    /// parity `m_pkSafebox` del CHARACTER C++ (None = caja cerrada). Los
+    /// handlers de CG_SAFEBOX_* la exigen; se cierra con `/safebox_close` o
+    /// al cerrar la conexión (CloseSafebox — char.cpp:1352).
+    pub safebox: Option<crate::channel::safebox::SafeboxState>,
+    /// Cooldown de re-apertura de la caja (parity `m_iSafeboxLoadTime` —
+    /// char.cpp:5508-5513: `PASSES_PER_SEC(10)` desde el cierre). Se arma al
+    /// CERRAR (`safebox::close`) y se consulta al abrir.
+    pub safebox_cooldown_until: Option<tokio::time::Instant>,
 }
 
 /// `g_iStatusPointGetLevelLimit` (config.cpp:47 — 90): el nivel hasta el que
@@ -403,6 +412,8 @@ impl Session {
             party_tx,
             party_rx,
             party_guard: None,
+            safebox: None,
+            safebox_cooldown_until: None,
         }
     }
 

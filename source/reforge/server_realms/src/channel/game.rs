@@ -19,7 +19,7 @@ use protocol::header;
 use game_core::ecs::{CombatIntent, Intent};
 
 use crate::channel::session::Session;
-use crate::channel::{chat, combat, events, items, movement, party, pvp, quest, quickslot, script, shop, skills, trade};
+use crate::channel::{chat, combat, events, items, movement, party, pvp, quest, quickslot, safebox, script, shop, skills, trade};
 
 /// Loop de juego de la conexión: corre SOLO con la sesión llena (las fases
 /// 1-7 las hizo `entry::run`). `Err` = cierre con razón (fatal o protocolario
@@ -39,6 +39,11 @@ pub async fn run(session: &mut Session) -> Result<(), String> {
     // timeout/speedhack/EOF): el save es fire-and-forget → Batcher del canal
     // (100 ms, WAL) — el batch se aplica aunque la conexión ya se cerró.
     let result = game_loop(session).await;
+    // Safebox al CIERRE de conexión (parity `CHARACTER::Destroy` →
+    // `CloseSafebox`, char.cpp:1352): persiste el oro (los items ya se
+    // persistieron en cada mutación) y suelta el estado. Errores de PG/
+    // socket → log interno, no fatal (el cierre no debe colgarse).
+    let _ = safebox::close(session).await;
     session.save();
     result
 }
@@ -226,6 +231,25 @@ async fn game_loop(session: &mut Session) -> Result<(), String> {
                     }
                     header::CG_PARTY_PARAMETER => {
                         party::handle_parameter(session, &pkt).await?.into_result()?;
+                    }
+                    // SAFEBOX (channel/safebox.rs — parity SafeboxCheckin/
+                    // SafeboxCheckout/SafeboxItemMove, input_main.cpp:1940-
+                    // 2117 + safebox.cpp:170-231): meter (70) / sacar (71) /
+                    // mover dentro (77, mismo shape que CG_ITEM_MOVE) de la
+                    // caja. El 79 (CG_SAFEBOX_MONEY — oro de la caja) es
+                    // DEFENSIVO: el C++ congelado no lo registra y el
+                    // cliente de la variante no lo envía.
+                    header::CG_SAFEBOX_CHECKIN => {
+                        safebox::handle_checkin(session, &pkt).await?.into_result()?;
+                    }
+                    header::CG_SAFEBOX_CHECKOUT => {
+                        safebox::handle_checkout(session, &pkt).await?.into_result()?;
+                    }
+                    header::CG_SAFEBOX_ITEM_MOVE => {
+                        safebox::handle_item_move(session, &pkt).await?.into_result()?;
+                    }
+                    header::CG_SAFEBOX_MONEY => {
+                        safebox::handle_money(session, &pkt).await?.into_result()?;
                     }
                     // TODO(F5 npcs): game_core::npc::... para los NPCs/mobs
                     //
