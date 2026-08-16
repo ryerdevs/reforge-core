@@ -88,3 +88,17 @@
 - **stat_points** — SIN wire en esta variante del cliente (Packet.h:32-37 comentado;
   solo `/con+`/`/str+` como GM). Documentado: la progresión de stats requiere una
   decisión de wire (modificar el cliente) — bloqueado, no un bug del server.
+
+## Actualización 2026-08-15 (3ª tanda)
+
+- **Buffs numéricos (CRITICAL ×2 + MOV_SPEED)** — DONE (feat(combat)): Affects::critical_pct
+  (parity char_battle.cpp:1661-1675) + melee_damage ×2 en number(1,100)≤pct; el buff
+  MOV_SPEED recalcula la velocidad real del jugador (GetMoveSpeed = motion × factor,
+  char.cpp:2751-2754). ATT_SPEED/CASTING_SPEED pendientes (GAP documentado).
+- **Death penalty** — DONE (feat(combat)): MIN(800000, next_exp × aiExpLossPercents% / 100)
+  al morir en RestartAtSamePos (char_battle.cpp:310-337, constants.cpp:768); el revive
+  en la ciudad no pierde. Ahora morir cuesta.
+- **Safebox** — IN PROGRESS (Fixer lane, límite 45 min).
+- **AUTOUSE_GOLD/treasure boxes** — PENDIENTE (requiere el SpecialItemGroup — dominio amplio).
+- **ATT_SPEED buff** — PENDIENTE (el intervalo viene del arma; conectar el buff al
+  attack_speed_ms del PlayerState).
