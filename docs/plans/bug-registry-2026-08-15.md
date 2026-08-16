@@ -277,3 +277,14 @@
 
 - El rewrite daba `mob_exp × rate` sin importar la diferencia de nivel (farmear mobs bajos daba exp llena). El C++ usa `NEW_GET_LVDELTA` (`aiPercentByDeltaLev`, constants.cpp:235-266) + cap `MIN(GetNextExp()/10, iExp)` (char_battle.cpp:2210-2267).
 - Fix: `exp_level_delta_factor` (tabla 31 valores, índice clamp `(mob+15)−player`) + cap 10% en `apply_kill`. mob_level en KillInfo.
+
+### C34. [CERRADO — fix `c8f3bd5`/`9d6f101`] Buffs numéricos (CRITICAL/MOV_SPEED/ATT_SPEED) solo cosméticos
+- CRITICAL_PCT → Affects::critical_pct (parity char_battle.cpp:1661-1675) + melee_damage ×2 + flag CRITICAL del wire.
+- MOV_SPEED → recalcula la velocidad real del jugador (GetMoveSpeed = motion × 10000/CalculateDuration, char.cpp:2751-2754).
+- ATT_SPEED → suma al denominador de GET_ATTACK_SPEED (battle.cpp:757-782).
+
+### C35. [CERRADO — fix `21b25f0`] Morir no cuesta nada (death penalty)
+- MIN(800000, next_exp × aiExpLossPercents% / 100) al morir en RestartAtSamePos (char_battle.cpp:310-337, constants.cpp:768); revive en ciudad exento.
+
+### C36. [CERRADO — fix `7aac132`] Sin banco del jugador (safebox)
+- /safebox_password abre (password, cooldown 10s, GC_SAFEBOX_WRONG_PASSWORD), checkin/checkout/item_move/gold con parity; SafeboxRepo wired (era 4 fns sin callers). Gaps: grid 2×2, antiflag, change_password, mall.
