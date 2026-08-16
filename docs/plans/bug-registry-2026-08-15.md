@@ -291,3 +291,6 @@
 ### C36. [CERRADO — fix `7aac132`] Sin banco del jugador (safebox)
 
 - /safebox_password abre (password, cooldown 10s, GC_SAFEBOX_WRONG_PASSWORD), checkin/checkout/item_move/gold con parity; SafeboxRepo wired (era 4 fns sin callers). Gaps: grid 2×2, antiflag, change_password, mall.
+
+### C37. [CERRADO — fix `625380f`] Refine/upgrade de items inexistente (loop de progresión)
+- CG_ITEM_USE_TO_ITEM (60) + CG_REFINE (96) con dispatch; refine_proto (405 filas) wired: NORMAL (fee cost×5, FAIL destruye) + SCROLL (consume scroll, FAIL baja al vnum previo). Gaps: specials, MONEY_ONLY, gates.
