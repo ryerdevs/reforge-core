@@ -7,6 +7,31 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-15] (53rd part) — Refine/upgrade: the Metin2 progression loop
+
+> The #1 CRITICAL gap — refining weapons/armor with minerals did not exist
+> (CG_ITEM_USE_TO_ITEM 60 and CG_REFINE 96 had frame but no dispatch; the
+> refine_proto table, 405 rows, was idle). Workspace **680 passed / 0 failed**,
+> pushed (`625380f`).
+
+- **CG_ITEM_USE_TO_ITEM (60, 7 B)**: tuning scroll on a target item → gates
+  501/702 → GC_REFINE_INFORMATION (119, 60 B packed) + refine mode in session.
+- **CG_REFINE (96, 3 B)**: type 255 = cancel; NORMAL → DoRefine (fee cost×5,
+  materials from refine_proto, prob roll, FAIL destroys); SCROLL →
+  DoRefineWithScroll (consumes the scroll, fee without ×5, FAIL drops to the
+  previous vnum). Wire: GC_ITEM_DEL + GC_ITEM_SET (success) / GC_ITEM_DEL
+  (fail) / GC_ITEM_UPDATE + GC_POINTS (fee).
+- **database/item.rs**: load_refine_recipe (refine_proto: id/cost/prob/vnum0-4/
+  count0-4), load_refine_proto (refine_set/refined_vnum), reverse lookup.
+- Wire byte-exact (packed structs in protocol) + 4 tests. Gaps: specials
+  (MUSIN/HYUNIRON/YONGSIN/YAGONG/MEMO/BDRAGON probs), MONEY_ONLY,
+  exchange/safebox/shop gates, USE_DETACHMENT, guild fee.
+- **CRITICAL flag in the wire** (`6415688`): the melee critical hit now sets
+  DAMAGE_CRITICAL (parity char_battle.cpp:2117-2120) — the client styles the
+  crit number.
+- **Next block (ranked)**: GM command remainder (95% of cmd_info[]), skill
+  families SPLASH/PARTY/HORSE + skill_power.txt, then events/raids/wedding.
+
 ## [2026-08-15] (52nd part) — Numeric buffs + death penalty + safebox
 
 > Buffs that alter gameplay (CRITICAL/MOV_SPEED/ATT_SPEED), death penalty, and the
