@@ -14,7 +14,15 @@ impl WorldSim {
         let ent = self.world.get_entity(e).ok()?;
         let pos = ent.get::<Position>()?;
         let item = ent.get::<Item>()?;
-        Some(ItemView { vnum: item.vnum, count: item.count, x: pos.x, y: pos.y, z: item.z })
+        Some(ItemView {
+            vnum: item.vnum,
+            count: item.count,
+            x: pos.x,
+            y: pos.y,
+            z: item.z,
+            sockets: item.sockets,
+            attrs: item.attrs,
+        })
     }
 
     /// Quita el item del suelo (commit del pickup). Idempotente.
@@ -37,15 +45,32 @@ impl WorldSim {
         x: i32,
         y: i32,
         z: i32,
+        sockets: [i64; 3],
+        attrs: [(i16, i16); 7],
     ) -> Vec<NpcEvent> {
         let item_vid = self.world.resource_mut::<VidAlloc>().item;
         self.world.resource_mut::<VidAlloc>().item += 1;
         let e = self
             .world
-            .spawn((Vid { vid: item_vid }, Position { x, y }, Item { vnum, count, z }))
+            .spawn((
+                Vid { vid: item_vid },
+                Position { x, y },
+                Item { vnum, count, z, sockets, attrs },
+            ))
             .id();
         self.world.resource_mut::<ItemIndex>().0.insert(item_vid, e);
-        vec![ItemEvent::DropResult { player_vid, item_vid, vnum, count, x, y, z }.into()]
+        vec![ItemEvent::DropResult {
+            player_vid,
+            item_vid,
+            vnum,
+            count,
+            x,
+            y,
+            z,
+            sockets,
+            attrs,
+        }
+        .into()]
     }
 
     /// Respuesta al pickup: el estado actual del item (None si ya no está —
@@ -62,12 +87,24 @@ mod tests {
     use crate::ecs::test_util::*;
 
     /// Ciclo de vida del item del suelo por intents: drop (vid del mundo) →
-    /// pickup (reporta) → remove (commit) → pickup (None).
+    /// pickup (reporta attrs/sockets) → remove (commit) → pickup (None).
     #[test]
     fn item_drop_pickup_remove() {
         let mut w = world_with(42);
+        let sockets = [1i64, 0, 0];
+        let attrs = [(1i16, 10i16), (0, 0), (0, 0), (0, 0), (0, 0), (53, 3), (0, 0)];
         let events = w.process_intent(
-            ItemIntent::DropItem { player_vid: 2, vnum: 101, count: 1, x: 100, y: 200, z: 0 }.into(),
+            ItemIntent::DropItem {
+                player_vid: 2,
+                vnum: 101,
+                count: 1,
+                x: 100,
+                y: 200,
+                z: 0,
+                sockets,
+                attrs,
+            }
+            .into(),
             1_000,
         );
         let drop = events.iter().find_map(|e| match e {
@@ -82,7 +119,11 @@ mod tests {
             NpcEvent::Item(ItemEvent::PickupResult { item, .. }) => *item,
             _ => None,
         });
-        assert_eq!(item, Some(ItemView { vnum: 101, count: 1, x: 100, y: 200, z: 0 }));
+        assert_eq!(
+            item,
+            Some(ItemView { vnum: 101, count: 1, x: 100, y: 200, z: 0, sockets, attrs }),
+            "el pickup reporta los attrs/sockets del drop"
+        );
         w.process_intent(ItemIntent::RemoveItem { item_vid: 50_000 }.into(), 3_000);
         let events = w.process_intent(ItemIntent::PickupItem { player_vid: 2, item_vid: 50_000 }.into(), 4_000);
         let item = events.iter().find_map(|e| match e {
@@ -101,11 +142,11 @@ mod tests {
         join(&mut w);
         assert_eq!(w.npc_count(), 1);
         w.process_intent(
-            ItemIntent::DropItem { player_vid: 2, vnum: 101, count: 1, x: 0, y: 0, z: 0 }.into(),
+            ItemIntent::DropItem { player_vid: 2, vnum: 101, count: 1, x: 0, y: 0, z: 0, sockets: [0; 3], attrs: [(0, 0); 7] }.into(),
             1_000,
         );
         let events = w.process_intent(
-            ItemIntent::DropItem { player_vid: 2, vnum: 101, count: 1, x: 0, y: 0, z: 0 }.into(),
+            ItemIntent::DropItem { player_vid: 2, vnum: 101, count: 1, x: 0, y: 0, z: 0, sockets: [0; 3], attrs: [(0, 0); 7] }.into(),
             2_000,
         );
         let vid = events.iter().find_map(|e| match e {

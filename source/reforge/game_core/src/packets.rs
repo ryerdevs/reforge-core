@@ -985,6 +985,8 @@ mod tests {
             values: [0; 6],
             wear_flag: 1 << 2, // WEARABLE_FOOTS
             weight: 0,
+            magic_pct: 0,
+            socket_pct: 0,
         };
         // Sin botas (o bota sin applies): base 100.
         assert_eq!(mov_speed_for_boots(None), 100);
@@ -1108,6 +1110,8 @@ mod tests {
             values: [0; 6],
             wear_flag: i64::from(wear_flag),
             weight: 0,
+            magic_pct: 0,
+            socket_pct: 0,
         };
         // Bits individuales -> slots (length.h:99-119).
         assert_eq!(find_equip_cell(&p(wearable::BODY)), Some(0), "WEAR_BODY");
@@ -1198,6 +1202,8 @@ mod tests {
             values: [0, 0, 0, 12, 15, 0],
             wear_flag: 16,
             weight: 0,
+            magic_pct: 0,
+            socket_pct: 0,
         };
         let b = compute_battle_points(&r, Some(&weapon), 25);
         // Ataque: 5×2 + (4×30+2×30)/3 = 10 + 60 (char.cpp:2061-2092).

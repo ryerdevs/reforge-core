@@ -126,6 +126,19 @@ pub async fn run(config: Config) -> std::io::Result<()> {
     // la caché evita el stall de minutos (10k conexiones por entrada).
     // F5.3 (ADR-0010): recurso `SpawnCache` del mundo compartido.
     let spawn_cache = std::sync::Arc::new(tokio::sync::Mutex::new(game_core::npc::MobCache::new()));
+    // Tablas de attrs aleatorios (player.item_attr + item_attr_rare — 54+20
+    // filas, lane 2026-08-16): caché COMPARTIDA entre conexiones cargada UNA
+    // vez en el arranque (fail-open: sin tablas → los items nacen sin attrs
+    // — parity degradada, misma semántica que los fallos del spawn_cache).
+    let attr_tables = std::sync::Arc::new(
+        match database::item::ItemRepo::new(pool.clone()).load_attr_tables().await {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("server_realms: channel: item_attr: {e} — items sin attrs (fail-open)");
+                database::attr::AttrTables::default()
+            }
+        },
+    );
     // F5.4 (ADR-0011): caché de walkability COMPARTIDA entre conexiones —
     // get-or-load del mapa por id (index + Setting.txt + server_attr), los
     // fallos se cachean (un mapa roto no re-lee disco por MOVE).
@@ -261,9 +274,10 @@ pub async fn run(config: Config) -> std::io::Result<()> {
                 let ms = map_store.clone();
                 let pool = pool.clone();
                 let batcher = batcher.clone();
+                let attr_tables = attr_tables.clone();
                 conn_id = conn_id.wrapping_add(1);
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(stream, cfg, id, tx, ms, pool, batcher).await {
+                    if let Err(e) = handle_connection(stream, cfg, id, tx, ms, pool, batcher, attr_tables).await {
                         eprintln!("server_realms: channel conn {id}: {e}");
                     }
                 });
@@ -307,8 +321,9 @@ async fn handle_connection(
     map_store: std::sync::Arc<std::sync::Mutex<game_core::map::MapStore>>,
     pool: database::pool::PgPool,
     batcher: std::sync::Arc<database::wal::Batcher>,
+    attr_tables: std::sync::Arc<database::attr::AttrTables>,
 ) -> Result<(), String> {
-    let mut session = Session::new(stream, config, conn_id, intent_tx, map_store, pool, batcher);
+    let mut session = Session::new(stream, config, conn_id, intent_tx, map_store, pool, batcher, attr_tables);
     // Fases 1-7 (handshake → login → select → entry → world join): la sesión
     // queda LLENA (row/store/motion/leave) antes del loop de juego.
     entry::run(&mut session).await?;

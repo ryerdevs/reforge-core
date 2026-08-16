@@ -297,4 +297,5 @@
 - CG_ITEM_USE_TO_ITEM (60) + CG_REFINE (96) con dispatch; refine_proto (405 filas) wired: NORMAL (fee cost×5, FAIL destruye) + SCROLL (consume scroll, FAIL baja al vnum previo). Gaps: specials, MONEY_ONLY, gates.
 
 ### C38. [CERRADO — fix `28f4395`] PvP/PK: atacar a otro PC no hace nada
+
 - battle_is_attackable gate (parity battle.cpp:107-139): muerto/misma-party → false; PK ON (víctima o atacante PK_MODE_FREE) → true. Daño al Hp del PC + 2 eventos (atacante/víctima, parity SendDamagePacket). Muerte → GC_DEAD + revive. Gaps: ATTR_BANPK, guilds/duelos/arena, alignment, broadcast.

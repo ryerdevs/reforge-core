@@ -236,14 +236,34 @@ async fn give_item(session: &mut Session, vnum: u32, count: u32) -> Result<(), S
         .await?
         .map(|m| m + 1)
         .unwrap_or(100_000_000);
+    // Lane attrs (2026-08-16): los rewards de quest son CreateItem SIN
+    // bTryMagic (questlua_game.cpp:110 — default false) → SOLO sockets
+    // (`socket_pct` abiertos; sin attrs mágicos). Fail-open: proto sin fila
+    // o tablas vacías → item plano.
+    let (mut sockets, mut attrs) = ([0i64; 3], [(0i16, 0i16); 7]);
+    if let Ok(Some(proto)) =
+        ItemRepo::new(session.pool.clone()).load_proto_use_values(i64::from(vnum)).await
+    {
+        let mut rng = crate::channel::rand32;
+        database::attr::roll_creation_bonus(
+            &mut rng,
+            0, // magic_pct 0 — parity quests (sin attrs mágicos)
+            proto.socket_pct,
+            &session.attr_tables,
+            proto.b_type,
+            proto.b_sub_type,
+            &mut sockets,
+            &mut attrs,
+        );
+    }
     let new_item = ItemRow {
         id,
         window: "INVENTORY".to_string(),
         pos: slot as i32,
         count: remaining,
         vnum: i64::from(vnum),
-        sockets: [0; 3],
-        attrs: [(0, 0); 7],
+        sockets,
+        attrs,
     };
     let set = TPacketGCItemSet {
         header: TPacketGCItemSet::HEADER,
@@ -253,8 +273,8 @@ async fn give_item(session: &mut Session, vnum: u32, count: u32) -> Result<(), S
         flags: 0,
         anti_flags: 0,
         highlight: 0,
-        sockets: [0; 3],
-        attrs: [(0, 0); 7],
+        sockets,
+        attrs,
     };
     session
         .send(&set.to_bytes())

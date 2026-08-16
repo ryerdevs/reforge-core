@@ -491,11 +491,10 @@ async fn warp(session: &mut Session, x: i32, y: i32) -> Result<(), String> {
 /// existe). count clamp 1..200 en el parseo.
 async fn give_item(session: &mut Session, vnum: u32, count: u32) -> Result<(), String> {
     // El item debe existir en el proto (parity CreateItem → nullptr → INFO).
-    if ItemRepo::new(session.pool.clone())
+    let Some(proto) = ItemRepo::new(session.pool.clone())
         .load_proto_use_values(i64::from(vnum))
         .await?
-        .is_none()
-    {
+    else {
         eprintln!(
             "server_realms: channel conn {}: GM {} — item vnum {vnum} \
              inexistente (item_proto)",
@@ -503,7 +502,7 @@ async fn give_item(session: &mut Session, vnum: u32, count: u32) -> Result<(), S
         );
         gm_info(session, "No such item by that vnum").await?;
         return Ok(());
-    }
+    };
     // Primer cell libre (parity GetEmptyInventory, char_item.cpp:709-711).
     let occupied: std::collections::HashSet<u16> = session
         .inventory
@@ -521,14 +520,29 @@ async fn give_item(session: &mut Session, vnum: u32, count: u32) -> Result<(), S
         .await?
         .map(|m| m + 1)
         .unwrap_or(100_000_000);
+    // Lane attrs: el GM `item` es CreateItem(..., true) (cmd_gm.cpp:437) —
+    // roll de magic_pct → attrs mágicos + rare, y socket_pct sockets abiertos.
+    let mut sockets = [0i64; 3];
+    let mut attrs = [(0i16, 0i16); 7];
+    let mut rng = crate::channel::rand32;
+    database::attr::roll_creation_bonus(
+        &mut rng,
+        proto.magic_pct,
+        proto.socket_pct,
+        &session.attr_tables,
+        proto.b_type,
+        proto.b_sub_type,
+        &mut sockets,
+        &mut attrs,
+    );
     let item = database::item::ItemRow {
         id,
         window: "INVENTORY".to_string(),
         pos: slot as i32,
         count: i64::from(count),
         vnum: i64::from(vnum),
-        sockets: [0; 3],
-        attrs: [(0, 0); 7],
+        sockets,
+        attrs,
     };
     let set = TPacketGCItemSet {
         header: TPacketGCItemSet::HEADER,
@@ -538,8 +552,8 @@ async fn give_item(session: &mut Session, vnum: u32, count: u32) -> Result<(), S
         flags: 0,
         anti_flags: 0,
         highlight: 0,
-        sockets: [0; 3],
-        attrs: [(0, 0); 7],
+        sockets,
+        attrs,
     };
     session
         .send(&set.to_bytes())

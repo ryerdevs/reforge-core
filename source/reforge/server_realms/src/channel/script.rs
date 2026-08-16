@@ -340,6 +340,7 @@ mod tests {
             std::sync::Arc::new(std::sync::Mutex::new(game_core::map::MapStore::new())),
             pool,
             batcher,
+            std::sync::Arc::new(database::attr::AttrTables::default()),
         );
         s.empire = 1;
         s.row = Some(dead_row());

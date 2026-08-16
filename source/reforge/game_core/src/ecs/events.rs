@@ -61,7 +61,8 @@ pub struct KillInfo {
 }
 
 /// Estado de un item del suelo que el pickup consume (mismo shape que el
-/// `LiveGroundItem` del canal).
+/// `LiveGroundItem` del canal). Sockets/attrs: los que llevó el drop desde
+/// su creación (lane attrs — el pickup los copia al ItemRow del inventario).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ItemView {
     pub vnum: u32,
@@ -69,6 +70,8 @@ pub struct ItemView {
     pub x: i32,
     pub y: i32,
     pub z: i32,
+    pub sockets: [i64; 3],
+    pub attrs: [(i16, i16); 7],
 }
 
 // ---------------------------------------------------------------------------
@@ -109,7 +112,10 @@ pub enum CombatIntent {
     SetPvpMode { player_vid: u32, on: bool },
     /// Party del jugador (el canal lo sincroniza en Joined/LeftParty —
     /// "cannot attack same party", pvp.cpp:439-441).
-    SetParty { player_vid: u32, party_id: Option<u32> },
+    SetParty {
+        player_vid: u32,
+        party_id: Option<u32>,
+    },
 }
 
 /// C→S de MOVIMIENTO: el CG_MOVE aceptado por la validación del canal
@@ -147,6 +153,12 @@ pub enum ItemIntent {
         x: i32,
         y: i32,
         z: i32,
+        /// Sockets del item del suelo (el canal los calculó al crear el
+        /// drop — lane attrs; el jugador soltando un item del inventario
+        /// pasa los del row).
+        sockets: [i64; 3],
+        /// Attrs (tipo, valor) del item del suelo.
+        attrs: [(i16, i16); 7],
     },
     PickupItem {
         player_vid: u32,
@@ -605,7 +617,8 @@ pub enum SkillEvent {
 
 /// S→C del dominio ITEMS: el drop se creó en el mundo (el vid lo asignó el
 /// mundo — el canal manda GC_ITEM_GROUND_ADD + GC_ITEM_OWNERSHIP con él) y
-/// la respuesta al pickup (el item, si sigue en el suelo).
+/// la respuesta al pickup (el item, si sigue en el suelo). Los sockets/attrs
+/// viajan con el drop (los pobló el canal al crearlo — parity CreateItem).
 #[derive(Debug, Clone)]
 pub enum ItemEvent {
     /// El drop se creó en el mundo — el vid lo asignó el mundo (el canal
@@ -618,6 +631,8 @@ pub enum ItemEvent {
         x: i32,
         y: i32,
         z: i32,
+        sockets: [i64; 3],
+        attrs: [(i16, i16); 7],
     },
     /// Respuesta al pickup: el item (si sigue en el suelo).
     PickupResult {

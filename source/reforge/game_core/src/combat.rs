@@ -918,6 +918,8 @@ mod tests {
             values: [0; 6],
             wear_flag: 1 << 4, // WEARABLE_WEAPON
             weight: 0,
+            magic_pct: 0,
+            socket_pct: 0,
         };
         assert_eq!(attack_speed_for_weapon(Some(&sword)), 1250, "espada: ANI default 1000");
         let dagger = ProtoItem { b_sub_type: weapon_subtype::DAGGER, ..sword };
@@ -933,6 +935,8 @@ mod tests {
             values: [0; 6],
             wear_flag: 1 << 0,
             weight: 0,
+            magic_pct: 0,
+            socket_pct: 0,
         };
         assert_eq!(attack_speed_for_weapon(Some(&armor)), 1250, "no-weapon: sin /2");
     }
@@ -954,6 +958,8 @@ mod tests {
             values: [0; 6],
             wear_flag: 1 << 4,
             weight: 0,
+            magic_pct: 0,
+            socket_pct: 0,
         };
         assert_eq!(attack_speed_for_weapon_bonus(Some(&dagger), 20), 500, "daga: 1000/2");
     }
