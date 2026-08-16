@@ -7,6 +7,28 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-15] (54th part) — PvP/PK: player vs player combat
+
+> Attacking another PC did nothing (process_attack only resolved npc_view —
+> multiplayer was "watch the other walk"). Workspace **684 passed / 0 failed**,
+> pushed (`28f4395`).
+
+- **battle_is_attackable** gate (parity battle.cpp:107-139 + pvp.cpp:373): dead →
+  false, same party → false, victim PK ON or attacker PK_MODE_FREE → true.
+- **process_attack vs a PC**: victim NpcState from its components (def doubled as
+  wdef so melee_damage uses PC defense), damage to its Hp, TWO events
+  (PvPAttackResult to attacker + PvPVictimHit to victim with the same packets —
+  parity SendDamagePacket char_battle.cpp:1508-1527); death → GC_DEAD + the
+  existing revive flow.
+- **Pvp { mode, party_id }** component synced from the session (CG_PVP handler
+  sends SetPvpMode; party Joined/LeftParty sync SetParty).
+- No wire change (HEADER_CG_PVP 41 only; GC_DAMAGE_INFO/GC_DEAD/GC_POINTS already
+  byte-exact). Gaps: ATTR_BANPK zones, guilds/duels/arena, alignment penalty,
+  kill broadcast to observers.
+- **Next block (ranked)**: item random attributes + sockets (item_attr/
+  item_attr_rare), skill families SPLASH/PARTY/HORSE + skill_power.txt, GM
+  command remainder (95% of cmd_info[]), then events/raids/wedding.
+
 ## [2026-08-15] (53rd part) — Refine/upgrade: the Metin2 progression loop
 
 > The #1 CRITICAL gap — refining weapons/armor with minerals did not exist
