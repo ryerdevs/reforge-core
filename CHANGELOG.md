@@ -7,6 +7,30 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-16] (61st part) — Client world-entry crash: root cause = load position
+
+> The client crashed "just on entering" (0xc0000374 heap corruption in WER +
+> VC++ Runtime Library dialog as symptoms; the ROOT cause was the client's
+> LoadMap failing → PostQuitMessage(0) → clean exit, no dump). Chronic and
+> intermittent since 08-13 because it depended on where the character was
+> saved. Workspace **712 passed / 0 failed**, pushed (`c3bd2e9`).
+
+- **Diagnosis (evidence-first)**: WER shows 0xc0000374 every day 08-12→08-16
+  with several exes (NOT my LARGEADDRESSAWARE — crashes at 09:30 with the
+  08-14 exe). Server log showed entry sent → client reset (10054) before
+  CG_ENTERGAME. PageHeap changed the detection (VC++ Runtime dialog, clean
+  exit). The decisive find: PythonBackground.cpp:762-768 — LoadMap failure →
+  PostQuitMessage(0). The character was at 987103,314720 (map 41), in-bounds
+  for the server_attr but not loadable by the client's pack (maps.epk differs
+  from the runtime). Moving the character to the spawn (969600,278400) →
+  entered fine (conn 20: CG_ENTERGAME + "cliente DENTRO del mapa").
+- **Fix**: strict load-position guard in validated_load_position — is_movable
+  (bounds + blocked + water) now falls back to the first movable cell;
+  previously only out-of-bounds triggered the fallback (lenient is_some).
+  Parity GetValidLocation sectree_manager.cpp:790-837 (EMPIRE_START fallback).
+- Wire verified correct during diagnosis: TPlayerSkill 6 B (_USE_32BIT_TIME_T),
+  GC_ITEM_SET 51 B, locale bounds checks, GC_CHARACTER_ADD 37 B.
+
 ## [2026-08-15] (60th part) — Party exp bonus
 
 > The party shared exp with no bonus. C++ parity (party.cpp:1495-1501,
