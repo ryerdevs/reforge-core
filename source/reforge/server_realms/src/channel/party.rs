@@ -45,9 +45,11 @@
 //!   evento Update() de 3 s, party.cpp:216-233 — no implementado); los
 //!   `affects` del UPDATE van a 0 (sin bonos de rol ni bonus de exp de
 //!   party — memset del C++ fuera de rango del líder).
-//! - Reparto NON_PARITY sin el bonus de party (`GetExpBonusPercent`) ni la
-//!   centralización (`GetExpCentralizeCharacter`); PARITY sin el bonus —
-//!   char_battle.cpp:2508-2532.
+//! - Reparto NON_PARITY/PARITY con el bonus de party (`GetExpBonusPercent`
+//!   — tabla CHN por miembros cerca del líder + 5% de party veterana; SIN el
+//!   +30% de item del líder, la variante no trackea equipo) y sin la
+//!   centralización (`GetExpCentralizeCharacter`) — char_battle.cpp:
+//!   2508-2532.
 //! - Sin dungeon/observer/block-mode/`IsEnablePCParty` (sistemas que esta
 //!   variante no tiene — los checks del C++ se omiten; el check de nivel
 //!   ±30 y el de imperio SÍ están, parity `IsPartyJoinableCondition`).
@@ -118,6 +120,19 @@ const PARTY_EXP_TABLE: [i64; 121] = [
     10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, // 101 - 110
     12000, 12000, 12000, 12000, 12000, 12000, 12000, 12000, 12000, 12000, // 111 - 120
 ];
+
+/// `CHN_aiPartyBonusExpPercentByMemberCount[9]` (constants.cpp:824-827) — el
+/// % de BONUS de exp por tamaño de party (índice = miembros CERCA DEL
+/// LÍDER, cap 8 — `ComputePartyBonusExpPercent`, party.cpp:1643-1660). Esta
+/// variante usa la tabla CHN (el `KOR_` de constants.cpp:830 es la
+/// alternativa del otro locale).
+const PARTY_EXP_BONUS_TABLE: [i32; 9] = [0, 0, 12, 18, 26, 40, 53, 70, 100];
+/// `PARTY_ENOUGH_MINUTE_FOR_EXP_BONUS = 60` (party.h:8) — minutos de party
+/// para el bonus de larga duración (`m_iLongTimeExpBonus`, party.cpp:1336).
+const PARTY_ENOUGH_MINUTE_FOR_EXP_BONUS: u64 = 60;
+/// `m_iLongTimeExpBonus = 5` (party.cpp:1339) — el % extra por party
+/// veterana (> 60 min, parity `Update` party.cpp:1336-1339).
+const PARTY_LONG_TIME_EXP_BONUS: i32 = 5;
 
 /// Peso de nivel del reparto NON_PARITY (parity `__GetPartyExpNP`,
 /// char_battle.cpp:44-49: `level == 0 || level > PLAYER_EXP_TABLE_MAX` →
@@ -300,6 +315,10 @@ pub struct PartyState {
     /// id nunca se reutiliza en caliente).
     pub id: u32,
     leader_pid: u32,
+    /// Instante de creación (parity `m_dwPartyStartTime` — party.cpp:262):
+    /// el bonus de larga duración (+5%) llega a los 60 min de party
+    /// (`Update`, party.cpp:1336-1339).
+    created_at: Instant,
     /// Modo de reparto de exp (`EPartyExpDistributionModes` — default
     /// NON_PARITY, party.cpp:249). Lo cambia CG_PARTY_PARAMETER (78).
     pub exp_mode: u8,
@@ -786,6 +805,7 @@ pub async fn handle_invite_answer(session: &mut Session, pkt: &[u8]) -> Result<O
             let mut party = PartyState {
                 id: p.leader_vid,
                 leader_pid: p.leader_vid,
+                created_at: Instant::now(),
                 exp_mode: PARTY_EXP_DISTRIBUTION_NON_PARITY,
                 members: HashMap::new(),
             };
@@ -983,13 +1003,20 @@ pub async fn handle_parameter(session: &mut Session, pkt: &[u8]) -> Result<Outco
 // ---------------------------------------------------------------------------
 
 /// Reparto de la exp de un kill entre los miembros del party del killer
-/// (parity `DistributeExp`/`FPartyDistributor` — char_battle.cpp:2465-2488,
+/// (parity `DistributeExp`/`FPartyDistributor` — char_battle.cpp:2465-2536,
 /// simplificado: miembros ONLINE del mismo mapa a ≤ PARTY_DEFAULT_RANGE
-/// (5000) del punto del kill; sin bonus de party ni centralización — GAPs
-/// del doc del módulo). La parte de cada miembro va por su outbox
-/// (`PartyMsg::ExpGain` → `Session::gain_exp`); devuelve la parte del
-/// KILLER (la que `apply_kill` aplica a su row). Sin party / sin reparto →
-/// devuelve `exp` íntegra (el kill normal).
+/// (5000) del punto del kill; sin centralización (`GetExpCentralizeCharacter`)
+/// — GAP del doc del módulo). El BONUS de party (parity
+/// char_battle.cpp:2513-2516 + `GetExpBonusPercent` party.cpp:1495-1501 +
+/// `ComputePartyBonusExpPercent` party.cpp:1643-1660): si el kill cayó a
+/// < PARTY_DEFAULT_RANGE del LÍDER y hay > 1 miembro cerca del líder, el
+/// pool se multiplica por `(100 + bonus) / 100` ANTES de repartir — bonus =
+/// tabla CHN por miembros cerca del líder (cap 8) + 5% si la party tiene
+/// más de 60 min. La parte de cada miembro va por su outbox
+/// (`PartyMsg::ExpGain` → `Session::gain_exp`); devuelve la parte del KILLER
+/// (la que `apply_kill` aplica a su row). Sin party / sin reparto devuelve
+/// `exp` (con el bonus ya aplicado — parity: el único miembro en rango
+/// recibe el pool completo).
 pub fn distribute_exp(session: &Session, exp: i64, kill_x: i32, kill_y: i32) -> i64 {
     if exp <= 0 {
         return 0;
@@ -998,7 +1025,7 @@ pub fn distribute_exp(session: &Session, exp: i64, kill_x: i32, kill_y: i32) -> 
     let map = session.row().map_index;
     // Miembros presentes: online + mismo mapa + dentro del rango del kill.
     let mut present: Vec<(u32, i16, u32, UnboundedSender<PartyMsg>)> = Vec::new();
-    let mode = {
+    let (mode, bonus) = {
         let ps = parties().lock().expect("parties lock");
         let Some(party) = ps.values().find(|pt| pt.members.contains_key(&vid)) else {
             return exp;
@@ -1012,11 +1039,51 @@ pub fn distribute_exp(session: &Session, exp: i64, kill_x: i32, kill_y: i32) -> 
                 present.push((m.pid, m.level, m.vid, out.clone()));
             }
         }
-        party.exp_mode
+        // Bonus de party (parity `GetExpBonusPercent`): solo si el kill cayó
+        // cerca del LÍDER (IsPositionNearLeader — party.cpp:1484-1493, `<`
+        // estricto) y hay > 1 miembro cerca del líder (Update — party.cpp:
+        // 1325-1332; mismo mapa como guard del subset — el C++ no chequea
+        // mapa fuera de dungeon). % = tabla CHN por count (cap 8) + 5% si la
+        // party tiene > 60 min. GAP: el +30% de item del líder
+        // (UNIQUE_ITEM_PARTY_BONUS_EXP, party.cpp:1653-1657) — la variante
+        // no trackea equipo.
+        let mut bonus = 0;
+        if let Some(leader) = party.members.get(&party.leader_pid) {
+            let near_leader = party
+                .members
+                .values()
+                .filter(|m| {
+                    m.map_index == leader.map_index
+                        && game_core::combat::distance_approx(m.x - leader.x, m.y - leader.y)
+                            < PARTY_DEFAULT_RANGE
+                })
+                .count();
+            if near_leader > 1
+                && game_core::combat::distance_approx(kill_x - leader.x, kill_y - leader.y)
+                    < PARTY_DEFAULT_RANGE
+            {
+                bonus = PARTY_EXP_BONUS_TABLE[near_leader.min(8)];
+                if party.created_at.elapsed()
+                    > Duration::from_secs(PARTY_ENOUGH_MINUTE_FOR_EXP_BONUS * 60)
+                {
+                    bonus += PARTY_LONG_TIME_EXP_BONUS;
+                }
+            }
+        }
+        (party.exp_mode, bonus)
+    };
+    // El bonus se aplica al pool ANTES de repartir (parity char_battle.cpp:
+    // 2513-2516: `iExp = iExp * (100 + pct) / 100`). Sin bonus → pool tal
+    // cual (comportamiento previo a la lane del bonus).
+    let exp = if bonus > 0 {
+        exp * (100 + i64::from(bonus)) / 100
+    } else {
+        exp
     };
     // Sin reparto: menos de 2 presentes (parity: FPartyDistributor solo da a
-    // los miembros en rango; con 1 no hay party efectiva) o el killer no
-    // está en la lista (estado inconsistente — defensivo).
+    // los miembros en rango; con 1 no hay party efectiva — el pool, ya
+    // bonificado, es del único miembro en rango: su peso = el total) o el
+    // killer no está en la lista (estado inconsistente — defensivo).
     if present.len() < 2 || !present.iter().any(|&(_, _, v, _)| v == vid) {
         return exp;
     }
@@ -1780,15 +1847,23 @@ mod tests {
         // A mata un mob en (969700, 278500): presentes = A + B (≤ 5000);
         // "far" está a ~10k del kill → fuera del reparto (parity
         // FPartyDistributor: DISTANCE_APPROX > PARTY_DEFAULT_RANGE → skip).
+        // BONUS de party activo (lane bonus): A (líder) está a ~135 del kill
+        // (IsPositionNearLeader) y B a ~1200 del líder → 2 miembros cerca
+        // del líder → +12% (CHN_aiPartyBonusExpPercentByMemberCount[2],
+        // constants.cpp:824-827) → pool 100 × 112/100 = 112.
         let my_share = distribute_exp(&a, 100, 969700, 278500);
         // PARITY NO está activo — el default es NON_PARITY (ponderado por
         // nivel): level 50 → 1800, level 45 → 1500 (tabla constants.cpp:
-        // 273-278). Total 3300 → killer 54, miembro 45 (residuo 1 — parity).
-        assert_eq!(my_share, 100 * 1800 / 3300, "parte del killer (NON_PARITY)");
+        // 273-278). Total 3300 → killer 61, miembro 50 (residuo 1 — parity).
+        assert_eq!(
+            my_share,
+            112 * 1800 / 3300,
+            "parte del killer (NON_PARITY + bonus 12%)"
+        );
         let to_b = recv_msg(&mut b).await;
         assert!(
-            matches!(to_b, PartyMsg::ExpGain { amount } if amount == 100 * 1500 / 3300),
-            "la parte de B (NON_PARITY ponderado por nivel)"
+            matches!(to_b, PartyMsg::ExpGain { amount } if amount == 112 * 1500 / 3300),
+            "la parte de B (NON_PARITY ponderado por nivel + bonus)"
         );
         // "far" NO recibe nada.
         assert!(
@@ -1817,6 +1892,80 @@ mod tests {
                 .await
                 .is_err(),
             "el miembro lejano no recibe exp"
+        );
+    }
+
+    #[tokio::test]
+    async fn kill_exp_bonus_grows_with_member_count_and_splits_non_parity() {
+        let _guard = test_lock();
+        let (mut a, _a_sock) = test_session(8301, "BonusLead", 50, 1, 41, 969600, 278400).await;
+        let (mut b, _b_sock) = test_session(8302, "BonusGuy", 45, 1, 41, 970600, 279000).await;
+        let (mut c, _c_sock) = test_session(8303, "BonusC", 30, 1, 41, 970000, 278800).await;
+        make_party(&mut a, &mut b).await;
+        for _ in 0..6 {
+            let _ = recv_msg(&mut a).await;
+        }
+        for _ in 0..6 {
+            let _ = recv_msg(&mut b).await;
+        }
+        // C se une (party de 3 — todos cerca del líder A).
+        let ic = TPacketCGPartyInvite::new(8303).to_bytes();
+        handle_invite(&mut a, &ic).await.expect("invite C");
+        let _ = recv_msg(&mut c).await;
+        let ac = TPacketCGPartyInviteAnswer::new(8301, 1).to_bytes();
+        handle_invite_answer(&mut c, &ac).await.expect("C acepta");
+        for _ in 0..2 {
+            let _ = recv_msg(&mut a).await;
+        }
+        for _ in 0..2 {
+            let _ = recv_msg(&mut b).await;
+        }
+        for _ in 0..8 {
+            let _ = recv_msg(&mut c).await;
+        }
+        // Kill cerca del líder con 3 miembros cerca → +18% (tabla CHN [3],
+        // constants.cpp:824-827 — parity ComputePartyBonusExpPercent). Pool
+        // = 100 × 118/100 = 118. NON_PARITY: pesos 1800/1500/550 (levels
+        // 50/45/30 — constants.cpp:273-278) → total 3850 → killer 55,
+        // B 45, C 16 (residuos sin repartir — parity).
+        let my_share = distribute_exp(&a, 100, 969700, 278500);
+        assert_eq!(
+            my_share,
+            118 * 1800 / 3850,
+            "parte del killer con 3 miembros (+18%)"
+        );
+        let to_b = recv_msg(&mut b).await;
+        assert!(
+            matches!(to_b, PartyMsg::ExpGain { amount } if amount == 118 * 1500 / 3850),
+            "la parte de B con 3 miembros"
+        );
+        let to_c = recv_msg(&mut c).await;
+        assert!(
+            matches!(to_c, PartyMsg::ExpGain { amount } if amount == 118 * 550 / 3850),
+            "la parte de C con 3 miembros"
+        );
+        // Party VETERANA (> 60 min — parity `Update` party.cpp:1336-1339):
+        // +5% extra sobre el bonus por tamaño → +23% → pool 123.
+        {
+            let mut ps = parties().lock().expect("parties lock");
+            let pt = ps.get_mut(&8301).expect("party del líder");
+            pt.created_at = pt.created_at - Duration::from_secs(61 * 60);
+        }
+        let my_share = distribute_exp(&a, 100, 969700, 278500);
+        assert_eq!(
+            my_share,
+            123 * 1800 / 3850,
+            "parte del killer con party veterana (+23%)"
+        );
+        let to_b = recv_msg(&mut b).await;
+        assert!(
+            matches!(to_b, PartyMsg::ExpGain { amount } if amount == 123 * 1500 / 3850),
+            "la parte de B (party veterana)"
+        );
+        let to_c = recv_msg(&mut c).await;
+        assert!(
+            matches!(to_c, PartyMsg::ExpGain { amount } if amount == 123 * 550 / 3850),
+            "la parte de C (party veterana)"
         );
     }
 
