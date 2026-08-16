@@ -72,7 +72,11 @@ pub const ATTR_MOVABLE_MASK: u32 = ATTR_BLOCK | ATTR_OBJECT;
 #[derive(Debug)]
 pub enum MapLoadError {
     /// I/O de un archivo del mapa.
-    Io { map: i32, path: String, source: std::io::Error },
+    Io {
+        map: i32,
+        path: String,
+        source: std::io::Error,
+    },
     /// El `index` no se pudo leer/parsear (problema global del map_path).
     Index(String),
     /// `Setting.txt` inválido para el mapa.
@@ -92,7 +96,9 @@ impl fmt::Display for MapLoadError {
             MapLoadError::Index(e) => write!(f, "index de mapas: {e}"),
             MapLoadError::Setting { map, source } => write!(f, "mapa {map}: Setting.txt: {source}"),
             MapLoadError::Attr { map, source } => write!(f, "mapa {map}: server_attr: {source}"),
-            MapLoadError::Cached { map, source } => write!(f, "mapa {map}: carga fallida antes: {source}"),
+            MapLoadError::Cached { map, source } => {
+                write!(f, "mapa {map}: carga fallida antes: {source}")
+            }
         }
     }
 }
@@ -133,7 +139,9 @@ impl MapData {
         if x < self.setting.base_x || y < self.setting.base_y {
             return None;
         }
-        if x >= self.setting.base_x + self.setting.width || y >= self.setting.base_y + self.setting.height {
+        if x >= self.setting.base_x + self.setting.width
+            || y >= self.setting.base_y + self.setting.height
+        {
             return None;
         }
         // Tree del punto: x/6400 (sectree_manager.cpp:75-76); tile en el
@@ -192,7 +200,8 @@ impl MapData {
 
 /// Parse de `Setting.txt` (parity `LoadSettingFile`, sectree_manager.cpp:163-208).
 pub fn parse_setting(index: i32, name: &str, content: &str) -> Result<MapSetting, String> {
-    let (mut width, mut height, mut base_x, mut base_y, mut cell_scale) = (0i32, 0i32, 0i32, 0i32, 0i32);
+    let (mut width, mut height, mut base_x, mut base_y, mut cell_scale) =
+        (0i32, 0i32, 0i32, 0i32, 0i32);
     for line in content.lines() {
         let mut tokens = line.split_whitespace();
         let Some(cmd) = tokens.next() else { continue };
@@ -243,8 +252,11 @@ pub fn parse_setting(index: i32, name: &str, content: &str) -> Result<MapSetting
 /// líneas `mapId mapName`; se saltan vacías y comentarios `#`/`/`.
 pub fn read_index(map_path: &str) -> Result<HashMap<i32, String>, MapLoadError> {
     let path = Path::new(map_path).join("index");
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| MapLoadError::Io { map: -1, path: path.display().to_string(), source: e })?;
+    let content = std::fs::read_to_string(&path).map_err(|e| MapLoadError::Io {
+        map: -1,
+        path: path.display().to_string(),
+        source: e,
+    })?;
     let mut index = HashMap::new();
     for line in content.lines() {
         let line = line.trim();
@@ -301,7 +313,9 @@ pub fn parse_attr_grid(bytes: &[u8], map: i32) -> Result<(usize, usize, Vec<u32>
             if ui_size < 0 || ui_size as usize > bytes.len() - at {
                 return Err(MapLoadError::Attr {
                     map,
-                    source: format!("tile ({tx},{ty}): bloque comprimido fuera de rango ({ui_size} B)"),
+                    source: format!(
+                        "tile ({tx},{ty}): bloque comprimido fuera de rango ({ui_size} B)"
+                    ),
                 });
             }
             let comp = &bytes[at..at + ui_size as usize];
@@ -387,11 +401,18 @@ impl MapStore {
             return Ok(());
         }
         if let Some(source) = self.failed.get(&map_id) {
-            return Err(MapLoadError::Cached { map: map_id, source: source.clone() });
+            return Err(MapLoadError::Cached {
+                map: map_id,
+                source: source.clone(),
+            });
         }
         // Mapas de instancia (≥ 10000): mismas celdas que su mapa base
         // (parity CreatePrivateMap — el C++ copia el sectree).
-        let base = if map_id >= 10000 { map_id / 10000 } else { map_id };
+        let base = if map_id >= 10000 {
+            map_id / 10000
+        } else {
+            map_id
+        };
         let name = match self.index_of(map_path) {
             Ok(idx) => match idx.get(&base).cloned() {
                 Some(n) => n,
@@ -429,7 +450,13 @@ impl MapStore {
 
     /// `IsMovablePosition` con get-or-load. `Err` = el mapa no cargó (el
     /// canal decide fail-open); `Ok(false)` = destino realmente no movible.
-    pub fn is_movable(&mut self, map_path: &str, map_id: i32, x: i32, y: i32) -> Result<bool, MapLoadError> {
+    pub fn is_movable(
+        &mut self,
+        map_path: &str,
+        map_id: i32,
+        x: i32,
+        y: i32,
+    ) -> Result<bool, MapLoadError> {
         self.load(map_path, map_id)?;
         Ok(self.get(map_id).is_some_and(|m| m.is_movable(x, y)))
     }
@@ -463,6 +490,40 @@ mod tests {
         }
     }
 
+    /// Diagnóstico 2026-08-16: las coords del crash del cliente (987103,
+    /// 314720) — ¿son terreno válido del mapa 41?
+    #[test]
+    fn check_crash_coords_987103_314720() {
+        let map_path = "../../deploy/main/srv1/share/locale/spain/map";
+        let attr = Path::new(map_path)
+            .join("metin2_map_c1")
+            .join("server_attr");
+        if !attr.exists() {
+            eprintln!("SKIP: runtime sin deploy");
+            return;
+        }
+        let bytes = std::fs::read(&attr).expect("server_attr legible");
+        let (tw, th, cells) = parse_attr_grid(&bytes, 41).expect("grid");
+        let m = MapData {
+            setting: map_41_setting(),
+            tiles_w: tw,
+            tiles_h: th,
+            cells,
+        };
+        eprintln!(
+            "coords crash (987103,314720): movible={}",
+            m.is_movable(987_103, 314_720)
+        );
+        eprintln!(
+            "spawn pueblo (969600,278400): movible={}",
+            m.is_movable(969_600, 278_400)
+        );
+        eprintln!(
+            "fuera del mapa (999999,999999): movible={}",
+            m.is_movable(9_999_999, 9_999_999)
+        );
+    }
+
     /// Grid sintética 2×1 tiles (256×128 celdas de 50 u), todo movible salvo
     /// las celdas marcadas.
     fn synthetic() -> MapData {
@@ -473,7 +534,12 @@ mod tests {
         // Celda (tx=1, cx=5, cy=7) bloqueada; celda (tx=0, cx=3, cy=4) objeto.
         cells[7 * cols + (TILE_CELLS + 5)] = ATTR_BLOCK;
         cells[4 * cols + 3] = ATTR_OBJECT;
-        MapData { setting: map_41_setting(), tiles_w: tw, tiles_h: th, cells }
+        MapData {
+            setting: map_41_setting(),
+            tiles_w: tw,
+            tiles_h: th,
+            cells,
+        }
     }
 
     fn unit_x(cx: usize) -> i32 {
@@ -500,7 +566,10 @@ mod tests {
     #[test]
     fn parse_setting_invalid_rejected() {
         assert!(parse_setting(41, "m", "").is_err(), "sin MapSize/CellScale");
-        assert!(parse_setting(41, "m", "MapSize 0 0\nCellScale 200").is_err(), "dims 0 (parity :198)");
+        assert!(
+            parse_setting(41, "m", "MapSize 0 0\nCellScale 200").is_err(),
+            "dims 0 (parity :198)"
+        );
     }
 
     /// `is_movable` sobre la grid sintética: celdas bloqueadas, el resto
@@ -557,17 +626,31 @@ mod tests {
     #[test]
     fn server_attr_map41_spot_check() {
         let map_path = "../../deploy/main/srv1/share/locale/spain/map";
-        let attr = Path::new(map_path).join("metin2_map_c1").join("server_attr");
+        let attr = Path::new(map_path)
+            .join("metin2_map_c1")
+            .join("server_attr");
         if !attr.exists() {
-            eprintln!("SKIP server_attr_map41_spot_check: {} no existe (runtime sin deploy)", attr.display());
+            eprintln!(
+                "SKIP server_attr_map41_spot_check: {} no existe (runtime sin deploy)",
+                attr.display()
+            );
             return;
         }
         let bytes = std::fs::read(&attr).expect("server_attr legible");
         let (tw, th, cells) = parse_attr_grid(&bytes, 41).expect("grid del mapa 41");
         assert_eq!((tw, th), (16, 20), "tiles del Setting (4x5 x CellScale/50)");
-        assert_eq!(cells.len(), 16 * TILE_CELLS * 20 * TILE_CELLS, "2048x2560 celdas");
+        assert_eq!(
+            cells.len(),
+            16 * TILE_CELLS * 20 * TILE_CELLS,
+            "2048x2560 celdas"
+        );
 
-        let m = MapData { setting: map_41_setting(), tiles_w: tw, tiles_h: th, cells };
+        let m = MapData {
+            setting: map_41_setting(),
+            tiles_w: tw,
+            tiles_h: th,
+            cells,
+        };
 
         // El spawn del jugador (Town.txt → base + (480,736)*100) ES movible
         // (la plaza del pueblo); el canal lo acepta en el primer MOVE.
@@ -600,14 +683,21 @@ mod tests {
     #[test]
     fn server_attr_map41_known_cells() {
         let map_path = "../../deploy/main/srv1/share/locale/spain/map";
-        let attr = Path::new(map_path).join("metin2_map_c1").join("server_attr");
+        let attr = Path::new(map_path)
+            .join("metin2_map_c1")
+            .join("server_attr");
         if !attr.exists() {
             eprintln!("SKIP server_attr_map41_known_cells: runtime sin deploy");
             return;
         }
         let bytes = std::fs::read(&attr).expect("server_attr legible");
         let (tw, th, cells) = parse_attr_grid(&bytes, 41).expect("grid");
-        let m = MapData { setting: map_41_setting(), tiles_w: tw, tiles_h: th, cells };
+        let m = MapData {
+            setting: map_41_setting(),
+            tiles_w: tw,
+            tiles_h: th,
+            cells,
+        };
 
         // Spawn del jugador (Town.txt -> base + (480,736)*100): movible.
         assert!(m.is_movable(969_600, 278_400), "spawn movible");
@@ -617,12 +707,19 @@ mod tests {
         // ella. ATTR_BLOCK REAL del archivo (el C++ la veria igual:
         // sectree_manager.cpp:760) — el bug 2026-08-13 NO era el parse.
         assert!(!m.is_movable(969_575, 278_375), "fuente: ATTR_BLOCK real");
-        assert!(!m.is_movable(969_595, 278_398), "borde de la fuente (el MOVE rechazado)");
+        assert!(
+            !m.is_movable(969_595, 278_398),
+            "borde de la fuente (el MOVE rechazado)"
+        );
 
         // AGUA (bit ATTR_WATER sin ATTR_BLOCK): el jugador puede caminar por
         // el agua (parity IsMovablePosition — solo BLOCK|OBJECT bloquean).
         let (wx, wy) = (996_300i32, 226_500i32);
-        assert_eq!(m.attr(wx, wy), Some(0x42), "agua: WATER + bit meta, sin BLOCK");
+        assert_eq!(
+            m.attr(wx, wy),
+            Some(0x42),
+            "agua: WATER + bit meta, sin BLOCK"
+        );
         assert!(m.is_movable(wx, wy), "el agua no bloquea");
 
         // MONTANA (ATTR_BLOCK): no movible (el anti-teleport la rechaza).
@@ -640,9 +737,15 @@ mod tests {
             store.load(map_path, 41).expect("mapa 41 del index");
             assert!(store.get(41).is_some());
             let err = store.load(map_path, 999_999).expect_err("mapa inexistente");
-            assert!(matches!(err, MapLoadError::Setting { .. } | MapLoadError::Index(_)));
+            assert!(matches!(
+                err,
+                MapLoadError::Setting { .. } | MapLoadError::Index(_)
+            ));
             let err2 = store.load(map_path, 999_999).expect_err("fallo cacheado");
-            assert!(matches!(err2, MapLoadError::Cached { .. }), "no re-lee disco: {err2}");
+            assert!(
+                matches!(err2, MapLoadError::Cached { .. }),
+                "no re-lee disco: {err2}"
+            );
         } else {
             eprintln!("SKIP map_store_load_and_cached_failure: {map_path}/index no existe");
         }
