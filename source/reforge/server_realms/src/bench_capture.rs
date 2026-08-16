@@ -87,8 +87,10 @@ static STATE: Mutex<Option<CaptureState>> = Mutex::new(None);
 /// flag, el módulo es un no-op de costo cero.
 pub fn init(dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
-    *STATE.lock().unwrap() =
-        Some(CaptureState { dir: dir.to_path_buf(), conns: Mutex::new(HashMap::new()) });
+    *STATE.lock().unwrap() = Some(CaptureState {
+        dir: dir.to_path_buf(),
+        conns: Mutex::new(HashMap::new()),
+    });
     Ok(())
 }
 
@@ -107,12 +109,18 @@ fn conn_path(state: &CaptureState, conn_id: u32, dir: Direction) -> PathBuf {
 pub fn open_conn(conn_id: u32) {
     let guard = STATE.lock().unwrap();
     let Some(st) = guard.as_ref() else { return };
-    let open = |p: &Path| -> Option<File> {
-        OpenOptions::new().create(true).append(true).open(p).ok()
+    let open =
+        |p: &Path| -> Option<File> { OpenOptions::new().create(true).append(true).open(p).ok() };
+    let Some(inbound) = open(&conn_path(st, conn_id, Direction::Inbound)) else {
+        return;
     };
-    let Some(inbound) = open(&conn_path(st, conn_id, Direction::Inbound)) else { return };
-    let Some(outbound) = open(&conn_path(st, conn_id, Direction::Outbound)) else { return };
-    st.conns.lock().unwrap().insert(conn_id, ConnFiles { inbound, outbound });
+    let Some(outbound) = open(&conn_path(st, conn_id, Direction::Outbound)) else {
+        return;
+    };
+    st.conns
+        .lock()
+        .unwrap()
+        .insert(conn_id, ConnFiles { inbound, outbound });
 }
 
 /// Captura `data` crudo de la conexión `conn_id` en la dirección indicada
@@ -125,7 +133,9 @@ pub fn capture_conn(conn_id: u32, direction: Direction, data: &[u8]) {
     let guard = STATE.lock().unwrap();
     let Some(st) = guard.as_ref() else { return };
     let mut conns = st.conns.lock().unwrap();
-    let Some(files) = conns.get_mut(&conn_id) else { return };
+    let Some(files) = conns.get_mut(&conn_id) else {
+        return;
+    };
     let f = match direction {
         Direction::Inbound => &mut files.inbound,
         Direction::Outbound => &mut files.outbound,
@@ -162,19 +172,26 @@ pub fn record_metrics(m: game_core::ecs::WorldMetrics) {
         Err(_) => return, // harness: un fallo de archivo no toca el runtime
     };
     if header {
-        let _ = writeln!(f, "ticks,intents_processed,mobs_spawned,mobs_despawned,events_emitted,tick_ms");
+        let _ = writeln!(
+            f,
+            "ticks,intents_processed,mobs_spawned,mobs_despawned,events_emitted,tick_ms"
+        );
     }
     let _ = writeln!(
         f,
         "{},{},{},{},{},{}",
-        m.ticks, m.intents_processed, m.mobs_spawned, m.mobs_despawned, m.events_emitted, m.last_tick_ms
+        m.ticks,
+        m.intents_processed,
+        m.mobs_spawned,
+        m.mobs_despawned,
+        m.events_emitted,
+        m.last_tick_ms
     );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     fn tmp_dir(tag: &str) -> PathBuf {
         let mut p = std::env::temp_dir();
@@ -219,8 +236,16 @@ mod tests {
 
         let in_path = dir.join("conn_000007_in.bin");
         let out_path = dir.join("conn_000007_out.bin");
-        assert_eq!(std::fs::read(&in_path).unwrap(), b"\xfd\x01\xff\x01\x02", "stream crudo IN");
-        assert_eq!(std::fs::read(&out_path).unwrap(), b"\xff\x0a", "stream crudo OUT");
+        assert_eq!(
+            std::fs::read(&in_path).unwrap(),
+            b"\xfd\x01\xff\x01\x02",
+            "stream crudo IN"
+        );
+        assert_eq!(
+            std::fs::read(&out_path).unwrap(),
+            b"\xff\x0a",
+            "stream crudo OUT"
+        );
 
         // 3. Un id sin open_conn no escribe nada.
         capture_conn(8, Direction::Inbound, b"x");
@@ -238,17 +263,30 @@ mod tests {
         open_conn(3);
         capture_conn(3, Direction::Inbound, b"b");
         close_conn(3);
-        assert_eq!(std::fs::read(&p3).unwrap(), b"ab", "append sobre la misma conexión");
+        assert_eq!(
+            std::fs::read(&p3).unwrap(),
+            b"ab",
+            "append sobre la misma conexión"
+        );
 
         // 5. Re-init (swap de estado) apunta a un dir nuevo.
         let dir2 = tmp_dir("swap");
         init(&dir2).unwrap();
-        assert!(dir.join("conn_000007_in.bin").exists(), "los archivos viejos quedan");
+        assert!(
+            dir.join("conn_000007_in.bin").exists(),
+            "los archivos viejos quedan"
+        );
         open_conn(9);
         capture_conn(9, Direction::Outbound, b"z");
         close_conn(9);
-        assert_eq!(std::fs::read(dir2.join("conn_000009_out.bin")).unwrap(), b"z");
-        assert_eq!(std::fs::read(dir2.join("conn_000009_out.bin")).unwrap(), b"z");
+        assert_eq!(
+            std::fs::read(dir2.join("conn_000009_out.bin")).unwrap(),
+            b"z"
+        );
+        assert_eq!(
+            std::fs::read(dir2.join("conn_000009_out.bin")).unwrap(),
+            b"z"
+        );
 
         // 6. record_metrics (harness F5): CSV con header + una linea por tick
         //    (las metricas del mundo, con el tick_ms del ultimo update). Vive
@@ -267,8 +305,14 @@ mod tests {
         let csv = std::fs::read_to_string(dir2.join("tick_ms.csv")).unwrap();
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(lines.len(), 3, "header + 2 ticks");
-        assert_eq!(lines[0], "ticks,intents_processed,mobs_spawned,mobs_despawned,events_emitted,tick_ms");
-        assert_eq!(lines[1], "3,7,11,2,5,42", "linea por tick (tick_ms del ultimo update)");
+        assert_eq!(
+            lines[0],
+            "ticks,intents_processed,mobs_spawned,mobs_despawned,events_emitted,tick_ms"
+        );
+        assert_eq!(
+            lines[1], "3,7,11,2,5,42",
+            "linea por tick (tick_ms del ultimo update)"
+        );
         assert_eq!(lines[2], "3,7,11,2,5,42");
 
         std::fs::remove_dir_all(&dir).unwrap();
