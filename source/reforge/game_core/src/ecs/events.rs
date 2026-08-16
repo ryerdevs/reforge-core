@@ -613,6 +613,43 @@ pub enum SkillEvent {
         skill_id: u32,
         point: u8,
     },
+    /// Modo SPLASH (área — flag SKILL_FLAG_SPLASH): el resultado COMPLETO
+    /// del uso, UNA entrada por víctima (mobs Y PCs atacables dentro del
+    /// radio, `lMaxHit` aplicado — parity `FuncSplashDamage`). El coste
+    /// SP/cooldown se paga UNA vez por uso (no por víctima — el mundo ya lo
+    /// aplicó; el canal descuenta el row con este evento). Los PCs golpeados
+    /// reciben ADEMÁS su propio `SplashVictimHit` (routing a la víctima —
+    /// parity `SendDamagePacket`: el mismo GC_DAMAGE_INFO a ambos descs).
+    SplashResult {
+        player_vid: u32,
+        skill_id: u32,
+        victims: Vec<SplashVictimInfo>,
+        sp_cost: i32,
+        hp_cost: i32,
+    },
+    /// El GOLPE recibido por un PC víctima del splash (routing a la VÍCTIMA
+    /// — la pareja del `SplashResult` del caster): el canal manda el mismo
+    /// GC_DAMAGE_INFO que ve el caster + el daño al row + GC_POINTS (la
+    /// barra) + GC_DEAD si murió (flujo compartido con el PvP).
+    SplashVictimHit {
+        player_vid: u32,
+        attacker_vid: u32,
+        packets: Vec<Vec<u8>>,
+        damage: i32,
+        dead: bool,
+    },
+}
+
+/// Una víctima del modo SPLASH (`SkillEvent::SplashResult`): su paquete
+/// GC_DAMAGE_INFO (el caster ve TODOS), el daño, si murió y — mobs — los
+/// datos del kill (el canal aplica la recompensa UNA vez por víctima).
+#[derive(Debug, Clone)]
+pub struct SplashVictimInfo {
+    pub victim_vid: u32,
+    pub packets: Vec<Vec<u8>>,
+    pub damage: i32,
+    pub dead: bool,
+    pub victim: Option<KillInfo>,
 }
 
 /// S→C del dominio ITEMS: el drop se creó en el mundo (el vid lo asignó el
@@ -757,7 +794,9 @@ impl SkillEvent {
     pub fn player_vid(&self) -> u32 {
         match self {
             SkillEvent::SkillResult { player_vid, .. }
-            | SkillEvent::AffectRemoved { player_vid, .. } => *player_vid,
+            | SkillEvent::AffectRemoved { player_vid, .. }
+            | SkillEvent::SplashResult { player_vid, .. }
+            | SkillEvent::SplashVictimHit { player_vid, .. } => *player_vid,
         }
     }
 }

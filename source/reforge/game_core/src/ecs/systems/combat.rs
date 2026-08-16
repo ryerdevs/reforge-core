@@ -381,8 +381,9 @@ impl WorldSim {
 
     /// El gate PvP del mundo: `battle_is_attackable` con los contextos de
     /// AMBOS jugadores (pk mode + party + hp de sus componentes). Sin
-    /// componentes → no atacable (defensivo).
-    fn pvp_attackable(&self, attacker: Entity, victim: Entity) -> bool {
+    /// componentes → no atacable (defensivo). Lo usa el PvP (combate) y el
+    /// modo SPLASH de las skills (systems/skill.rs).
+    pub(crate) fn pvp_attackable(&self, attacker: Entity, victim: Entity) -> bool {
         match (self.pvp_context(attacker), self.pvp_context(victim)) {
             (Some(a), Some(v)) => battle_is_attackable(&a, &v),
             _ => false,
@@ -391,7 +392,7 @@ impl WorldSim {
 
     /// El contexto PvP de un jugador (parity `GetPKMode`/`GetParty`/
     /// `IsDead` — los consume el gate).
-    fn pvp_context(&self, e: Entity) -> Option<PvpContext> {
+    pub(crate) fn pvp_context(&self, e: Entity) -> Option<PvpContext> {
         let ent = self.world.get_entity(e).ok()?;
         let pvp = ent.get::<Pvp>()?;
         let hp = ent.get::<Hp>()?;
