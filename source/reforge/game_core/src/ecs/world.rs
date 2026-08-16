@@ -10,7 +10,7 @@ use bevy_ecs::prelude::*;
 
 use crate::combat::CombatState;
 use crate::ecs::components::{
-    Affects, Combat, Hp, Map, Mp, Player, Position, SkillCooldowns, SkillLevels,
+    Affects, Combat, Hp, Map, Mp, Player, Position, Pvp, SkillCooldowns, SkillLevels,
 };
 use crate::ecs::events::{
     CombatIntent, Intent, ItemIntent, MoveIntent, NpcEvent, PlayerJoin, SkillIntent,
@@ -146,6 +146,7 @@ impl WorldSim {
                 SkillLevels(join.skill_level),
                 SkillCooldowns::default(),
                 Affects::default(),
+                Pvp::default(), // PK mode + party (el gate PvP del mundo)
             ))
             .id();
         self.players.insert(join.vid, e);
@@ -219,6 +220,14 @@ impl WorldSim {
                 }
                 CombatIntent::SetLevel { player_vid, level } => {
                     self.set_player_level(player_vid, level);
+                    Vec::new()
+                }
+                CombatIntent::SetPvpMode { player_vid, on } => {
+                    self.set_player_pvp_mode(player_vid, on);
+                    Vec::new()
+                }
+                CombatIntent::SetParty { player_vid, party_id } => {
+                    self.set_player_party(player_vid, party_id);
                     Vec::new()
                 }
             },

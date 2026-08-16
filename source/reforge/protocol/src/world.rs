@@ -2490,7 +2490,10 @@ mod tests {
                 cell: 42,
             },
         };
-        assert_eq!(TPacketCGItemUseToItem::from_bytes(&uti.to_bytes()).unwrap(), uti);
+        assert_eq!(
+            TPacketCGItemUseToItem::from_bytes(&uti.to_bytes()).unwrap(),
+            uti
+        );
 
         let cr = TPacketCGRefine {
             header: TPacketCGRefine::HEADER,
@@ -2511,7 +2514,10 @@ mod tests {
             prob: 54,
             materials: [RefineMaterial { vnum: 0, count: 0 }; 5],
         };
-        info.materials[0] = RefineMaterial { vnum: 30053, count: 1 };
+        info.materials[0] = RefineMaterial {
+            vnum: 30053,
+            count: 1,
+        };
         let bytes = info.to_bytes();
         assert_eq!(bytes[0], 119);
         assert_eq!(bytes[1], 2, "type SCROLL");

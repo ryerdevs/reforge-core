@@ -9,11 +9,13 @@ use bevy_ecs::prelude::*;
 
 use crate::ai::{attack_damage, change_attack_dest, mob_move_speed, move_duration_ms, rotation_5deg, step_toward};
 use crate::combat::{
-    attack_speed_for_weapon_bonus, distance_approx, handle_attack,
-    mob_attack_max_range, mob_attack_range_base, player_def_grade, CombatState, NpcState, PlayerState,
+    attack_speed_for_weapon_bonus, battle_is_attackable, distance_approx, handle_attack,
+    mob_attack_max_range, mob_attack_range_base, player_def_grade, BATTLE_TYPE_MELEE,
+    CombatState, NpcState, PlayerState, PvpContext,
 };
 use crate::ecs::components::{
-    Affects, Aggro, AttackPos, Combat, Hp, LastAttack, Map, Mob, Mp, Player, Position, SpawnRef, Vid,
+    Affects, Aggro, AttackPos, Combat, Hp, LastAttack, Map, Mob, Mp, Player, Position, Pvp,
+    SpawnRef, Vid,
 };
 use crate::ecs::events::{CombatEvent, KillInfo, MoveEvent, NpcEvent};
 use crate::ecs::resources::{
@@ -334,8 +336,7 @@ pub(crate) struct NpcDamage {
 
 impl WorldSim {
     /// Estado completo del mob `vid` (None si no existe).
-    pub(crate) fn npc_view(&self, vid: u32) -> Option<NpcView> {
-        let e = *self.world.resource::<NpcIndex>().0.get(&vid)?;
+    pub(crate) fn npc_view(&self, vid: u32) -> Option<NpcView> {        let e = *self.world.resource::<NpcIndex>().0.get(&vid)?;
         let ent = self.world.get_entity(e).ok()?;
         let pos = ent.get::<Position>()?;
         let hp = ent.get::<Hp>()?;
@@ -350,6 +351,51 @@ impl WorldSim {
             gold_max: mob.gold_max,
             drop_item: mob.drop_item,
         })
+    }
+
+    /// La vista `NpcState` de un JUGADOR como VÍCTIMA PvP: sus stats
+    /// (level/ht/dx) + la DEF del PC (`player_def_grade` — char.cpp:
+    /// 2112-2114) DOBLADA en `wdef` para que `melee_damage` (que usa
+    /// `def_grade_npc` = level+ht+wdef) produzca la def del PC — parity
+    /// `GetDefGrade()` del CHARACTER (el mob y el PC comparten la fórmula
+    /// del daño, `CalcMeleeDamage`). El rango: MELEE con attack_range 0 →
+    /// `melee_max_range` = 300 (parity battle.cpp:144-167 — una víctima PC
+    /// NO extiende el rango del atacante, solo los mobs MELEE lo hacen).
+    fn player_npc_state(&self, e: Entity) -> Option<NpcState> {
+        let ent = self.world.get_entity(e).ok()?;
+        let pos = ent.get::<Position>()?;
+        let p = ent.get::<Player>()?;
+        let def = player_def_grade(p.level, p.ht, p.armor);
+        Some(NpcState {
+            vid: p.vid,
+            x: pos.x,
+            y: pos.y,
+            level: p.level,
+            dx: p.dx,
+            ht: p.ht,
+            wdef: def - p.level - p.ht, // def_grade_npc(lv, ht, wdef) == def PC
+            battle_type: BATTLE_TYPE_MELEE,
+            attack_range: 0,
+        })
+    }
+
+    /// El gate PvP del mundo: `battle_is_attackable` con los contextos de
+    /// AMBOS jugadores (pk mode + party + hp de sus componentes). Sin
+    /// componentes → no atacable (defensivo).
+    fn pvp_attackable(&self, attacker: Entity, victim: Entity) -> bool {
+        match (self.pvp_context(attacker), self.pvp_context(victim)) {
+            (Some(a), Some(v)) => battle_is_attackable(&a, &v),
+            _ => false,
+        }
+    }
+
+    /// El contexto PvP de un jugador (parity `GetPKMode`/`GetParty`/
+    /// `IsDead` — los consume el gate).
+    fn pvp_context(&self, e: Entity) -> Option<PvpContext> {
+        let ent = self.world.get_entity(e).ok()?;
+        let pvp = ent.get::<Pvp>()?;
+        let hp = ent.get::<Hp>()?;
+        Some(PvpContext { pvp_mode: pvp.mode, party_id: pvp.party_id, hp: hp.hp })
     }
 
     /// Aplica `damage` al HP del mob (clamp a 0) y le marca AGGRO contra el
@@ -488,7 +534,24 @@ impl WorldSim {
             crc_proc: 0,
             crc_file: 0,
         };
-        let target = self.npc_view(victim_vid).map(|v| v.state);
+        // Resuelve el objetivo: mob materializado (NpcIndex) o — PvP — OTRO
+        // jugador del mundo (`players` — un PC no está en el NpcIndex).
+        let mut target = self.npc_view(victim_vid).map(|v| v.state);
+        let pvp_victim = if target.is_none() {
+            self.players.get(&victim_vid).copied()
+        } else {
+            None
+        };
+        // GATE PvP (parity `battle_is_attackable` — battle.cpp:107-139; se
+        // evalúa ANTES del cooldown, parity `CHARACTER::Attack`
+        // char_battle.cpp:205-210): un PC→PC no atacable → sin evento
+        // (parity: return false — el canal no mandaba nada).
+        if let Some(ve) = pvp_victim {
+            if !self.pvp_attackable(pe, ve) {
+                return Vec::new();
+            }
+            target = self.player_npc_state(ve);
+        }
         // El cooldown del jugador: componente Combat de su entidad (se
         // extrae y se devuelve — borrows secuenciales del mundo).
         let mut combat = {
@@ -517,6 +580,43 @@ impl WorldSim {
         }
         if result.packets.is_empty() {
             return Vec::new(); // rechazado (cooldown/rango/sin objetivo)
+        }
+        let damage = result.damage;
+        // PvP: el daño va al Hp del PC VÍCTIMA (igual que al mob) y se
+        // emiten DOS eventos — el del atacante (`PvPAttackResult`) y el de
+        // la víctima (`PvPVictimHit`): parity `SendDamagePacket`
+        // (char_battle.cpp:1508-1527) manda el mismo GC_DAMAGE_INFO a
+        // AMBOS descs; la víctima además recibe GC_POINTS (su barra) y
+        // GC_DEAD si murió (flujo de muerte/revive compartido).
+        if let Some(ve) = pvp_victim {
+            let hp_after = {
+                let Ok(mut ent) = self.world.get_entity_mut(ve) else {
+                    return Vec::new(); // defensivo: el objetivo desapareció
+                };
+                let Some(mut hp) = ent.get_mut::<Hp>() else {
+                    return Vec::new();
+                };
+                hp.hp = (hp.hp - damage).max(0);
+                hp.hp
+            };
+            let dead = hp_after <= 0;
+            return vec![
+                CombatEvent::PvPAttackResult {
+                    player_vid,
+                    victim_vid,
+                    packets: result.packets.clone(),
+                    damage,
+                    dead,
+                    victim_hp: hp_after,
+                }.into(),
+                CombatEvent::PvPVictimHit {
+                    player_vid: victim_vid,
+                    attacker_vid: player_vid,
+                    packets: result.packets,
+                    damage,
+                    dead,
+                }.into(),
+            ];
         }
         let Some(view) = self.npc_view(victim_vid) else {
             return Vec::new(); // defensivo: el objetivo desapareció
@@ -615,6 +715,29 @@ impl WorldSim {
             && let Some(mut p) = ent.get_mut::<Player>()
         {
             p.level = level;
+        }
+    }
+
+    /// Sincroniza el PK mode del jugador (CG_PVP 41 — el handler del canal
+    /// lo manda al setear el flag de sesión; el gate `battle_is_attackable`
+    /// del PvP lo consume).
+    pub(crate) fn set_player_pvp_mode(&mut self, player_vid: u32, on: bool) {
+        let Some(e) = self.players.get(&player_vid).copied() else { return };
+        if let Ok(mut ent) = self.world.get_entity_mut(e)
+            && let Some(mut p) = ent.get_mut::<Pvp>()
+        {
+            p.mode = on;
+        }
+    }
+
+    /// Sincroniza la party del jugador (Joined/LeftParty del canal —
+    /// "cannot attack same party", pvp.cpp:439-441).
+    pub(crate) fn set_player_party(&mut self, player_vid: u32, party_id: Option<u32>) {
+        let Some(e) = self.players.get(&player_vid).copied() else { return };
+        if let Ok(mut ent) = self.world.get_entity_mut(e)
+            && let Some(mut p) = ent.get_mut::<Pvp>()
+        {
+            p.party_id = party_id;
         }
     }
 }
@@ -1234,5 +1357,139 @@ mod tests {
             "no reaparece al volver el jugador: {events:?}"
         );
         assert_eq!(w.npc_count(), 0);
+    }
+
+    /// PvP básico: el ataque a OTRO JUGADOR (players map) con PK mode ON
+    /// hace daño a su Hp y emite los DOS eventos — `PvPAttackResult`
+    /// (atacante) y `PvPVictimHit` (víctima) con los MISMOS paquetes
+    /// (parity `SendDamagePacket`, char_battle.cpp:1508-1527 — el
+    /// GC_DAMAGE_INFO va a ambos descs). Sin PK mode en ninguno → el gate
+    /// `battle_is_attackable` rechaza SIN evento (parity battle.cpp:107-139
+    /// — return false, el canal no mandaba nada).
+    #[test]
+    fn pvp_attack_requires_pk_mode_and_damages_victim() {
+        let mut w = world_with(42);
+        join_at(&mut w, 2, 0, 0); // atacante (ninja lvl 5 del harness)
+        join_at(&mut w, 3, 0, 0); // víctima (el mismo dummy)
+        // PK OFF en ambos → el gate rechaza (PK_MODE_PEACE — el resto del
+        // switch del C++ cae al duelo → false).
+        let events = w.process_intent(
+            CombatIntent::Attack { player_vid: 2, victim_vid: 3, b_type: 0, weapon: None }.into(),
+            1_000,
+        );
+        assert!(events.is_empty(), "PK OFF → battle_is_attackable false: {events:?}");
+        // Atacante PK ON → atacable: el golpe hace daño al Hp del jugador 3.
+        w.process_intent(CombatIntent::SetPvpMode { player_vid: 2, on: true }.into(), 1_000);
+        let events = w.process_intent(
+            CombatIntent::Attack { player_vid: 2, victim_vid: 3, b_type: 0, weapon: None }.into(),
+            1_000,
+        );
+        let atk = events.iter().find_map(|e| match e {
+            NpcEvent::Combat(CombatEvent::PvPAttackResult { victim_vid, packets, damage, dead, victim_hp, .. }) => {
+                Some((*victim_vid, packets.clone(), *damage, *dead, *victim_hp))
+            }
+            _ => None,
+        }).expect("PvPAttackResult");
+        let hit = events.iter().find_map(|e| match e {
+            NpcEvent::Combat(CombatEvent::PvPVictimHit { player_vid, attacker_vid, packets, damage, dead, .. }) => {
+                Some((*player_vid, *attacker_vid, packets.clone(), *damage, *dead))
+            }
+            _ => None,
+        }).expect("PvPVictimHit");
+        let (victim_vid, atk_packets, damage, dead, victim_hp) = atk;
+        let (hit_vid, attacker_vid, hit_packets, hit_damage, hit_dead) = hit;
+        assert_eq!(victim_vid, 3);
+        assert_eq!(hit_vid, 3, "el evento de la víctima va a SU cola (routing)");
+        assert_eq!(attacker_vid, 2);
+        assert_eq!(atk_packets, hit_packets, "el mismo GC_DAMAGE_INFO a ambos descs");
+        assert_eq!(atk_packets.len(), 1);
+        assert_eq!(atk_packets[0][0], 135, "header GC_DAMAGE_INFO");
+        assert!(!dead && !hit_dead);
+        // DEF del PC víctima: player_def_grade(5, 30, 0) = 29 (char.cpp:
+        // 2112-2114 — level + ht/1.25 + armor) → 56-29 = 27 / 57-29 = 28
+        // (la MISMA fórmula del mob, con la def del PC como víctima).
+        assert!((27..=28).contains(&damage), "daño del ninja vs PC lvl 5: {damage}");
+        assert_eq!(hit_damage, damage);
+        assert_eq!(victim_hp, 100 - damage, "hp del PC tras el golpe");
+        assert_eq!(w.player_hp(3), 100 - damage, "el mundo aplicó el daño al Hp del PC");
+        // La VÍCTIMA con PK ON también es atacable con el atacante OFF
+        // (parity IsKillerMode — pvp.cpp:443-445). Esperando el cooldown
+        // del jugador (1250 ms → 2_500).
+        w.process_intent(CombatIntent::SetPvpMode { player_vid: 2, on: false }.into(), 2_000);
+        w.process_intent(CombatIntent::SetPvpMode { player_vid: 3, on: true }.into(), 2_000);
+        let events = w.process_intent(
+            CombatIntent::Attack { player_vid: 2, victim_vid: 3, b_type: 0, weapon: None }.into(),
+            2_500,
+        );
+        assert!(
+            events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::PvPAttackResult { .. }))),
+            "PK ON de la víctima → atacable: {events:?}"
+        );
+    }
+
+    /// PvP: la misma PARTY bloquea el ataque aunque el atacante tenga PK
+    /// ON (pvp.cpp:439-441 — "Cannot attack same party on any pvp model");
+    /// al salir de la party el ataque YA pasa.
+    #[test]
+    fn pvp_attack_blocked_by_same_party() {
+        let mut w = world_with(42);
+        join_at(&mut w, 2, 0, 0);
+        join_at(&mut w, 3, 0, 0);
+        w.process_intent(CombatIntent::SetPvpMode { player_vid: 2, on: true }.into(), 1_000);
+        w.process_intent(CombatIntent::SetParty { player_vid: 2, party_id: Some(7) }.into(), 1_000);
+        w.process_intent(CombatIntent::SetParty { player_vid: 3, party_id: Some(7) }.into(), 1_000);
+        let events = w.process_intent(
+            CombatIntent::Attack { player_vid: 2, victim_vid: 3, b_type: 0, weapon: None }.into(),
+            1_000,
+        );
+        assert!(events.is_empty(), "misma party → no atacable: {events:?}");
+        // El jugador 3 sale de la party → el ataque YA pasa (cooldown intacto
+        // — el gate corre ANTES, parity char_battle.cpp:205-210).
+        w.process_intent(CombatIntent::SetParty { player_vid: 3, party_id: None }.into(), 1_000);
+        let events = w.process_intent(
+            CombatIntent::Attack { player_vid: 2, victim_vid: 3, b_type: 0, weapon: None }.into(),
+            1_000,
+        );
+        assert!(
+            events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::PvPAttackResult { .. }))),
+            "parties distintas → atacable: {events:?}"
+        );
+    }
+
+    /// PvP: la MUERTE del PC — hp ≤ 0 → `dead` en ambos eventos y el Hp
+    /// del mundo a 0 (la víctima entra al flujo de muerte/revive del canal:
+    /// GC_DEAD + CG_SCRIPT_ANSWER → script.rs). El muerto YA no es atacable
+    /// (battle_is_attackable — IsDead, battle.cpp:116).
+    #[test]
+    fn pvp_kill_drops_victim_hp_to_zero() {
+        let mut w = world_with(42);
+        join_at(&mut w, 2, 0, 0);
+        join_at(&mut w, 3, 0, 0);
+        w.process_intent(CombatIntent::SetPvpMode { player_vid: 2, on: true }.into(), 1_000);
+        // La víctima a 10 hp: un golpe (27-28) la mata.
+        w.process_intent(CombatIntent::SetHp { player_vid: 3, hp: 10 }.into(), 1_000);
+        let events = w.process_intent(
+            CombatIntent::Attack { player_vid: 2, victim_vid: 3, b_type: 0, weapon: None }.into(),
+            1_000,
+        );
+        let (dead, hp) = events.iter().find_map(|e| match e {
+            NpcEvent::Combat(CombatEvent::PvPAttackResult { dead, victim_hp, .. }) => {
+                Some((*dead, *victim_hp))
+            }
+            _ => None,
+        }).expect("PvPAttackResult");
+        assert!(dead, "10 hp < 27 de daño → muere");
+        assert_eq!(hp, 0);
+        assert!(
+            events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::PvPVictimHit { dead: true, .. }))),
+            "el evento de la víctima marca la muerte"
+        );
+        assert_eq!(w.player_hp(3), 0, "el mundo dejó el Hp del PC a 0");
+        // El muerto YA no es atacable (IsDead → false, battle.cpp:116).
+        let events = w.process_intent(
+            CombatIntent::Attack { player_vid: 2, victim_vid: 3, b_type: 0, weapon: None }.into(),
+            2_500,
+        );
+        assert!(events.is_empty(), "víctima muerta → no atacable: {events:?}");
     }
 }

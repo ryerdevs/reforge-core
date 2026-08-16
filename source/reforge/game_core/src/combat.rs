@@ -285,6 +285,42 @@ pub fn player_def_grade(level: i32, ht: i32, i_armor: i32) -> i32 {
     level + (ht as f64 / 1.25) as i32 + i_armor
 }
 
+/// El contexto PvP de un jugador para el gate `battle_is_attackable`
+/// (parity `GetPKMode()`/`GetParty()`/`IsDead()` del CHARACTER C++). Lo
+/// construye el mundo de los componentes del jugador (`Pvp` + `Hp`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PvpContext {
+    /// PK mode del jugador (CG_PVP 41 — flag de sesión; parity `GetPKMode`).
+    pub pvp_mode: bool,
+    /// Party del jugador (None sin party — parity `GetParty()`).
+    pub party_id: Option<u32>,
+    /// HP actual (el muerto no ataca ni es atacable — parity `IsDead()`).
+    pub hp: i32,
+}
+
+/// `battle_is_attackable` (battle.cpp:107-139 + `CPVPManager::CanAttack`,
+/// pvp.cpp:373-...): el gate PC→PC del PvP — subset básico con parity:
+/// 1. Muerto (atacante o víctima) → false (battle.cpp:116-118 — `IsDead()`;
+///    `IsObserverMode` sin observers en el subset).
+/// 2. Misma party → false (pvp.cpp:439-441: "Cannot attack same party on
+///    any pvp model").
+/// 3. La VÍCTIMA con PK ON (parity `IsKillerMode`) → true.
+/// 4. El ATACANTE con PK ON (parity `PK_MODE_FREE`) → true.
+/// 5. Si no → false (sin guilds/duelos/arena en el subset — el resto del
+///    switch del C++ cae en el `Find` del duelo → false).
+/// ATTR_BANPK del mapa (battle.cpp:112-115): sin mapas de zonas aún — el
+/// subset usa el flag de sesión (documentado). El gate se evalúa ANTES del
+/// cooldown (parity `CHARACTER::Attack`, char_battle.cpp:205-210).
+pub fn battle_is_attackable(attacker: &PvpContext, victim: &PvpContext) -> bool {
+    if attacker.hp <= 0 || victim.hp <= 0 {
+        return false;
+    }
+    if attacker.party_id.is_some() && attacker.party_id == victim.party_id {
+        return false;
+    }
+    victim.pvp_mode || attacker.pvp_mode
+}
+
 /// `CalcAttackRating` (`battle.cpp:227-251`) en f32. OJO: `(iERSrc*2 + 5) /
 /// (iERSrc + 95)` es división ENTERA en el C++ (los dos operandos son int).
 pub fn calc_attack_rating(attacker_dx: i32, attacker_lv: i32, victim_dx: i32, victim_lv: i32) -> f32 {
@@ -661,6 +697,28 @@ mod tests {
         // Con armadura: se suma el iArmor del equipo (char.cpp:2146).
         assert_eq!(player_def_grade(5, 30, 100), 129, "29 + 100");
         assert_eq!(player_def_grade(1, 5, 20), 25, "5 + 20");
+    }
+
+    /// El gate PvP (`battle_is_attackable` — battle.cpp:107-139 +
+    /// CPVPManager::CanAttack, pvp.cpp:373-...): muerto → false; misma
+    /// party → false; PK ON de la víctima o del atacante → true; ambos OFF
+    /// → false (el resto del switch del C++ cae en el duelo → false).
+    #[test]
+    fn battle_is_attackable_gate_pvp() {
+        let live = |pvp: bool, party: Option<u32>| PvpContext { pvp_mode: pvp, party_id: party, hp: 100 };
+        let dead = PvpContext { pvp_mode: true, party_id: None, hp: 0 };
+        // Muerto: ni el atacante ataca ni la víctima es atacable (battle.cpp:116).
+        assert!(!battle_is_attackable(&dead, &live(true, None)));
+        assert!(!battle_is_attackable(&live(true, None), &dead));
+        // Misma party → no (pvp.cpp:439-441 — "any pvp model").
+        assert!(!battle_is_attackable(&live(true, Some(7)), &live(false, Some(7))));
+        assert!(battle_is_attackable(&live(true, Some(7)), &live(false, Some(8))));
+        // PK ON de la VÍCTIMA → atacable (parity IsKillerMode).
+        assert!(battle_is_attackable(&live(false, None), &live(true, None)));
+        // PK ON del ATACANTE (parity PK_MODE_FREE) → atacable.
+        assert!(battle_is_attackable(&live(true, None), &live(false, None)));
+        // Ambos OFF (PK_MODE_PEACE) → no.
+        assert!(!battle_is_attackable(&live(false, None), &live(false, None)));
     }
 
     /// Atacante del harness E2E (channel.rs `dummy_row` — ninja: job 1

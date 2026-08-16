@@ -59,6 +59,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use database::player::PlayerRow;
+use game_core::ecs::{CombatIntent, Intent};
 use protocol::header;
 use protocol::world::{
     TPacketCGPartyInvite, TPacketCGPartyInviteAnswer, TPacketCGPartyParameter,
@@ -1057,12 +1058,32 @@ pub async fn handle_msg(session: &mut Session, msg: PartyMsg) -> Result<(), Stri
         }
         PartyMsg::Joined { party_id } => {
             session.party_id = Some(party_id);
+            // El mundo COMPARTIDO (el gate PvP "cannot attack same party" —
+            // pvp.cpp:439-441 — se evalúa donde están AMBOS jugadores).
+            pvp_sync_party(session, Some(party_id));
             Ok(())
         }
         PartyMsg::LeftParty => {
             session.party_id = None;
+            pvp_sync_party(session, None);
             Ok(())
         }
+    }
+}
+
+/// Sincroniza la party del jugador al mundo COMPARTIDO (el gate PvP
+/// `battle_is_attackable` — "cannot attack same party" — se evalúa en el
+/// mundo, donde están AMBOS jugadores). Error → log (no fatal — el flag
+/// del mundo queda stale solo hasta el próximo join/leave).
+fn pvp_sync_party(session: &mut Session, party_id: Option<u32>) {
+    if let Err(e) = session.intent(Intent::Combat(CombatIntent::SetParty {
+        player_vid: session.player_vid(),
+        party_id,
+    })) {
+        eprintln!(
+            "server_realms: channel conn {}: sync de party al mundo: {e}",
+            session.conn_id
+        );
     }
 }
 

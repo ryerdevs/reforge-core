@@ -179,6 +179,19 @@ pub struct Player {
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub struct Combat(pub crate::combat::CombatState);
 
+/// Estado PvP/PK del jugador (parity `GetPKMode()`/`GetParty()` del
+/// CHARACTER C++ — efímero de sesión, sin columna en `player.player`). El
+/// canal lo sincroniza con `CombatIntent::SetPvpMode`/`SetParty` (el gate
+/// `battle_is_attackable` del mundo — PvP — lo consume).
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Pvp {
+    /// PK mode ON (CG_PVP 41 — el flag de sesión del canal).
+    pub mode: bool,
+    /// Party del jugador (None sin party — "cannot attack same party on
+    /// any pvp model", pvp.cpp:439-441).
+    pub party_id: Option<u32>,
+}
+
 /// SP del jugador (el coste de las skills lo paga de aquí — parity
 /// `PointChange(POINT_SP, -iNeededSP)`; se sincroniza con row.mp: pociones,
 /// revive — `Intent::SetMp`).

@@ -103,6 +103,13 @@ pub enum CombatIntent {
     SetArmor { player_vid: u32, armor: i32 },
     /// Level-up del kill (la DEF del ataque del mob lo usa).
     SetLevel { player_vid: u32, level: i32 },
+    /// PK mode del jugador (CG_PVP 41 — el handler del canal lo manda al
+    /// setear el flag de sesión; el gate PvP `battle_is_attackable` del
+    /// mundo lo consume — el mundo es donde están AMBOS jugadores).
+    SetPvpMode { player_vid: u32, on: bool },
+    /// Party del jugador (el canal lo sincroniza en Joined/LeftParty —
+    /// "cannot attack same party", pvp.cpp:439-441).
+    SetParty { player_vid: u32, party_id: Option<u32> },
 }
 
 /// C→S de MOVIMIENTO: el CG_MOVE aceptado por la validación del canal
@@ -522,6 +529,30 @@ pub enum CombatEvent {
         hp: i32,
         max_hp: i32,
     },
+    /// El ataque del jugador contra OTRO JUGADOR (PvP — parity
+    /// `battle_melee_attack` + `SendDamagePacket`): el daño va al Hp del PC
+    /// víctima (mundo) y el `packets` (GC_DAMAGE_INFO) se manda al atacante
+    /// Y a la víctima (char_battle.cpp:1508-1527 — ambos descs).
+    /// `victim_hp` = HP del objetivo tras el golpe (el log del atacante).
+    PvPAttackResult {
+        player_vid: u32,
+        victim_vid: u32,
+        packets: Vec<Vec<u8>>,
+        damage: i32,
+        dead: bool,
+        victim_hp: i32,
+    },
+    /// El GOLPE recibido de otro jugador (routing a la VÍCTIMA — la pareja
+    /// del `PvPAttackResult` del mismo ataque): el canal aplica el daño al
+    /// row, manda GC_DAMAGE_INFO + GC_POINTS (la barra) y GC_DEAD si murió
+    /// (el flujo de muerte/revive compartido con el MobAttack).
+    PvPVictimHit {
+        player_vid: u32,
+        attacker_vid: u32,
+        packets: Vec<Vec<u8>>,
+        damage: i32,
+        dead: bool,
+    },
 }
 
 /// S→C del dominio MOVIMIENTO: el mob se MOVIÓ (GC_MOVE FUNC_MOVE —
@@ -690,7 +721,9 @@ impl CombatEvent {
             | CombatEvent::Spawned { player_vid, .. }
             | CombatEvent::Despawned { player_vid, .. }
             | CombatEvent::AttackResult { player_vid, .. }
-            | CombatEvent::TargetResult { player_vid, .. } => *player_vid,
+            | CombatEvent::TargetResult { player_vid, .. }
+            | CombatEvent::PvPAttackResult { player_vid, .. }
+            | CombatEvent::PvPVictimHit { player_vid, .. } => *player_vid,
         }
     }
 }
