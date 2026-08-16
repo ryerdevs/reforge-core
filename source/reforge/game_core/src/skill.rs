@@ -49,7 +49,11 @@
 //!   documentada) y el grand master (kMasterBonusPoly) quedan fuera.
 //! - `ar` del poly = `combat::calc_attack_rating` del PC contra el mob.
 //! - `def`/`odef` = la DEF del PC (`player_def_grade` + bonus / sin bonus).
-//! - `skill_power.txt` no se carga (k = level × max_level / 100).
+//! - `skill_power.txt` no se carga — la fuente es PG (`common.locale`
+//!   SKILL_POWER_BY_LEVEL*, parity config.cpp:532-613): el `k` del poly =
+//!   `power(job, skillgroup, level) × max_level / 100` (tabla real, ver
+//!   `database::skill_power`). Fail-open: sin tabla → `k = level ×
+//!   max_level / 100` (aproximación — desviación documentada, F6 balance).
 
 
 
@@ -251,9 +255,12 @@ pub fn skill_level_from_blob(blob: &[u8], skill_id: u32) -> u8 {
 }
 
 /// `k` del poly: `GetSkillPower(vnum, level) * bMaxLevel / 100`
-/// (char_skill.cpp:1632). La tabla real (`skill_power.txt`, por
-/// job/skillgroup/nivel) no está en PG — el subset usa el nivel directo
-/// (desviación documentada, F6 balance).
+/// (char_skill.cpp:1632). El runtime carga la tabla REAL por
+/// job/skillgroup/nivel (`common.locale` SKILL_POWER_BY_LEVEL* — ver
+/// `database::skill_power`) y el proceso_skill usa `power(job, group, level)
+/// × max / 100`. Esta función es el FALLBACK fail-open cuando la tabla no
+/// carga (aproximación `level × max_level / 100` — desviación documentada,
+/// F6 balance; el server nunca rompe por eso).
 pub fn k_value(skill_level: u8, max_level: u8) -> f64 {
     f64::from(skill_level) * f64::from(max_level) / 100.0
 }
@@ -707,7 +714,8 @@ mod tests {
         assert_eq!(skill_level_from_blob(&[], 1), 0);
     }
 
-    /// k = level × max_level / 100 (subset del skill_power.txt).
+    /// k = level × max_level / 100 (el FAILBACK fail-open del runtime
+    /// cuando la tabla real de skill_power no carga).
     #[test]
     fn k_value_formula() {
         assert_eq!(k_value(5, 40), 2.0);

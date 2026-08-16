@@ -305,7 +305,9 @@
 - attribute_set_index + alter_to_magic_item + add_rare_attribute + roll_creation_bonus (parity item_attribute.cpp); tablas item_attr/item_attr_rare wired; drops/GM/quest pueblan attrs+sockets. Gaps: engarce de gems (USE), addon, iRarePct.
 
 ### C40. [CERRADO — fix `11a2f69`] Skills de área (SPLASH) sin efecto
+
 - process_skill → splash_damage (parity ComputeSkillAtPosition/FuncSplashDamage): centro = target/caster, radio dwsplashrange, lMaxHit, daño per-víctima + szSplashAroundDamageAdjustPoly, gate atacabilidad. SP/cooldown 1 vez. +FIX kill single-target: vista ANTES de remove_npc (exp/gold del kill por skill).
 
 ### C41. [CERRADO — fix `c8f3bd5`+`9d6f101`] Buffs numéricos
+
 - CRITICAL_PCT/MOV_SPEED/ATT_SPEED alteran gameplay (no solo icono); melee crit ×2 + flag DAMAGE_CRITICAL del wire.

@@ -16,8 +16,8 @@ use crate::ecs::events::{
     CombatIntent, Intent, ItemIntent, MoveIntent, NpcEvent, PlayerJoin, SkillIntent,
 };
 use crate::ecs::resources::{
-    ItemIndex, NpcIndex, NpcOutbox, Rand, RespawnQueue, SkillTable, SpawnCache, SpawnTable,
-    SpawnTableEntry, Tick, VidAlloc, WorldClock, WorldMetrics,
+    ItemIndex, NpcIndex, NpcOutbox, Rand, RespawnQueue, SkillPowerTable, SkillTable, SpawnCache,
+    SpawnTable, SpawnTableEntry, Tick, VidAlloc, WorldClock, WorldMetrics,
 };
 use crate::ecs::systems::combat::{aggro_detect_system, chase_attack_system};
 use crate::ecs::systems::movement::patrol_system;
@@ -81,6 +81,7 @@ impl WorldSim {
         world.insert_resource(ItemIndex::default());
         world.insert_resource(WorldMetrics::default());
         world.insert_resource(SkillTable::default());
+        world.insert_resource(SkillPowerTable::default());
         world.insert_resource(crate::ecs::systems::social::ShopTable::default());
         let mut schedule = Schedule::default();
         // Cadena: parity del ORDEN del tick del canal (spawn → chase → detect
@@ -120,6 +121,13 @@ impl WorldSim {
         Ok(self.join_player_ready(join))
     }
 
+    /// La tabla REAL de poder de skills (fail-open — ver `SkillPowerTable`):
+    /// el canal la carga UNA vez al boot (Arc compartido) y la inyecta aquí;
+    /// sin llamada → la aproximación `k = level × max_level / 100`.
+    pub fn set_skill_power(&mut self, table: Arc<database::skill_power::SkillPowerTable>) {
+        self.world.resource_mut::<SkillPowerTable>().0 = table;
+    }
+
     /// Entra al jugador al mundo CON la tabla ya cargada (tests y el flujo
     /// interno): crea la entidad (Position/Hp/Player/Combat/Map) y corre el
     /// primer tick — el spawn dinámico materializa los mobs visibles desde su
@@ -137,6 +145,7 @@ impl WorldSim {
                     ht: join.ht,
                     armor: join.armor,
                     job: join.job,
+                    skill_group: join.skill_group,
                     st: join.st,
                     dx: join.dx,
                     iq: join.iq,

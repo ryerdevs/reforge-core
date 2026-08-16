@@ -416,6 +416,7 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
             ht: i32::from(session.row().ht),
             armor,
             job: session.row().job as u8,
+            skill_group: session.row().skill_group,
             st: i32::from(session.row().st),
             dx: i32::from(session.row().dx),
             iq: i32::from(session.row().iq),

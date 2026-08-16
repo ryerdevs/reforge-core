@@ -141,3 +141,11 @@ pub struct WorldMetrics {
 /// cada skill se resuelve con estos datos (game_core::skill).
 #[derive(Resource, Debug, Default)]
 pub struct SkillTable(pub std::collections::HashMap<u32, crate::skill::SkillProto>);
+
+/// La tabla REAL de poder de skills (`common.locale` SKILL_POWER_BY_LEVEL*,
+/// cargada UNA vez al boot del canal — fail-open como AttrTables: sin tabla
+/// → el `k` del poly cae a la aproximación `level × max_level / 100` con
+/// log). Compartida (Arc) — el proceso_skill la lee para `k = power(job,
+/// skillgroup, level) × max_level / 100` (parity char_skill.cpp:1632).
+#[derive(Resource, Debug, Default)]
+pub struct SkillPowerTable(pub std::sync::Arc<database::skill_power::SkillPowerTable>);

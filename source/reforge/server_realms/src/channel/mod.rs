@@ -139,11 +139,30 @@ pub async fn run(config: Config) -> std::io::Result<()> {
             }
         },
     );
+    // skill_power (common.locale — SKILL_POWER_BY_LEVEL*): la tabla REAL de
+    // poder por job/skillgroup/nivel (parity skill_power.cpp — el C++ la
+    // lee de la DB al boot, config.cpp:532-613). Cargada UNA vez al boot;
+    // fail-open como AttrTables: si no carga, el `k` del poly de las skills
+    // cae a la aproximación level×max/100 con log — NO rompe el server.
+    let skill_power = std::sync::Arc::new(
+        match database::skill_power::SkillPowerRepo::new(pool.clone()).load().await {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!(
+                    "server_realms: channel: skill_power: {e} — k aproximado (level×max/100) (fail-open)"
+                );
+                database::skill_power::SkillPowerTable::default()
+            }
+        },
+    );
     // F5.4 (ADR-0011): caché de walkability COMPARTIDA entre conexiones —
     // get-or-load del mapa por id (index + Setting.txt + server_attr), los
     // fallos se cachean (un mapa roto no re-lee disco por MOVE).
     let map_store = std::sync::Arc::new(std::sync::Mutex::new(game_core::map::MapStore::new()));
     let mut world = WorldSim::new(spawn_cache);
+    // La tabla de poder de skills (cargada arriba — fail-open): el mundo la
+    // usa para el `k` del poly (parity char_skill.cpp:1632).
+    world.set_skill_power(skill_power);
     let (intent_tx, mut intent_rx) = tokio::sync::mpsc::unbounded_channel::<Intent>();
     // F5 quests (wiring 2026-08-13, fix A/B 2026-08-14): la conversión del
     // corpus (194 archivos, ~2 s) NO puede bloquear el arranque — el cliente

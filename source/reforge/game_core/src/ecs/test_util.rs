@@ -82,6 +82,7 @@ pub fn join_at(w: &mut WorldSim, vid: u32, x: i32, y: i32) -> Vec<NpcEvent> {
         ht: 30,
         armor: 0,
         job: 1,
+        skill_group: 1,
         st: 30,
         dx: 30,
         iq: 30,
@@ -91,6 +92,18 @@ pub fn join_at(w: &mut WorldSim, vid: u32, x: i32, y: i32) -> Vec<NpcEvent> {
 /// Join con el blob de skills: `grant` = (skill_id, nivel) — el blob
 /// `255 × 6 B` con el nivel en `id*6+1` (parity del layout del player).
 pub fn join_with_skills(w: &mut WorldSim, vid: u32, grant: &[(u32, u8)]) -> Vec<NpcEvent> {
+    join_with_skills_group(w, vid, grant, 1)
+}
+
+/// `join_with_skills` con el skillgroup explícito (el `k` de las skills usa
+/// job/skillgroup/nivel — la tabla real; los tests que la inyectan necesitan
+/// controlarlo).
+pub fn join_with_skills_group(
+    w: &mut WorldSim,
+    vid: u32,
+    grant: &[(u32, u8)],
+    skill_group: i16,
+) -> Vec<NpcEvent> {
     let mut blob = vec![0u8; 255 * 6];
     for (id, lv) in grant {
         let off = (*id as usize) * 6 + 1;
@@ -112,6 +125,7 @@ pub fn join_with_skills(w: &mut WorldSim, vid: u32, grant: &[(u32, u8)]) -> Vec<
         ht: 30,
         armor: 0,
         job: 1,
+        skill_group,
         st: 30,
         dx: 30,
         iq: 30,

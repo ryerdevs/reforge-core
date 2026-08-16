@@ -36,6 +36,10 @@ pub struct PlayerJoin {
     pub ht: i32,
     pub armor: i32,
     pub job: u8,
+    /// `player.skill_group` — el skillgroup del personaje (parity
+    /// `GetSkillGroup()`; el `k` de las skills usa la tabla real por
+    /// job/skillgroup/nivel).
+    pub skill_group: i16,
     pub st: i32,
     pub dx: i32,
     pub iq: i32,

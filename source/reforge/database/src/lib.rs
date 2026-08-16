@@ -41,6 +41,7 @@ pub mod pool;
 pub mod quest;
 pub mod safebox;
 pub mod sha1;
+pub mod skill_power;
 pub mod social;
 pub mod wal;
 

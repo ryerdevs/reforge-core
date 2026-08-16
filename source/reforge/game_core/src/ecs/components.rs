@@ -175,6 +175,10 @@ pub struct Player {
     pub ht: i32,
     pub armor: i32,
     pub job: u8,
+    /// `player.skill_group` (i16) — el skillgroup del personaje (parity
+    /// `GetSkillGroup()` del C++): el `k` del poly de las skills se resuelve
+    /// con la tabla real por job/skillgroup/nivel (`skill_power`).
+    pub skill_group: i16,
     pub st: i32,
     pub dx: i32,
     pub iq: i32,
