@@ -123,6 +123,9 @@ pub struct ItemRepo {
 /// `applyvalue0..2`): el equip los aplica con `ModifyPoints` (item.cpp:
 /// 718-735 — `ApplyPoint(aApplies[i].bType, ±lValue)`); el C27 (velocidad
 /// de botas) lee el apply `APPLY_MOV_SPEED` (8) de aquí.
+/// `magic_pct`/`socket_pct` = `bAlterToMagicItemPct`/`bGainSocketPct` del
+/// TItemTable (columnas `magic_pct`/`socket_pct` — el lane de attrs
+/// aleatorios los consume en `CreateItem`, item_manager.cpp:301-312).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProtoItem {
     pub b_type: i16,
@@ -133,6 +136,11 @@ pub struct ProtoItem {
     pub wear_flag: i64,
     /// Peso del item (unidades crudas de la columna `weight`).
     pub weight: i64,
+    /// `bAlterToMagicItemPct` — probabilidad % de attr mágico al crear
+    /// (tinyint; 0 = nunca).
+    pub magic_pct: i16,
+    /// `bGainSocketPct` — nº de sockets abiertos al crear (tinyint).
+    pub socket_pct: i16,
 }
 
 /// Receta de refine (parity `TRefineTable` — `tables.h:924-933` + el load
@@ -154,7 +162,8 @@ impl ItemRepo {
         Self { pool }
     }
 
-    async fn connect(&self) -> Result<Client, String> {
+    /// pub(crate): lo usa también el impl de `load_attr_tables` (attr.rs).
+    pub(crate) async fn connect(&self) -> Result<Client, String> {
         self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
     }
 
@@ -229,7 +238,8 @@ impl ItemRepo {
             .query(
                 "SELECT type, subtype, \
                  applytype0, applyvalue0, applytype1, applyvalue1, applytype2, applyvalue2, \
-                 value0, value1, value2, value3, value4, value5, wearflag, weight \
+                 value0, value1, value2, value3, value4, value5, wearflag, weight, \
+                 magic_pct, socket_pct \
                  FROM player.item_proto WHERE vnum = $1",
                 &[&vnum],
             )
@@ -258,6 +268,8 @@ impl ItemRepo {
             values,
             wear_flag: r.try_get(14).map_err(|e| format!("item_proto.wearflag: {e}"))?,
             weight: i64::from(weight),
+            magic_pct: r.try_get(16).map_err(|e| format!("item_proto.magic_pct: {e}"))?,
+            socket_pct: r.try_get(17).map_err(|e| format!("item_proto.socket_pct: {e}"))?,
         }))
     }
 

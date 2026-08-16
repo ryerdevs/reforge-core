@@ -155,6 +155,12 @@ pub struct Item {
     pub vnum: u32,
     pub count: u32,
     pub z: i32,
+    /// Sockets del item del suelo (el wire GC_ITEM_GROUND_ADD los lleva —
+    /// parity: el CItem del suelo conserva attrs/sockets entre el drop y el
+    /// pickup; el lane de attrs los pobló al CREAR el drop).
+    pub sockets: [i64; 3],
+    /// Attrs (tipo, valor) — igual que `ItemRow.attrs` (7 slots).
+    pub attrs: [(i16, i16); 7],
 }
 
 /// Stats de combate del jugador que el AI del mob usa (parity

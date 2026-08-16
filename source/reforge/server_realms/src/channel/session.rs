@@ -177,6 +177,9 @@ pub struct Session {
     /// Pool COMPARTIDO de conexiones PG del canal (los repos lo usan — NINGÚN
     /// camino abre conexión propia por llamada, fix 2026-08-13).
     pub pool: database::pool::PgPool,
+    /// Tablas de attrs aleatorios (item_attr/item_attr_rare) compartidas —
+    /// las carga el canal UNA vez al arrancar (lane attrs 2026-08-16).
+    pub attr_tables: std::sync::Arc<database::attr::AttrTables>,
     /// Batcher ÚNICO del canal (WAL durable + audit — el WorldStore lo usa
     /// para los saves/exchange; un solo loop de flush por canal).
     pub batcher: std::sync::Arc<database::wal::Batcher>,
@@ -367,6 +370,7 @@ impl Session {
         map_store: Arc<Mutex<game_core::map::MapStore>>,
         pool: database::pool::PgPool,
         batcher: std::sync::Arc<database::wal::Batcher>,
+        attr_tables: std::sync::Arc<database::attr::AttrTables>,
     ) -> Self {
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
         let (chat_tx, chat_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -382,6 +386,7 @@ impl Session {
             config,
             pool,
             batcher,
+            attr_tables,
             map_store,
             intent_tx,
             event_tx,
@@ -538,7 +543,14 @@ impl Session {
         // etc_drop_item.txt por nombre — TRAP AGENTS.md §17 — el subset base
         // usa solo la columna.) El vid lo asigna el MUNDO (`DropResult` — el
         // GC_ITEM_GROUND_ADD sale cuando llega).
+        // Lane attrs (2026-08-16): el drop nace con attrs/sockets — parity
+        // `CreateItem(vnum, 1, 0, true)` del RewardKill (item_manager.cpp:933):
+        // roll de `magic_pct` → AlterToMagicItem + rare, y `socket_pct`
+        // sockets abiertos. El C++ los fija en la creación del CItem del
+        // suelo; aquí el roll vive en el canal (el mundo ECS no toca PG) y
+        // viajan en el intent → `DropResult` → GC_ITEM_GROUND_ADD/pickup.
         if v.drop_item > 0 && (rand32() % 100) < u32::from(self.config.drop_rate) {
+            let (sockets, attrs) = self.roll_drop_attrs(v.drop_item).await?;
             self.intent(Intent::Item(ItemIntent::DropItem {
                 player_vid: self.player_vid(),
                 vnum: v.drop_item as u32,
@@ -546,6 +558,8 @@ impl Session {
                 x: v.x,
                 y: v.y,
                 z: 0,
+                sockets,
+                attrs,
             }))?;
         }
         eprintln!(
@@ -559,6 +573,31 @@ impl Session {
             self.row().level
         );
         Ok(())
+    }
+
+    /// Attrs/sockets de un drop de mob (parity `CreateItem(vnum,1,0,true)`
+    /// — item_manager.cpp:301-312 + :933): lee `magic_pct`/`socket_pct` del
+    /// item_proto y aplica el roll del lane attrs con las tablas compartidas
+    /// del canal (`attr_tables`). Vnum sin fila en item_proto → sin attrs
+    /// (mismo no-op que el C++ con proto inexistente).
+    async fn roll_drop_attrs(&self, vnum: i64) -> Result<([i64; 3], [(i16, i16); 7]), String> {
+        let Some(proto) = ItemRepo::new(self.pool.clone()).load_proto_use_values(vnum).await? else {
+            return Ok(([0; 3], [(0, 0); 7]));
+        };
+        let mut sockets = [0i64; 3];
+        let mut attrs = [(0i16, 0i16); 7];
+        let mut rng = rand32;
+        database::attr::roll_creation_bonus(
+            &mut rng,
+            proto.magic_pct,
+            proto.socket_pct,
+            &self.attr_tables,
+            proto.b_type,
+            proto.b_sub_type,
+            &mut sockets,
+            &mut attrs,
+        );
+        Ok((sockets, attrs))
     }
 
     /// Aplica exp al row del jugador (level-up + GC_POINTS + save) — el

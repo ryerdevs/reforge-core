@@ -1199,6 +1199,7 @@ mod tests {
             std::sync::Arc::new(std::sync::Mutex::new(game_core::map::MapStore::new())),
             pool,
             batcher,
+            std::sync::Arc::new(database::attr::AttrTables::default()),
         );
         s.empire = empire;
         let row = dummy_row(i64::from(vid), name, level, map_index, x, y);

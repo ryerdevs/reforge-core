@@ -129,6 +129,8 @@ async fn drop_gold(session: &mut Session, gold: u32) -> Result<Outcome, String> 
         x,
         y,
         z: 0,
+        sockets: [0; 3],
+        attrs: [(0, 0); 7],
     }))?;
     {
         let row = session.row_mut();
@@ -215,6 +217,10 @@ async fn drop_item(
         x,
         y,
         z: 0,
+        // El item del suelo conserva attrs/sockets del row (parity: el CItem
+        // soltado los mantiene — el pickup los devuelve al inventario).
+        sockets: session.inventory[idx].sockets,
+        attrs: session.inventory[idx].attrs,
     }))?;
     // Quitar del inventario (parity RemoveFromCharacter + SetCount).
     session.inventory[idx].count -= want;

@@ -442,8 +442,8 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                 pos: slot as i32,
                 count: remaining,
                 vnum: gi.vnum as i64,
-                sockets: [0; 3],
-                attrs: [(0, 0); 7],
+                sockets: gi.sockets,
+                attrs: gi.attrs,
             };
             // GC_ITEM_SET (51 B — el slot pintado del cliente).
             let set = TPacketGCItemSet {
@@ -454,8 +454,8 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                 flags: 0,
                 anti_flags: 0,
                 highlight: 0,
-                sockets: [0; 3],
-                attrs: [(0, 0); 7],
+                sockets: gi.sockets,
+                attrs: gi.attrs,
             };
             session
                 .send(&set.to_bytes())
@@ -477,11 +477,16 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                 session.conn_id, session.row().name, gi.vnum, item_vid
             );
         }
-        NpcEvent::Item(ItemEvent::DropResult { item_vid, vnum, count, x, y, z, .. }) => {
+        NpcEvent::Item(ItemEvent::DropResult { item_vid, vnum, count, x, y, z, sockets, attrs, .. }) => {
             // El drop se creó en el mundo (vid asignado por el mundo —
             // VidAlloc global): el ADD + ownership salen con el vid correcto.
+            // Los attrs/sockets del drop viajan al wire (58 B — el cliente
+            // pinta el item mágico/engarzado ya en el suelo).
+            let mut add = TPacketGCItemGroundAdd::new(item_vid, vnum, x, y, z, count);
+            add.sockets = sockets;
+            add.attrs = attrs;
             session
-                .send(&TPacketGCItemGroundAdd::new(item_vid, vnum, x, y, z, count).to_bytes())
+                .send(&add.to_bytes())
                 .await
                 .map_err(|e| format!("enviando GC_ITEM_GROUND_ADD: {e}"))?;
             // Ownership (parity item.cpp:145-162 — el nombre del dueño sobre

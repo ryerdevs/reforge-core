@@ -265,6 +265,32 @@ async fn item_load_ninja_inventory_structure_only() {
     let _ = repo.max_id_in_range(100_000_000, 200_000_000).await.expect("probe no falla");
 }
 
+/// Load de las tablas de attrs (lane 2026-08-16): 54 filas de item_attr +
+/// 20 de item_attr_rare contra PG REAL (estructura-only — asserts de forma,
+/// no de contenido). Verifica además el mapeo de tipos (todas las columnas
+/// numéricas son bigint en PG — el cast del loader) y los índices EApplyTypes.
+#[tokio::test]
+#[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
+async fn item_attr_tables_load_live_structure_only() {
+    let repo = ItemRepo::new(database::pool::new_pool(&pg_conn(), 4).expect("pool PG"));
+    let t = repo.load_attr_tables().await.expect("ATTR load no falla");
+    assert_eq!(t.normal.len(), 54, "item_attr — 54 filas");
+    assert_eq!(t.rare.len(), 20, "item_attr_rare — 20 filas");
+    for row in t.normal.iter().chain(t.rare.iter()) {
+        assert!(row.apply_index > 0, "apply_index EApplyTypes 1-based: {row:?}");
+        assert!(row.prob >= 0, "prob no negativa");
+        // Hay filas legítimas con TODOS los sets a 0 (los ATTBONUS_* del
+        // item_attr — el C++ las salta en PutAttributeWithLevel porque
+        // bMaxLevelBySet[set] == 0); las RARE siempre tienen set activo.
+        assert!(
+            t.rare.iter().all(|r| r.max_level_by_set.iter().any(|m| *m > 0)),
+            "item_attr_rare: todas las filas con set activo"
+        );
+    }
+    // El MAX_HP del item_attr es el APPLY_MAX_HP=1 (parity apply+0 MySQL).
+    assert_eq!(t.normal[0].apply_index, 1, "primera fila ORDER BY apply = MAX_HP");
+}
+
 /// Upsert (id explicito del rango + DEFAULT) y delete — throwaway, cleanup SIEMPRE.
 #[tokio::test]
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]

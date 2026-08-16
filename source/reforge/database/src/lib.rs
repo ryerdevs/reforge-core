@@ -28,6 +28,7 @@
 
 pub mod account;
 pub mod affect;
+pub mod attr;
 pub mod common;
 pub mod economy;
 pub mod item;

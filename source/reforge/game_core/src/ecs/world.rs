@@ -239,9 +239,9 @@ impl WorldSim {
                 self.process_skill(player_vid, skill_id, target_vid, weapon.as_ref(), now_ms)
             }
             Intent::Item(item) => match item {
-                ItemIntent::DropItem { player_vid, vnum, count, x, y, z } => {
-                    self.process_drop(player_vid, vnum, count, x, y, z)
-                }
+            ItemIntent::DropItem { player_vid, vnum, count, x, y, z, sockets, attrs } => {
+                self.process_drop(player_vid, vnum, count, x, y, z, sockets, attrs)
+            }
                 ItemIntent::PickupItem { player_vid, item_vid } => {
                     self.process_pickup(player_vid, item_vid)
                 }
