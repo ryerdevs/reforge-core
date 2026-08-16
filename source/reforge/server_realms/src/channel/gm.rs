@@ -80,8 +80,10 @@ const WALKMODE_WALK: u8 = 1;
 const SKILL_LEVEL_MAX: u8 = 40;
 
 /// Texto del chat al GM (GC_CHAT type INFO — parity del ChatPacket del C++;
-/// sin locale system → EN, divergencia documentada).
-async fn gm_info(session: &mut Session, text: &str) -> Result<(), String> {
+/// sin locale system → EN, divergencia documentada). Reutilizado por
+/// `channel/safebox.rs` para los INFO del safebox (parity ChatPacket del
+/// C++ en ReqSafeboxLoad/CloseSafebox).
+pub(crate) async fn gm_info(session: &mut Session, text: &str) -> Result<(), String> {
     let size = (9 + text.len()) as u16;
     let mut out = Vec::with_capacity(9 + text.len());
     out.push(protocol::header::GC_CHAT);
@@ -157,6 +159,12 @@ pub async fn handle(session: &mut Session, cmd: &str) -> Result<Outcome, String>
         GmCommand::GiveItem { vnum, count } => give_item(session, vnum, count).await?,
         GmCommand::Notice { text } => self_notice(session, &text).await?,
         GmCommand::SetLevel { level } => set_level(session, level).await?,
+        // Safebox (tamaño) — GM_HIGH_WIZARD (parity cmd.cpp:351): el lote 2
+        // de jugador va por `handle_player_command`; este es el único
+        // safebox con nivel GM real.
+        GmCommand::Safebox { size } => {
+            crate::channel::safebox::set_size(session, size).await?;
+        }
         // Inalcanzable: todos los GM_PLAYER (nivel 0) van por
         // `handle_player_command` (routing arriba por required_level).
         _ => {}
@@ -227,6 +235,14 @@ async fn handle_player_command(
             Ok(Outcome::Close("comando /phase_select — reconexión al selector".into()))
         }
         // Lote 2 — REALES (regla 2 del lane B: sistema subyacente + persistencia).
+        GmCommand::SafeboxPassword { password } => {
+            crate::channel::safebox::open(session, &password).await?;
+            Ok(Outcome::Continue)
+        }
+        GmCommand::SafeboxClose => {
+            crate::channel::safebox::close(session).await?;
+            Ok(Outcome::Continue)
+        }
         GmCommand::SetWalkMode => {
             set_walk_mode(session, true).await?;
             Ok(Outcome::Continue)
@@ -235,6 +251,9 @@ async fn handle_player_command(
             set_walk_mode(session, false).await?;
             Ok(Outcome::Continue)
         }
+        // Inalcanzable aquí: `safebox` (tamaño) requiere HIGH_WIZARD — el
+        // routing de `handle()` lo manda al match GM (exhaustividad).
+        GmCommand::Safebox { .. } => Ok(Outcome::Continue),
         GmCommand::SkillUp { vnum } => {
             skillup(session, vnum).await?;
             Ok(Outcome::Continue)
@@ -242,10 +261,9 @@ async fn handle_player_command(
         // Lote 2 — SIN sistema subyacente en reforge (regla 3): el comando
         // EXISTE en el cmd_info[] → INFO 'not implemented' (NO 'No such
         // command'). El GAP de cada uno está documentado en la variante del
-        // enum (game_core/gm.rs).
-        GmCommand::Safebox
-        | GmCommand::SafeboxClose
-        | GmCommand::Mount
+        // enum (game_core/gm.rs). Safebox/SafeboxClose/SafeboxPassword ya
+        // NO están aquí (sistema real — channel/safebox.rs).
+        GmCommand::Mount
         | GmCommand::HorseState
         | GmCommand::HorseLevel
         | GmCommand::HorseRide

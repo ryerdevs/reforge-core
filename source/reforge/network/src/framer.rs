@@ -158,6 +158,14 @@ fn game_phase_size(header: u8) -> Option<usize> {
         header::CG_PARTY_USE_SKILL => 6,    // 76, header+bySkillIndex+dwTargetVID (Packet.h:897-902)
         header::CG_SAFEBOX_ITEM_MOVE => 8,  // 77, header+pos+change_pos+num — mismo shape que CG_ITEM_MOVE (Packet.h:593-599)
         header::CG_PARTY_PARAMETER => 2,    // 78, header+bDistributeMode (Packet.h:1012-1016)
+        // 79, TPacketCGSafeboxMoney (header+bState+lMoney, packet.h:1627-1632).
+        // Aditivo del reforge: el C++ congelado NO lo registra en el
+        // packet_info (un 79 ahí cerraría la conexión — input.cpp:77-84) y
+        // el cliente de la variante nunca lo envía (assert en
+        // SendSafeBoxMoneyPacket). Se registra para que el handler defensivo
+        // del safebox (oro de la caja) pueda existir sin derribar la
+        // conexión.
+        header::CG_SAFEBOX_MONEY => 6,
         header::CG_GUILD => 2,              // 80, header+subheader (Packet.h:923-927)
         header::CG_ANSWER_MAKE_GUILD => 14, // 81, header+guild_name[13] (GUILD_NAME_MAX_LEN=12) (Packet.h:929-933)
         header::CG_FISHING => 2,            // 82, header+dir (packet.h:1800-1804)
@@ -420,6 +428,13 @@ mod tests {
         assert_eq!(packet_size(ConnectionRole::Channel, header::CG_MYSHOP), Some(35));
         assert_eq!(packet_size(ConnectionRole::Channel, header::CG_WARP), Some(15));
         assert_eq!(packet_size(ConnectionRole::Channel, header::CG_ITEM_DROP), Some(8), "cheque OFF en el cliente");
+        // CG_SAFEBOX_MONEY (79, 6 B — TPacketCGSafeboxMoney: header+bState+
+        // lMoney; packet.h:1627-1632): aditivo del reforge (el C++ no lo
+        // registra; el handler del safebox es defensivo).
+        assert_eq!(
+            packet_size(ConnectionRole::Channel, header::CG_SAFEBOX_MONEY),
+            Some(6)
+        );
         // Los variables del C++ siguen fuera de la tabla fija (se resuelven
         // en try_extract — CG_CHAT/CG_WHISPER/CG_SHOP — o cierran).
         assert_eq!(packet_size(ConnectionRole::Channel, header::CG_CHAT), None);

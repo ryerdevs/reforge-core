@@ -34,6 +34,10 @@ pub struct SafeboxRow {
 const LOAD_SQL: &str = "\
 SELECT account_id, size, password FROM player.safebox WHERE account_id = $1";
 
+/// SELECT del gold de la caja (columna `gold` — integer PG; la escribe
+/// `set_gold`/QUERY_SAFEBOX_SAVE).
+const GOLD_SQL: &str = "SELECT gold FROM player.safebox WHERE account_id = $1";
+
 /// Repositorio del dominio world (safebox). Conexion por llamada (ADR-0008).
 pub struct SafeboxRepo {
     pool: PgPool,
@@ -75,6 +79,21 @@ impl SafeboxRepo {
             size: r.try_get(1).expect("col1 size"),
             password: r.try_get(2).expect("col2 password"),
         }))
+    }
+
+    /// Gold actual de la caja (columna `gold` de `player.safebox` — integer
+    /// PG). `None` = sin fila. OJO parity: el C++ congelado NO lee el gold
+    /// en el load (la lectura está comentada en `RESULT_SAFEBOX_LOAD`,
+    /// ClientManager.cpp:663-665) — el subset del reforge lo lee para que el
+    /// handler de dinero funcione entre sesiones (divergencia documentada;
+    /// la columna la escribe `set_gold`/QUERY_SAFEBOX_SAVE).
+    pub async fn get_gold(&self, account_id: i64) -> Result<Option<i32>, String> {
+        let client = self.connect().await?;
+        let rows = client
+            .query(GOLD_SQL, &[&account_id])
+            .await
+            .map_err(|e| pg_err("SAFEBOX_GOLD", &e))?;
+        Ok(rows.first().and_then(|r| r.try_get(0).ok()))
     }
 
     /// Change size (QUERY_SAFEBOX_CHANGE_SIZE). Parity `ClientManager.cpp:967-970`:
@@ -153,6 +172,13 @@ mod tests {
             .collect();
         assert_eq!(cols, ["account_id", "size", "password"]);
         assert!(LOAD_SQL.contains("FROM player.safebox WHERE account_id = $1"));
+    }
+
+    /// get_gold: SELECT de la columna `gold` por account_id (la escribe
+    /// `set_gold` — QUERY_SAFEBOX_SAVE, ClientManager.cpp:1122-1124).
+    #[test]
+    fn get_gold_sql_shape() {
+        assert_eq!(GOLD_SQL, "SELECT gold FROM player.safebox WHERE account_id = $1");
     }
 
     /// set_size: parity del C++ (`ClientManager.cpp:967-970`) — size==1 INSERT

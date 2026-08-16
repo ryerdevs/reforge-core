@@ -45,6 +45,17 @@ attrtype6, attrvalue6 \
 FROM player.item WHERE owner_id = $1 AND \"window\" IN \
 ('INVENTORY','EQUIPMENT','DRAGON_SOUL_INVENTORY','BELT_INVENTORY')";
 
+/// Load del SAFEBOX (parity `RESULT_SAFEBOX_LOAD`,
+/// `ClientManager.cpp:686-693`): MISMAS 22 columnas del QID_ITEM pero con
+/// `owner_id = $1 AND window = 'SAFEBOX'` — el owner de los items de la caja
+/// es la CUENTA (no el personaje; el C++ pasa `pi->account_id`).
+const SAFEBOX_LOAD_SQL: &str = "\
+SELECT id, \"window\", pos, count, vnum, socket0, socket1, socket2, \
+attrtype0, attrvalue0, attrtype1, attrvalue1, attrtype2, attrvalue2, \
+attrtype3, attrvalue3, attrtype4, attrvalue4, attrtype5, attrvalue5, \
+attrtype6, attrvalue6 \
+FROM player.item WHERE owner_id = $1 AND \"window\" = 'SAFEBOX'";
+
 /// Upsert con id explicito (el id lo asigna el game desde ITEM_ID_RANGE —
 /// `ItemIDRangeManager.cpp:93,121`; el E2E Q8 sondea el rango 100M-200M).
 const UPSERT_SQL: &str = "\
@@ -140,6 +151,18 @@ impl ItemRepo {
             .query(LOAD_SQL, &[&owner_id])
             .await
             .map_err(|e| pg_err("ITEM_LOAD", &e))?;
+        rows.iter().map(item_from_row).collect()
+    }
+
+    /// Load de los items de la CAJA (parity `RESULT_SAFEBOX_LOAD`,
+    /// `ClientManager.cpp:686-693`): `window = 'SAFEBOX'`, owner = la
+    /// CUENTA (`account_id` — el C++ pasa `pi->account_id`, no el pid).
+    pub async fn load_safebox(&self, owner_id: i64) -> Result<Vec<ItemRow>, String> {
+        let client = self.connect().await?;
+        let rows = client
+            .query(SAFEBOX_LOAD_SQL, &[&owner_id])
+            .await
+            .map_err(|e| pg_err("SAFEBOX_ITEM_LOAD", &e))?;
         rows.iter().map(item_from_row).collect()
     }
 
@@ -528,6 +551,37 @@ mod tests {
         assert!(
             LOAD_SQL.contains("('INVENTORY','EQUIPMENT','DRAGON_SOUL_INVENTORY','BELT_INVENTORY')"),
             "filtro de windows"
+        );
+    }
+
+    /// Load del SAFEBOX: las MISMAS 22 columnas del QID_ITEM (mismo mapeo
+    /// `item_from_row`) pero con el filtro `window = 'SAFEBOX'` y el owner =
+    /// la CUENTA (parity `RESULT_SAFEBOX_LOAD`, ClientManager.cpp:686-693).
+    #[test]
+    fn safebox_load_sql_has_22_columns_and_safebox_window() {
+        let select = SAFEBOX_LOAD_SQL.split_once(" FROM ").expect("FROM").0;
+        let cols: Vec<&str> = select
+            .trim_start_matches("SELECT")
+            .split(',')
+            .map(|c| c.trim())
+            .collect();
+        assert_eq!(cols.len(), 22, "id+window+pos+count+vnum+3 sockets+14 attrs");
+        assert_eq!(cols[0], "id");
+        assert_eq!(cols[21], "attrvalue6");
+        assert_eq!(
+            select, "SELECT id, \"window\", pos, count, vnum, socket0, socket1, socket2, \
+attrtype0, attrvalue0, attrtype1, attrvalue1, attrtype2, attrvalue2, \
+attrtype3, attrvalue3, attrtype4, attrvalue4, attrtype5, attrvalue5, \
+attrtype6, attrvalue6",
+            "mismas columnas que el QID_ITEM"
+        );
+        assert!(
+            SAFEBOX_LOAD_SQL.contains("\"window\" = 'SAFEBOX'"),
+            "filtro exclusivo del window SAFEBOX"
+        );
+        assert!(
+            SAFEBOX_LOAD_SQL.contains("WHERE owner_id = $1"),
+            "bind del owner (cuenta)"
         );
     }
 

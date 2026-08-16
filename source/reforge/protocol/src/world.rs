@@ -331,6 +331,10 @@ impl TItemPos {
     pub const SIZE: usize = 3;
     pub const WINDOW_INVENTORY: u8 = 1;
     pub const WINDOW_EQUIPMENT: u8 = 2;
+    /// `EWindows` (GameType.h:175-186): SAFEBOX = 3 — el window de los
+    /// items de la caja en el wire (GC_SAFEBOX_SET manda `Cell.window =
+    /// SAFEBOX`; safebox.cpp:69 `TItemPos(m_bWindowMode, dwPos)`).
+    pub const WINDOW_SAFEBOX: u8 = 3;
     pub const WINDOW_DRAGON_SOUL: u8 = 5;
     pub const WINDOW_BELT: u8 = 6;
 }
@@ -763,6 +767,292 @@ impl TPacketGCItemDelDeprecated {
             b[21 + i * 3] = a.0 as u8;
             b[22 + i * 3..24 + i * 3].copy_from_slice(&a.1.to_le_bytes());
         }
+        b
+    }
+}
+
+/// `TPacketGCItemDel` (2 B — `packet.h:1056-1060`): el borrado de un item
+/// por posición SIMPLE (header + BYTE pos) — lo usa la safebox
+/// (`CSafebox::Remove` manda `HEADER_GC_SAFEBOX_DEL` 86 con este shape,
+/// safebox.cpp:109-113) y el mall. Distinto del `GC_ITEM_DEL` (20, 42 B
+/// deprecated — el del inventario, ver `TPacketGCItemDelDeprecated`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketGCItemDel {
+    pub header: u8,
+    pub pos: u8,
+}
+
+impl TPacketGCItemDel {
+    pub const SIZE: usize = 2;
+    pub const HEADER: u8 = header::GC_SAFEBOX_DEL;
+
+    pub fn new(pos: u8) -> Self {
+        Self {
+            header: Self::HEADER,
+            pos,
+        }
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        Ok(Self {
+            header: data[0],
+            pos: data[1],
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        [self.header, self.pos]
+    }
+}
+
+/// `TPacketCGSafeboxCheckin` (5 B, header 70 — `packet.h:1494-1499`): meter
+/// un item del INVENTARIO en la caja — `BYTE bHeader; BYTE bSafePos;
+/// TItemPos ItemPos` (packed, 1+1+3 = 5). Parity `SafeboxCheckin`
+/// (input_main.cpp:1940-2024): el item entero (sin count) se mueve a la
+/// posición `bSafePos` de la caja.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketCGSafeboxCheckin {
+    pub header: u8,
+    pub b_safe_pos: u8,
+    pub item_pos: TItemPos,
+}
+
+impl TPacketCGSafeboxCheckin {
+    pub const SIZE: usize = 5;
+    pub const HEADER: u8 = header::CG_SAFEBOX_CHECKIN;
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        Ok(Self {
+            header: data[0],
+            b_safe_pos: data[1],
+            item_pos: TItemPos {
+                window: data[2],
+                cell: u16::from_le_bytes([data[3], data[4]]),
+            },
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        b[1] = self.b_safe_pos;
+        b[2] = self.item_pos.window;
+        b[3..5].copy_from_slice(&self.item_pos.cell.to_le_bytes());
+        b
+    }
+}
+
+/// `TPacketCGSafeboxCheckout` (5 B, header 71 — `packet.h:1487-1492`): sacar
+/// un item de la caja al INVENTARIO — `BYTE bHeader; BYTE bSafePos;
+/// TItemPos ItemPos`. Parity `SafeboxCheckout` (input_main.cpp:2027-2117).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketCGSafeboxCheckout {
+    pub header: u8,
+    pub b_safe_pos: u8,
+    pub item_pos: TItemPos,
+}
+
+impl TPacketCGSafeboxCheckout {
+    pub const SIZE: usize = 5;
+    pub const HEADER: u8 = header::CG_SAFEBOX_CHECKOUT;
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        Ok(Self {
+            header: data[0],
+            b_safe_pos: data[1],
+            item_pos: TItemPos {
+                window: data[2],
+                cell: u16::from_le_bytes([data[3], data[4]]),
+            },
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        b[1] = self.b_safe_pos;
+        b[2] = self.item_pos.window;
+        b[3..5].copy_from_slice(&self.item_pos.cell.to_le_bytes());
+        b
+    }
+}
+
+/// `TPacketCGSafeboxMoney` (6 B, header 79 — `packet.h:1627-1632`):
+/// depositar/retirar oro de la caja — `BYTE bHeader; BYTE bState; long
+/// lMoney` (long x86 = 4 B; el cliente lo define como DWORD dwMoney —
+/// Packet.h:818-824). `bState`: `SAFEBOX_MONEY_STATE_SAVE` (0) = depositar,
+/// `SAFEBOX_MONEY_STATE_WITHDRAW` (1) = retirar (packet.h:1623-1624).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketCGSafeboxMoney {
+    pub header: u8,
+    pub b_state: u8,
+    pub l_money: i32,
+}
+
+impl TPacketCGSafeboxMoney {
+    pub const SIZE: usize = 6;
+    pub const HEADER: u8 = header::CG_SAFEBOX_MONEY;
+    pub const STATE_SAVE: u8 = 0;
+    pub const STATE_WITHDRAW: u8 = 1;
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        Ok(Self {
+            header: data[0],
+            b_state: data[1],
+            l_money: i32::from_le_bytes([data[2], data[3], data[4], data[5]]),
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        b[1] = self.b_state;
+        b[2..6].copy_from_slice(&self.l_money.to_le_bytes());
+        b
+    }
+}
+
+/// `TPacketGCSafeboxSize` (2 B, header 88 — `packet.h:1598-1602`): el
+/// tamaño de la caja en PÁGINAS (0..3 — `do_safebox_size` cmd_gm.cpp:
+/// 1857-1871; el DB guarda páginas y `RESULT_SAFEBOX_LOAD` lo reenvía tal
+/// cual, char.cpp:5553-5558). El cliente abre `SAFEBOX_SLOT_X_COUNT (5) ×
+/// bSize` slots (PythonSafeBox.cpp:4-15).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketGCSafeboxSize {
+    pub header: u8,
+    pub b_size: u8,
+}
+
+impl TPacketGCSafeboxSize {
+    pub const SIZE: usize = 2;
+    pub const HEADER: u8 = header::GC_SAFEBOX_SIZE;
+
+    pub fn new(b_size: u8) -> Self {
+        Self {
+            header: Self::HEADER,
+            b_size,
+        }
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        Ok(Self {
+            header: data[0],
+            b_size: data[1],
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        [self.header, self.b_size]
+    }
+}
+
+/// `TPacketGCSafeboxWrongPassword` (1 B, header 87 — `packet.h:1604-1607`):
+/// password incorrecta — solo el header (input_db.cpp:1165-1175). El
+/// cliente re-muestra el diálogo de password.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketGCSafeboxWrongPassword {
+    pub header: u8,
+}
+
+impl TPacketGCSafeboxWrongPassword {
+    pub const SIZE: usize = 1;
+    pub const HEADER: u8 = header::GC_SAFEBOX_WRONG_PASSWORD;
+
+    pub fn new() -> Self {
+        Self {
+            header: Self::HEADER,
+        }
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        Ok(Self { header: data[0] })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        [self.header]
+    }
+}
+
+/// `TPacketGCSafeboxMoneyChange` (5 B, header 84 — `packet.h:1634-1638`):
+/// el oro de la caja cambió — `BYTE bHeader; long lMoney` (el cliente lo
+/// lee como DWORD dwMoney — PythonNetworkStreamPhaseGameItem.cpp:123-133).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketGCSafeboxMoneyChange {
+    pub header: u8,
+    pub l_money: i32,
+}
+
+impl TPacketGCSafeboxMoneyChange {
+    pub const SIZE: usize = 5;
+    pub const HEADER: u8 = header::GC_SAFEBOX_MONEY_CHANGE;
+
+    pub fn new(l_money: i32) -> Self {
+        Self {
+            header: Self::HEADER,
+            l_money,
+        }
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        Ok(Self {
+            header: data[0],
+            l_money: i32::from_le_bytes([data[1], data[2], data[3], data[4]]),
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        b[1..5].copy_from_slice(&self.l_money.to_le_bytes());
         b
     }
 }

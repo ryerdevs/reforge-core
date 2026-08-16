@@ -56,6 +56,7 @@ mod party;
 mod pvp;
 mod quest;
 mod quickslot;
+mod safebox;
 mod script;
 mod session;
 mod shop;
