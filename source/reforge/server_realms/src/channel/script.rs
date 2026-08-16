@@ -19,6 +19,25 @@ use game_core::packets;
 use crate::channel::session::{Outcome, Session};
 use crate::channel::parse_listen;
 
+/// DEATH PENALTY: `aiExpLossPercents` (constants.cpp:768-789) — el % del
+/// next_exp que se pierde al morir, por nivel (índice 0 = lvl 0 → 0).
+/// 5% lvl 1-10, 4% 11-30, 3% 31-40, 2% 41-60, 1% 61+ (el resto se repite).
+const EXP_LOSS_PERCENT: [i32; 121] = [
+    0, // 0
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5, // 1-10
+    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, // 11-20
+    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, // 21-30
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, // 31-40
+    2, 2, 2, 2, 2, 2, 2, 2, 2, 2, // 41-50
+    2, 2, 2, 2, 2, 2, 2, 2, 2, 2, // 51-60
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 61-70
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 71-80
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 81-90
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 91-100
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 101-110
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 111-120
+];
+
 /// CG_SCRIPT_ANSWER (29): revive con la respuesta del diálogo de muerte —
 /// answer 1 → GC_WARP a la ciudad (el cliente RECONECTA con el flujo
 /// DirectEnter completo); si no → RestartAtSamePos (remove + insert del
@@ -71,6 +90,25 @@ pub async fn revive(session: &mut Session, answer: u8) -> Result<(), String> {
         .send(&close_restart_window_packet(session.empire))
         .await
         .map_err(|e| format!("enviando GC_CHAT CloseRestartWindow: {e}"))?;
+    // DEATH PENALTY (parity `INSTANT_FLAG_DEATH_PENALTY`,
+    // char_battle.cpp:310-337): al morir se pierde
+    // `MIN(800000, (GetNextExp() * __GetExpLossPerc(level)) / 100)` exp —
+    // la tabla `aiExpLossPercents` (constants.cpp:768: 5% lvl 1-10, 4%
+    // 11-30, 3% 31-40, 2% 41-60, 1% 61+). El revive EN LA CIUDAD (answer
+    // 1 → `bTown`) NO pierde exp; RestartAtSamePos sí.
+    if answer != 1 {
+        let level = i32::from(session.row().level);
+        let pct = EXP_LOSS_PERCENT[level.clamp(0, EXP_LOSS_PERCENT.len() as i32 - 1) as usize];
+        let loss = ((session.next_exp.max(0) * i64::from(pct)) / 100).min(800_000);
+        let conn_id = session.conn_id;
+        let name = session.row().name.clone();
+        let row = session.row_mut();
+        row.exp = row.exp.saturating_sub(loss as i32);
+        eprintln!(
+            "server_realms: channel conn {conn_id}: {name} perdió {loss} exp al morir ({}% del next_exp)",
+            pct
+        );
+    }
     // Restaurar hp/mp a los máximos del subset (parity
     // PointChange(POINT_HP, GetMaxHP()) — el revive del C++ restaura
     // antes de mostrar).
