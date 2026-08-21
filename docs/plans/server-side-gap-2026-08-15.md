@@ -62,9 +62,23 @@
 
 ## Estructura (deuda)
 
-- **Headers GC ad-hoc por módulo** — 34 centralizados en `protocol::header`, pero GC_GUILD*/GC_SAFEBOX*/GC_MYSHOP/etc. se definen sueltos (sin fuente única del wire S→C).
-- **Headers C→S sin frame** — guild/fishing/acce/mall/item-give/fly-targeting **cierran la conexión del cliente** (UnknownHeader).
-- **Repos dormidos** — safebox.rs/messenger.rs/social.rs GuildRepo: capa de datos escrita, cero callers.
+> **Actualizado 2026-08-21** — esta sección estaba desactualizada: los dos
+> primeros puntos ya estaban cerrados (gap-lane A 2026-08-15 + `44f2173`).
+
+- ~~**Headers GC ad-hoc por módulo**~~ — **CERRADO (`44f2173`, 2026-08-21)**:
+  `protocol::header` es la fuente única del wire S→C (47 consts); los
+  subheaders de shop/trade quedan module-local a propósito (un caller cada
+  uno). Los GC_GUILD*/GC_MYSHOP* del texto original nunca existieron como
+  consts sueltas — se emiten vía structs de `protocol::world`.
+- ~~**Headers C→S sin frame**~~ — **CERRADO (gap-lane A, 2026-08-15,**
+  **test `gap_lane_a_headers_have_exact_sizes`)**: guild/fishing/acce/mall/
+  item-give/fly-targeting/dragon-soul/hack/messenger/myshop están en la
+  tabla del framer con su tamaño exacto y caen en el brazo `other` del
+  dispatch (ignorados SIN desconectar).
+- **Repos dormidos** (pendiente de conectar con su bloque de contenido):
+  `MessengerRepo` (bloque messenger/emotions) y `GuildRepo` (bloque
+  guilds) — capa de datos escrita y testeada, cero callers. `SafeboxRepo`
+  ya está despierto (`channel/safebox.rs` + GM).
 
 ## Próximo bloque sugerido
 
