@@ -389,6 +389,13 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
          + GC_TIME + GC_CHANNEL {}) — el cliente está DENTRO del mapa",
         session.conn_id, lands.len(), session.config.channel
     );
+    // MESSENGER (bloque 2026-08-21): la lista de amigos al entrar al mundo
+    // (parity input_login.cpp:639 — `MessengerManager::Login(ch->GetName())`
+    // dentro de ENTERGAME → LoadList + SendList). Con 0 filas NO se envía
+    // nada (parity messenger_manager.cpp:341-343). El C++ lo manda ANTES del
+    // LandList; aquí va después del lote ENTERGAME (el cliente bufferiza —
+    // mismo resultado visible).
+    crate::channel::messenger::send_login_list(session).await?;
 
     // ------------------------------------------------------------------
     // F5.3 (ADR-0010): el jugador entra al MUNDO COMPARTIDO del canal — la
@@ -444,6 +451,7 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
         session.row().map_index,
         session.motion().x,
         session.motion().y,
+        session.empire,
         session.chat_tx.clone(),
     ));
     // PARTY (lane 2026-08-16): registro del peer de party del jugador — las

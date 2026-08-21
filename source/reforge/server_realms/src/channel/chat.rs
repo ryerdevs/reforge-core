@@ -96,16 +96,22 @@ const CHATBUF_MAX: usize = 512;
 const SHOUT_COOLDOWN: tokio::time::Duration = tokio::time::Duration::from_secs(15);
 
 /// Peer de chat de una sesión activa: lo que el broadcast/whisper necesitan
-/// de OTRA conexión (nombre para el whisper, posición/mapa para el rango y
-/// el outbox para la entrega S→C). `out` es el lado emisor del `chat_rx`
-/// que el game loop de esa conexión drena. El empire del GC_CHAT es el del
-/// EMISOR (se copia del session al construir el paquete — parity del C++).
+/// de OTRA conexión (nombre para el whisper, posición/mapa para el rango,
+/// imperio para los GC_CHAT dirigidos y el outbox para la entrega S→C).
+/// `out` es el lado emisor del `chat_rx` que el game loop de esa conexión
+/// drena. El empire del GC_CHAT es el del EMISOR (se copia del session al
+/// construir el paquete — parity del C++).
 #[derive(Clone)]
 struct ChatPeer {
     name: String,
     map_index: i32,
     x: i32,
     y: i32,
+    /// Imperio de la sesión (bEmpire del GC_CHAT dirigido a este peer —
+    /// parity ChatPacket char.cpp:3948, `d->GetEmpire()` = receptor). Lo
+    /// usan los lanes sociales (messenger) que construyen GC_CHAT para OTRA
+    /// sesión.
+    empire: u8,
     out: UnboundedSender<Vec<u8>>,
 }
 
@@ -136,11 +142,12 @@ pub fn register_peer(
     map_index: i32,
     x: i32,
     y: i32,
+    empire: u8,
     out: UnboundedSender<Vec<u8>>,
 ) -> ChatPeerGuard {
     peers().lock().expect("chat peers lock").insert(
         vid,
-        ChatPeer { name, map_index, x, y, out },
+        ChatPeer { name, map_index, x, y, empire, out },
     );
     ChatPeerGuard(vid)
 }
@@ -164,6 +171,65 @@ pub fn find_player(name: &str) -> Option<(u32, i32, i32, i32)> {
     ps.iter()
         .find(|(_, p)| p.name.eq_ignore_ascii_case(name))
         .map(|(vid, p)| (*vid, p.map_index, p.x, p.y))
+}
+
+/// Nombre del peer con el vid dado (None = no conectado). Lo usa el
+/// messenger para resolver el destino de un ADD_BY_VID (parity
+/// `CHARACTER_MANAGER::Find(vid)` input_main.cpp:941).
+pub(crate) fn peer_name(vid: u32) -> Option<String> {
+    peers()
+        .lock()
+        .expect("chat peers lock")
+        .get(&vid)
+        .map(|p| p.name.clone())
+}
+
+/// Imperio de la sesión con el vid dado (`d->GetEmpire()` — bEmpire del
+/// GC_CHAT dirigido; 0 si el peer no existe). Messenger.
+pub(crate) fn peer_empire(vid: u32) -> u8 {
+    peers().lock().expect("chat peers lock").get(&vid).map(|p| p.empire).unwrap_or(0)
+}
+
+/// Entrega bytes al outbox del peer `vid` (true si el peer existe y su cola
+/// sigue viva). El game loop de ESA conexión los drena y los manda al
+/// socket. Lo usan los lanes sociales que construyen paquetes S→C para OTRA
+/// sesión (messenger: prompt messenger_auth, INFO al invitador, sync
+/// REMOVE_FRIEND) — mismo camino de entrega que el whisper/broadcast.
+pub(crate) fn send_to_vid(vid: u32, bytes: &[u8]) -> bool {
+    match peers().lock().expect("chat peers lock").get(&vid) {
+        Some(p) => p.out.send(bytes.to_vec()).is_ok(),
+        None => false,
+    }
+}
+
+/// Broadcast a los peers EN RANGO del view (mismo mapa + distancia ≤ 5500),
+/// EXCLUYENDO al emisor `my_vid` — el patrón PacketAround del C++ para las
+/// emociones (entity.cpp:73-92 incluye AL EMISOR vía f(this); aquí el echo
+/// al emisor lo hace su propio socket directo). Devuelve cuántos peers lo
+/// recibieron. Lo usa emotions.rs (GC_CHAT CHAT_TYPE_COMMAND).
+pub(crate) fn broadcast_in_range(
+    my_vid: u32,
+    my_map: i32,
+    my_x: i32,
+    my_y: i32,
+    bytes: &[u8],
+) -> usize {
+    let ps = peers().lock().expect("chat peers lock");
+    let mut sent = 0usize;
+    for (vid, peer) in ps.iter() {
+        if *vid == my_vid || peer.map_index != my_map {
+            continue;
+        }
+        let dx = i64::from(peer.x) - i64::from(my_x);
+        let dy = i64::from(peer.y) - i64::from(my_y);
+        if dx * dx + dy * dy > TALKING_RANGE * TALKING_RANGE {
+            continue;
+        }
+        if peer.out.send(bytes.to_vec()).is_ok() {
+            sent += 1;
+        }
+    }
+    sent
 }
 
 /// Recorta el texto del chat/whisper en el PRIMER NUL y lo capa (parity
@@ -230,11 +296,25 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
     // → `interpret_command(ch, buf + 1, ...)`; el comando NO se muestra NI se
     // difunde — el hook vive ANTES del broadcast).
     if msg.len() > 1 && msg[0] == b'/' {
-        return crate::channel::gm::handle(
-            session,
-            &String::from_utf8_lossy(&msg[1..]),
-        )
-        .await;
+        let text = String::from_utf8_lossy(&msg[1..]).into_owned();
+        // Comandos de JUGADOR sin nivel GM del cmd_info[] (parity: en el C++
+        // TODOS entran por interpret_command — la tabla cmd_info[] mezcla GM
+        // y jugador): messenger_auth (do_messenger_auth cmd_general.cpp:
+        // 1167-1189), emotion_allow y las emociones (cmd.cpp:448-473 →
+        // do_emotion/do_emotion_allow). Los nombres NO colisionan con el
+        // subset GM → dispatch ANTES de gm::handle (la misma tabla en el C++;
+        // aquí el orden equivalente). None = comando social ajeno → cae al GM.
+        if let Some(outcome) = crate::channel::messenger::try_handle_command(session, &text)
+            .await?
+        {
+            return Ok(outcome);
+        }
+        if let Some(outcome) = crate::channel::emotions::try_handle_command(session, &text)
+            .await?
+        {
+            return Ok(outcome);
+        }
+        return crate::channel::gm::handle(session, &text).await;
     }
     // SHOUT (C-04): canal COMPLETO (todos los mapas) con id=0 y payload
     // "Name : msg" (parity SendShout/FuncShout — input_p2p.cpp:208-228, sin
@@ -547,6 +627,7 @@ mod tests {
             map_index,
             x,
             y,
+            s.empire,
             s.chat_tx.clone(),
         ));
         (s, client_side)

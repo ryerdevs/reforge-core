@@ -136,7 +136,9 @@ pub async fn handle_add(session: &mut Session, pkt: &[u8]) -> Result<Outcome, St
             );
             return Ok(Outcome::Continue);
         }
-        QUICKSLOT_TYPE_SKILL if add.slot.pos >= SKILL_MAX_NUM => {
+        // `==` (no `>=`): SKILL_MAX_NUM es el MAX del u8 — con `>=` clippy
+        // 1.97 deniega absurd_extreme_comparisons (semántica idéntica).
+        QUICKSLOT_TYPE_SKILL if add.slot.pos == SKILL_MAX_NUM => {
             eprintln!(
                 "server_realms: channel conn {}: quickslot SKILL a pos {} — \
                  fuera de rango (SKILL_MAX_NUM {SKILL_MAX_NUM})",

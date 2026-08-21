@@ -37,10 +37,11 @@ pub enum ConnectionRole {
 /// Subconjunto F1 de `CPacketInfoCG` (flujo de login + fase de juego,
 /// sequence OFF): los de tamaño fijo — ver `packet_size` para la lista
 /// completa con sus Packet.h del cliente. Los de tamaño VARIABLE del C++
-/// (CG_CHAT 3, CG_WHISPER 19, CG_SYNC_POSITION 8, CG_SHOP 50, CG_TEXT... —
-/// su `iExtraLen` depende del contenido) NO están en la tabla fija: se
-/// resuelven en `try_extract` (CG_CHAT/CG_WHISPER/CG_SHOP) o cierran la
-/// conexión si no tienen arm (seguro por defecto, documentado).
+/// (CG_CHAT 3, CG_WHISPER 19, CG_SYNC_POSITION 8, CG_SHOP 50,
+/// CG_MESSENGER 67, CG_TEXT... — su `iExtraLen` depende del contenido) NO
+/// están en la tabla fija: se resuelven en `try_extract` (CG_CHAT/
+/// CG_WHISPER/CG_SHOP/CG_MESSENGER) o cierran la conexión si no tienen arm
+/// (seguro por defecto, documentado).
 ///
 /// Matices verificados contra el C++:
 /// - `0x00` NO se acepta. El C++ lo consume como no-op de 1 byte ANTES del
@@ -103,12 +104,15 @@ pub fn packet_size(role: ConnectionRole, header: u8) -> Option<usize> {
 /// tamaños son los structs del PACKET.H DEL CLIENTE, packed — la entrada al
 /// mundo no puede cerrar por un paquete de juego legítimo).
 ///
-/// gap-lane A (2026-08-15): añadidos los 21 headers que el C++ conoce y el
-/// Rust no (safebox, party, guild, refine, dragon soul, fishing, acce, mall,
+/// gap-lane A (2026-08-15): añadidos los headers que el C++ conoce y el Rust
+/// no (safebox, party, guild, refine, dragon soul, fishing, acce, mall,
 /// item give, fly targeting, hack, script select item —
 /// `packet_info.cpp:191-234`). Antes caían como [`FramingError::UnknownHeader`]
 /// → CIERRE de conexión; ahora el framer los acepta con su tamaño exacto y
 /// caen en el 'other' del dispatch (ignorados sin desconectar).
+/// (CG_MESSENGER 67 estaba en ese lote con 2 B fijos — desde el bloque
+/// messenger 2026-08-21 es VARIABLE por subheader, arm propio en
+/// `try_extract`.)
 ///
 /// gap-lane E (2026-08-15): añadidos `CG_EMPIRE` (90, 2 B) y `CG_CHANGE_NAME`
 /// (106, 27 B) — los manda el cliente en la fase select (elegir imperio /
@@ -147,7 +151,9 @@ fn game_phase_size(header: u8) -> Option<usize> {
         header::CG_TARGET => 5,             // 61, header+vid (Packet.h:671-675)
         header::CG_WARP => 15,              // 65, header+x+y+addr+port (Packet.h:2028-2035)
         header::CG_SCRIPT_BUTTON => 5,      // 66, header+idx (Packet.h:665-669)
-        header::CG_MESSENGER => 2,          // 67, header+subheader (Packet.h:801-805)
+        // 67 (CG_MESSENGER) es VARIABLE (subheader): resuelto en try_extract
+        // (parity input_main.cpp:927-1037 — el C++ lee el payload del mismo
+        // buffer; ver protocol::social).
         header::CG_MALL_CHECKOUT => 5,      // 69, header+bMallPos+TItemPos (Packet.h:839-845)
         header::CG_SAFEBOX_CHECKIN => 5,    // 70, header+bSafePos+TItemPos (Packet.h:832-838)
         header::CG_SAFEBOX_CHECKOUT => 5,   // 71, header+bSafePos+TItemPos (Packet.h:825-831)
@@ -361,6 +367,32 @@ impl Framer {
             }
             return Ok(Some(self.buf.drain(..total).collect()));
         }
+        // CG_MESSENGER (67): paquete de tamaño VARIABLE del C++ —
+        // `TPacketCGMessenger` (2 B: header + subheader, Packet.h:801-805) +
+        // payload según subheader: ADD_BY_VID=0 (+DWORD vid → total 6),
+        // ADD_BY_NAME=1 / REMOVE=2 (+nombre crudo de CHARACTER_NAME_MAX_LEN
+        // 24 → total 26) (input_main.cpp:927-1037 — el C++ lee el payload
+        // dentro del MISMO buffer con uiBytes). El header NO está en la tabla
+        // fija (`Set(HEADER_CG_MESSENGER, sizeof(TPacketCGMessenger), ...)` +
+        // iExtraLen); se resuelve aquí como CG_SHOP. Un subheader DESCONOCIDO
+        // entrega los 2 B base y el handler lo descarta CON LOG sin cerrar la
+        // conexión (parity sys_err input_main.cpp:1031-1035).
+        if hdr == header::CG_MESSENGER && self.role == ConnectionRole::Channel {
+            if self.buf.len() < protocol::social::CG_FIXED {
+                return Ok(None); // falta el subheader
+            }
+            let total = match self.buf[1] {
+                protocol::social::SUB_CG_ADD_BY_VID => protocol::social::CG_ADD_BY_VID_TOTAL,
+                protocol::social::SUB_CG_ADD_BY_NAME | protocol::social::SUB_CG_REMOVE => {
+                    protocol::social::CG_NAME_TOTAL
+                }
+                _ => protocol::social::CG_FIXED, // desconocido — el handler lo descarta
+            };
+            if self.buf.len() < total {
+                return Ok(None);
+            }
+            return Ok(Some(self.buf.drain(..total).collect()));
+        }
         let Some((min, max)) = packet_range(self.role, hdr) else {
             return Err(FramingError::UnknownHeader { header: hdr });
         };
@@ -461,18 +493,17 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // gap-lane A (2026-08-15): los 21 headers C→S que el C++ conoce
+    // gap-lane A (2026-08-15): los headers C→S que el C++ conoce
     // (packet_info.cpp:191-234) y el Rust no — safebox, party, guild,
     // refine, dragon soul, fishing, acce, mall, item give, fly targeting,
     // hack, script select item. Tamaño EXACTO del struct packed del
     // Packet.h del cliente; antes: UnknownHeader → CIERRE de conexión.
     // ------------------------------------------------------------------
 
-    /// (header, tamaño total) de los 21 — verificado contra packet_info.cpp
+    /// (header, tamaño total) de los 20 — verificado contra packet_info.cpp
     /// (sizeof del struct del server) y Packet.h del cliente (packed, pack(1)).
     const GAP_LANE_A: &[(u8, usize)] = &[
         (header::CG_ADD_FLY_TARGETING, 13), // 53, TPacketCGFlyTargeting (Packet.h:717-723)
-        (header::CG_MESSENGER, 2), // 67, TPacketCGMessenger (Packet.h:801-805)
         (header::CG_MALL_CHECKOUT, 5), // 69, TPacketCGMallCheckout (Packet.h:839-845)
         (header::CG_SAFEBOX_CHECKIN, 5), // 70, TPacketCGSafeboxCheckin (Packet.h:832-838)
         (header::CG_SAFEBOX_CHECKOUT, 5), // 71, TPacketCGSafeboxCheckout (Packet.h:825-831)
@@ -496,8 +527,9 @@ mod tests {
 
     #[test]
     fn gap_lane_a_headers_have_exact_sizes() {
-        // El framer del canal conoce los 21 headers con el tamaño EXACTO del
-        // struct packed del Packet.h del cliente (packet_info.cpp Set(...)).
+        // El framer del canal conoce los headers del gap con el tamaño EXACTO
+        // del struct packed del Packet.h del cliente (packet_info.cpp Set(...)).
+        // (CG_MESSENGER salió de esta tabla: es variable — tests propios.)
         for &(hdr, size) in GAP_LANE_A {
             assert_eq!(
                 packet_size(ConnectionRole::Channel, hdr),
@@ -510,7 +542,7 @@ mod tests {
     #[test]
     fn gap_lane_a_headers_rejected_on_auth() {
         // El rol Auth solo habla el flujo de login: cualquier header de la
-        // fase de juego (los 21 del gap incluidos) → None → UnknownHeader →
+        // fase de juego (los del gap incluidos) → None → UnknownHeader →
         // cierre (parity input.cpp:77-84).
         for &(hdr, _) in GAP_LANE_A {
             assert_eq!(
@@ -550,7 +582,8 @@ mod tests {
         }
     }
 
-    /// Los 21 del gap concatenados en un solo read → 21 paquetes en orden
+    /// Los headers del gap concatenados en un solo read → un paquete por
+    /// header, en orden
     /// (los tamaños no se pisan entre sí).
     #[test]
     fn gap_lane_a_concatenated_in_one_push() {
@@ -920,6 +953,68 @@ mod tests {
             f.push(&buy),
             Err(FramingError::UnknownHeader { header: header::CG_SHOP })
         ));
+    }
+
+    /// CG_MESSENGER (67) — ADD_BY_VID (subheader 0): paquete de tamaño
+    /// VARIABLE — total 6 B (TPacketCGMessenger 2 B + DWORD vid;
+    /// Packet.h:801-805 + :1471-1474, parity input_main.cpp:939-969). Antes
+    /// era fijo de 2 B en la tabla: el vid se comía como el PRÓXIMO paquete
+    /// (desync del stream).
+    #[test]
+    fn cg_messenger_add_by_vid_total_6_bytes() {
+        let pkt = [67u8, 0, 0x07, 0x00, 0x00, 0x00]; // sub 0 + vid 7 LE
+        let mut f = Framer::new(ConnectionRole::Channel);
+        let out = f.push(&pkt).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0], pkt.to_vec());
+        assert_eq!(f.buffered(), 0);
+
+        // Fragmentado: los primeros 2 B (base) NO emiten nada solos — el
+        // tamaño depende del subheader.
+        let mut f = Framer::new(ConnectionRole::Channel);
+        assert!(f.push(&pkt[..2]).unwrap().is_empty());
+        assert_eq!(f.push(&pkt[2..]).unwrap(), vec![pkt.to_vec()]);
+
+        // El rol Auth NO lo acepta (flujo corto — tabla común).
+        assert!(matches!(
+            Framer::new(ConnectionRole::Auth).push(&pkt),
+            Err(FramingError::UnknownHeader { header: header::CG_MESSENGER })
+        ));
+    }
+
+    /// CG_MESSENGER — ADD_BY_NAME (subheader 1) y REMOVE (subheader 2):
+    /// total 26 B cada uno (base 2 B + nombre crudo de CHARACTER_NAME_MAX_LEN
+    /// 24 bytes, sin byte de longitud en el wire — parity
+    /// input_main.cpp:971-986 y :1015-1030).
+    #[test]
+    fn cg_messenger_add_by_name_and_remove_total_26_bytes() {
+        for sub in [protocol::social::SUB_CG_ADD_BY_NAME, protocol::social::SUB_CG_REMOVE] {
+            let mut pkt = vec![header::CG_MESSENGER, sub];
+            pkt.extend_from_slice(b"Companion\0");
+            pkt.resize(protocol::social::CG_NAME_TOTAL, 0);
+            assert_eq!(pkt.len(), 26);
+            let mut f = Framer::new(ConnectionRole::Channel);
+            let out = f.push(&pkt).unwrap();
+            assert_eq!(out, vec![pkt.clone()], "subheader {sub}");
+            assert_eq!(f.buffered(), 0);
+        }
+    }
+
+    /// CG_MESSENGER con subheader DESCONOCIDO: entrega los 2 B base SIN
+    /// cerrar la conexión (parity input_main.cpp:1031-1035 — sys_err + break,
+    /// `return 0` sin PHASE_CLOSE); el handler lo descarta con log.
+    #[test]
+    fn cg_messenger_unknown_subheader_delivered_not_closed() {
+        let bad = [header::CG_MESSENGER, 0xEE];
+        let out = Framer::new(ConnectionRole::Channel).push(&bad).unwrap();
+        assert_eq!(out, vec![bad.to_vec()], "los 2 B se entregan (sin UnknownHeader)");
+        // La conexión sigue viva: un MESSENGER válido detrás se parsea bien.
+        let next = [header::CG_MESSENGER, protocol::social::SUB_CG_ADD_BY_VID, 1, 0, 0, 0];
+        let mut f = Framer::new(ConnectionRole::Channel);
+        let out = f.push(&bad).unwrap();
+        assert_eq!(out.len(), 1);
+        let out = f.push(&next).unwrap();
+        assert_eq!(out, vec![next.to_vec()], "el stream sigue parseando tras el desconocido");
     }
 
     /// Los headers de 1 byte se parsean como paquetes de 1 byte en el rol

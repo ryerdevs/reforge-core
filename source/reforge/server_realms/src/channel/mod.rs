@@ -46,11 +46,13 @@
 
 mod chat;
 mod combat;
+mod emotions;
 mod entry;
 mod events;
 mod game;
 mod gm;
 mod items;
+mod messenger;
 mod movement;
 mod party;
 mod pvp;
