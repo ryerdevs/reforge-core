@@ -7,12 +7,31 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
-## [2026-08-21] (63rd part) — Repo consolidated + structural debt closed
+## [2026-08-21] (63rd part) — Repo consolidated + structural debt closed + MESSENGER/EMOTIONS block
 
 > The working tree carried an UNCOMMITTED fix from 2026-08-16
 > (SPAWN_VIEW 8000→300000) that the deployed binary already included —
-> source of truth divergence. Workspace **712 passed / 0 failed / 51
-> ignored**, pushed (`d646669`, `44f2173`).
+> source of truth divergence. Workspace went 712 → 733 passed / 0 failed
+> with the social block; pushed `d646669`, `44f2173`, `cae61b3` and the
+> messenger commit.
+
+- **MESSENGER + EMOTIONS (content slice 1 of the 2026-08-21 ranking)** —
+  fixer lane + independent verifier PASS: variable framing for CG_MESSENGER
+  (67; 6 B ADD_BY_VID / 26 B ADD_BY_NAME|REMOVE — was a fixed 2 B that
+  desynced the stream), `protocol::social` encoders byte-exact vs
+  messenger_manager.cpp (LOGIN/LOGOUT len+name, LIST at world entry,
+  REMOVE_FRIEND sync — define active on BOTH sides), invite flow via the
+  chat-command `messenger_auth <name>` + `/messenger_auth y|n <name>` with
+  a pending-request set (closes the auto-add exploit), accept inserts BOTH
+  directions (AuthToAdd parity), remove deletes both (@fixme183);
+  MessengerRepo awakened (was a sleeping repo). Emotions: full English
+  command table (21 entries to END_OF_DANCE), `/emotion_allow`, do_emotion
+  validations in parity order (riding, victim-in-view, distance 10..500
+  exclusive, prior permission) and the CHAT_TYPE_COMMAND broadcast.
+  Documented gaps: OTHER_SEX_ONLY (no player.sex in this variant),
+  marriage branch, block-mode/observer, INFO texts in EN. New tests: 21
+  (framer 4, protocol golden 6, handlers 12, live-PG gated 1 — ran green
+  against real PG).
 
 - **`d646669`**: committed the whole-map materialization fix (parity
   sectree_manager.cpp — the C++ loads ALL mobs of the map at boot;
