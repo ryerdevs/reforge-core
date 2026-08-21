@@ -116,3 +116,13 @@
 - **AUTOUSE_GOLD/treasure boxes** — PENDIENTE (requiere el SpecialItemGroup — dominio amplio).
 - **ATT_SPEED buff** — PENDIENTE (el intervalo viene del arma; conectar el buff al
   attack_speed_ms del PlayerState).
+
+## Actualización 2026-08-21 (ranking de contenido — decisión del usuario)
+
+Orden acordado para los bloques de contenido (eventos demorado al final):
+
+1. **Messenger + emociones** (despierta `MessengerRepo` con consumidor real).
+2. **Belt + Dragon Soul** (CG_ITEM_MOVE acepta esas celdas).
+3. **Quests**: conversor (~88) + acciones pendientes (say_reward, send_letter, timers).
+4. (reserva)
+5. **Eventos/raids/wedding** — demorado por decisión del usuario 2026-08-21.
