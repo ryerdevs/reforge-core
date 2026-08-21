@@ -23,11 +23,18 @@ use database::npc::{MobRepo, MobRow};
 /// explícita del usuario 2026-08-13: "la distancia de visión para cargar las
 /// cosas es muy pequeña, agrándala aún más" — ampliado de 5000); el coste del
 /// loop por tick (10k entradas × checks de distancia) es despreciable.
-pub const SPAWN_VIEW: i32 = 8_000;
+/// 2026-08-16 (world entry fix #2): 8000 NO materializaba nada en el mapa 41
+/// — el spawn del jugador (Town.txt: celda 480,736 = 969600,278400) está a
+/// ~27k units de la zona de mobs (regen celdas y 114-629) → el mundo quedaba
+/// vacío ("0 entradas visibles materializadas"). El C++ cargaba TODOS los
+/// mobs del mapa al boot (sectree completo — sectree_manager.cpp); el spawn
+/// dinámico es una desviación del rewrite. Materializar el mapa completo:
+/// 300000 cubre la diagonal del mapa más grande (8×8 × 128 × 200 ≈ 290k).
+pub const SPAWN_VIEW: i32 = 300_000;
 /// Radio de desmaterialización (units) — margen de histéresis sobre el
 /// spawn (evita el flapping en el borde). Documentado: los mobs aparecen a
-/// ≤ 8000 y desaparecen a > 10000 de TODOS los jugadores.
-pub const DESPAWN_RADIUS: i32 = 10_000;
+/// ≤ 300000 y desaparecen a > 310000 de TODOS los jugadores.
+pub const DESPAWN_RADIUS: i32 = 310_000;
 
 /// 0) SPAWN/DESPAWN DINÁMICO — el fix del mundo vacío (parity sectree): los
 ///    mobs se MATERIALIZAN cuando un jugador de su mapa está a ≤ SPAWN_VIEW
@@ -355,25 +362,22 @@ mod tests {
     use crate::ecs::events::{CombatEvent, CombatIntent, MoveIntent, NpcEvent};
     use crate::ecs::test_util::*;
 
-    /// El spawn dinámico materializa SOLO las entradas a ≤ SPAWN_VIEW del
-    /// jugador (el fix del mundo vacío: los mobs aparecen al acercarse).
+    /// El spawn materializa TODAS las entradas del mapa del jugador (parity
+    /// C++: el sectree carga todos los mobs al boot — SPAWN_VIEW 300000
+    /// cubre la diagonal del mapa más grande, 8×8 × 128 × 200 ≈ 290k).
     #[test]
-    fn spawns_only_entries_within_view() {
+    fn spawns_all_entries_of_the_players_map() {
         let mut w = world_with(42);
         let mut far = mob_row(2101);
-        far.ai_flag = Some("NOMOVE".into()); // determinista: no patrulla hacia la vista
+        far.ai_flag = Some("NOMOVE".into()); // determinista
         load(&mut w, vec![
             (entry(101, 0, 0, 1), mob_row(101)),
-            (entry(2101, 8_600, 0, 1), far), // fuera de SPAWN_VIEW 8000 (dist_approx 8264)
+            (entry(2101, 260_000, 0, 1), far), // lejos del spawn pero en el mapa
         ]);
         let events = join(&mut w);
         let spawned = spawn_events(&events);
-        assert_eq!(spawned.len(), 1, "solo la entrada cercana: {events:?}");
-        assert_eq!(w.npc_count(), 1);
-        // El ADD del wire: header 1, vid 10000 (primer vid del allocador).
-        let add = &spawned[0][0];
-        assert_eq!(add[0], 1, "GC_CHARACTER_ADD");
-        assert_eq!(&add[1..5], &10_000u32.to_le_bytes(), "vid del allocador");
+        assert_eq!(spawned.len(), 2, "todos los del mapa: {events:?}");
+        assert_eq!(w.npc_count(), 2);
     }
 
     /// El despawn: un mob intacto a > DESPAWN_RADIUS de TODOS los jugadores
@@ -387,7 +391,10 @@ mod tests {
         let events = join(&mut w);
         assert_eq!(spawn_events(&events).len(), 1);
         assert_eq!(w.npc_count(), 1);
-        w.process_intent(MoveIntent::Move { player_vid: 2, x: 10_800, y: 0 }.into(), 1_000);
+        // 400k y no 320k: `distance_approx` (DISTANCE_APPROX del C++)
+        // SUBESTIMA ~4% — 320000×246/256 ≈ 307.5k quedaba DENTRO del radio
+        // 310k y nunca desmaterializaba. 400k → aprox ≈ 384k, margen holgado.
+        w.process_intent(MoveIntent::Move { player_vid: 2, x: 400_000, y: 0 }.into(), 1_000);
         let events = w.update(500);
         assert!(events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Despawned { vid: 10_000, .. }))), "{events:?}");
         assert_eq!(w.npc_count(), 0);
@@ -414,20 +421,26 @@ mod tests {
         assert_eq!(w.npc_count(), 1, "dañado: se queda en el mundo");
     }
 
-    /// Re-materialización al volver: la entrada vuelve con un vid NUEVO
-    /// (el allocador global no reusa).
+    /// Re-materialización tras vaciarse el mapa: con el mapa completo
+    /// materializado, el despawn solo ocurre cuando NADIE queda en el mapa
+    /// (limpieza del sectree — parity: el C++ no despawnea por distancia,
+    /// las entidades viven por mapa). Al re-entrar, la entrada vuelve con
+    /// un vid NUEVO (el allocador global no reusa).
     #[test]
-    fn respawns_with_new_vid_on_approach() {
+    fn respawns_with_new_vid_after_map_empties() {
         let mut w = world_with(42);
         let mut row = mob_row(101);
         row.ai_flag = Some("NOMOVE".into());
         load(&mut w, vec![(entry(101, 0, 0, 1), row)]);
         join(&mut w);
-        w.process_intent(MoveIntent::Move { player_vid: 2, x: 10_800, y: 0 }.into(), 1_000);
-        w.update(500);
+        assert_eq!(w.npc_count(), 1);
+        // El último jugador sale: limpieza del mapa (sin evento Despawned —
+        // no queda nadie a quien emitírselo).
+        w.leave_player(2);
+        assert_eq!(w.update(500).len(), 0);
         assert_eq!(w.npc_count(), 0);
-        w.process_intent(MoveIntent::Move { player_vid: 2, x: 0, y: 0 }.into(), 2_000);
-        let events = w.update(500);
+        // Re-entrada: materialización completa con vid fresco.
+        let events = join(&mut w);
         let spawned = spawn_events(&events);
         assert_eq!(spawned.len(), 1, "re-materializa al volver");
         assert_eq!(&spawned[0][0][1..5], &10_001u32.to_le_bytes(), "vid fresco");
@@ -523,29 +536,37 @@ mod tests {
         );
     }
 
-    /// REGRESIÓN (alcance por jugador): la re-emisión del ADD es POR VISTA —
-    /// un segundo jugador solo recibe las entradas DENTRO de su SPAWN_VIEW
-    /// (las lejanas no se emiten aunque otro jugador las vea).
+    /// REGRESIÓN (cobertura por mapa): TODOS los jugadores del mapa reciben
+    /// los ADDs de todas las entradas sin importar la distancia (parity
+    /// sectree: el mapa completo se carga para cada jugador que entra).
     #[test]
-    fn spawn_adds_scoped_to_each_players_view() {
+    fn spawn_adds_reach_every_player_of_the_map() {
         let mut w = world_with(42);
         let mut far = mob_row(2101);
         far.ai_flag = Some("NOMOVE".into()); // determinista: no patrulla hacia el P2
         load(&mut w, vec![
             (entry(101, 0, 0, 1), mob_row(101)),
-            (entry(2101, 6_900, 0, 1), far), // vista del P1 (6900 -> 6631 < 8000), fuera de la del P2 (8900 -> 8554 > 8000)
+            (entry(2101, 260_000, 0, 1), far),
         ]);
+        // P1 en el spawn: materializa ambas y recibe sus ADDs.
         let events1 = join_at(&mut w, 1, 0, 0);
         assert_eq!(spawn_events(&events1).len(), 2, "P1 ve ambas entradas");
         assert_eq!(w.npc_count(), 2);
-        // P2 a 2000 units del spawn del 101: el 2101 (8900 units) queda fuera
-        // de su vista → solo recibe el ADD del 101.
-        let events2 = join_at(&mut w, 2, -2_000, 0);
-        let vids: Vec<u32> = spawn_events(&events2)
+        // P2 a 260k units: también recibe AMBAS (pase B — las entradas ya
+        // materializadas emiten su ADD con el vid EXACTO de la entidad).
+        let events2 = join_at(&mut w, 2, 260_000, 0);
+        let mut vids: Vec<u32> = spawn_events(&events2)
             .iter()
             .flat_map(|pkts| pkts.iter().map(|p| u32::from_le_bytes(p[1..5].try_into().unwrap())))
             .collect();
-        assert_eq!(vids, vec![10_000], "solo la entrada dentro de su vista: {vids:?}");
+        vids.sort_unstable();
+        assert_eq!(vids, vec![10_000, 10_001], "ambas entradas para P2: {vids:?}");
+        // Sin re-emisión para los jugadores que YA recibieron el ADD.
+        let events3 = w.update(500);
+        assert!(
+            !events3.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))),
+            "sin duplicados: {events3:?}"
+        );
     }
 
     /// TRAP grupos (parity entry_spawns): un entry con kind de grupo NO se
