@@ -69,11 +69,9 @@ use crate::channel::{parse_listen, INVENTORY_MAX_NUM};
 const CHAT_TYPE_INFO: u8 = 1;
 const CHAT_TYPE_NOTICE: u8 = 2;
 
-/// HEADER_GC_WALK_MODE = 111 (packet.h:212) — el protocol reforge aún no
-/// tiene la struct; igual que CHAT_TYPE_* se define aquí (bytes crudos).
-const HEADER_GC_WALK_MODE: u8 = 111;
 /// WALKMODE_RUN/WALK (packet.h:1880-1882) — el modo del TPacketGCWalkMode
-/// (header 111, vid, mode — packet.h:1884-1886).
+/// (header 111 — `protocol::header::GC_WALK_MODE` —, vid, mode —
+/// packet.h:1884-1886).
 const WALKMODE_RUN: u8 = 0;
 const WALKMODE_WALK: u8 = 1;
 /// Cap del nivel de skill (parity SetSkillLevel MIN(40, bLev)
@@ -354,7 +352,7 @@ async fn not_implemented(session: &mut Session, command: &GmCommand) -> Result<(
 async fn set_walk_mode(session: &mut Session, walk: bool) -> Result<(), String> {
     session.walking = walk;
     let mut out = Vec::with_capacity(6);
-    out.push(HEADER_GC_WALK_MODE);
+    out.push(protocol::header::GC_WALK_MODE);
     out.extend_from_slice(&session.player_vid().to_le_bytes());
     out.push(if walk { WALKMODE_WALK } else { WALKMODE_RUN });
     session

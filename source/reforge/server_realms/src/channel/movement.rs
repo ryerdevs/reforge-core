@@ -26,6 +26,7 @@
 //! el cierre del speedhack → `Outcome::Close(razón)`.
 
 use game_core::ecs::{Intent, MoveIntent};
+use protocol::header;
 
 use crate::channel::session::{Outcome, Session};
 use crate::channel::now32;
@@ -95,7 +96,14 @@ pub async fn handle_position(session: &mut Session, pkt: &[u8]) -> Result<Outcom
     // vid + position — packet.h:159, packet.h:1238-1243; el cliente lo
     // recibe en RecvCharacterPositionPacket).
     let vid = session.player_vid();
-    let reply = [43, vid as u8, (vid >> 8) as u8, (vid >> 16) as u8, (vid >> 24) as u8, wire_pos];
+    let reply = [
+        header::GC_CHARACTER_POSITION,
+        vid as u8,
+        (vid >> 8) as u8,
+        (vid >> 16) as u8,
+        (vid >> 24) as u8,
+        wire_pos,
+    ];
     session
         .send(&reply)
         .await

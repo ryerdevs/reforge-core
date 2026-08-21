@@ -105,7 +105,7 @@ impl LegacyData {
 // garantía (race de paquete parcial → login roto). `count` es semántico: el
 // cliente procesa solo las `count` primeras entradas.
 // ---------------------------------------------------------------------------
-pub const GC_CHANNEL_LIST: u8 = 164;
+pub use protocol::header::GC_CHANNEL_LIST;
 /// Slots del wire (fijos). El runtime srv1 tiene 4 canales (30003-30015).
 pub const GC_CHANNEL_LIST_MAX_CHANNELS: usize = 4;
 /// Tamaño total del paquete: header + count + rates(6) + 4×36 = 152 B.
