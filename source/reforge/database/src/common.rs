@@ -65,6 +65,27 @@ impl CommonRepo {
         row.map(|r| r.try_get(0).map_err(|e| format!("GM_AUTHORITY col0: {e}")))
             .transpose()
     }
+
+    /// Autoridad GM SOLO por nombre de personaje (parity `gm_get_level(name)`
+    /// con host/account NULL — gm.cpp:66-79: con account a nullptr el check
+    /// BAD ACCOUNT se salta y basta la entrada del map). Lo usa el gate
+    /// staff-del-messenger (input_main.cpp:947/982: un jugador normal no
+    /// puede añadir al messenger a un GM — el C++ resuelve el nivel del
+    /// DESTINO solo por nombre, sin conocer su cuenta).
+    pub async fn gm_authority_by_name(&self, name: &str) -> Result<Option<String>, String> {
+        let client = self.connect().await?;
+        let row = client
+            .query_opt(
+                "SELECT mauthority FROM common.gmlist \
+                 WHERE mname = $1 \
+                   AND (mserverip = 'ALL' OR mserverip = '')",
+                &[&name],
+            )
+            .await
+            .map_err(|e| pg_err("GM_AUTHORITY_BY_NAME", &e))?;
+        row.map(|r| r.try_get(0).map_err(|e| format!("GM_AUTHORITY_BY_NAME col0: {e}")))
+            .transpose()
+    }
 }
 
 #[cfg(test)]

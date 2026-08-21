@@ -47,6 +47,10 @@ pub mod datachannel;
 /// Aditivo (patrón datachannel); spec `docs/plans/locale-redesign.md` §Wire.
 pub mod locale;
 
+/// MESSENGER (amigos): `CG_MESSENGER` (67, variable por subheader) y
+/// `GC_MESSENGER` (74) — parity packet.h:1400-1490 + messenger_manager.cpp.
+pub mod social;
+
 /// Chat y whisper (parity `packet.h` — `TPacketCGWhisper`/`TPacketGCWhisper`,
 /// `length.h:19` `CHARACTER_NAME_MAX_LEN = 24`): los tamaños FIJOS del wire
 /// (packed, LE) y las constantes de tipo.
@@ -135,7 +139,10 @@ pub mod header {
     pub const CG_WARP: u8 = 65;
     pub const CG_SCRIPT_BUTTON: u8 = 66;
     /// `HEADER_CG_MESSENGER` (Packet.h:79 — 67): messenger (amigos) —
-    /// `TPacketCGMessenger` 2 B (header+subheader; Packet.h:801-805).
+    /// `TPacketCGMessenger` 2 B base (header+subheader; Packet.h:801-805);
+    /// VARIABLE en el framer: ADD_BY_VID total 6 B (+DWORD vid), ADD_BY_NAME/
+    /// REMOVE totales 26 B (+nombre crudo de 24) — lo resuelve
+    /// `try_extract` (parity input_main.cpp:927-1037).
     pub const CG_MESSENGER: u8 = 67;
     /// `HEADER_CG_MALL_CHECKOUT` (Packet.h:81 — 69): compra en la tienda
     /// (mall) — `TPacketCGMallCheckout` 5 B (header+bMallPos+TItemPos;
@@ -383,6 +390,10 @@ pub mod header {
     /// F1 (locale, aditivo — ADR-0009): `GC_LOCALE` chunked variable-length
     /// (el bundle reensamblado son ~1-2 MB — excede u16, por eso va chunked).
     pub const GC_LOCALE: u8 = 140;
+    /// `HEADER_GC_MESSENGER` (server `packet.h:177` — 74): messenger —
+    /// sobre de 4 B (`TPacketGCMessenger`: header+WORD size+subheader) +
+    /// payload según subheader (ver `protocol::social`).
+    pub const GC_MESSENGER: u8 = 74;
     /// `HEADER_GC_RESPOND_CHANNELSTATUS` (cliente `Packet.h:312` — 210): la
     /// respuesta al CG_STATE_CHECKER del selector de canales — `[0xd2][nSize
     /// i32][n× TChannelStatus port u16+status u8][bSuccess 0x01]` (parity

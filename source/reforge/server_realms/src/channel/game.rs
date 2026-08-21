@@ -238,6 +238,14 @@ async fn game_loop(session: &mut Session) -> Result<(), String> {
                         shop::handle(session, &pkt).await?.into_result()?;
                     }
                     header::CG_EXCHANGE => trade::handle(session, &pkt).await?.into_result()?,
+                    // MESSENGER (channel/messenger.rs — bloque 2026-08-21):
+                    // CG_MESSENGER (67, variable por subheader — el framer lo
+                    // resuelve). Parity `Messenger` input_main.cpp:927-1037:
+                    // ADD_BY_VID/ADD_BY_NAME (prompt messenger_auth al
+                    // destino) y REMOVE (borrado en ambas direcciones + sync).
+                    header::CG_MESSENGER => {
+                        crate::channel::messenger::handle(session, &pkt).await?.into_result()?;
+                    }
                     // PARTY (lane 2026-08-16 — `channel/party.rs`): invitación
                     // (72), respuesta (73), expulsión/salida (74) y modo de
                     // reparto de exp (78). CG_PARTY_SET_STATE (75) y

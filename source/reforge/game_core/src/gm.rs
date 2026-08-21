@@ -230,14 +230,18 @@ pub enum GmCommand {
         point: StatPoint,
         amount: i32,
     },
-    /// `/emotion_allow <0|1>` — permite/deniega emociones de otros hacia el
-    /// personaje (do_emotion_allow cmd_emotion.cpp:55+). INFO (GAP).
+    /// `/emotion_allow <vid>` — permite emociones de otros hacia el
+    /// personaje (do_emotion_allow cmd_emotion.cpp:55+). REAL desde el
+    /// bloque messenger+emotions 2026-08-21: el hook social de chat.rs
+    /// (channel/emotions.rs) lo intercepta ANTES de gm::handle — estas
+    /// variantes quedan sombra (solo por exhaustividad del match).
     EmotionAllow,
     /// `/kiss|slap|french_kiss|clap|cheer1|cheer2|dance1-6|congratulation|
     /// forgive` — emociones (do_emotion cmd_emotion.cpp:96+: la emoción
     /// sale del NOMBRE del comando, no del argumento — `emotion_types[]`
-    /// cmd_emotion.cpp:30-51). El sistema de emociones (GC emoticon a los
-    /// cercanos) no existe en reforge → INFO (GAP).
+    /// cmd_emotion.cpp:30-51). REAL desde 2026-08-21: las maneja
+    /// channel/emotions.rs vía el hook de chat.rs (estas variantes quedan
+    /// sombra — exhaustividad).
     Kiss,
     Slap,
     FrenchKiss,

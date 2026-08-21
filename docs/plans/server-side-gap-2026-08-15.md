@@ -121,7 +121,15 @@
 
 Orden acordado para los bloques de contenido (eventos demorado al final):
 
-1. **Messenger + emociones** (despierta `MessengerRepo` con consumidor real).
+1. **Messenger + emociones** — **DONE 2026-08-21** (fixer+verifier lane):
+   framing variable CG_MESSENGER (6/26 B por subheader), `protocol::social`
+   byte-exacto vs messenger_manager.cpp, handlers invite/auth/remove con
+   peticiones pendientes (cierra el auto-add exploit), LIST al entrar,
+   REMOVE_FRIEND sync (define activo en ambos lados), MessengerRepo despierto;
+   emociones = tabla inglesa completa + emotion_allow + validaciones
+   do_emotion (distancia/permiso/montado) + broadcast CHAT_TYPE_COMMAND.
+   Gaps documentados: OTHER_SEX_ONLY (sin player.sex), matrimonio,
+   block-mode/observer, textos INFO en EN. Workspace **733 passed / 0 failed**.
 2. **Belt + Dragon Soul** (CG_ITEM_MOVE acepta esas celdas).
 3. **Quests**: conversor (~88) + acciones pendientes (say_reward, send_letter, timers).
 4. (reserva)
