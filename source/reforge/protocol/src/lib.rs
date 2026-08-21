@@ -357,6 +357,15 @@ pub mod header {
     /// bHPPercent). Parity `SetTarget`/`BroadcastTargetPacket`
     /// (char.cpp:5048-5143).
     pub const GC_TARGET: u8 = 63;
+    /// HEADER_GC_CHARACTER_POSITION = 43 (packet.h:159, packet.h:1238-1243)
+    /// — respuesta S→C del sit/stand (el C→S es el 28).
+    pub const GC_CHARACTER_POSITION: u8 = 43;
+    /// HEADER_GC_WALK_MODE = 111 (packet.h:212, packet.h:1884-1886) —
+    /// modo de marcha RUN/WALK del jugador.
+    pub const GC_WALK_MODE: u8 = 111;
+    /// HEADER_GC_CHANNEL_LIST = 164 (F5 auth) — lista de canales + manifest
+    /// tras el login OK; 152 B fijos (`server_realms/src/auth.rs`).
+    pub const GC_CHANNEL_LIST: u8 = 164;
     /// `HEADER_GC_SHOP` (cliente `Packet.h:183`, server `packet.h:153` —
     /// 38): la tienda NPC (`TPacketGCShop` 4 B: header+WORD size+subheader;
     /// START payload items — ver `server_realms/channel/shop.rs`).

@@ -37,9 +37,9 @@ use protocol::{
 };
 use tokio::io::{AsyncRead, AsyncReadExt};
 
-/// `GC_CHANNEL_LIST` (164): `auth.rs:108` — const local de `server_realms`
-/// (no está en `protocol`; el bot la define con la doc del origen).
-pub const GC_CHANNEL_LIST: u8 = 164;
+/// `GC_CHANNEL_LIST` (164) — fuente única: `protocol::header`
+/// (el wire lo emite `server_realms/src/auth.rs`).
+pub use protocol::header::GC_CHANNEL_LIST;
 /// Tamaño fijo del 164: header + count + rates(6) + 4×36 (`auth.rs:112`).
 const GC_CHANNEL_LIST_SIZE: usize = 152;
 
