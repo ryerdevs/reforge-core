@@ -7,12 +7,12 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
-## [2026-08-21] (63rd part) — Repo consolidated: the uncommitted whole-map spawn fix landed
+## [2026-08-21] (63rd part) — Repo consolidated + structural debt closed
 
 > The working tree carried an UNCOMMITTED fix from 2026-08-16
 > (SPAWN_VIEW 8000→300000) that the deployed binary already included —
 > source of truth divergence. Workspace **712 passed / 0 failed / 51
-> ignored**, pushed (`d646669`).
+> ignored**, pushed (`d646669`, `44f2173`).
 
 - **`d646669`**: committed the whole-map materialization fix (parity
   sectree_manager.cpp — the C++ loads ALL mobs of the map at boot;
@@ -26,9 +26,19 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
   coverage). Trap documented in-test: `distance_approx` (C++
   `DISTANCE_APPROX`) UNDERESTIMATES ~4% — a 320k check returned ~307.5k,
   inside the new 310k radius → no despawn; margins moved clear of the band.
-- Repo junk removed (`nul` artifact, stray client `syserr.txt`).
-- Stack verified up after consolidation: PG :5432 / auth :30001 /
-  channel :30003.
+- **`44f2173`** — structural debt audit + closure: (1) the "C→S headers
+  that close the connection" item was ALREADY DONE (gap-lane A,
+  2026-08-15, tested) — the gap doc was stale; (2) the last ad-hoc GC
+  headers centralized in `protocol::header` (GC_CHARACTER_POSITION 43,
+  GC_WALK_MODE 111, GC_CHANNEL_LIST 164 deduplicated across auth.rs and
+  bench_bot) — wire bytes identical, no behavior change; (3) sleeping
+  repos re-audited: SafeboxRepo awake, MessengerRepo/GuildRepo documented
+  as content-block debt instead of wiring infrastructure without a
+  consumer.
+- `docs/plans/server-side-gap-2026-08-15.md` §Estructura rewritten with
+  the real status (2 items closed, repos debt scoped).
+- Repo junk removed (`nul` artifact, stray client `syserr.txt`). Stack
+  verified up after consolidation: PG :5432 / auth :30001 / channel :30003.
 
 ## [2026-08-16] (62nd part) — Fix chain complete: world entry + channel panic
 
