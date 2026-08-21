@@ -7,6 +7,29 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-21] (63rd part) — Repo consolidated: the uncommitted whole-map spawn fix landed
+
+> The working tree carried an UNCOMMITTED fix from 2026-08-16
+> (SPAWN_VIEW 8000→300000) that the deployed binary already included —
+> source of truth divergence. Workspace **712 passed / 0 failed / 51
+> ignored**, pushed (`d646669`).
+
+- **`d646669`**: committed the whole-map materialization fix (parity
+  sectree_manager.cpp — the C++ loads ALL mobs of the map at boot;
+  view-scoped dynamic spawn left map 41 empty because the player spawn
+  sits ~27k units from the mob zone). DESPAWN_RADIUS 10000→310000:
+  distance-based despawn now only fires when every player leaves the map.
+- **The fix was HALF-DONE**: 3 tests still asserted the old view-scoped
+  semantics (`despawns_when_player_leaves_range`,
+  `respawns_with_new_vid_on_approach`, `spawn_adds_scoped_to_each_players_view`).
+  Rewritten to the new premises (leave/rejoin lifecycle, map-wide ADD
+  coverage). Trap documented in-test: `distance_approx` (C++
+  `DISTANCE_APPROX`) UNDERESTIMATES ~4% — a 320k check returned ~307.5k,
+  inside the new 310k radius → no despawn; margins moved clear of the band.
+- Repo junk removed (`nul` artifact, stray client `syserr.txt`).
+- Stack verified up after consolidation: PG :5432 / auth :30001 /
+  channel :30003.
+
 ## [2026-08-16] (62nd part) — Fix chain complete: world entry + channel panic
 
 > After the position guard (61st), the channel PANICKED right after a
