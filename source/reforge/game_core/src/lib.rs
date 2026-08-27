@@ -25,11 +25,14 @@
 //!   `IsMovablePosition` (`sectree_manager.cpp`): grid de atributos por mapa
 //!   desde los archivos del server (`server_attr` LZO1X + `Setting.txt`),
 //!   caché por mapa y `is_movable(map, x, y)` en units (celdas de 50 u).
+//! - `guild` — slice social: ciclo de vida básico de una guild (create/add/
+//!   remove) en dominio puro, sin I/O — la persistencia vive en `database`.
 
 pub mod ai;
 pub mod combat;
 pub mod ecs;
 pub mod gm;
+pub mod guild;
 pub mod map;
 pub mod movement;
 pub mod npc;
