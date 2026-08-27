@@ -263,6 +263,14 @@ async fn game_loop(session: &mut Session) -> Result<(), String> {
                     header::CG_PARTY_PARAMETER => {
                         party::handle_parameter(session, &pkt).await?.into_result()?;
                     }
+                    // GUILD (slice 2026-08-27 — channel/guild.rs): CG_GUILD
+                    // (80, variable por subheader — el framer lo resuelve):
+                    // CREATE (sub 1) → game_core::guild::create_guild →
+                    // GC_GUILD INFO + GC_CHAT ok/error. Memoria del proceso
+                    // (player.guild PG = slice futuro, GAP documentado).
+                    header::CG_GUILD => {
+                        crate::channel::guild::handle(session, &pkt).await?.into_result()?;
+                    }
                     // SAFEBOX (channel/safebox.rs — parity SafeboxCheckin/
                     // SafeboxCheckout/SafeboxItemMove, input_main.cpp:1940-
                     // 2117 + safebox.cpp:170-231): meter (70) / sacar (71) /

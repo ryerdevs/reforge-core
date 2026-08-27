@@ -51,6 +51,10 @@ pub mod locale;
 /// `GC_MESSENGER` (74) — parity packet.h:1400-1490 + messenger_manager.cpp.
 pub mod social;
 
+/// GUILD: `CG_GUILD` (80, variable por subheader) / `GC_GUILD` (75) —
+/// parity packet.h:1640-1720 + guild.h:58-69; slice create (sub 1).
+pub mod guild;
+
 /// Chat y whisper (parity `packet.h` — `TPacketCGWhisper`/`TPacketGCWhisper`,
 /// `length.h:19` `CHARACTER_NAME_MAX_LEN = 24`): los tamaños FIJOS del wire
 /// (packed, LE) y las constantes de tipo.

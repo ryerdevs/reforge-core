@@ -23,7 +23,7 @@ use crate::wal::{Batcher, Mutation, Param};
 
 /// Fila completa del load (42 columnas, orden de Q2). Tipos PG reales
 /// (verificados en el esquema: bigint/smallint/integer/bytea/float8).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct PlayerRow {
     pub id: i64,
     pub name: String,

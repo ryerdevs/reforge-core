@@ -51,6 +51,7 @@ mod entry;
 mod events;
 mod game;
 mod gm;
+mod guild;
 mod items;
 mod messenger;
 mod movement;

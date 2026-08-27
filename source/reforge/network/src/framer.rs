@@ -110,9 +110,9 @@ pub fn packet_size(role: ConnectionRole, header: u8) -> Option<usize> {
 /// `packet_info.cpp:191-234`). Antes caían como [`FramingError::UnknownHeader`]
 /// → CIERRE de conexión; ahora el framer los acepta con su tamaño exacto y
 /// caen en el 'other' del dispatch (ignorados sin desconectar).
-/// (CG_MESSENGER 67 estaba en ese lote con 2 B fijos — desde el bloque
-/// messenger 2026-08-21 es VARIABLE por subheader, arm propio en
-/// `try_extract`.)
+/// (CG_MESSENGER 67 y CG_GUILD 80 estaban en ese lote con 2 B fijos — desde
+/// el bloque messenger 2026-08-21 / guild 2026-08-27 son VARIABLES por
+/// subheader, arm propio en `try_extract`.)
 ///
 /// gap-lane E (2026-08-15): añadidos `CG_EMPIRE` (90, 2 B) y `CG_CHANGE_NAME`
 /// (106, 27 B) — los manda el cliente en la fase select (elegir imperio /
@@ -172,7 +172,8 @@ fn game_phase_size(header: u8) -> Option<usize> {
         // del safebox (oro de la caja) pueda existir sin derribar la
         // conexión.
         header::CG_SAFEBOX_MONEY => 6,
-        header::CG_GUILD => 2,              // 80, header+subheader (Packet.h:923-927)
+        // 80 (CG_GUILD) es VARIABLE (subheader): resuelto en try_extract
+        // (parity input_main.cpp:2425-2447 — GetSubPacketSize).
         header::CG_ANSWER_MAKE_GUILD => 14, // 81, header+guild_name[13] (GUILD_NAME_MAX_LEN=12) (Packet.h:929-933)
         header::CG_FISHING => 2,            // 82, header+dir (packet.h:1800-1804)
         header::CG_ITEM_GIVE => 9,          // 83, header+dwTargetVID+TItemPos+byItemCount (Packet.h:935-941)
@@ -393,6 +394,40 @@ impl Framer {
             }
             return Ok(Some(self.buf.drain(..total).collect()));
         }
+        // CG_GUILD (80): paquete de tamaño VARIABLE del C++ — `TPacketCGGuild`
+        // (2 B: header + subheader) + payload según subheader (parity
+        // `GetSubPacketSize` input_main.cpp:2425-2447 — el C++ lee base +
+        // payload del mismo buffer). El slice guild-2026-08-27 redefine el
+        // sub 1 como CREATE (+13 B de nombre → total 15; DIVERGENCIA: en el
+        // legacy el 1 es REMOVE_MEMBER +DWORD = 6). Subheader DESCONOCIDO →
+        // los 2 B base (el handler lo descarta con log, patrón messenger).
+        if hdr == header::CG_GUILD && self.role == ConnectionRole::Channel {
+            if self.buf.len() < protocol::guild::CG_FIXED {
+                return Ok(None); // falta el subheader
+            }
+            let total = match self.buf[1] {
+                protocol::guild::SUB_CG_CREATE => protocol::guild::CG_CREATE_TOTAL,
+                0 => 6,  // ADD_MEMBER +DWORD
+                2 => 12, // CHANGE_GRADE_NAME +10
+                3 => 4,  // CHANGE_GRADE_AUTHORITY +BYTE+BYTE
+                4 => 6,  // OFFER +DWORD
+                5 => 3,  // POST_COMMENT +1
+                6 => 6,  // DELETE_COMMENT +DWORD
+                7 => 2,  // REFRESH_COMMENT +0
+                8 => 7,  // CHANGE_MEMBER_GRADE +DWORD+BYTE
+                9 => 10, // USE_SKILL +TPacketCGGuildUseSkill
+                10 => 7, // CHANGE_MEMBER_GENERAL +DWORD+BYTE
+                11 => 7, // GUILD_INVITE_ANSWER +DWORD+BYTE
+                12 => 6, // CHARGE_GSP +int
+                13 => 6, // DEPOSIT_MONEY +int
+                14 => 6, // WITHDRAW_MONEY +int
+                _ => protocol::guild::CG_FIXED, // desconocido — el handler lo descarta
+            };
+            if self.buf.len() < total {
+                return Ok(None);
+            }
+            return Ok(Some(self.buf.drain(..total).collect()));
+        }
         let Some((min, max)) = packet_range(self.role, hdr) else {
             return Err(FramingError::UnknownHeader { header: hdr });
         };
@@ -514,7 +549,6 @@ mod tests {
         (header::CG_PARTY_USE_SKILL, 6), // 76, TPacketCGPartyUseSkill (Packet.h:897-902)
         (header::CG_SAFEBOX_ITEM_MOVE, 8), // 77, TPacketCGItemMove (Packet.h:593-599)
         (header::CG_PARTY_PARAMETER, 2), // 78, TPacketCGPartyParameter (Packet.h:1012-1016)
-        (header::CG_GUILD, 2), // 80, TPacketCGGuild (Packet.h:923-927)
         (header::CG_ANSWER_MAKE_GUILD, 14), // 81, TPacketCGAnswerMakeGuild (Packet.h:929-933)
         (header::CG_FISHING, 2), // 82, TPacketCGFishing (packet.h:1800-1804)
         (header::CG_ITEM_GIVE, 9), // 83, TPacketCGGiveItem (Packet.h:935-941)
@@ -559,7 +593,6 @@ mod tests {
         // fluye por el framer del canal → cae en el 'other' del dispatch
         // (ignorado sin desconectar); el auth los rechaza cerrando.
         let samples: &[(u8, usize)] = &[
-            (header::CG_GUILD, 2),
             (header::CG_SAFEBOX_CHECKIN, 5),
             (header::CG_PARTY_SET_STATE, 7),
             (header::CG_ANSWER_MAKE_GUILD, 14),
@@ -1015,6 +1048,47 @@ mod tests {
         assert_eq!(out.len(), 1);
         let out = f.push(&next).unwrap();
         assert_eq!(out, vec![next.to_vec()], "el stream sigue parseando tras el desconocido");
+    }
+
+    /// CG_GUILD (80) — CREATE (sub 1, slice 2026-08-27): total 15 B (base
+    /// 2 B + nombre crudo de 13 B — buffer GUILD_NAME_MAX_LEN+1). Antes era
+    /// fijo de 2 B: el nombre se comía como el PRÓXIMO paquete (desync).
+    #[test]
+    fn cg_guild_create_total_15_bytes() {
+        let mut pkt = vec![header::CG_GUILD, protocol::guild::SUB_CG_CREATE];
+        pkt.extend_from_slice(b"Valientes\0\0\0\0");
+        assert_eq!(pkt.len(), protocol::guild::CG_CREATE_TOTAL);
+        let mut f = Framer::new(ConnectionRole::Channel);
+        let out = f.push(&pkt).unwrap();
+        assert_eq!(out, vec![pkt.clone()]);
+        assert_eq!(f.buffered(), 0);
+
+        // Fragmentado: los 2 B base NO emiten nada solos (tamaño = f(sub)).
+        let mut f = Framer::new(ConnectionRole::Channel);
+        assert!(f.push(&pkt[..2]).unwrap().is_empty());
+        assert_eq!(f.push(&pkt[2..]).unwrap(), vec![pkt.to_vec()]);
+
+        // El rol Auth NO lo acepta (tabla común).
+        assert!(matches!(
+            Framer::new(ConnectionRole::Auth).push(&pkt),
+            Err(FramingError::UnknownHeader { header: header::CG_GUILD })
+        ));
+    }
+
+    /// CG_GUILD — los subheaders legacy conservan su tamaño exacto (parity
+    /// GetSubPacketSize input_main.cpp:2425-2447), salvo el 1 (slice) y el
+    /// desconocido (base 2 B con log, patrón messenger).
+    #[test]
+    fn cg_guild_legacy_subheader_sizes() {
+        for (sub, total) in [(0u8, 6usize), (2, 12), (3, 4), (7, 2), (9, 10), (11, 7), (13, 6), (14, 6)] {
+            let mut pkt = vec![header::CG_GUILD, sub];
+            pkt.resize(total, 0);
+            let out = Framer::new(ConnectionRole::Channel).push(&pkt).unwrap();
+            assert_eq!(out, vec![pkt.clone()], "subheader {sub}");
+        }
+        let bad = [header::CG_GUILD, 0xEE];
+        let out = Framer::new(ConnectionRole::Channel).push(&bad).unwrap();
+        assert_eq!(out, vec![bad.to_vec()], "desconocido → base 2 B (sin cierre)");
     }
 
     /// Los headers de 1 byte se parsean como paquetes de 1 byte en el rol
