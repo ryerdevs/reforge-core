@@ -1,0 +1,37 @@
+﻿name: docs
+
+on:
+  push:
+    branches: [main, beta]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify workspace
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File scripts/verify.ps1
+      - name: Status snapshot
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File scripts/status.ps1
+      - name: Handoff check — source changed without progress/CHANGELOG
+        shell: pwsh
+        run: |
+          $changed = git diff --name-only origin/main...HEAD
+          $touchedSource = $changed | Select-String "source/reforge"
+          $touchedDocs = $changed | Select-String "documentation/progress.md|CHANGELOG.md"
+          if ($touchedSource -and -not $touchedDocs) {
+            Write-Error "source/reforge touched but documentation/progress.md and CHANGELOG.md not updated — update handoff"
+            exit 1
+          }
+          Write-Host "handoff check ok"
+      - name: Link checker
+        uses: lycheeverse/lychee-action@v1
+        with:
+          args: --verbose --no-progress documentation/**/*.md
