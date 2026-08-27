@@ -10,6 +10,7 @@
 //! | Guild Load (boot) | `db/src/GuildManager.cpp:161` (`CGuildManager::Initialize`) | `GuildRepo::load_all` | 8 columnas (`id, name, ladder_point, win, draw, loss, gold, level`) — `ParseResult` del boot del db. |
 //! | Guild Load (uno) | `GuildManager.cpp:191` (`CGuildManager::Load`) | `GuildRepo::load` | Mismas 8 columnas + `WHERE id = $1`. |
 //! | QID_GUILD_RANKING (20) | `GuildManager.cpp:201` (`QueryRanking`) | `GuildRepo::ranking` | `SELECT id, name, ladder_point ... ORDER BY ladder_point DESC LIMIT 20` (top 20). |
+//! | Grade upsert (slice F4) | `guild.cpp:104-111,799,838` | `GuildRepo::upsert_grade` | `player.guild_grade` (PK guild_id+grade): INSERT + `ON CONFLICT DO UPDATE` name/auth; auth serializado a SET textual (el legacy escribia `%d`, MariaDB canonicalizaba). |
 //!
 //! # Estado de migracion (verificado en pg_catalog 2026-08-13)
 //!
@@ -57,6 +58,29 @@ SELECT id, name, ladder_point, win, draw, loss, gold, level FROM player.guild WH
 /// Ranking (QID_GUILD_RANKING, `GuildManager.cpp:201`): top 20.
 const GUILD_RANKING_SQL: &str = "\
 SELECT id, name, ladder_point FROM player.guild ORDER BY ladder_point DESC LIMIT 20";
+
+/// Upsert de grade (PK `guild_id+grade`): INSERT + ON CONFLICT DO UPDATE —
+/// cubre el CREATE de grades (guild.cpp:104-111) y los UPDATE de name/auth
+/// (guild.cpp:799/838) en una sola sentencia idempotente.
+const GUILD_GRADE_UPSERT_SQL: &str = "\
+INSERT INTO player.guild_grade (guild_id, grade, name, auth) VALUES ($1, $2, $3, $4)
+ON CONFLICT (guild_id, grade) DO UPDATE SET name = EXCLUDED.name, auth = EXCLUDED.auth";
+
+/// Literales SET en orden de definicion (canonicalizacion de MariaDB del SET;
+/// parity bitmask guild.h:92-95). El typo `REMOVE_MEMEBER` es legacy
+/// (guild.cpp:106/838) y el CHECK de guild_grade lo exige literal.
+const GUILD_AUTH_LITERALS: [(u8, &str); 4] =
+    [(1, "ADD_MEMBER"), (2, "REMOVE_MEMEBER"), (4, "NOTICE"), (8, "USE_SKILL")];
+
+/// Bitmask de auth -> SET textual; 0 -> `''` (ambos aceptados por el CHECK).
+fn auth_to_set(auth: u8) -> String {
+    GUILD_AUTH_LITERALS
+        .iter()
+        .filter(|(b, _)| auth & *b != 0)
+        .map(|(_, s)| *s)
+        .collect::<Vec<_>>()
+        .join(",")
+}
 
 /// Repositorio del dominio social (guildas). Conexion por llamada (ADR-0008).
 pub struct GuildRepo {
@@ -110,6 +134,27 @@ impl GuildRepo {
                 ))
             })
             .collect()
+    }
+
+    /// Upsert de un grade (`player.guild_grade`, PK guild_id+grade). `grade`
+    /// 1..=15, `auth` bitmask (guild.h:92-95). Idempotente: vuelve a llamarlo
+    /// para set_grade_auth (UPDATE name/auth via ON CONFLICT).
+    pub async fn upsert_grade(
+        &self,
+        guild_id: i64,
+        grade: u8,
+        name: &str,
+        auth: u8,
+    ) -> Result<(), String> {
+        let client = self.connect().await?;
+        client
+            .execute(
+                GUILD_GRADE_UPSERT_SQL,
+                &[&guild_id, &(grade as i16), &name, &auth_to_set(auth)],
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| pg_err("GUILD_GRADE_UPSERT", &e))
     }
 }
 
@@ -186,5 +231,16 @@ mod tests {
         let _ = MessengerRepo::new(crate::pool::new_pool("host=127.0.0.1 port=1 user=x password=x dbname=x", 2).expect("pool"));
         let row = MessengerRow { account: "a".into(), companion: "b".into() };
         assert_eq!(row.account, "a");
+    }
+
+    /// SET serialization: bitmask -> literales en orden de definicion (parity
+    /// canonicalizacion MariaDB; guild.h:92-95). 0 -> ''.
+    #[test]
+    fn grade_auth_serializes_to_set_literals() {
+        assert_eq!(auth_to_set(0), "");
+        assert_eq!(auth_to_set(1), "ADD_MEMBER");
+        assert_eq!(auth_to_set(6), "REMOVE_MEMEBER,NOTICE");
+        assert_eq!(auth_to_set(10), "REMOVE_MEMEBER,USE_SKILL");
+        assert_eq!(auth_to_set(15), "ADD_MEMBER,REMOVE_MEMEBER,NOTICE,USE_SKILL");
     }
 }
