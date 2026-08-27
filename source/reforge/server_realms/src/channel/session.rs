@@ -588,7 +588,7 @@ impl Session {
         let mut sockets = [0i64; 3];
         let mut attrs = [(0i16, 0i16); 7];
         let mut rng = rand32;
-        database::attr::roll_creation_bonus(
+        database::attr::roll_attrs(
             &mut rng,
             proto.magic_pct,
             proto.socket_pct,

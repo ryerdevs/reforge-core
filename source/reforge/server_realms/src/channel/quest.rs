@@ -245,7 +245,7 @@ async fn give_item(session: &mut Session, vnum: u32, count: u32) -> Result<(), S
         ItemRepo::new(session.pool.clone()).load_proto_use_values(i64::from(vnum)).await
     {
         let mut rng = crate::channel::rand32;
-        database::attr::roll_creation_bonus(
+        database::attr::roll_attrs(
             &mut rng,
             0, // magic_pct 0 — parity quests (sin attrs mágicos)
             proto.socket_pct,

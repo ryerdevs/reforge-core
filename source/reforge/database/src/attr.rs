@@ -327,8 +327,9 @@ pub fn add_rare_attribute(
 ///
 /// `magic_pct == 0` → sin attrs mágicos (parity quests — bTryMagic=false;
 /// los sockets SÍ aplican). Los attrs/sockets previos se conservan (los
-/// items ya mágicos no se re-rollean).
-pub fn roll_creation_bonus(
+/// items ya mágicos no se re-rollean). La ÚNICA función pública del slice
+/// (ponytail: 1 función, no las 3 clases del C++).
+pub fn roll_attrs(
     rng: &mut dyn FnMut() -> u32,
     magic_pct: i16,
     socket_pct: i16,
@@ -561,11 +562,11 @@ mod tests {
         assert!(!add_rare_attribute(&mut rng, &rare, 3, 0, &mut attrs));
     }
 
-    /// `roll_creation_bonus` parity CreateItem id==0: sockets = socket_pct
+    /// `roll_attrs` parity CreateItem id==0: sockets = socket_pct
     /// abiertos SIEMPRE (con o sin magic_pct); el mágico solo si el roll
     /// acierta magic_pct.
     #[test]
-    fn roll_creation_bonus_sockets_and_magic() {
+    fn roll_attrs_sockets_and_magic() {
         let tables = AttrTables {
             normal: vec![row(1, 10, [10, 20, 30, 40, 50], [5, 0, 0, 0, 0, 0, 0, 0])],
             rare: vec![row(53, 0, [1, 2, 3, 4, 5], [3, 0, 0, 0, 0, 0, 0, 0])],
@@ -574,29 +575,29 @@ mod tests {
         let mut sockets = [0i64; 3];
         let mut attrs = [(0i16, 0i16); 7];
         let mut rng = seq(vec![0]);
-        roll_creation_bonus(&mut rng, 0, 1, &tables, 1, 0, &mut sockets, &mut attrs);
+        roll_attrs(&mut rng, 0, 1, &tables, 1, 0, &mut sockets, &mut attrs);
         assert_eq!(sockets, [1, 0, 0]);
         assert_eq!(attrs, [(0, 0); 7], "magic_pct 0 → sin attrs mágicos");
         // socket_pct=3 → los 3 abiertos (AlterToSocketItem sin clamp del C++).
         let mut sockets = [0i64; 3];
-        roll_creation_bonus(&mut rng, 0, 3, &tables, 1, 0, &mut sockets, &mut attrs);
+        roll_attrs(&mut rng, 0, 3, &tables, 1, 0, &mut sockets, &mut attrs);
         assert_eq!(sockets, [1, 1, 1]);
         // magic_pct=100, roll 1 → acierta: attr normal + attr RARE.
         let mut sockets = [0i64; 3];
         let mut attrs = [(0i16, 0i16); 7];
         let mut rng = seq(vec![1, 1, 1, 1, 99, 0]);
-        roll_creation_bonus(&mut rng, 100, 0, &tables, 1, 0, &mut sockets, &mut attrs);
+        roll_attrs(&mut rng, 100, 0, &tables, 1, 0, &mut sockets, &mut attrs);
         assert_eq!(attrs[0], (1, 10), "attr normal MAX_HP lv1");
         assert_eq!(attrs[5], (53, 3), "attr RARE en el slot 5");
         // magic_pct=0 pero roll alto → nada.
         let mut attrs = [(0i16, 0i16); 7];
         let mut rng = seq(vec![99]);
-        roll_creation_bonus(&mut rng, 50, 0, &tables, 1, 0, &mut sockets, &mut attrs);
+        roll_attrs(&mut rng, 50, 0, &tables, 1, 0, &mut sockets, &mut attrs);
         assert_eq!(attrs, [(0, 0); 7], "roll 99 > 50 → sin attrs");
         // Items YA mágicos no se re-rollean (parity CreateItem).
         let mut attrs = [(1i16, 10i16), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0)];
         let mut rng = seq(vec![1]);
-        roll_creation_bonus(&mut rng, 100, 0, &tables, 1, 0, &mut sockets, &mut attrs);
+        roll_attrs(&mut rng, 100, 0, &tables, 1, 0, &mut sockets, &mut attrs);
         assert_eq!(attrs[0], (1, 10), "intacto");
         assert_eq!(attrs[1], (0, 0), "sin segundo attr");
     }

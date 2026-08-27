@@ -552,7 +552,7 @@ async fn give_item(session: &mut Session, vnum: u32, count: u32) -> Result<(), S
     let mut sockets = [0i64; 3];
     let mut attrs = [(0i16, 0i16); 7];
     let mut rng = crate::channel::rand32;
-    database::attr::roll_creation_bonus(
+    database::attr::roll_attrs(
         &mut rng,
         proto.magic_pct,
         proto.socket_pct,
