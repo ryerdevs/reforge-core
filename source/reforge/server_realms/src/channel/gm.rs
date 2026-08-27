@@ -764,10 +764,6 @@ async fn gm_goto(session: &mut Session, name: &str) -> Result<(), String> {
     warp_units(session, x, y, "goto").await
 }
 
-/// `g_iStatusPointSetMaxValue = 90` (config.cpp:48) — el cap MAX_STAT del
-/// do_stat (`GetRealPoint(idx) >= MAX_STAT` — cmd_general.cpp:675).
-const STAT_MAX: i16 = 90;
-
 /// Valor actual del stat en el row (parity `GetRealPoint`).
 fn stat_value(row: &database::player::PlayerRow, point: StatPoint) -> i16 {
     match point {
@@ -826,11 +822,14 @@ async fn sync_stats(session: &mut Session) -> Result<(), String> {
 }
 
 /// `/stat <st|dx|ht|iq> [cantidad]` — asigna puntos de stat (parity do_stat
-/// cmd_general.cpp:644-702: gasta POINT_STAT, cap MAX_STAT = 90 —
-/// `nPoint = 90 - actual`; la cantidad es la extensión del lane, default 1).
-/// Sin POINT_STAT suficiente → no-op silencioso (parity `GetPoint(POINT_STAT)
-/// <= 0 → return`). El recálculo de MAX_HP/MAX_SP del C++ lo refleja el
-/// GC_POINTS vía compute_max_points (max_hp = f(ht), max_sp = f(iq)).
+/// cmd_general.cpp:644-702: gasta POINT_STAT; la cantidad es la extensión del
+/// lane, default 1). DIVERGENCIA deliberada (2026-08-27): el C++ capa en
+/// `g_iStatusPointSetMaxValue = 90` (config.cpp:48 / cmd_general.cpp:675 —
+/// `nPoint = 90 - actual`); el rewrite NO capa — stats infinitos (5 puntos
+/// por nivel, sin límite). Sin POINT_STAT suficiente → no-op silencioso
+/// (parity `GetPoint(POINT_STAT) <= 0 → return`). El recálculo de
+/// MAX_HP/MAX_SP del C++ lo refleja el GC_POINTS vía compute_max_points
+/// (max_hp = f(ht), max_sp = f(iq)).
 async fn gm_stat(session: &mut Session, point: StatPoint, amount: i32) -> Result<(), String> {
     if i32::from(session.row().stat_point) < amount {
         eprintln!(
@@ -842,20 +841,11 @@ async fn gm_stat(session: &mut Session, point: StatPoint, amount: i32) -> Result
         );
         return Ok(());
     }
-    let cur = stat_value(session.row(), point);
-    // Cap MAX_STAT (parity do_stat: `nPoint = 90 - GetPoint` — el exceso no
-    // se aplica NI se gasta).
-    let applied = (i32::from(cur) + amount).min(i32::from(STAT_MAX)) - i32::from(cur);
-    if applied <= 0 {
-        eprintln!(
-            "server_realms: channel conn {}: /stat {} — ya en el cap \
-             MAX_STAT ({STAT_MAX}) — no-op (parity)",
-            session.conn_id, point.name()
-        );
-        return Ok(());
-    }
-    *stat_value_mut(session.row_mut(), point) += applied as i16;
-    session.row_mut().stat_point -= applied as i16;
+    // `amount` ≥ 1 lo garantiza el parse (game_core gm.rs) y ≤ stat_point
+    // (i16) el guard de arriba → el cast es exacto.
+    let applied = amount as i16;
+    *stat_value_mut(session.row_mut(), point) += applied;
+    session.row_mut().stat_point -= applied;
     sync_stats(session).await?;
     eprintln!(
         "server_realms: channel conn {}: {} asignó +{applied} a {} \
@@ -869,18 +859,12 @@ async fn gm_stat(session: &mut Session, point: StatPoint, amount: i32) -> Result
 }
 
 /// `/stat- <st|dx|ht|iq> [cantidad]` — devuelve puntos de stat (parity
-/// do_stat_minus cmd_general.cpp:577-643: gasta POINT_STAT_RESET_COUNT y no
-/// baja del floor de los iniciales del job; `PointChange(POINT_STAT, +1)`).
-/// Sin POINT_STAT_RESET_COUNT → no-op silencioso (parity).
+/// do_stat_minus cmd_general.cpp:577-643: no baja del floor de los iniciales
+/// del job; `PointChange(POINT_STAT, +1)`). DIVERGENCIA deliberada
+/// (2026-08-27): el C++ gasta POINT_STAT_RESET_COUNT por punto devuelto (y
+/// capa el stat_point resultante) — el rewrite no requiere reset count y no
+/// capa (stats infinitos).
 async fn gm_stat_minus(session: &mut Session, point: StatPoint, amount: i32) -> Result<(), String> {
-    if session.row().stat_reset_count < 1 {
-        eprintln!(
-            "server_realms: channel conn {}: /stat- {} — sin \
-             POINT_STAT_RESET_COUNT — no-op (parity)",
-            session.conn_id, point.name()
-        );
-        return Ok(());
-    }
     let floor = job_initial_stat(session.row(), point);
     let cur = stat_value(session.row(), point);
     // Floor del job (parity `GetRealPoint <= JobInitialPoints → return`) +
@@ -895,17 +879,15 @@ async fn gm_stat_minus(session: &mut Session, point: StatPoint, amount: i32) -> 
         return Ok(());
     }
     *stat_value_mut(session.row_mut(), point) -= applied;
-    session.row_mut().stat_point = (session.row().stat_point + applied).min(STAT_MAX * 100);
-    session.row_mut().stat_reset_count = (session.row().stat_reset_count - applied).max(0);
+    session.row_mut().stat_point += applied;
     sync_stats(session).await?;
     eprintln!(
         "server_realms: channel conn {}: {} devolvió {applied} de {} \
-         (POINT_STAT {} — reset restantes {})",
+         (POINT_STAT {})",
         session.conn_id,
         session.row().name,
         point.name(),
-        session.row().stat_point,
-        session.row().stat_reset_count
+        session.row().stat_point
     );
     Ok(())
 }

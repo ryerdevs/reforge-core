@@ -340,27 +340,21 @@ pub struct Session {
     pub target_vid: Option<u32>,
 }
 
-/// `g_iStatusPointGetLevelLimit` (config.cpp:47 — 90): el nivel hasta el que
-/// cada subida da POINT_STAT (parity char.cpp:3110-3112).
-const STATUS_POINT_GET_LEVEL_LIMIT: i16 = 90;
-
 /// Un nivel subido (parity char.cpp:3064-3136 — el POINT_EXP y el ciclo del
 /// POINT_LEVEL_STEP): `exp -= next_exp`, `level += 1`, y los POINT_STAT del
-/// ciclo. El C++ avanza el level_step 0→4 DENTRO de cada nivel (el
-/// `for (4 - iLevStep)` de char.cpp:3075-3077): los cases 1/2/3 dan +1
-/// POINT_STAT cada uno (char.cpp:3110-3112) mientras GetLevel() — el nivel
-/// PRE-incremento, el nivel sube en el case 4 (char.cpp:3130) — sea <= 90;
-/// el case 4 resetea el step a 0 (char.cpp:3136), así que el estado
-/// estacionario son 3 puntos por nivel (ResetPoint lo confirma:
-/// `MINMAX(1, iLv, 90) * 3` — char.cpp:5857). Devuelve el nivel NUEVO (el
+/// ciclo. DIVERGENCIA deliberada (2026-08-27): el C++ daba 3 POINT_STAT por
+/// nivel SOLO hasta el 90 (`g_iStatusPointGetLevelLimit`, config.cpp:47 — el
+/// ciclo LEVEL_STEP char.cpp:3075-3136); el rewrite da
+/// `stat_points_per_level` (config, default 5) SIEMPRE, sin límite de nivel
+/// (stats infinitos — no hay cap status point). Devuelve el nivel NUEVO (el
 /// caller recarga el next_exp de la tabla).
-fn level_up_step(row: &mut PlayerRow, next_exp: i64) -> i16 {
+fn level_up_step(row: &mut PlayerRow, next_exp: i64, stat_points_per_level: i16) -> i16 {
     let prev_level = row.level;
     row.exp = (i64::from(row.exp) - next_exp) as i32;
     row.level = prev_level.saturating_add(1);
-    if prev_level <= STATUS_POINT_GET_LEVEL_LIMIT {
-        row.stat_point += 3;
-    }
+    row.stat_point = row
+        .stat_point
+        .saturating_add(stat_points_per_level);
     row.level
 }
 
@@ -622,9 +616,10 @@ impl Session {
         // Level-up (parity char.cpp `GetNextExp` — exp_table por nivel; el
         // next_exp se recarga de la DB al subir).
         let mut leveled = false;
+        let per_level = i16::from(self.config.stat_points_per_level);
         while self.next_exp > 0 && i64::from(self.row().exp) >= self.next_exp {
             let next = self.next_exp;
-            let level = level_up_step(self.row_mut(), next);
+            let level = level_up_step(self.row_mut(), next, per_level);
             leveled = true;
             self.next_exp =
                 CommonRepo::new(self.pool.clone()).next_exp(level).await.unwrap_or(0);
@@ -803,12 +798,11 @@ mod tests {
         );
     }
 
-    /// El level-up da POINT_STAT (bug 3 — parity char.cpp:3064-3136): por
-    /// CADA nivel subido `stat_point` sube 3 — el ciclo LEVEL_STEP 0→4 del
-    /// C++ (el `for (4 - iLevStep)` por nivel, char.cpp:3075-3077: los cases
-    /// 1/2/3 dan +1 cada uno, 3110-3112; el case 4 sube el nivel y resetea el
-    /// step, 3130/3136). Sin PG: se simula el row y el while de apply_kill
-    /// (el next_exp se avanza a mano).
+    /// El level-up da POINT_STAT (bug 3 — DIVERGENCIA deliberada
+    /// 2026-08-27: el C++ daba 3 por nivel hasta el 90 — char.cpp:3064-3136;
+    /// el rewrite da `stat_points_per_level` (config, default 5) SIEMPRE,
+    /// sin límite). Sin PG: se simula el row y el while de apply_kill (el
+    /// next_exp se avanza a mano).
     #[test]
     fn level_up_grants_stat_points() {
         fn row(level: i16, exp: i32) -> PlayerRow {
@@ -859,33 +853,45 @@ mod tests {
                 horse_skill_point: 0,
             }
         }
+        const PER_LEVEL: i16 = 5; // config default (stat_points_per_level)
 
-        // Un nivel (5→6 con exp justo): +3 puntos, exp sobrante 0.
+        // Un nivel (5→6 con exp justo): +5 puntos, exp sobrante 0.
         let mut r = row(5, 1000);
-        assert_eq!(level_up_step(&mut r, 1000), 6, "nivel nuevo");
+        assert_eq!(level_up_step(&mut r, 1000, PER_LEVEL), 6, "nivel nuevo");
         assert_eq!(r.exp, 0, "exp sobrante");
-        assert_eq!(r.stat_point, 3, "ciclo LEVEL_STEP 0→4: cases 1/2/3 → +1 cada uno");
+        assert_eq!(r.stat_point, 5, "5 puntos por nivel (diseño nuevo)");
 
-        // Multi-nivel (el while de apply_kill): 5→7 con exp de sobra → +6.
+        // Multi-nivel (el while de apply_kill): 5→7 con exp de sobra → +10.
         let mut r = row(5, 5000);
         let mut next_exp = 1000i64;
         let mut levels = 0;
         while next_exp > 0 && i64::from(r.exp) >= next_exp {
-            let level = level_up_step(&mut r, next_exp);
+            let level = level_up_step(&mut r, next_exp, PER_LEVEL);
             next_exp = i64::from(level) * i64::from(level) * 100; // tabla simulada
             levels += 1;
         }
         assert_eq!(levels, 2, "5→6 y 6→7 (el tercer next ya no alcanza)");
         assert_eq!(r.level, 7);
-        assert_eq!(r.stat_point, 6, "2 niveles × 3 puntos");
+        assert_eq!(r.stat_point, 10, "2 niveles × 5 puntos");
 
-        // El límite (g_iStatusPointGetLevelLimit = 90 — config.cpp:47): la
-        // transición 90→91 aún da (el check del C++ usa el nivel
-        // PRE-incremento — el nivel sube en el case 4), la 91→92 ya no.
+        // SIN límite (antes g_iStatusPointGetLevelLimit = 90 — config.cpp:47):
+        // la transición 90→91 da 5 y la 91→92 también (stats infinitos).
         let mut r = row(90, 1000);
-        level_up_step(&mut r, 1000);
-        assert_eq!(r.stat_point, 3, "90→91: GetLevel()=90 <= 90 → da");
-        level_up_step(&mut r, 1000);
-        assert_eq!(r.stat_point, 3, "91→92: GetLevel()=91 > 90 → no da");
+        level_up_step(&mut r, 1000, PER_LEVEL);
+        assert_eq!(r.stat_point, 5, "90→91: da (sin límite)");
+        level_up_step(&mut r, 1000, PER_LEVEL);
+        assert_eq!(r.stat_point, 10, "91→92: sigue dando (sin límite)");
+
+        // 1→99 (98 subidas): 98 × 5 = 490 — el total del diseño.
+        let mut r = row(1, i32::MAX);
+        let mut next_exp = 100i64;
+        let mut levels = 0;
+        while r.level < 99 {
+            let level = level_up_step(&mut r, next_exp, PER_LEVEL);
+            next_exp = i64::from(level) * i64::from(level) * 100; // tabla simulada
+            levels += 1;
+        }
+        assert_eq!(levels, 98, "98 subidas de 1 a 99");
+        assert_eq!(r.stat_point, 490, "98 × 5 puntos = 490 total 1→99");
     }
 }

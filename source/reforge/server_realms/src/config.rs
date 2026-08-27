@@ -18,6 +18,7 @@
 //! exp_rate = 100           # manifest: rate de exp (%)
 //! gold_rate = 100          # manifest: rate de oro (%)
 //! drop_rate = 100          # manifest: rate de drop (%)
+//! stat_points_per_level = 5  # POINT_STAT por nivel (sin límite de nivel)
 //! ```
 
 use std::time::Duration;
@@ -76,6 +77,10 @@ pub struct Config {
     pub gold_rate: u16,
     /// F5 manifest: rate de drop en %.
     pub drop_rate: u16,
+    /// POINT_STAT por nivel (2026-08-27 — diseño nuevo: 5 por nivel, SIN
+    /// límite; el C++ daba 3 por nivel hasta el 90 — g_iStatusPointGetLevelLimit
+    /// config.cpp:47 y g_iStatusPointSetMaxValue config.cpp:48).
+    pub stat_points_per_level: u8,
     /// Tamaño máximo del pool de conexiones PG del proceso (fix del cuello
     /// del entry 2026-08-13 — una conexión por llamada era el cuello del
     /// login; el pool lo crea el arranque de cada rol). Default 10.
@@ -113,6 +118,7 @@ impl Default for Config {
             exp_rate: 100,
             gold_rate: 100,
             drop_rate: 100,
+            stat_points_per_level: 5,
             pool_max_size: 10,
         }
     }
@@ -188,6 +194,11 @@ impl Config {
                     cfg.pool_max_size = value
                         .parse()
                         .map_err(|_| where_at("pool_max_size debe ser un entero (usize)"))?;
+                }
+                "stat_points_per_level" => {
+                    cfg.stat_points_per_level = value
+                        .parse()
+                        .map_err(|_| where_at("stat_points_per_level debe ser un entero (u8)"))?;
                 }
                 other => return Err(where_at(&format!("clave desconocida: {other}"))),
             }
@@ -370,6 +381,17 @@ mod tests {
         let cfg = Config::parse("listen = \"127.0.0.1:30001\"\n").unwrap();
         assert!(cfg.channels.is_empty());
         assert_eq!((cfg.exp_rate, cfg.gold_rate, cfg.drop_rate), (100, 100, 100));
+        assert_eq!(cfg.stat_points_per_level, 5, "default 5 por nivel");
+    }
+
+    /// 2026-08-27: `stat_points_per_level` (POINT_STAT por nivel — 5, sin
+    /// límite) se parsea del toml y rechaza valores malformados.
+    #[test]
+    fn parses_stat_points_per_level() {
+        let cfg = Config::parse("stat_points_per_level = 7\n").unwrap();
+        assert_eq!(cfg.stat_points_per_level, 7);
+        assert!(Config::parse("stat_points_per_level = \"x\"\n").is_err());
+        assert!(Config::parse("stat_points_per_level = 300\n").is_err(), "u8");
     }
 
     /// F5: errores del array — canal sin ip, malformado, campo desconocido.

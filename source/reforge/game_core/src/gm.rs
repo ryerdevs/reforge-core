@@ -209,10 +209,11 @@ pub enum GmCommand {
         name: String,
     },
     /// `/stat <st|dx|ht|iq> [cantidad]` — asigna puntos de stat gastando
-    /// POINT_STAT, con cap MAX_STAT = 90 (parity do_stat cmd_general.cpp:
-    /// 644-702: `SetRealPoint +1`, cap `GetRealPoint(idx) >= MAX_STAT`,
-    /// `PointChange(POINT_STAT, -1)`; g_iStatusPointSetMaxValue,
-    /// config.cpp:48). La cantidad es una EXTENSIÓN del lane (el C++ solo
+    /// POINT_STAT, SIN cap (divergencia deliberada 2026-08-27: el C++
+    /// capaba en MAX_STAT = 90 — `GetRealPoint(idx) >= MAX_STAT`, parity
+    /// do_stat cmd_general.cpp:644-702 y g_iStatusPointSetMaxValue
+    /// config.cpp:48; el rewrite da 5 puntos por nivel sin límite → stats
+    /// infinitos). La cantidad es una EXTENSIÓN del lane (el C++ solo
     /// hace +1; el cliente manda `/stat st` sin cantidad → 1). El
     /// recálculo de MAX_HP/MAX_SP del C++ (PointChange(POINT_MAX_HP/SP, 0))
     /// lo refleja el GC_POINTS del rewrite vía `compute_max_points`
@@ -223,9 +224,12 @@ pub enum GmCommand {
         amount: i32,
     },
     /// `/stat- <st|dx|ht|iq> [cantidad]` — devuelve puntos de stat (parity
-    /// do_stat_minus cmd_general.cpp:577-643: gasta POINT_STAT_RESET_COUNT,
-    /// floor de los iniciales del job — JobInitialPoints constants.cpp:6-15;
-    /// `PointChange(POINT_STAT, +1)`). GM_PLAYER (cmd.cpp:325).
+    /// do_stat_minus cmd_general.cpp:577-643: floor de los iniciales del job
+    /// — JobInitialPoints constants.cpp:6-15; `PointChange(POINT_STAT, +1)`).
+    /// DIVERGENCIA deliberada (2026-08-27): el C++ gasta
+    /// POINT_STAT_RESET_COUNT por punto devuelto — el rewrite no lo
+    /// requiere (puntos infinitos, sin reset limitado). GM_PLAYER
+    /// (cmd.cpp:325).
     StatMinus {
         point: StatPoint,
         amount: i32,
