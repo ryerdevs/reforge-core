@@ -510,14 +510,15 @@ impl Session {
         );
         let (exp_gain, gold_gain) = (reward.exp_gain, reward.gold_gain);
         // C33: factor de exp por level-delta (parity `GiveExp`,
-        // char_battle.cpp:2210-2220 — `NEW_GET_LVDELTA`: el índice clamp
-        // (mob_level+15) − player_level sobre `aiPercentByDeltaLev`). Matar
+        // char_battle.cpp:2219-2221 — `NEW_GET_LVDELTA`: el índice clamp
+        // (mob_level+15) − player_level sobre `aiPercentByDeltaLev`; el
+        // helper `combat::apply_exp_delta` es el camino testeado). Matar
         // mobs mucho más débiles da 1% de la exp (antes: exp llena).
-        let delta_factor = game_core::combat::exp_level_delta_factor(
+        let mut exp_gain = game_core::combat::apply_exp_delta(
+            exp_gain,
             i32::from(self.row().level),
             v.mob_level,
         );
-        let mut exp_gain = exp_gain.saturating_mul(i64::from(delta_factor)) / 100;
         // C33: cap 10% del next_exp por kill (parity `iExp = MIN(
         // GetNextExp() / 10, iExp)` — char_battle.cpp:2267; se necesitan al
         // menos 10 kills del mismo mob para subir de nivel).

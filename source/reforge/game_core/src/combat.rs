@@ -614,6 +614,13 @@ pub fn exp_level_delta_factor(player_level: i32, mob_level: i32) -> i32 {
     AI_PERCENT_BY_DELTA_LEV[idx]
 }
 
+/// Exp de kill con el factor por level-delta aplicado (parity `GiveExp`:
+/// `iExp *= NEW_GET_LVDELTA(...)/100` — char_battle.cpp:2219-2221). El canal
+/// usa ESTA función en `apply_kill` (session.rs) — verifier en tests.
+pub fn apply_exp_delta(exp_gain: i64, player_level: i32, mob_level: i32) -> i64 {
+    exp_gain.saturating_mul(i64::from(exp_level_delta_factor(player_level, mob_level))) / 100
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -645,6 +652,19 @@ mod tests {
         assert_eq!(exp_level_delta_factor(40, 20), 1, "clamp inferior");
         // Mob muy superior (índice > 30) → clamp a 170.
         assert_eq!(exp_level_delta_factor(20, 50), 170, "clamp superior (índice 30)");
+    }
+
+    /// Verifier (regla 20): `apply_exp_delta` es el camino EXACTO que usa
+    /// `apply_kill` (session.rs:520) — si el canal vuelve a dar exp llena
+    /// con delta grande (mutation: quitar el factor), este test falla.
+    #[test]
+    fn exp_delta_low_mob_never_full() {
+        // player 50 vs mob 30 → (30+15)−50 = −5 → clamp índice 0 → 1%.
+        assert_eq!(apply_exp_delta(1000, 50, 30), 10, "1000 exp × 1%");
+        assert!(apply_exp_delta(1000, 50, 30) < 1000, "delta grande → < 100%");
+        // Contraste: mismo nivel → 100% sin castigo; mob superior → bono.
+        assert_eq!(apply_exp_delta(1000, 50, 50), 1000);
+        assert_eq!(apply_exp_delta(1000, 50, 65), 1700, "índice 30 = 170%");
     }
 
     /// Rates aplicados: exp_rate 150 → 22*1.5 = 33; gold_rate 200 → 30*2 = 60.
