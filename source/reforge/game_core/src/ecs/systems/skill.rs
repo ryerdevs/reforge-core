@@ -984,7 +984,7 @@ mod tests {
     fn skill_power_table_drives_k_in_poly() {
         let mut w = world_with(42);
         load(&mut w, vec![(entry(101, 0, 0, 1), mob_row(101))]);
-        join_with_skills_group(&mut w, 2, &[(1, 1)], 2); // job 1 (assassin) group 2
+        join_with_skills_group(&mut w, 2, &[(1, 1)], 2, 5); // job 1 (assassin) group 2
         // El coste SP del poly sube con el k real (80+220×401.2 ≈ 88k).
         w.set_player_mp(2, 200_000);
         load_skills(&mut w, vec![skill1_proto()]);
@@ -1010,7 +1010,7 @@ mod tests {
         // Contraste: sin tabla (fail-open) el mismo escenario da 80-82.
         let mut w2 = world_with(42);
         load(&mut w2, vec![(entry(101, 0, 0, 1), mob_row(101))]);
-        join_with_skills_group(&mut w2, 2, &[(1, 1)], 2);
+        join_with_skills_group(&mut w2, 2, &[(1, 1)], 2, 5);
         w2.set_player_mp(2, 500);
         load_skills(&mut w2, vec![skill1_proto()]);
         let events = w2.process_intent(
@@ -1147,9 +1147,9 @@ mod tests {
         let mut row = mob_row(101);
         row.ai_flag = Some("NOMOVE".into());
         load(&mut w, vec![(entry(101, 0, 0, 1), row)]);
-        join_with_skills(&mut w, 2, &[(1, 1)]); // caster en (0,0)
-        join_at(&mut w, 3, 0, 100); // PC víctima cerca (PK on)
-        join_at(&mut w, 4, 0, 200); // PC víctima (PK off — no atacable)
+        join_with_skills_pvp(&mut w, 2, &[(1, 1)]); // caster en (0,0) — lvl 20
+        join_pvp(&mut w, 3, 0, 100); // PC víctima cerca (PK on)
+        join_pvp(&mut w, 4, 0, 200); // PC víctima (PK off — no atacable)
         w.set_player_mp(2, 500);
         w.process_intent(
             CombatIntent::SetPvpMode { player_vid: 3, on: true }.into(),

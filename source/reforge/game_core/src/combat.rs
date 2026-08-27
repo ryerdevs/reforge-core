@@ -285,32 +285,51 @@ pub fn player_def_grade(level: i32, ht: i32, i_armor: i32) -> i32 {
     level + (ht as f64 / 1.25) as i32 + i_armor
 }
 
-/// El contexto PvP de un jugador para el gate `battle_is_attackable`
-/// (parity `GetPKMode()`/`GetParty()`/`IsDead()` del CHARACTER C++). Lo
-/// construye el mundo de los componentes del jugador (`Pvp` + `Hp`).
+/// `PK_PROTECT_LEVEL` del runtime spain = 15 (`__LocaleService_Init_spain`,
+/// locale_service.cpp:602): los jugadores por debajo entran en
+/// `PK_MODE_PROTECT` automático (`SetLevel`, char.cpp:1674-1675; load,
+/// :1785-1786) → no atacan ni son atacables (`CanAttack`, pvp.cpp:421-429).
+pub const PK_PROTECT_LEVEL: i32 = 15;
+
+/// El contexto PvP de un jugador para el gate `can_attack` (parity
+/// `GetPKMode()`/`GetParty()`/`GetGuild()`/`GetLevel()`/`IsDead()` + el
+/// `ATTR_BANPK` del sectree — battle.cpp:91-101). Lo construye el mundo de
+/// los componentes del jugador (`Pvp` + `Hp` + `Player`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PvpContext {
     /// PK mode del jugador (CG_PVP 41 — flag de sesión; parity `GetPKMode`).
     pub pvp_mode: bool,
     /// Party del jugador (None sin party — parity `GetParty()`).
     pub party_id: Option<u32>,
+    /// Guild del jugador (None sin guild — parity `GetGuild()`).
+    /// GAP (2026-08-27): el mundo aún no la sincroniza (el lane de guildas
+    /// mandará un `SetGuild` — hoy el check queda inerte hasta entonces).
+    pub guild_id: Option<u32>,
     /// HP actual (el muerto no ataca ni es atacable — parity `IsDead()`).
     pub hp: i32,
+    /// Nivel del jugador (parity `GetLevel()` — la protección PK).
+    pub level: i32,
+    /// El jugador está en una celda `ATTR_BANPK` del mapa (parity
+    /// `sectree->IsAttr(..., ATTR_BANPK)`, battle.cpp:91-101). GAP
+    /// (2026-08-27): el mundo no tiene el grid del mapa — false hasta que
+    /// el lane de mapas lo alimente.
+    pub safe_zone: bool,
 }
 
 /// `battle_is_attackable` (battle.cpp:107-139 + `CPVPManager::CanAttack`,
-/// pvp.cpp:373-...): el gate PC→PC del PvP — subset básico con parity:
+/// pvp.cpp:373-...): el núcleo `is_attackable` del PvP — subset con parity:
 /// 1. Muerto (atacante o víctima) → false (battle.cpp:116-118 — `IsDead()`;
 ///    `IsObserverMode` sin observers en el subset).
 /// 2. Misma party → false (pvp.cpp:439-441: "Cannot attack same party on
 ///    any pvp model").
 /// 3. La VÍCTIMA con PK ON (parity `IsKillerMode`) → true.
 /// 4. El ATACANTE con PK ON (parity `PK_MODE_FREE`) → true.
-/// 5. Si no → false (sin guilds/duelos/arena en el subset — el resto del
-///    switch del C++ cae en el `Find` del duelo → false).
-/// ATTR_BANPK del mapa (battle.cpp:112-115): sin mapas de zonas aún — el
-/// subset usa el flag de sesión (documentado). El gate se evalúa ANTES del
-/// cooldown (parity `CHARACTER::Attack`, char_battle.cpp:205-210).
+/// 5. Si no → false (sin duelos/arena en el subset — el resto del switch
+///    del C++ cae en el `Find` del duelo → false).
+///
+/// El gate completo (zona segura/nivel/guild + este núcleo) es `can_attack`
+/// — se evalúa ANTES del cooldown (parity `CHARACTER::Attack`,
+/// char_battle.cpp:205-210).
 pub fn battle_is_attackable(attacker: &PvpContext, victim: &PvpContext) -> bool {
     if attacker.hp <= 0 || victim.hp <= 0 {
         return false;
@@ -319,6 +338,35 @@ pub fn battle_is_attackable(attacker: &PvpContext, victim: &PvpContext) -> bool 
         return false;
     }
     victim.pvp_mode || attacker.pvp_mode
+}
+
+/// `can_attack` — el gate PvP COMPLETO PC→PC: zona segura, nivel
+/// (`PK_PROTECT_LEVEL`), misma guild y `battle_is_attackable`. Orden del
+/// C++ (`battle_is_attackable` battle.cpp:83-125 + `CanAttack` pvp.cpp:
+/// 373-522; el gate se evalúa antes del cooldown, char_battle.cpp:205-210):
+/// 1. ATTR_BANPK (battle.cpp:91-101) — atacante o víctima en zona segura.
+/// 2. `PK_PROTECT_LEVEL` (pvp.cpp:421-429 — PROTECT auto por nivel,
+///    char.cpp:1674/1785 — el subset aplica el nivel directamente; sin
+///    tabla de imperios, todo mapa cuenta como propio — conservador).
+/// 3. Misma guild → false (pvp.cpp:472-473/489 — PEACE/REVENGE/GUILD).
+///    Desviación documentada: el C++ `PK_MODE_FREE` SÍ ataca a la guild
+///    propia (pvp.cpp:500); el flag único de sesión del subset no distingue
+///    FREE de GUILD y el más estricto evita el PK accidental entre
+///    guildmates (el wire no cambia: PEACE ya rechazaba).
+/// 4. `battle_is_attackable` — muerto/misma party → false; PK ON (killer o
+///    free) → true (pvp.cpp:453-456/500-505); sin PK → false (el resto cae
+///    al duelo, que no existe en el subset).
+pub fn can_attack(attacker: &PvpContext, victim: &PvpContext) -> bool {
+    if attacker.safe_zone || victim.safe_zone {
+        return false;
+    }
+    if attacker.level < PK_PROTECT_LEVEL || victim.level < PK_PROTECT_LEVEL {
+        return false;
+    }
+    if attacker.guild_id.is_some() && attacker.guild_id == victim.guild_id {
+        return false;
+    }
+    battle_is_attackable(attacker, victim)
 }
 
 /// `CalcAttackRating` (`battle.cpp:227-251`) en f32. OJO: `(iERSrc*2 + 5) /
@@ -725,8 +773,9 @@ mod tests {
     /// → false (el resto del switch del C++ cae en el duelo → false).
     #[test]
     fn battle_is_attackable_gate_pvp() {
-        let live = |pvp: bool, party: Option<u32>| PvpContext { pvp_mode: pvp, party_id: party, hp: 100 };
-        let dead = PvpContext { pvp_mode: true, party_id: None, hp: 0 };
+        // Contexto mínimo del test: nivel protegido (15) y sin guild/zona.
+        let live = |pvp: bool, party: Option<u32>| ctx(pvp, party, 100);
+        let dead = PvpContext { hp: 0, ..ctx(true, None, 100) };
         // Muerto: ni el atacante ataca ni la víctima es atacable (battle.cpp:116).
         assert!(!battle_is_attackable(&dead, &live(true, None)));
         assert!(!battle_is_attackable(&live(true, None), &dead));
@@ -739,6 +788,66 @@ mod tests {
         assert!(battle_is_attackable(&live(true, None), &live(false, None)));
         // Ambos OFF (PK_MODE_PEACE) → no.
         assert!(!battle_is_attackable(&live(false, None), &live(false, None)));
+    }
+
+    /// Contexto PvP del test (nivel protegido, sin guild, sin zona segura).
+    fn ctx(pvp: bool, party: Option<u32>, hp: i32) -> PvpContext {
+        PvpContext {
+            pvp_mode: pvp,
+            party_id: party,
+            guild_id: None,
+            hp,
+            level: PK_PROTECT_LEVEL,
+            safe_zone: false,
+        }
+    }
+
+    /// VERIFIER del slice (task 2026-08-27): `can_attack` RECHAZA a un
+    /// miembro de la MISMA PARTY aunque el atacante tenga PK ON
+    /// (pvp.cpp:446-450 — "Cannot attack same party on any pvp model").
+    /// FALLA si se permite atacar a un compañero de party (mutation:
+    /// quitar el check de party).
+    #[test]
+    fn can_attack_rejects_same_party_even_with_pk() {
+        let attacker = ctx(true, Some(7), 100);
+        let mate = ctx(false, Some(7), 100);
+        assert!(!can_attack(&attacker, &mate), "PK ON + misma party → rechazado");
+        let stranger = ctx(false, Some(8), 100);
+        assert!(can_attack(&attacker, &stranger), "party distinta → atacable");
+    }
+
+    /// Nivel: por debajo de PK_PROTECT_LEVEL (15 — locale spain,
+    /// locale_service.cpp:602) no se ataca ni se es atacable (parity
+    /// PROTECT auto, char.cpp:1674/1785 + pvp.cpp:421-429).
+    #[test]
+    fn can_attack_rejects_below_protect_level() {
+        let pk = |level: i32| PvpContext { level, ..ctx(true, None, 100) };
+        let peace = |level: i32| PvpContext { level, ..ctx(false, None, 100) };
+        assert!(!can_attack(&pk(PK_PROTECT_LEVEL - 1), &peace(PK_PROTECT_LEVEL)));
+        assert!(!can_attack(&pk(PK_PROTECT_LEVEL), &peace(PK_PROTECT_LEVEL - 1)));
+        assert!(can_attack(&pk(PK_PROTECT_LEVEL), &peace(PK_PROTECT_LEVEL)));
+    }
+
+    /// Guild: misma guild → rechazado (pvp.cpp:472-473/489 — PEACE/
+    /// REVENGE/GUILD; desviación documentada: el C++ PK_MODE_FREE la
+    /// permitiría, pvp.cpp:500).
+    #[test]
+    fn can_attack_rejects_same_guild() {
+        let attacker = PvpContext { guild_id: Some(9), ..ctx(true, None, 100) };
+        let mate = PvpContext { guild_id: Some(9), ..ctx(false, None, 100) };
+        assert!(!can_attack(&attacker, &mate), "PK ON + misma guild → rechazado");
+        let other = PvpContext { guild_id: Some(10), ..ctx(false, None, 100) };
+        assert!(can_attack(&attacker, &other), "guild distinta → atacable");
+    }
+
+    /// Zona segura (ATTR_BANPK — battle.cpp:91-101): atacante o víctima en
+    /// zona segura → nunca atacable, ni con PK ON.
+    #[test]
+    fn can_attack_rejects_safe_zone() {
+        let in_zone = PvpContext { safe_zone: true, ..ctx(true, None, 100) };
+        let outside = ctx(false, None, 100);
+        assert!(!can_attack(&in_zone, &outside), "atacante en zona segura");
+        assert!(!can_attack(&outside, &in_zone), "víctima en zona segura");
     }
 
     /// Atacante del harness E2E (channel.rs `dummy_row` — ninja: job 1

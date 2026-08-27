@@ -9,7 +9,7 @@ use bevy_ecs::prelude::*;
 
 use crate::ai::{attack_damage, change_attack_dest, mob_move_speed, move_duration_ms, rotation_5deg, step_toward};
 use crate::combat::{
-    attack_speed_for_weapon_bonus, battle_is_attackable, distance_approx, handle_attack,
+    attack_speed_for_weapon_bonus, can_attack, distance_approx, handle_attack,
     mob_attack_max_range, mob_attack_range_base, player_def_grade, BATTLE_TYPE_MELEE,
     CombatState, NpcState, PlayerState, PvpContext,
 };
@@ -379,24 +379,36 @@ impl WorldSim {
         })
     }
 
-    /// El gate PvP del mundo: `battle_is_attackable` con los contextos de
-    /// AMBOS jugadores (pk mode + party + hp de sus componentes). Sin
-    /// componentes → no atacable (defensivo). Lo usa el PvP (combate) y el
-    /// modo SPLASH de las skills (systems/skill.rs).
+    /// El gate PvP del mundo: `can_attack` con los contextos de AMBOS
+    /// jugadores (zona segura/nivel/guild/party/pk — parity battle.cpp:
+    /// 83-125 + pvp.cpp:373-522). Sin componentes → no atacable
+    /// (defensivo). Lo usa el PvP (combate) y el modo SPLASH de las skills
+    /// (systems/skill.rs).
     pub(crate) fn pvp_attackable(&self, attacker: Entity, victim: Entity) -> bool {
         match (self.pvp_context(attacker), self.pvp_context(victim)) {
-            (Some(a), Some(v)) => battle_is_attackable(&a, &v),
+            (Some(a), Some(v)) => can_attack(&a, &v),
             _ => false,
         }
     }
 
     /// El contexto PvP de un jugador (parity `GetPKMode`/`GetParty`/
-    /// `IsDead` — los consume el gate).
+    /// `GetGuild`/`GetLevel`/`IsDead` — los consume el gate `can_attack`).
+    /// GAP (2026-08-27): `guild_id` (el lane de guildas la sincronizará) y
+    /// `safe_zone` (el lane de mapas alimentará el ATTR_BANPK) quedan
+    /// inertes — el gate puro los cubre con tests; `level` es real.
     pub(crate) fn pvp_context(&self, e: Entity) -> Option<PvpContext> {
         let ent = self.world.get_entity(e).ok()?;
         let pvp = ent.get::<Pvp>()?;
         let hp = ent.get::<Hp>()?;
-        Some(PvpContext { pvp_mode: pvp.mode, party_id: pvp.party_id, hp: hp.hp })
+        let player = ent.get::<Player>()?;
+        Some(PvpContext {
+            pvp_mode: pvp.mode,
+            party_id: pvp.party_id,
+            hp: hp.hp,
+            level: player.level,
+            guild_id: None,
+            safe_zone: false,
+        })
     }
 
     /// Aplica `damage` al HP del mob (clamp a 0) y le marca AGGRO contra el
@@ -543,7 +555,7 @@ impl WorldSim {
         } else {
             None
         };
-        // GATE PvP (parity `battle_is_attackable` — battle.cpp:107-139; se
+        // GATE PvP (parity `can_attack` — battle.cpp:83-139 + pvp.cpp:373-...; se
         // evalúa ANTES del cooldown, parity `CHARACTER::Attack`
         // char_battle.cpp:205-210): un PC→PC no atacable → sin evento
         // (parity: return false — el canal no mandaba nada).
@@ -1524,13 +1536,14 @@ mod tests {
     /// (atacante) y `PvPVictimHit` (víctima) con los MISMOS paquetes
     /// (parity `SendDamagePacket`, char_battle.cpp:1508-1527 — el
     /// GC_DAMAGE_INFO va a ambos descs). Sin PK mode en ninguno → el gate
-    /// `battle_is_attackable` rechaza SIN evento (parity battle.cpp:107-139
-    /// — return false, el canal no mandaba nada).
+    /// `can_attack` rechaza SIN evento (parity battle.cpp:83-139 — return
+    /// false, el canal no mandaba nada). Ambos a nivel 20 (≥
+    /// PK_PROTECT_LEVEL — el gate rechaza a los inferiores).
     #[test]
     fn pvp_attack_requires_pk_mode_and_damages_victim() {
         let mut w = world_with(42);
-        join_at(&mut w, 2, 0, 0); // atacante (ninja lvl 5 del harness)
-        join_at(&mut w, 3, 0, 0); // víctima (el mismo dummy)
+        join_pvp(&mut w, 2, 0, 0); // atacante (ninja lvl 20 del harness)
+        join_pvp(&mut w, 3, 0, 0); // víctima (el mismo dummy)
         // PK OFF en ambos → el gate rechaza (PK_MODE_PEACE — el resto del
         // switch del C++ cae al duelo → false).
         let events = w.process_intent(
@@ -1565,10 +1578,11 @@ mod tests {
         assert_eq!(atk_packets.len(), 1);
         assert_eq!(atk_packets[0][0], 135, "header GC_DAMAGE_INFO");
         assert!(!dead && !hit_dead);
-        // DEF del PC víctima: player_def_grade(5, 30, 0) = 29 (char.cpp:
-        // 2112-2114 — level + ht/1.25 + armor) → 56-29 = 27 / 57-29 = 28
-        // (la MISMA fórmula del mob, con la def del PC como víctima).
-        assert!((27..=28).contains(&damage), "daño del ninja vs PC lvl 5: {damage}");
+        // DEF del PC víctima: player_def_grade(20, 30, 0) = 44 (char.cpp:
+        // 2112-2114 — level + ht/1.25 + armor) → 87-44 = 43 / 88-44 = 44
+        // (ATT_GRADE 100 lvl 20, fAR 0.7866 — la MISMA fórmula del mob,
+        // con la def del PC como víctima).
+        assert!((43..=44).contains(&damage), "daño del ninja vs PC lvl 20: {damage}");
         assert_eq!(hit_damage, damage);
         assert_eq!(victim_hp, 100 - damage, "hp del PC tras el golpe");
         assert_eq!(w.player_hp(3), 100 - damage, "el mundo aplicó el daño al Hp del PC");
@@ -1588,13 +1602,13 @@ mod tests {
     }
 
     /// PvP: la misma PARTY bloquea el ataque aunque el atacante tenga PK
-    /// ON (pvp.cpp:439-441 — "Cannot attack same party on any pvp model");
+    /// ON (pvp.cpp:446-450 — "Cannot attack same party on any pvp model");
     /// al salir de la party el ataque YA pasa.
     #[test]
     fn pvp_attack_blocked_by_same_party() {
         let mut w = world_with(42);
-        join_at(&mut w, 2, 0, 0);
-        join_at(&mut w, 3, 0, 0);
+        join_pvp(&mut w, 2, 0, 0);
+        join_pvp(&mut w, 3, 0, 0);
         w.process_intent(CombatIntent::SetPvpMode { player_vid: 2, on: true }.into(), 1_000);
         w.process_intent(CombatIntent::SetParty { player_vid: 2, party_id: Some(7) }.into(), 1_000);
         w.process_intent(CombatIntent::SetParty { player_vid: 3, party_id: Some(7) }.into(), 1_000);
@@ -1619,12 +1633,12 @@ mod tests {
     /// PvP: la MUERTE del PC — hp ≤ 0 → `dead` en ambos eventos y el Hp
     /// del mundo a 0 (la víctima entra al flujo de muerte/revive del canal:
     /// GC_DEAD + CG_SCRIPT_ANSWER → script.rs). El muerto YA no es atacable
-    /// (battle_is_attackable — IsDead, battle.cpp:116).
+    /// (can_attack — IsDead, battle.cpp:116).
     #[test]
     fn pvp_kill_drops_victim_hp_to_zero() {
         let mut w = world_with(42);
-        join_at(&mut w, 2, 0, 0);
-        join_at(&mut w, 3, 0, 0);
+        join_pvp(&mut w, 2, 0, 0);
+        join_pvp(&mut w, 3, 0, 0);
         w.process_intent(CombatIntent::SetPvpMode { player_vid: 2, on: true }.into(), 1_000);
         // La víctima a 10 hp: un golpe (27-28) la mata.
         w.process_intent(CombatIntent::SetHp { player_vid: 3, hp: 10 }.into(), 1_000);

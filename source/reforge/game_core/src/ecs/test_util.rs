@@ -68,7 +68,12 @@ pub fn world_with(seed: u64) -> WorldSim {
 /// Jugador del harness (parity `dummy_row` del canal — ninja lvl 5,
 /// ht 30, ASSASSIN st/dx/iq 30) en el mapa 41.
 pub fn join_at(w: &mut WorldSim, vid: u32, x: i32, y: i32) -> Vec<NpcEvent> {
-    w.join_player_ready(PlayerJoin {
+    w.join_player_ready(dummy_join(vid, x, y, 5))
+}
+
+/// El `PlayerJoin` del dummy del harness con el nivel deseado.
+fn dummy_join(vid: u32, x: i32, y: i32, level: i32) -> PlayerJoin {
+    PlayerJoin {
         vid,
         map_index: 41,
         x,
@@ -78,7 +83,7 @@ pub fn join_at(w: &mut WorldSim, vid: u32, x: i32, y: i32) -> Vec<NpcEvent> {
         mp: 100,
         max_mp: 100,
         skill_level: Vec::new(),
-        level: 5,
+        level,
         ht: 30,
         armor: 0,
         job: 1,
@@ -86,23 +91,30 @@ pub fn join_at(w: &mut WorldSim, vid: u32, x: i32, y: i32) -> Vec<NpcEvent> {
         st: 30,
         dx: 30,
         iq: 30,
-    })
+    }
+}
+
+/// Join a nivel 20 (≥ `PK_PROTECT_LEVEL`): los tests PvP del gate
+/// `can_attack` necesitan jugadores FUERA de la protección por nivel.
+pub fn join_pvp(w: &mut WorldSim, vid: u32, x: i32, y: i32) -> Vec<NpcEvent> {
+    w.join_player_ready(dummy_join(vid, x, y, 20))
 }
 
 /// Join con el blob de skills: `grant` = (skill_id, nivel) — el blob
 /// `255 × 6 B` con el nivel en `id*6+1` (parity del layout del player).
 pub fn join_with_skills(w: &mut WorldSim, vid: u32, grant: &[(u32, u8)]) -> Vec<NpcEvent> {
-    join_with_skills_group(w, vid, grant, 1)
+    join_with_skills_group(w, vid, grant, 1, 5)
 }
 
 /// `join_with_skills` con el skillgroup explícito (el `k` de las skills usa
 /// job/skillgroup/nivel — la tabla real; los tests que la inyectan necesitan
-/// controlarlo).
+/// controlarlo) y el nivel (los tests PvP del splash usan ≥ 15).
 pub fn join_with_skills_group(
     w: &mut WorldSim,
     vid: u32,
     grant: &[(u32, u8)],
     skill_group: i16,
+    level: i32,
 ) -> Vec<NpcEvent> {
     let mut blob = vec![0u8; 255 * 6];
     for (id, lv) in grant {
@@ -121,7 +133,7 @@ pub fn join_with_skills_group(
         mp: 100,
         max_mp: 100,
         skill_level: blob,
-        level: 5,
+        level,
         ht: 30,
         armor: 0,
         job: 1,
@@ -130,6 +142,11 @@ pub fn join_with_skills_group(
         dx: 30,
         iq: 30,
     })
+}
+
+/// Caster PvP del splash — nivel 20 (≥ `PK_PROTECT_LEVEL`).
+pub fn join_with_skills_pvp(w: &mut WorldSim, vid: u32, grant: &[(u32, u8)]) -> Vec<NpcEvent> {
+    join_with_skills_group(w, vid, grant, 1, 20)
 }
 
 pub fn join(w: &mut WorldSim) -> Vec<NpcEvent> {
