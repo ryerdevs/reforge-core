@@ -230,6 +230,15 @@ async fn enter_and_read_spawns(conn: &mut Connection<TcpStream>) -> Result<Vec<(
             136 => {
                 let _ = read_exact_size(conn, 69).await.map_err(|e| format!("spawn info: {e}"))?;
             }
+            140 => {
+                // GC_LOCALE (F1 — push del canal al conectar,
+                // channel/locale.rs): 0x8c + u16 payload_len (flag+chunk).
+                // Se consume (el fake no lo procesa) y el loop sigue con los
+                // spawns.
+                let len = read_exact_size(conn, 2).await.map_err(|e| format!("locale len: {e}"))?;
+                let n = u16::from_le_bytes([len[0], len[1]]) as usize;
+                let _ = read_exact_size(conn, n).await.map_err(|e| format!("locale chunk: {e}"))?;
+            }
             other => {
                 // Fin de los spawns — el byte leído es el siguiente paquete
                 // (ping/heartbeat del canal). No se devuelve al buffer; el

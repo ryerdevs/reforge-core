@@ -53,6 +53,7 @@ mod game;
 mod gm;
 mod guild;
 mod items;
+mod locale;
 mod messenger;
 mod movement;
 mod party;
