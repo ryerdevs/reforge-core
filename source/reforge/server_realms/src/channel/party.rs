@@ -1448,7 +1448,7 @@ mod tests {
         let _guard = test_lock();
         let (mut a, mut a_sock) = test_session(2001, "Lead", 50, 1, 41, 969600, 278400).await;
         let (mut b, mut b_sock) = test_session(2002, "Guest", 45, 1, 41, 970000, 278500).await;
-        let (mut c, _c_sock) = test_session(2003, "Solo", 45, 1, 41, 970000, 278500).await;
+        let (c, _c_sock) = test_session(2003, "Solo", 45, 1, 41, 970000, 278500).await;
         make_party(&mut a, &mut b).await;
         // Un miembro NO líder no puede invitar → INFO al emisor (B).
         let invite = TPacketCGPartyInvite::new(c.player_vid()).to_bytes();
@@ -1967,6 +1967,38 @@ mod tests {
             matches!(to_c, PartyMsg::ExpGain { amount } if amount == 123 * 550 / 3850),
             "la parte de C (party veterana)"
         );
+    }
+
+    // Verifier (regla 20): el BONUS de party — un party de 2 gana MÁS exp
+    // TOTAL que solo (parity `ComputePartyBonusExpPercent`, constants.cpp:
+    // 824-827: CHN [2] = +12%; el "10%" del slice era un boceto — el oracle
+    // C++ manda: 1000 × 112/100 = 1120 → 560 cada uno). Mutations que
+    // fallan: quitar el bonus (pool 1000 → total == solo) o el reparto
+    // (sin ExpGain a B).
+    #[tokio::test]
+    async fn party_of_two_gains_more_exp_than_solo() {
+        let _guard = test_lock();
+        // Baseline SOLO: sin party → exp íntegra (1000).
+        let (solo, _solo_sock) = test_session(8401, "Solo", 50, 1, 41, 969600, 278400).await;
+        assert_eq!(distribute_exp(&solo, 1000, 969700, 278500), 1000, "solo: íntegra");
+        // Party de 2 (mismos niveles → NON_PARITY reparte a partes iguales).
+        let (mut a, _a_sock) = test_session(8402, "Lead", 50, 1, 41, 969600, 278400).await;
+        let (mut b, _b_sock) = test_session(8403, "Mate", 50, 1, 41, 970000, 278600).await;
+        make_party(&mut a, &mut b).await;
+        for _ in 0..6 {
+            let _ = recv_msg(&mut a).await;
+        }
+        for _ in 0..6 {
+            let _ = recv_msg(&mut b).await;
+        }
+        let my_share = distribute_exp(&a, 1000, 969700, 278500);
+        assert_eq!(my_share, 560, "1000 × (100+12)/100 / 2 — bonus CHN [2]");
+        let PartyMsg::ExpGain { amount } = recv_msg(&mut b).await else {
+            panic!("ExpGain esperado");
+        };
+        assert_eq!(amount, 560, "la misma parte para B");
+        assert!(my_share + amount > 1000, "party de 2 gana MÁS total que solo");
+        assert!(my_share < 1000, "cada miembro recibe MENOS que solo (reparto)");
     }
 
     #[tokio::test]
