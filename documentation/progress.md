@@ -21,3 +21,4 @@
 3. T1 baseline si se ejecuta el audit
 
 Last update: 2026-08-27 16:55 - handoff.ps1
+- 2026-08-27 | slice weight (coder): game_core/src/weight.rs (weight_for_item/can_carry/max_weight (30+level*3+ST*2)*10) + gate pickup events.rs con GC_CHAT INFO + verifier weight_limit_rejects_pickup; game_core 214/214, server_realms check OK. DB item_proto.weight = 0 (11 002 filas): el gate es fail-open hasta importar pesos (pendiente: columna weight). VE: formula clásica GetMaxWeight (el C++ de la variante no tiene peso).

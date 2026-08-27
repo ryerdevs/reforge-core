@@ -41,4 +41,5 @@ pub mod quest;
 pub mod shop;
 pub mod skill;
 pub mod trade;
+pub mod weight;
 pub mod world;

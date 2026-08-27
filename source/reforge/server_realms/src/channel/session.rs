@@ -657,13 +657,13 @@ impl Session {
     }
 
     /// PESO básico (lane D — parity de la fórmula clásica del Metin2,
-    /// `char.cpp GetMaxWeight`: `(30 + level + ST×2) × 10`; el C++ de esta
+    /// `GetMaxWeight`: `(30 + level×3 + ST×2) × 10`; el C++ de esta
     /// variante no tiene peso — el gate es solo server-side, el cliente no
-    /// muestra la barra). Divergencia documentada: sin bonus de montura ni
+    /// muestra la barra). La fórmula vive en `game_core::weight::max_weight`
+    /// (testeada). Divergencia documentada: sin bonus de montura ni
     /// `POINT_HT` (el subset base).
     pub fn max_weight(&self) -> i64 {
-        let row = self.row();
-        (30 + i64::from(row.level) + 2 * i64::from(row.st)) * 10
+        game_core::weight::max_weight(i64::from(self.row().level), i64::from(self.row().st))
     }
 
     /// Peso ACTUAL del inventario (lane D): `Σ count × item_proto.weight`

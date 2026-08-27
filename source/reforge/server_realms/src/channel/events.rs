@@ -22,6 +22,11 @@ use game_core::packets;
 
 use crate::channel::session::Session;
 use crate::channel::{is_gold_item, now32, INVENTORY_MAX_NUM, ITEM_COUNT_LIMIT};
+use crate::channel::gm::gm_info;
+
+/// Rechazo de pickup por peso — GC_CHAT INFO (mismo patrón que gm.rs;
+/// sin locale system → EN, divergencia documentada; parity del ChatPacket).
+const PICKUP_OVERWEIGHT_MSG: &str = "You are carrying too many items.";
 
 /// Un evento S→C del mundo → paquetes GC + estado de la sesión. `Err` =
 /// fatal (socket/PG); los rechazos internos (sin víctima, fuera de rango,
@@ -343,8 +348,8 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                 );
                 return Ok(());
             }
-            // PESO básico (lane D): el pickup se rechaza si el item excede
-            // el peso máximo (parity GetMaxWeight/GetWeight del Metin2
+            // PESO básico (lane D, slice weight): el pickup se rechaza si
+            // `can_carry` falla (parity GetMaxWeight/GetWeight del Metin2
             // clásico — el C++ de esta variante no tiene el sistema; gate
             // server-side, el cliente no muestra la barra). Sin fila de
             // proto → fail-open (el vnum pesa 0).
@@ -353,15 +358,16 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                 .await?
             {
                 let current = session.inventory_weight().await?;
-                let add = proto.weight * i64::from(gi.count) / 10;
+                let add = game_core::weight::weight_for_item(proto.weight, i64::from(gi.count));
                 let max = session.max_weight();
-                if current + add > max {
+                if !game_core::weight::can_carry(current, add, max) {
                     eprintln!(
                         "server_realms: channel conn {}: pickup de vid \
                          {item_vid} (vnum {}, ×{}) — RECHAZADO por PESO \
                          (actual {current} + {add} > máximo {max})",
                         session.conn_id, gi.vnum, gi.count
                     );
+                    gm_info(session, PICKUP_OVERWEIGHT_MSG).await?;
                     return Ok(());
                 }
             }
