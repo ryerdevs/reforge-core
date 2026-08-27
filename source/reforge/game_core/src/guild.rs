@@ -1,7 +1,7 @@
-//! F4 slice guild (2026-08-13): dominio PURO del ciclo de vida básico y de
-//! los grades de una guild — structs + validaciones, sin I/O. La persistencia
-//! ya existe (`database::social::GuildRepo`; `guild_grade` migrada) y el
-//! dispatch wire (CG_GUILD_*) es un slice futuro.
+//! F4 slice guild (2026-08-13): dominio PURO del ciclo de vida básico, grades
+//! y tablón de comentarios de una guild — structs + validaciones, sin I/O. La
+//! persistencia ya existe (`database::social::GuildRepo`; `guild_grade`
+//! migrada) y el dispatch wire (CG_GUILD_*) es un slice futuro.
 //!
 //! Parity: `GUILD_NAME_MAX_LEN = 12` (common/length.h:35); mínimo 2 chars =
 //! diálogo del cliente (spec); duplicado: COUNT(*) de guild_manager.cpp:90-107.
@@ -12,17 +12,23 @@ pub const NAME_MAX: usize = 12; // GUILD_NAME_MAX_LEN, common/length.h:35
 pub const NAME_MIN: usize = 2; // mínimo del diálogo cliente (spec slice)
 pub const GRADE_COUNT: u8 = 15; // GUILD_GRADE_COUNT, guild.h:11
 pub const GRADE_NAME_MAX: usize = 8; // GUILD_GRADE_NAME_MAX_LEN, guild.h:10
+pub const COMMENT_MAX: usize = 50; // GUILD_COMMENT_MAX_LEN, guild.h:13
 
 /// Miembro (clave natural `player.guild_member.player_id`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GuildMember { pub player_id: i64 }
 
+/// Comentario del tablón (`guild_comment.id/name/content`; `notice`='!' inicial
+/// excluido del slice).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuildComment { pub id: i64, pub author: String, pub text: String }
+
 /// Guild en memoria (`player.guild.id` / `player.guild_member` / `guild_grade`).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Guild { pub id: i64, pub name: String, pub members: Vec<GuildMember>, pub grades: Vec<GuildGrade> }
+pub struct Guild { pub id: i64, pub name: String, pub members: Vec<GuildMember>, pub grades: Vec<GuildGrade>, pub comments: Vec<GuildComment> }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GuildError { NameTooShort, NameTooLong, DuplicateName, DuplicateMember, DuplicateGrade, GradeFull }
+pub enum GuildError { NameTooShort, NameTooLong, DuplicateName, DuplicateMember, DuplicateGrade, GradeFull, EmptyComment, CommentTooLong, DuplicateComment }
 
 /// `create_guild`: valida nombre (2..=12 tras trim) y duplicado
 /// (case-insensitive) contra `existing`. Parity: guild_manager.cpp:90-107.
@@ -35,7 +41,7 @@ pub fn create_guild(id: i64, name: &str, existing: &[&str]) -> Result<Guild, Gui
     if existing.iter().any(|n| n.eq_ignore_ascii_case(name)) {
         return Err(GuildError::DuplicateName);
     }
-    Ok(Guild { id, name: name.to_owned(), members: Vec::new(), grades: Vec::new() })
+    Ok(Guild { id, name: name.to_owned(), members: Vec::new(), grades: Vec::new(), comments: Vec::new() })
 }
 
 /// `add_member`: rechaza un `player_id` ya miembro (sin duplicados).
@@ -89,6 +95,32 @@ pub fn set_grade_auth(guild: &mut Guild, grade: u8, auth: u8) -> bool {
     }
 }
 
+/// `add_comment`: texto 1..=COMMENT_MAX chars tras trim (parity max
+/// guild.cpp:1006; C++ cuenta bytes, el slice cuenta chars). Rechaza vacío y
+/// duplicado (mismo autor + mismo texto — el C++ NO lo comprueba, divergencia
+/// deliberada del slice). Devuelve el id asignado (max+1, único entre vivos).
+pub fn add_comment(guild: &mut Guild, author: &str, text: &str) -> Result<i64, GuildError> {
+    let text = text.trim();
+    let len = text.chars().count();
+    if !(1..=COMMENT_MAX).contains(&len) {
+        return Err(if len == 0 { GuildError::EmptyComment } else { GuildError::CommentTooLong });
+    }
+    if guild.comments.iter().any(|c| c.author == author && c.text == text) {
+        return Err(GuildError::DuplicateComment);
+    }
+    let id = guild.comments.iter().map(|c| c.id).max().unwrap_or(0) + 1;
+    guild.comments.push(GuildComment { id, author: author.to_owned(), text: text.to_owned() });
+    Ok(id)
+}
+
+/// `remove_comment`: `false` si el id no existe (parity DeleteComment
+/// id+guild, guild.cpp:1018-1025).
+pub fn remove_comment(guild: &mut Guild, id: i64) -> bool {
+    let before = guild.comments.len();
+    guild.comments.retain(|c| c.id != id);
+    guild.comments.len() != before
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,5 +160,22 @@ mod tests {
         assert!(set_grade_auth(&mut g, 1, 1 | 4));
         assert_eq!(g.grades[0].auth, 5);
         assert!(!set_grade_auth(&mut g, 16, 0));
+    }
+
+    /// Verifier: FALLA si add_comment admite vacío, >50 chars o duplicado
+    /// (mismo autor+texto), o si remove_comment miente.
+    #[test]
+    fn add_comment_rejects_empty_duplicate() {
+        let mut g = create_guild(1, "Valientes", &[]).unwrap();
+        assert_eq!(add_comment(&mut g, "Heroe", ""), Err(GuildError::EmptyComment));
+        assert_eq!(add_comment(&mut g, "Heroe", "   "), Err(GuildError::EmptyComment));
+        assert_eq!(add_comment(&mut g, "Heroe", &"x".repeat(51)), Err(GuildError::CommentTooLong));
+        assert_eq!(add_comment(&mut g, "Heroe", &"x".repeat(50)), Ok(1));
+        let id = add_comment(&mut g, "Heroe", "Bienvenidos!").unwrap();
+        assert_eq!(add_comment(&mut g, "Heroe", "Bienvenidos!"), Err(GuildError::DuplicateComment));
+        assert_eq!(add_comment(&mut g, "Otro", "Bienvenidos!"), Ok(id + 1));
+        assert!(remove_comment(&mut g, id));
+        assert!(!remove_comment(&mut g, id));
+        assert_eq!(add_comment(&mut g, "Heroe", "Bienvenidos!"), Ok(id + 2)); // borrado → válido otra vez
     }
 }
