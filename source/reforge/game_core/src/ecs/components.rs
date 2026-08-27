@@ -202,6 +202,13 @@ pub struct Pvp {
     pub party_id: Option<u32>,
 }
 
+/// ¿El jugador está MONTADO? (`IsHorseRiding()` del C++ — el gate de las
+/// skills HORSE: `SKILL_TYPE_HORSE` exige montado, parity
+/// char_skill.cpp:1936-1940/2404-2408). Ausente = desmontado (default) —
+/// el lane del caballo la inserta/remueve (estado de sesión, como `Pvp`).
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HorseRiding(pub bool);
+
 /// SP del jugador (el coste de las skills lo paga de aquí — parity
 /// `PointChange(POINT_SP, -iNeededSP)`; se sincroniza con row.mp: pociones,
 /// revive — `Intent::SetMp`).

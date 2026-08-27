@@ -8,13 +8,15 @@ use crate::combat::{
     attack_power, attack_speed_for_weapon, calc_attack_rating, def_grade_npc, distance_approx,
     player_def_grade, PlayerState,
 };
-use crate::ecs::components::{Affect, Affects, Hp, Mp, Player, Position, SkillCooldowns, SkillLevels};
+use crate::ecs::components::{
+    Affect, Affects, Hp, HorseRiding, Mp, Player, Position, SkillCooldowns, SkillLevels,
+};
 use crate::ecs::events::{KillInfo, NpcEvent, SkillEvent, SplashVictimInfo};
 use crate::ecs::resources::{NpcIndex, NpcOutbox, Rand, SkillPowerTable, SkillTable, Tick};
 use crate::ecs::world::WorldSim;
 use crate::skill::{
-    attr_type, damage_flag_for_attr, eval_poly, k_value, skill_damage, skill_level_from_blob,
-    point, SkillProto, SkillRepo, skill_flag,
+    attr_type, damage_flag_for_attr, eval_poly, k_value, point, skill_damage, skill_flag,
+    skill_level_from_blob, SkillProto, SkillRepo, SkillType,
 };
 use database::item::ProtoItem;
 
@@ -61,6 +63,37 @@ pub(crate) fn affects_system(
     }
 }
 
+/// El mensaje del gate HORSE (EN — locale system pendiente, ADR-0009;
+/// misma divergencia documentada que channel/gm.rs).
+const HORSE_NEED_MOUNT_MSG: &str = "You need a horse to use this skill.";
+
+/// El rechazo del gate HORSE: SkillResult SIN gasto (0 daño, 0 SP, sin
+/// cooldown) con un GC_CHAT INFO del motivo (parity `ChatPacket(INFO)` —
+/// layout byte-exacto del canal gm.rs: header + WORD size(9+msg) + type +
+/// dwVID + empire; empire 0 — el cliente no lo usa para INFO).
+fn horse_rejected(player_vid: u32, skill_id: u32, target_vid: u32) -> NpcEvent {
+    let mut pkt = Vec::with_capacity(9 + HORSE_NEED_MOUNT_MSG.len());
+    pkt.push(protocol::header::GC_CHAT);
+    pkt.extend_from_slice(&((9 + HORSE_NEED_MOUNT_MSG.len()) as u16).to_le_bytes());
+    pkt.push(protocol::chat::TYPE_INFO);
+    pkt.extend_from_slice(&player_vid.to_le_bytes());
+    pkt.push(0);
+    pkt.extend_from_slice(HORSE_NEED_MOUNT_MSG.as_bytes());
+    SkillEvent::SkillResult {
+        player_vid,
+        skill_id,
+        victim_vid: target_vid,
+        packets: vec![pkt],
+        damage: 0,
+        dead: false,
+        victim: None,
+        sp_cost: 0,
+        hp_cost: 0,
+        buff: None,
+    }
+    .into()
+}
+
 impl WorldSim {
     /// Carga (una vez) la tabla de skills del `player.skill_proto` (PG — el
     /// canal la llama tras el join del primer jugador). Errores → `Err` (el
@@ -78,8 +111,10 @@ impl WorldSim {
     /// Resuelve el CG_USE_SKILL EN EL MUNDO (server-authoritative — parity
     /// `CHARACTER::UseSkill` + `ComputeSkill` + `FuncSplashDamage::OnHit`).
     ///
-    /// Validaciones en orden (rechazos SILENCIOSOS — parity: el legacy
-    /// devuelve false sin respuesta; el cliente muestra su propio cooldown):
+    /// Validaciones en orden (los rechazos son silenciosos salvo el gate
+    /// HORSE, que responde con un INFO — extensión del lane, divergencia
+    /// documentada, EN por locale pendiente como gm.rs):
+    /// 0. gate HORSE (`btype` = SKILL_TYPE_HORSE sin montar → 0 daño);
     /// 1. nivel del jugador en la skill (GetSkillLevel == 0 → false);
     /// 2. objetivo (mob para daño; jugador/self para buffs) + rango
     ///    (`dwtargetrange > 0` → `dist <= range + 50` — parity ComputeSkill);
@@ -105,6 +140,19 @@ impl WorldSim {
         let Some(proto) = self.world.resource::<SkillTable>().0.get(&skill_id).cloned() else {
             return Vec::new(); // skill desconocida (o tabla sin cargar)
         };
+        // (0) Gate HORSE (parity ComputeSkill/UseSkill — char_skill.cpp:
+        // 1936-1940/2404-2408: `pkSk->dwType == SKILL_TYPE_HORSE` exige
+        // montado): sin caballo → 0 daño + INFO (NADA se gasta — el gate
+        // vive ANTES del nivel/SP/cooldown del legacy, pero a diferencia de
+        // él responde visible; divergencia documentada en el doc del fn).
+        if proto.skill_type() == SkillType::Horse
+            && !self
+                .world
+                .get_entity(pe)
+                .is_ok_and(|e| e.get::<HorseRiding>().is_some_and(|h| h.0))
+        {
+            return vec![horse_rejected(player_vid, skill_id, target_vid)];
+        }
         let (px, py, level, job, skill_group, st, dx, iq, ht, armor, hp, mp, max_hp, max_mp, skill_blob) = {
             let Ok(ent) = self.world.get_entity(pe) else { return Vec::new() };
             let Some(pos) = ent.get::<Position>() else { return Vec::new() };
@@ -1022,6 +1070,62 @@ mod tests {
             _ => None,
         });
         assert!((80..=82).contains(&damage.expect("SkillResult sin tabla")), "fail-open → aproximación");
+    }
+
+    /// El gate HORSE (btype 5 — SKILL_TYPE_HORSE, skill.h:47): desmontado →
+    /// rechazo visible (GC_CHAT INFO + 0 daño; SP y mob intactos — NADA se
+    /// gasta); montado (`HorseRiding(true)`) → el daño normal del poly.
+    #[test]
+    fn horse_skill_rejects_unmounted_and_damages_mounted() {
+        let mut w = world_with(42);
+        load(&mut w, vec![(entry(101, 0, 0, 1), mob_row(101))]);
+        join_with_skills(&mut w, 2, &[(50, 1)]);
+        w.set_player_mp(2, 500);
+        let mut proto = skill1_proto();
+        proto.vnum = 50;
+        proto.b_type = 5; // SKILL_TYPE_HORSE
+        load_skills(&mut w, vec![proto]);
+        let use_skill = |w: &mut WorldSim| {
+            w.process_intent(
+                SkillIntent::UseSkill { player_vid: 2, skill_id: 50, target_vid: 10_000, weapon: None }
+                    .into(),
+                1_000,
+            )
+        };
+        // Sin caballo (sin componente HorseRiding): 0 daño + GC_CHAT INFO.
+        let events = use_skill(&mut w);
+        let (packets, damage, sp_cost) = events
+            .iter()
+            .find_map(|e| match e {
+                NpcEvent::Skill(SkillEvent::SkillResult { packets, damage, sp_cost, .. }) => {
+                    Some((packets.clone(), *damage, *sp_cost))
+                }
+                _ => None,
+            })
+            .expect("SkillResult del rechazo");
+        assert_eq!((damage, sp_cost), (0, 0), "0 daño y NADA se gasta");
+        assert_eq!(packets.len(), 1);
+        assert_eq!(packets[0][0], protocol::header::GC_CHAT, "GC_CHAT");
+        assert_eq!(packets[0][3], protocol::chat::TYPE_INFO, "type INFO");
+        assert_eq!(packets[0][4..8], 2u32.to_le_bytes(), "dwVID = el caster");
+        assert!(packets[0].ends_with(HORSE_NEED_MOUNT_MSG.as_bytes()));
+        assert_eq!(w.npc_view(10_000).expect("mob 101").hp, 126, "sin daño");
+        // Montado → el daño NORMAL del poly (el mismo del skill 1: 80-82).
+        let ent = *w.players.get(&2).expect("entidad del player");
+        w.world.entity_mut(ent).insert(HorseRiding(true));
+        let events = use_skill(&mut w);
+        let (packets, damage) = events
+            .iter()
+            .find_map(|e| match e {
+                NpcEvent::Skill(SkillEvent::SkillResult { packets, damage, .. }) => {
+                    Some((packets.clone(), *damage))
+                }
+                _ => None,
+            })
+            .expect("SkillResult del daño");
+        assert!((80..=82).contains(&damage), "daño del poly HORSE: {damage}");
+        assert_eq!(packets.len(), 1);
+        assert_eq!(packets[0][0], 135, "GC_DAMAGE_INFO");
     }
 
     /// SPLASH (área — skill 1 con flag SPLASH, radio 250, lMaxHit 4): el

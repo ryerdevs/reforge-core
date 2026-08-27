@@ -70,6 +70,9 @@ pub mod chat {
     pub const NAME_BYTES: usize = 25;
     /// `EChatType` (length.h:258-274): TALKING — el broadcast en rango.
     pub const TYPE_TALKING: u8 = 0;
+    /// `EChatType` (length.h:258-274): INFO — el aviso del server al
+    /// jugador (p.ej. el gate HORSE del mundo — `ChatPacket(CHAT_TYPE_INFO)`).
+    pub const TYPE_INFO: u8 = 1;
     /// `EChatType` (length.h:258-274): SHOUT — el broadcast de mapa.
     pub const TYPE_SHOUT: u8 = 6;
     /// `EWhisperType` (packet.h): whisper normal (el cliente lo pinta).

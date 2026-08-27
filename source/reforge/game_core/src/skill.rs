@@ -44,9 +44,12 @@
 //!   self-buffs (SELFONLY) y el modo ÁREA (flag SPLASH — `iSplashRange` =
 //!   radio, `lMaxHit` = máx víctimas, `kSplashAroundDamageAdjustPoly` =
 //!   ajuste del daño de las víctimas alrededor — parity `ComputeSkill` +
-//!   `FuncSplashDamage` + `ComputeSkillAtPosition`). PARTY, HORSE, arco
+//!   `FuncSplashDamage` + `ComputeSkillAtPosition`). PARTY, arco
 //!   (USE_ARROW_DAMAGE se resuelve con el ataque melee — desviación
 //!   documentada) y el grand master (kMasterBonusPoly) quedan fuera.
+//!   HORSE (btype 5): el gate montado/desmontado está DENTRO (ver
+//!   `SkillType` y el `process_skill` del ecs) — el lane del caballo
+//!   alimenta el componente `HorseRiding`.
 //! - `ar` del poly = `combat::calc_attack_rating` del PC contra el mob.
 //! - `def`/`odef` = la DEF del PC (`player_def_grade` + bonus / sin bonus).
 //! - `skill_power.txt` no se carga — la fuente es PG (`common.locale`
@@ -70,6 +73,30 @@ pub mod skill_flag {
     pub const COMPUTE_MAGIC_DAMAGE: u32 = 1 << 6;
     pub const SPLASH: u32 = 1 << 7;
     pub const USE_ARROW_DAMAGE: u32 = 1 << 9;
+}
+
+/// `SKILL_TYPE_*` — el `btype` del skill_proto (el `dwType` del legacy:
+/// `enum { SKILL_PENALTY_DURATION = 3, SKILL_TYPE_HORSE = 5 }`, skill.h:
+/// 44-48). El runtime solo distingue el gate del caballo (parity
+/// `ComputeSkill`/`UseSkill`: `pkSk->dwType == SKILL_TYPE_HORSE` ↔
+/// `CanUseHorseSkill()`, char_skill.cpp:1936-1940 y 2404-2408).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillType {
+    /// `btype` 0 — SKILL_TYPE_NORMAL (todo el resto del runtime).
+    Normal = 0,
+    /// `btype` 5 — SKILL_TYPE_HORSE (skill.h:47): solo usable montado.
+    Horse = 5,
+}
+
+impl SkillType {
+    /// `btype` (i16 → u8 de la fila del skill_proto) → SkillType.
+    pub fn from_b_type(b: u8) -> SkillType {
+        if b == SkillType::Horse as u8 {
+            SkillType::Horse
+        } else {
+            SkillType::Normal
+        }
+    }
 }
 
 /// `POINT_*` (EPointTypes — char.h:134+): el `bPointIdxApplyOn` del wire y
@@ -130,7 +157,7 @@ pub mod aff {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillProto {
     pub vnum: u32,
-    /// `btype` — el SKILL_TYPE_* (HORSE=5 fuera del subset).
+    /// `btype` — el SKILL_TYPE_* (HORSE=5 — ver `SkillType`).
     pub b_type: u8,
     /// `blevelstep` — el paso de nivel del skill.
     pub level_step: u8,
@@ -175,6 +202,11 @@ impl SkillProto {
     /// SKILL_FLAG_ATTACK + punto HP — char_skill.cpp:2070-2096).
     pub fn is_attack(&self) -> bool {
         self.flag & skill_flag::ATTACK != 0 && self.point_on == point::HP
+    }
+
+    /// El SKILL_TYPE del proto (`btype` — el gate del caballo del mundo).
+    pub fn skill_type(&self) -> SkillType {
+        SkillType::from_b_type(self.b_type)
     }
 }
 
