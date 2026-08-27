@@ -1087,6 +1087,8 @@ mod tests {
         let k1 = v1.victim.expect("kill info del mob 102");
         assert_eq!(k1.vnum, 102);
         assert_eq!(k1.hp, 126 - v1.damage);
+        // El mob 103 (a ~288 > radio 250) NO recibió daño — intacto.
+        assert_eq!(w.npc_view(10_002).expect("mob 103").hp, 126, "fuera del radio");
         // Cooldown 12 s: el segundo uso inmediato → rechazo silencioso
         // (el cooldown se paga UNA vez por uso, no por víctima).
         assert!(
