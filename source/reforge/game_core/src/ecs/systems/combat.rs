@@ -152,6 +152,22 @@ pub(crate) fn chase_attack_system(
             continue;
         }
         let state = npc_state(vid.vid, &pos, mob);
+        // COWARD (StateBattle:870-886): nunca ataca ni persigue; con HP <
+        // 20% huye al lado opuesto del jugador (CowardEscape:269-307).
+        if mob.coward {
+            if mob_hp.hp > 0 && mob_hp.hp * 100 / mob_hp.max_hp.max(1) < 20 {
+                let (fx, fy) = step_toward(pos.x, pos.y, pos.x * 2 - ppos.x, pos.y * 2 - ppos.y, mob_move_speed(mob.move_speed) as i32, tick.dt_ms);
+                if fx != pos.x || fy != pos.y {
+                    let rot = rotation_5deg(pos.x, pos.y, fx, fy);
+                    let duration_ms = move_duration_ms(fx - pos.x, fy - pos.y, mob_move_speed(mob.move_speed) as i32);
+                    pos.x = fx;
+                    pos.y = fy;
+                    outbox.0.push(MoveEvent::Moved { player_vid: p.vid, vid: vid.vid, x: fx, y: fy, rot, duration_ms }.into());
+                }
+            }
+            aggro.target = None;
+            continue; // nunca ataca ni persigue
+        }
         // C31: el rango del ataque del MOB (mob→PC) es SOLO su
         // `GetMobAttackRange() * 1.15` — sin el floor 300 del PC
         // (battle.cpp:147-152). `melee_max_range` (con floor) se queda para
@@ -191,7 +207,7 @@ pub(crate) fn chase_attack_system(
                 player_def_grade(p.level, p.ht, p.armor) + paff.def_grade_bonus(),
                 &mut |lo, hi| rng.roll(lo, hi),
             );
-            if mob.sp_berserk > 0
+            if mob.berserk && mob.sp_berserk > 0
                 && mob_hp.hp > 0
                 && mob_hp.hp * 100 / mob_hp.max_hp.max(1) < mob.sp_berserk
             {
@@ -1022,7 +1038,7 @@ mod tests {
         // (46 de daño → max_hp 60 → hp 14 = 23% < 30%).
         let mut w = world_with(42);
         let mut row = mob_row(101);
-        row.ai_flag = Some("AGGR".into());
+        row.ai_flag = Some("AGGR,BERSERK".into()); // gate del flag (StateBattle:1015-1018)
         row.damage_min = 200;
         row.damage_max = 200;
         row.sp_berserk = 30;
@@ -1780,5 +1796,46 @@ mod tests {
         let ent = w.world.get_entity(e).expect("entidad");
         let p = ent.get::<crate::ecs::components::Player>().expect("Player");
         assert_eq!((p.st, p.dx, p.iq, p.ht), (50, 60, 70, 80));
+    }
+
+    /// Verifier AIFLAGs (slice 2026-08-27): BERSERK requiere el flag del
+    /// `ai_flag` (IsBerserker + `GetHPPct() < sp_berserk`, char_state.cpp:
+    /// 1015-1018): sin flag 171, con flag ×2 = 342. COWARD: no ataca y con
+    /// HP < 20% huye al lado opuesto.
+    #[test]
+    fn berserk_requires_flag_and_coward_flees() {
+        for (flags, expected) in [("AGGR", 171), ("AGGR,BERSERK", 342)] { // HP 23% < sp_berserk 30
+            let mut w = world_with(42);
+            let mut row = mob_row(101);
+            row.ai_flag = Some(flags.into());
+            row.damage_min = 200;
+            row.damage_max = 200;
+            row.sp_berserk = 30;
+            row.max_hp = 60;
+            load(&mut w, vec![(entry(101, 0, 0, 1), row)]);
+            join(&mut w);
+            w.process_intent(CombatIntent::Attack { player_vid: 2, victim_vid: 10_000, b_type: 0, weapon: None }.into(), 1_000);
+            let damage = w.update(2_000).iter().find_map(|e| match e {
+                NpcEvent::Combat(CombatEvent::MobAttack { damage, .. }) => Some(*damage),
+                _ => None,
+            });
+            assert_eq!(damage, Some(expected), "flags {flags}: 200−29=171 → {expected}");
+        }
+        // COWARD (AGGR, en rango): no ataca; HP 8% → el mob (100,0) huye al
+        // lado opuesto del jugador (0,0) → (200,0).
+        let mut w = world_with(42);
+        let mut row = mob_row(101);
+        row.ai_flag = Some("AGGR,COWARD".into());
+        row.max_hp = 100;
+        load(&mut w, vec![(entry(101, 100, 0, 1), row)]);
+        join(&mut w);
+        w.process_intent(CombatIntent::Attack { player_vid: 2, victim_vid: 10_000, b_type: 0, weapon: None }.into(), 1_000);
+        w.process_intent(CombatIntent::Attack { player_vid: 2, victim_vid: 10_000, b_type: 0, weapon: None }.into(), 3_000); // hp 8 (8%)
+        let run = w.update(2_000);
+        assert_eq!(
+            run.iter().find_map(|e| match e { NpcEvent::Move(MoveEvent::Moved { x, .. }) => Some(*x), _ => None }), Some(200),
+            "huye al lado opuesto: {run:?}"
+        );
+        assert!(!run.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::MobAttack { .. }))), "no ataca huyendo");
     }
 }

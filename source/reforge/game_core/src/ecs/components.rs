@@ -93,6 +93,9 @@ pub struct Mob {
     pub aggressive_sight: i32,
     /// `ai_flag` "AGGR" → aggro proactivo (parity AIFLAG_AGGRESSIVE).
     pub aggressive: bool,
+    /// `ai_flag` "COWARD"/"BERSERK" (char_state.cpp:234-247): COWARD no ataca y huye con HP < 20%; BERSERK gate del ×2.
+    pub coward: bool,
+    pub berserk: bool,
     // ---- combate (la vista `NpcState` que `game_core::combat` consume) ----
     pub level: i32,
     /// `ht` del PG — la "dx" del mob en el NpcState (parity channel.rs:426).
@@ -108,9 +111,9 @@ pub struct Mob {
     /// (`GetMobRank() < MOB_RANK_BOSS`, char.cpp:5437).
     pub rank: i32,
     /// AIFLAGs de combate (sp_* del mob_proto — HP% de activación; 0 =
-    /// inactivo). BERSERK: daño ×2 bajo sp_berserk% HP; STONESKIN: daño
-    /// recibido /2 bajo sp_stoneskin%; GODSPEED: ATT_SPEED 250 bajo
-    /// sp_godspeed% (char_state.cpp:1016-1023, char_battle.cpp:2082-2084).
+    /// inactivo). BERSERK (gate `berserk`): daño ×2 bajo sp_berserk% HP;
+    /// STONESKIN: daño recibido /2 bajo sp_stoneskin%; GODSPEED: ATT_SPEED
+    /// 250 bajo sp_godspeed% (char_state.cpp:1016-1023, char_battle.cpp:2082-2084).
     pub sp_berserk: i32,
     pub sp_stoneskin: i32,
     pub sp_godspeed: i32,
@@ -135,6 +138,8 @@ impl Mob {
             nomove: row.ai_flag.as_deref().is_some_and(|f| f.contains("NOMOVE")),
             aggressive_sight: row.aggressive_sight,
             aggressive: crate::ai::is_aggressive(row.ai_flag.as_deref()),
+            coward: crate::ai::is_coward(row.ai_flag.as_deref()),
+            berserk: crate::ai::is_berserker(row.ai_flag.as_deref()),
             level: row.level,
             ht: row.ht,
             wdef: row.def,

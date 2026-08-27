@@ -5,9 +5,8 @@
 //! Parity del C++ (el subset documentado): el mob aggro se mueve hacia el
 //! jugador a `move_speed` UNITS/seg (`m_dwMoveSpeed` del mob_proto) y se
 //! detiene al alcanzar su rango de ataque (`wAttackRange`). Fuera del subset
-//! (pendiente): patrullaje/estados (`COWARD`/`BERSERK` de `ai_flag`), el
-//! ataque del mob (el C++ envía `FUNC_ATTACK` cuando está en rango), de-aggro
-//! por distancia.
+//! (pendiente): patrullaje/estados, el ataque del mob (el C++ envía
+//! `FUNC_ATTACK` cuando está en rango), de-aggro por distancia.
 
 /// Paso de movimiento: desde `(x,y)` hacia `(tx,ty)` a `speed` UNITS/seg
 /// durante `dt_ms`. Devuelve la nueva posición (redondeada). Sin movimiento
@@ -134,6 +133,14 @@ pub fn mob_move_speed(move_speed: i32) -> u32 {
 pub fn is_aggressive(ai_flag: Option<&str>) -> bool {
     ai_flag.is_some_and(|f| f.split(',').any(|t| t.trim() == "AGGR"))
 }
+
+/// `IsCoward()`/`IsBerserker()` parity (char_state.cpp:234-247): COWARD
+/// huye con HP bajo (StateBattle:870-886); BERSERK gate del ×2 (1015-1018).
+fn has_aiflag(ai_flag: Option<&str>, flag: &str) -> bool {
+    ai_flag.is_some_and(|f| f.split(',').any(|t| t.trim() == flag))
+}
+pub fn is_coward(ai_flag: Option<&str>) -> bool { has_aiflag(ai_flag, "COWARD") }
+pub fn is_berserker(ai_flag: Option<&str>) -> bool { has_aiflag(ai_flag, "BERSERK") }
 
 /// PASO DE PATRULLAJE del mob idle (parity `UpdateState` IDLE —
 /// `char_state.cpp:668-688`): con probabilidad `1/7` por tick, el mob elige
