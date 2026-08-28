@@ -73,8 +73,8 @@ use protocol::header;
 use protocol::world::{
     TPacketCGPartyInvite, TPacketCGPartyInviteAnswer, TPacketCGPartyParameter,
     TPacketCGPartyRemove, TPacketCGPartySetState, TPacketCGPartyUseSkill,
-    TPacketGCPartyAdd, TPacketGCPartyInvite, TPacketGCPartyParameter,
-    TPacketGCPartyRemove, TPacketGCPartyUpdate, TPacketGCWarp,
+    TPacketGCPartyAdd, TPacketGCPartyInvite, TPacketGCPartyLink, TPacketGCPartyParameter,
+    TPacketGCPartyRemove, TPacketGCPartyUnlink, TPacketGCPartyUpdate, TPacketGCWarp,
 };
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -451,7 +451,7 @@ fn deliver(out: &UnboundedSender<PartyMsg>, msgs: Vec<PartyMsg>) {
 
 /// Disuelve la party completa (parity `DeleteParty` party.cpp:290-325):
 /// GC_PARTY_REMOVE con el pid PROPIO de cada miembro (party.cpp:310-313) +
-/// INFO "party disbanded" (party.cpp:314) + LeftParty a todos. No-op si ya
+/// GC_PARTY_UNLINK (91/92) + INFO "party disbanded" (party.cpp:314) + LeftParty a todos. No-op si ya
 /// no existe.
 fn disband(party_id: u32) {
     let deliveries: Vec<(UnboundedSender<PartyMsg>, Vec<PartyMsg>)> = {
@@ -468,6 +468,7 @@ fn disband(party_id: u32) {
                     out,
                     vec![
                         PartyMsg::Packet(TPacketGCPartyRemove::new(m.pid).to_bytes().to_vec()),
+                        PartyMsg::Packet(unlink_bytes(m.pid, m.vid)),
                         PartyMsg::Packet(info_packet(
                             m.vid,
                             m.empire,
@@ -512,17 +513,21 @@ fn remove_member(party_id: u32, pid: u32, reason: RemoveReason) {
             return;
         };
         let remove_bytes = TPacketGCPartyRemove::new(pid).to_bytes().to_vec();
+        let unlink = unlink_bytes(member.pid, member.vid);
         let mut deliveries = Vec::new();
-        // A TODOS los que quedan: el REMOVE del que se va.
+        // A TODOS los que quedan: el REMOVE + UNLINK del que se va.
         for m in party.members.values() {
             if let Some(out) = &m.out {
                 deliveries.push((
                     out.clone(),
-                    vec![PartyMsg::Packet(remove_bytes.clone())],
+                    vec![
+                        PartyMsg::Packet(remove_bytes.clone()),
+                        PartyMsg::Packet(unlink.clone()),
+                    ],
                 ));
             }
         }
-        // Al expulsado: REMOVE + INFO + LeftParty.
+        // Al expulsado: REMOVE + UNLINK + INFO + LeftParty.
         if let Some(out) = member.out {
             let text = match reason {
                 RemoveReason::Kicked => "<Party> You've been kicked from the party.",
@@ -532,6 +537,7 @@ fn remove_member(party_id: u32, pid: u32, reason: RemoveReason) {
                 out,
                 vec![
                     PartyMsg::Packet(remove_bytes),
+                    PartyMsg::Packet(unlink),
                     PartyMsg::Packet(info_packet(member.vid, member.empire, text)),
                     PartyMsg::LeftParty,
                 ],
@@ -570,6 +576,13 @@ fn leave_party_on_disconnect(vid: u32) {
     } else {
         remove_member(party_id, vid, RemoveReason::Left);
     }
+}
+
+fn link_bytes(pid: u32, vid: u32) -> Vec<u8> {
+    TPacketGCPartyLink::new(pid, vid).to_bytes().to_vec()
+}
+fn unlink_bytes(pid: u32, vid: u32) -> Vec<u8> {
+    TPacketGCPartyUnlink::new(pid, vid).to_bytes().to_vec()
 }
 
 /// Los mensajes de sync COMPLETO de la party para UN miembro: ADD+UPDATE de
@@ -806,10 +819,12 @@ pub async fn handle_invite_answer(session: &mut Session, pkt: &[u8]) -> Result<O
                         level: guest_level,
                     },
                 );
-                // Al invitado: sync completo. A los existentes: ADD+UPDATE
-                // del invitado (parity SendPartyJoinOneToAll +
-                // SendPartyInfoOneToAll).
+                // Al invitado: sync completo + LINKs (parity SendPartyLinkAllToOne). A los existentes: ADD+UPDATE+LINK
+                // del invitado (parity SendPartyJoinOneToAll + SendPartyLinkOneToAll).
                 let mut guest_msgs = member_sync_msgs(party);
+                for m in party.members.values() {
+                    guest_msgs.push(PartyMsg::Packet(link_bytes(m.pid, m.vid)));
+                }
                 guest_msgs.push(PartyMsg::Packet(info_packet(
                     my_vid,
                     guest_empire,
@@ -838,6 +853,7 @@ pub async fn handle_invite_answer(session: &mut Session, pkt: &[u8]) -> Result<O
                                     .to_bytes()
                                     .to_vec(),
                                 ),
+                                PartyMsg::Packet(link_bytes(guest_pid, my_vid)),
                             ],
                         ));
                     }
@@ -891,9 +907,11 @@ pub async fn handle_invite_answer(session: &mut Session, pkt: &[u8]) -> Result<O
                     level: guest_level,
                 },
             );
-            // A AMBOS: el sync completo (ADD+UPDATE de cada miembro +
-            // PARAMETER + INFO de join — el wire funcional del subset).
+            // A AMBOS: el sync completo + LINKs (parity SendPartyLink*).
             let mut leader_msgs = member_sync_msgs(&party);
+            for m in party.members.values() {
+                leader_msgs.push(PartyMsg::Packet(link_bytes(m.pid, m.vid)));
+            }
             leader_msgs.push(PartyMsg::Packet(info_packet(
                 p.leader_vid,
                 leader_peer.empire,
@@ -907,6 +925,9 @@ pub async fn handle_invite_answer(session: &mut Session, pkt: &[u8]) -> Result<O
             ));
             deliveries.push((leader_peer.out.clone(), leader_msgs));
             let mut guest_msgs = member_sync_msgs(&party);
+            for m in party.members.values() {
+                guest_msgs.push(PartyMsg::Packet(link_bytes(m.pid, m.vid)));
+            }
             guest_msgs.push(PartyMsg::Packet(info_packet(
                 my_vid,
                 guest_empire,
@@ -1698,14 +1719,13 @@ mod tests {
         let (mut a, _a_sock) = test_session(1001, "Leader", 50, 1, 41, 969600, 278400).await;
         let (mut b, _b_sock) = test_session(1002, "Guest", 45, 1, 41, 970000, 278500).await;
         make_party(&mut a, &mut b).await;
-        // B recibe el sync completo: ADD+UPDATE de AMBOS + PARAMETER + INFO.
+        // B y A reciben el sync completo: ADD+UPDATE de AMBOS + PARAMETER + LINKs + INFO.
         let mut msgs_b = Vec::new();
-        for _ in 0..6 {
+        for _ in 0..8 {
             msgs_b.push(recv_msg(&mut b).await);
         }
-        // A recibe el sync completo (tras el Joined).
         let mut msgs_a = Vec::new();
-        for _ in 0..6 {
+        for _ in 0..8 {
             msgs_a.push(recv_msg(&mut a).await);
         }
         let collect = |msgs: Vec<PartyMsg>| {
@@ -1883,16 +1903,14 @@ mod tests {
         apply_msg(&mut b, m).await;
         let ab = TPacketCGPartyInviteAnswer::new(a.player_vid(), 1).to_bytes();
         handle_invite_answer(&mut b, &ab).await.expect("B acepta");
-        // drenar el sync de A y B aplicando cada mensaje (Joined limpia
-        // party_id; Packet → bytes; el canal real hace esto en game.rs).
-        for _ in 0..7 {
+        for _ in 0..9 {
 
             let m = recv_msg(&mut a).await;
 
             apply_msg(&mut a, m).await;
 
         }
-        for _ in 0..6 {
+        for _ in 0..8 {
 
             let m = recv_msg(&mut b).await;
 
@@ -1906,28 +1924,28 @@ mod tests {
         apply_msg(&mut c, m).await;
         let ac = TPacketCGPartyInviteAnswer::new(a.player_vid(), 1).to_bytes();
         handle_invite_answer(&mut c, &ac).await.expect("C acepta");
-        for _ in 0..2 {
+        for _ in 0..3 {
 
             let m = recv_msg(&mut a).await;
 
             apply_msg(&mut a, m).await;
 
         }
-        for _ in 0..2 {
+        for _ in 0..3 {
 
             let m = recv_msg(&mut b).await;
 
             apply_msg(&mut b, m).await;
 
         }
-        for _ in 0..8 {
+        for _ in 0..11 {
 
             let m = recv_msg(&mut c).await;
 
             apply_msg(&mut c, m).await;
 
         }
-        // El líder expulsa a B → GC_PARTY_REMOVE(5002) a todos.
+        // El líder expulsa a B → GC_PARTY_REMOVE(5002)+UNLINK a todos.
         let rm = TPacketCGPartyRemove::new(5002).to_bytes();
         handle_remove(&mut a, &rm).await.expect("kick OK");
         for s in [&mut a, &mut b, &mut c] {
@@ -1941,6 +1959,15 @@ mod tests {
                 5002,
                 "el pid del EXPULSADO (SendPartyRemoveOneToAll)"
             );
+            apply_msg(s, m).await;
+        }
+        // UNLINK del expulsado a todos (incluido el expulsado)
+        for s in [&mut a, &mut b, &mut c] {
+            let m = recv_msg(s).await;
+            let PartyMsg::Packet(bytes) = &m else {
+                panic!("GC_PARTY_UNLINK esperado");
+            };
+            assert_eq!(bytes[0], header::GC_PARTY_UNLINK);
             apply_msg(s, m).await;
         }
         // B (el expulsado) recibe además el INFO de kick y limpia su estado.
@@ -1975,12 +2002,17 @@ mod tests {
                 pid,
                 "disband: el pid PROPIO de cada miembro"
             );
+            // UNLINK del disband
+            let m = recv_msg(s).await;
+            assert!(matches!(&m, PartyMsg::Packet(bytes) if bytes[0] == header::GC_PARTY_UNLINK));
         }
-        // C también recibe INFO disband + LeftParty.
-        let m = recv_msg(&mut c).await;
-        assert!(matches!(&m, PartyMsg::Packet(bytes) if bytes[0] == header::GC_CHAT));
-        let m = recv_msg(&mut c).await;
-        assert!(matches!(&m, PartyMsg::LeftParty));
+        // C también recibe INFO disband + LeftParty (A ya consumió su INFO? ambos la tienen)
+        for s in [&mut a, &mut c] {
+            let m = recv_msg(s).await;
+            assert!(matches!(&m, PartyMsg::Packet(bytes) if bytes[0] == header::GC_CHAT));
+            let m = recv_msg(s).await;
+            assert!(matches!(&m, PartyMsg::LeftParty));
+        }
         assert!(a.party_id.is_none(), "A limpio su party_id");
         assert!(parties().lock().expect("parties lock").get(&5001).is_none(), "party eliminada");
     }
@@ -1998,14 +2030,14 @@ mod tests {
         let (mut c, mut c_sock) = test_session(6003, "Stay3", 45, 1, 41, 970000, 278500).await;
         make_party(&mut a, &mut b).await;
         // drenar el sync de A y B (aplicando — Joined mantiene party_id).
-        for _ in 0..6 {
+        for _ in 0..8 {
 
             let m = recv_msg(&mut a).await;
 
             apply_msg(&mut a, m).await;
 
         }
-        for _ in 0..6 {
+        for _ in 0..8 {
 
             let m = recv_msg(&mut b).await;
 
@@ -2019,21 +2051,21 @@ mod tests {
         apply_msg(&mut c, m).await;
         let ac = TPacketCGPartyInviteAnswer::new(a.player_vid(), 1).to_bytes();
         handle_invite_answer(&mut c, &ac).await.expect("C acepta");
-        for _ in 0..2 {
+        for _ in 0..3 {
 
             let m = recv_msg(&mut a).await;
 
             apply_msg(&mut a, m).await;
 
         }
-        for _ in 0..2 {
+        for _ in 0..3 {
 
             let m = recv_msg(&mut b).await;
 
             apply_msg(&mut b, m).await;
 
         }
-        for _ in 0..8 {
+        for _ in 0..11 {
 
             let m = recv_msg(&mut c).await;
 
@@ -2089,10 +2121,10 @@ mod tests {
         let (mut b, _b_sock) = test_session(7002, "ParamGuy", 45, 1, 41, 970000, 278500).await;
         make_party(&mut a, &mut b).await;
         // drenar el sync de A y B.
-        for _ in 0..6 {
+        for _ in 0..8 {
             let _ = recv_msg(&mut a).await;
         }
-        for _ in 0..6 {
+        for _ in 0..8 {
             let _ = recv_msg(&mut b).await;
         }
         // B (cualquier miembro — el C++ no exige líder) cambia a PARITY (1).
@@ -2134,10 +2166,10 @@ mod tests {
         let (mut far, _far_sock) = test_session(8003, "FarGuy", 45, 1, 41, 990000, 290000).await;
         make_party(&mut a, &mut b).await;
         // drenar el sync de A y B.
-        for _ in 0..6 {
+        for _ in 0..8 {
             let _ = recv_msg(&mut a).await;
         }
-        for _ in 0..6 {
+        for _ in 0..8 {
             let _ = recv_msg(&mut b).await;
         }
         // Se une "far" (party de 3 — mismo mapa pero LEJOS del kill).
@@ -2146,13 +2178,13 @@ mod tests {
         let _ = recv_msg(&mut far).await;
         let ac = TPacketCGPartyInviteAnswer::new(8001, 1).to_bytes();
         handle_invite_answer(&mut far, &ac).await.expect("far acepta");
-        for _ in 0..2 {
+        for _ in 0..3 {
             let _ = recv_msg(&mut a).await;
         }
-        for _ in 0..2 {
+        for _ in 0..3 {
             let _ = recv_msg(&mut b).await;
         }
-        for _ in 0..8 {
+        for _ in 0..11 {
             let _ = recv_msg(&mut far).await;
         }
         // A mata un mob en (969700, 278500): presentes = A + B (≤ 5000);
@@ -2187,10 +2219,10 @@ mod tests {
         let (mut a2, _a2s) = test_session(8101, "SoloExp", 50, 1, 41, 969600, 278400).await;
         let (mut b2, _b2s) = test_session(8102, "FarExp", 45, 1, 41, 990000, 290000).await;
         make_party(&mut a2, &mut b2).await;
-        for _ in 0..6 {
+        for _ in 0..8 {
             let _ = recv_msg(&mut a2).await;
         }
-        for _ in 0..6 {
+        for _ in 0..8 {
             let _ = recv_msg(&mut b2).await;
         }
         assert_eq!(
@@ -2213,10 +2245,10 @@ mod tests {
         let (mut b, _b_sock) = test_session(8302, "BonusGuy", 45, 1, 41, 970600, 279000).await;
         let (mut c, _c_sock) = test_session(8303, "BonusC", 30, 1, 41, 970000, 278800).await;
         make_party(&mut a, &mut b).await;
-        for _ in 0..6 {
+        for _ in 0..8 {
             let _ = recv_msg(&mut a).await;
         }
-        for _ in 0..6 {
+        for _ in 0..8 {
             let _ = recv_msg(&mut b).await;
         }
         // C se une (party de 3 — todos cerca del líder A).
@@ -2225,13 +2257,13 @@ mod tests {
         let _ = recv_msg(&mut c).await;
         let ac = TPacketCGPartyInviteAnswer::new(8301, 1).to_bytes();
         handle_invite_answer(&mut c, &ac).await.expect("C acepta");
-        for _ in 0..2 {
+        for _ in 0..3 {
             let _ = recv_msg(&mut a).await;
         }
-        for _ in 0..2 {
+        for _ in 0..3 {
             let _ = recv_msg(&mut b).await;
         }
-        for _ in 0..8 {
+        for _ in 0..11 {
             let _ = recv_msg(&mut c).await;
         }
         // Kill cerca del líder con 3 miembros cerca → +18% (tabla CHN [3],
@@ -2296,10 +2328,10 @@ mod tests {
         let (mut a, _a_sock) = test_session(8402, "Lead", 50, 1, 41, 969600, 278400).await;
         let (mut b, _b_sock) = test_session(8403, "Mate", 50, 1, 41, 970000, 278600).await;
         make_party(&mut a, &mut b).await;
-        for _ in 0..6 {
+        for _ in 0..8 {
             let _ = recv_msg(&mut a).await;
         }
-        for _ in 0..6 {
+        for _ in 0..8 {
             let _ = recv_msg(&mut b).await;
         }
         let my_share = distribute_exp(&a, 1000, 969700, 278500);
@@ -2346,10 +2378,10 @@ mod tests {
         let (mut b, _b_sock) = test_session(9002, "DropGuy", 45, 1, 41, 970000, 278500).await;
         let (mut c, _c_sock) = test_session(9003, "DropC", 45, 1, 41, 970000, 278500).await;
         make_party(&mut a, &mut b).await;
-        for _ in 0..6 {
+        for _ in 0..8 {
             let _ = recv_msg(&mut a).await;
         }
-        for _ in 0..6 {
+        for _ in 0..8 {
             let _ = recv_msg(&mut b).await;
         }
         // C se une (party de 3) para que la salida de B no disuelva.
@@ -2358,16 +2390,16 @@ mod tests {
         let _ = recv_msg(&mut c).await;
         let ac = TPacketCGPartyInviteAnswer::new(9001, 1).to_bytes();
         handle_invite_answer(&mut c, &ac).await.expect("C acepta");
-                for _ in 0..2 {
+                for _ in 0..3 {
             let _ = recv_msg(&mut a).await;
         }
-        for _ in 0..2 {
+        for _ in 0..3 {
             let _ = recv_msg(&mut b).await;
         }
-        for _ in 0..8 {
+        for _ in 0..11 {
             let _ = recv_msg(&mut c).await;
         }
-        // B se desconecta (drop de la sesión → guard): A y C ven el REMOVE.
+        // B se desconecta (drop de la sesión → guard): A y C ven el REMOVE+UNLINK.
         drop(b);
         for s in [&mut a, &mut c] {
             let m = recv_msg(s).await;
@@ -2376,6 +2408,8 @@ mod tests {
             };
             assert_eq!(bytes[0], header::GC_PARTY_REMOVE);
             assert_eq!(u32::from_le_bytes(bytes[1..5].try_into().unwrap()), 9002);
+            let m = recv_msg(s).await;
+            assert!(matches!(&m, PartyMsg::Packet(bytes) if bytes[0] == header::GC_PARTY_UNLINK));
         }
         assert_eq!(
             parties().lock().expect("parties lock").get(&9001).map(|p| p.members.len()),
@@ -2383,7 +2417,7 @@ mod tests {
             "el miembro normal solo se va"
         );
         // El LÍDER se desconecta → DISOLUCIÓN (parity party.cpp:494-495):
-        // C recibe REMOVE con su pid PROPIO + INFO disband + LeftParty.
+        // C recibe REMOVE+UNLINK con su pid PROPIO + INFO disband + LeftParty.
         drop(a);
         let m = recv_msg(&mut c).await;
         let PartyMsg::Packet(bytes) = m else {
@@ -2395,6 +2429,8 @@ mod tests {
             9003,
             "disband: el pid PROPIO del miembro"
         );
+        let m = recv_msg(&mut c).await;
+        assert!(matches!(&m, PartyMsg::Packet(bytes) if bytes[0] == header::GC_PARTY_UNLINK));
         let m = recv_msg(&mut c).await;
         let PartyMsg::Packet(bytes) = m else {
             panic!("INFO disband esperado");
@@ -2422,10 +2458,10 @@ mod tests {
         let (mut a, _a_sock) = test_session(9501, "SkillLead", 50, 1, 41, 969600, 278400).await;
         let (mut b, mut b_sock) = test_session(9502, "SkillGuy", 45, 1, 41, 970000, 278500).await;
         make_party(&mut a, &mut b).await;
-        for _ in 0..6 {
+        for _ in 0..8 {
             let _ = recv_msg(&mut a).await;
         }
-        for _ in 0..6 {
+        for _ in 0..8 {
             let _ = recv_msg(&mut b).await;
         }
         // Un miembro NO líder asigna rol → INFO (parity input_main.cpp:2197).
@@ -2498,5 +2534,27 @@ mod tests {
             .await
             .expect("GC_WARP del summon");
         assert_eq!(pkt[0], protocol::world::TPacketGCWarp::HEADER, "GC_WARP");
+    }
+
+    // Verifier LINK (regla 20): al crear party se envía GC_PARTY_LINK (91) — pinta el vid.
+    #[tokio::test]
+    async fn party_link_sent_on_create() {
+        let _guard = test_lock();
+        let (mut a, _a_sock) = test_session(9601, "LinkLead", 50, 1, 41, 969600, 278400).await;
+        let (mut b, _b_sock) = test_session(9602, "LinkGuy", 45, 1, 41, 970000, 278500).await;
+        make_party(&mut a, &mut b).await;
+        let mut got_link = false;
+        for _ in 0..8 {
+            let m = recv_msg(&mut a).await;
+            if let PartyMsg::Packet(b) = &m { if b[0]==header::GC_PARTY_LINK { got_link=true; } }
+        }
+        assert!(got_link, "GC_PARTY_LINK (91) debe enviarse al crear party");
+        // UNLINK al disolver
+        let rm = TPacketCGPartyRemove::new(9601).to_bytes();
+        handle_remove(&mut a, &rm).await.expect("disband OK");
+        let m = recv_msg(&mut a).await;
+        assert!(matches!(&m, PartyMsg::Packet(b) if b[0]==header::GC_PARTY_REMOVE));
+        let m = recv_msg(&mut a).await;
+        assert!(matches!(&m, PartyMsg::Packet(b) if b[0]==header::GC_PARTY_UNLINK), "GC_PARTY_UNLINK al disolver");
     }
 }
