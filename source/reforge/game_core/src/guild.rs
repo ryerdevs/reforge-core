@@ -144,6 +144,34 @@ pub fn add_score(war: GuildWar, guild_id: i64, points: u32) -> GuildWar {
     w
 }
 
+/// Ranking de guilds (stub): puntos acumulados por guild. La fuente legacy
+/// conceptual es el score de guild_war.cpp:178-232 (ver `add_score`); la
+/// persistencia y el ladder wire (CG_GUILD_*) son slice futuro.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GuildRanking { pub guild_id: i64, pub points: u32 }
+
+/// `add_points`: suma `points` a la entrada de `guild_id` (la crea si no
+/// existe) y devuelve la entrada actualizada.
+pub fn add_points(rankings: &mut Vec<GuildRanking>, guild_id: i64, points: u32) -> GuildRanking {
+    match rankings.iter_mut().find(|r| r.guild_id == guild_id) {
+        Some(r) => {
+            r.points += points;
+            *r
+        }
+        None => {
+            let r = GuildRanking { guild_id, points };
+            rankings.push(r);
+            r
+        }
+    }
+}
+
+/// `top_guilds`: la guild con más puntos (empate → la primera en el vector).
+/// `None` si el ladder está vacío.
+pub fn top_guilds(rankings: &[GuildRanking]) -> Option<GuildRanking> {
+    rankings.iter().copied().max_by_key(|r| r.points)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,5 +240,19 @@ mod tests {
         let w = add_score(add_score(w, 2, 3), 2, 2);
         assert_eq!(w.score_b, 5); // 3+2 acumulado en el lado B
         assert_eq!(add_score(w, 99, 1), w); // ajena → sin cambios
+    }
+
+    /// Verifier: FALLA si add_points no crea la entrada o no acumula (o
+    /// duplica guild_id), o si top_guilds miente en vacío o en el máximo.
+    #[test]
+    fn guild_ranking_verifier() {
+        let mut rs: Vec<GuildRanking> = Vec::new();
+        assert_eq!(top_guilds(&rs), None);
+        assert_eq!(add_points(&mut rs, 1, 5), GuildRanking { guild_id: 1, points: 5 });
+        add_points(&mut rs, 2, 3);
+        add_points(&mut rs, 1, 7);
+        assert_eq!(top_guilds(&rs), Some(GuildRanking { guild_id: 1, points: 12 })); // 5+7
+        assert_eq!(rs.len(), 2); // sin entradas duplicadas
+        assert_eq!(add_points(&mut rs, 99, 1).points, 1); // entrada nueva desde cero
     }
 }
