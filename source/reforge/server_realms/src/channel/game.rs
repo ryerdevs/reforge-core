@@ -247,10 +247,8 @@ async fn game_loop(session: &mut Session) -> Result<(), String> {
                         crate::channel::messenger::handle(session, &pkt).await?.into_result()?;
                     }
                     // PARTY (lane 2026-08-16 — `channel/party.rs`): invitación
-                    // (72), respuesta (73), expulsión/salida (74) y modo de
-                    // reparto de exp (78). CG_PARTY_SET_STATE (75) y
-                    // CG_PARTY_USE_SKILL (76) siguen fuera del subset (caen
-                    // en `other`).
+                    // (72), respuesta (73), expulsión/salida (74), estado/rol
+                    // (75), skill de party (76) y modo de reparto de exp (78).
                     header::CG_PARTY_INVITE => {
                         party::handle_invite(session, &pkt).await?.into_result()?;
                     }
@@ -259,6 +257,12 @@ async fn game_loop(session: &mut Session) -> Result<(), String> {
                     }
                     header::CG_PARTY_REMOVE => {
                         party::handle_remove(session, &pkt).await?.into_result()?;
+                    }
+                    header::CG_PARTY_SET_STATE => {
+                        party::handle_set_state(session, &pkt).await?.into_result()?;
+                    }
+                    header::CG_PARTY_USE_SKILL => {
+                        party::handle_use_skill(session, &pkt).await?.into_result()?;
                     }
                     header::CG_PARTY_PARAMETER => {
                         party::handle_parameter(session, &pkt).await?.into_result()?;

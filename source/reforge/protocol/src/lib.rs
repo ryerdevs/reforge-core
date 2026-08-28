@@ -333,6 +333,11 @@ pub mod header {
     /// `HEADER_GC_PARTY_PARAMETER` (packet.h:186 — 83): modo de reparto de
     /// exp (`TPacketGCPartyParameter` 2 B — packet.h:1510-1514).
     pub const GC_PARTY_PARAMETER: u8 = 83;
+    /// `HEADER_GC_PARTY_LINK` (packet.h:197 — 91): enlaza el vid de un
+    /// miembro (`TPacketGCPartyLink` 9 B — packet.h:1557-1562).
+    pub const GC_PARTY_LINK: u8 = 91;
+    /// `HEADER_GC_PARTY_UNLINK` (packet.h:198 — 92): des-enlaza el vid.
+    pub const GC_PARTY_UNLINK: u8 = 92;
     /// `HEADER_GC_SAFEBOX_MONEY_CHANGE` (packet.h:190 — 84; cliente
     /// Packet.h:219): el oro de la caja cambió — `TPacketGCSafeboxMoneyChange`
     /// 5 B (header + long lMoney; el cliente lo lee como DWORD dwMoney —

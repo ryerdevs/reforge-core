@@ -3,9 +3,9 @@
 //! `char.cpp`, `party.cpp`, `char_battle.cpp`).
 //!
 //! Alcance (lane 2026-08-16): CG_PARTY_INVITE (72), CG_PARTY_INVITE_ANSWER
-//! (73), CG_PARTY_REMOVE (74), CG_PARTY_PARAMETER (78) + reparto de exp del
-//! kill entre los miembros presentes. CG_PARTY_SET_STATE (75) y
-//! CG_PARTY_USE_SKILL (76) quedan fuera (siguen en `other` de game.rs).
+//! (73), CG_PARTY_REMOVE (74), CG_PARTY_SET_STATE (75), CG_PARTY_USE_SKILL
+//! (76), CG_PARTY_PARAMETER (78) + reparto de exp del kill entre los
+//! miembros presentes (75/76 añadidos 2026-08-27 — lane "party full").
 //!
 //! El estado vive en el CHANNEL (registros `static` — patrón de
 //! `chat.rs::peers()`): `sessions()` (sesiones activas por vid — el
@@ -39,8 +39,6 @@
 //!   al invitado solo ADD propio + PARAMETER + LINK; sin el ADD el UPDATE no
 //!   pinta nada en el cliente. Divergencia deliberada (mismo resultado
 //!   visible, wire funcional).
-//! - GC_PARTY_LINK/UNLINK (91/92) NO se emiten (el LINK pinta el vid del
-//!   miembro — la ventana del party funciona sin él; sigue para otra lane).
 //! - `percent_hp` = snapshot al unirse/registrarse (el C++ refresca con el
 //!   evento Update() de 3 s, party.cpp:216-233 — no implementado); los
 //!   `affects` del UPDATE van a 0 (sin bonos de rol ni bonus de exp de
@@ -49,7 +47,16 @@
 //!   — tabla CHN por miembros cerca del líder + 5% de party veterana; SIN el
 //!   +30% de item del líder, la variante no trackea equipo) y sin la
 //!   centralización (`GetExpCentralizeCharacter`) — char_battle.cpp:
-//!   2508-2532.
+//!   2508-2532. GAP pendiente (todo "party full"): GC_PARTY_LINK/UNLINK
+//!   (91/92) NO se emiten (el LINK pinta el vid del miembro — la ventana del
+//!   party funciona sin él) y el +30% del líder (UNIQUE_ITEM_PARTY_BONUS_EXP,
+//!   party.cpp:1653-1657) requiere trackear el equipo del líder.
+//! - Roles: cupo 1 por rol (sin liderazgo en la variante — el C++ sin
+//!   leadership tiene m_anMaxRole[ATTACKER]=0, party.cpp:1365-1371, y hasta
+//!   2 con leadership ≥ 40). HealParty sin m_bCanUsePartyHeal (liderazgo ≥
+//!   18) → cooltime LONG de 60 min siempre (party.cpp:1377-1388). Summon sin
+//!   walkability (el C++ elige entre las celdas movibles, GetMovablePosition)
+//!   ni CanSummon — divergencias deliberadas del subset (sin liderazgo).
 //! - Sin dungeon/observer/block-mode/`IsEnablePCParty` (sistemas que esta
 //!   variante no tiene — los checks del C++ se omiten; el check de nivel
 //!   ±30 y el de imperio SÍ están, parity `IsPartyJoinableCondition`).
@@ -65,8 +72,9 @@ use game_core::ecs::{CombatIntent, Intent};
 use protocol::header;
 use protocol::world::{
     TPacketCGPartyInvite, TPacketCGPartyInviteAnswer, TPacketCGPartyParameter,
-    TPacketCGPartyRemove, TPacketGCPartyAdd, TPacketGCPartyInvite, TPacketGCPartyParameter,
-    TPacketGCPartyRemove, TPacketGCPartyUpdate,
+    TPacketCGPartyRemove, TPacketCGPartySetState, TPacketCGPartyUseSkill,
+    TPacketGCPartyAdd, TPacketGCPartyInvite, TPacketGCPartyParameter,
+    TPacketGCPartyRemove, TPacketGCPartyUpdate, TPacketGCWarp,
 };
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -93,6 +101,34 @@ pub const PARTY_EXP_DISTRIBUTION_PARITY: u8 = 1;
 /// `PARTY_EXP_DISTRIBUTION_MAX_NUM` (party.h:31) — gate del SetParameter
 /// (party.cpp:1565-1571: modo inválido → sys_err + return).
 const PARTY_EXP_DISTRIBUTION_MAX_NUM: u8 = 2;
+/// `PARTY_ROLE_ATTACKER` (party.h:19) — primer rol asignable.
+const PARTY_ROLE_ATTACKER: u8 = 2;
+/// `PARTY_ROLE_DEFENDER` (party.h:24) — último rol asignable (HASTE 6,
+/// DEFENDER 7 — party.h:19-25).
+const PARTY_ROLE_DEFENDER: u8 = 7;
+/// `PARTY_SKILL_HEAL = 1` / `PARTY_SKILL_WARP = 2` (packet.h:1585-1589).
+const PARTY_SKILL_HEAL: u8 = 1;
+const PARTY_SKILL_WARP: u8 = 2;
+/// `PARTY_HEAL_COOLTIME_LONG = 60` (party.h:9) — MINUTOS del cooltime de la
+/// curación SIN liderazgo (party.cpp:1382: `m_iLeadership >= 40 ? SHORT :
+/// LONG`; liderazgo 0 → LONG — la variante no trackea liderazgo).
+const PARTY_HEAL_COOLTIME_LONG_MIN: u64 = 60;
+/// Anillo de invocación `xy[12]` de `SummonToLeader` (party.cpp:1075-1089)
+/// — offsets en UNIDADES alrededor del líder.
+const SUMMON_RING: [(i32, i32); 12] = [
+    (250, 0),
+    (216, 125),
+    (125, 216),
+    (0, 250),
+    (-125, 216),
+    (-216, 125),
+    (-250, 0),
+    (-216, -125),
+    (-125, -216),
+    (0, -250),
+    (125, -216),
+    (216, -125),
+];
 /// Límite de nivel del invitado (parity `__party_can_join_by_level`,
 /// char.cpp:4757-4760: `abs(leader - quest) <= 30`).
 const PARTY_LEVEL_LIMIT: i16 = 30;
@@ -184,6 +220,13 @@ pub enum PartyMsg {
     /// El jugador ya no está en el party (expulsión/disolución/desconexión
     /// de otro miembro) — limpia `Session.party_id`.
     LeftParty,
+    /// Curación de party (`HealParty` — party.cpp:1044-1071): HP/SP a
+    /// máximo — se aplica en la sesión local (parity `PointChange(POINT_HP/
+    /// POINT_SP, max-current)`).
+    HealFull,
+    /// Invocación del líder (`SummonToLeader` → Show, party.cpp:1134-1136):
+    /// GC_WARP al anillo — el cliente reconecta (flujo DirectEnter).
+    Summon { x: i32, y: i32 },
 }
 
 /// Peer de sesión del party: lo que OTRA sesión necesita — el objetivo de
@@ -322,6 +365,10 @@ pub struct PartyState {
     /// Modo de reparto de exp (`EPartyExpDistributionModes` — default
     /// NON_PARITY, party.cpp:249). Lo cambia CG_PARTY_PARAMETER (78).
     pub exp_mode: u8,
+    /// Instante en que la curación de party vuelve a estar disponible
+    /// (parity `m_dwPartyHealTime` + cooltime → `m_bPartyHealReady`,
+    /// party.cpp:264-266 + 1382-1388: al crear la party NO está lista).
+    heal_at: Instant,
     members: HashMap<u32, PartyMember>,
 }
 
@@ -807,6 +854,9 @@ pub async fn handle_invite_answer(session: &mut Session, pkt: &[u8]) -> Result<O
                 leader_pid: p.leader_vid,
                 created_at: Instant::now(),
                 exp_mode: PARTY_EXP_DISTRIBUTION_NON_PARITY,
+                // Parity party.cpp:264-265: m_dwPartyHealTime = now y
+                // m_bPartyHealReady = false → el heal llega a los 60 min.
+                heal_at: Instant::now() + Duration::from_secs(PARTY_HEAL_COOLTIME_LONG_MIN * 60),
                 members: HashMap::new(),
             };
             party.members.insert(
@@ -937,6 +987,225 @@ pub async fn handle_remove(session: &mut Session, pkt: &[u8]) -> Result<Outcome,
         session.party_id = None;
     } else {
         info(session, "<Party> You can't kick other party members.").await?;
+    }
+    Ok(Outcome::Continue)
+}
+
+/// CG_PARTY_SET_STATE (75, 7 B: header + pid + by_role + flag) — parity
+/// `PartySetState` (input_main.cpp:2184-2239 → `SetRole` party.cpp:934-992):
+/// el LÍDER asigna (flag=1) o revoca (flag=0) un rol (ATTACKER..DEFENDER
+/// 2..=7) a un miembro. Gates del C++: sin party → silencioso; no líder →
+/// INFO; pid no miembro → INFO; rol inválido → sys_err silencioso; cupo
+/// lleno / miembro con rol ya (SetRole false) → silencioso. Éxito →
+/// GC_PARTY_UPDATE con el rol nuevo a TODOS (SendPartyInfoOneToAll → Build-
+/// UpdatePartyPacket, party.cpp:990 + char.cpp:5705-5712). Sin GD_PARTY_
+/// STATE_CHANGE (esta variante no persiste parties — GAP del doc del módulo).
+pub async fn handle_set_state(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String> {
+    let Ok(p) = TPacketCGPartySetState::from_bytes(pkt) else {
+        eprintln!(
+            "server_realms: channel conn {}: CG_PARTY_SET_STATE malformado ({})",
+            session.conn_id,
+            pkt.len()
+        );
+        return Ok(Outcome::Continue);
+    };
+    let (my_vid, my_pid) = (session.player_vid(), session.row().id as u32);
+    let Some(party_id) = parties()
+        .lock()
+        .expect("parties lock")
+        .values()
+        .find(|pt| pt.members.contains_key(&my_vid))
+        .map(|pt| pt.id)
+    else {
+        return Ok(Outcome::Continue);
+    };
+    if !parties()
+        .lock()
+        .expect("parties lock")
+        .get(&party_id)
+        .is_some_and(|pt| pt.leader_pid == my_pid)
+    {
+        info(session, "<Party> Only the party leader can set member states.").await?;
+        return Ok(Outcome::Continue);
+    }
+    if !is_member(party_id, p.pid) {
+        info(session, "<Party> The target is not a party member.").await?;
+        return Ok(Outcome::Continue);
+    }
+    if !(PARTY_ROLE_ATTACKER..=PARTY_ROLE_DEFENDER).contains(&p.by_role) {
+        eprintln!(
+            "server_realms: channel conn {}: CG_PARTY_SET_STATE rol inválido {} \
+             (parity sys_err input_main.cpp:2235-2237)",
+            session.conn_id, p.by_role
+        );
+        return Ok(Outcome::Continue);
+    }
+    let deliveries: Vec<(UnboundedSender<PartyMsg>, Vec<PartyMsg>)> = {
+        let mut ps = parties().lock().expect("parties lock");
+        let Some(party) = ps.get_mut(&party_id) else {
+            return Ok(Outcome::Continue);
+        };
+        let Some(member) = party.members.get(&p.pid) else {
+            return Ok(Outcome::Continue);
+        };
+        // SetRole (party.cpp:945-988): set → miembro NORMAL y cupo libre
+        // (1 por rol — sin liderazgo en la variante, divergencia doc.);
+        // unset → miembro con rol (NORMAL/LEADER → falla silenciosa).
+        let ok = if p.flag == 1 {
+            member.role == PARTY_ROLE_NORMAL
+                && !party.members.values().any(|m| m.role == p.by_role)
+        } else {
+            member.role != PARTY_ROLE_NORMAL && member.role != PARTY_ROLE_LEADER
+        };
+        if !ok {
+            return Ok(Outcome::Continue);
+        }
+        let new_role = if p.flag == 1 { p.by_role } else { PARTY_ROLE_NORMAL };
+        let hp = member.hp_percent;
+        party.members.get_mut(&p.pid).expect("miembro chequeado").role = new_role;
+        let bytes = TPacketGCPartyUpdate::new(p.pid, new_role, hp).to_bytes().to_vec();
+        party
+            .members
+            .values()
+            .filter_map(|m| {
+                m.out
+                    .clone()
+                    .map(|out| (out, vec![PartyMsg::Packet(bytes.clone())]))
+            })
+            .collect()
+    };
+    for (out, msgs) in deliveries {
+        deliver(&out, msgs);
+    }
+    eprintln!(
+        "server_realms: channel conn {}: {} rol {} → {} ({})",
+        session.conn_id,
+        session.row().name,
+        p.pid,
+        if p.flag == 1 { p.by_role } else { PARTY_ROLE_NORMAL },
+        if p.flag == 1 { "on" } else { "off" }
+    );
+    Ok(Outcome::Continue)
+}
+
+/// CG_PARTY_USE_SKILL (76, 6 B: header + by_skill_index + vid) — parity
+/// `PartyUseSkill` (input_main.cpp:2388-2415): el LÍDER usa una skill de
+/// party. HEAL (1) → `HealParty` (party.cpp:1044-1071): HP/SP llenos a los
+/// miembros ONLINE a < PARTY_DEFAULT_RANGE del líder; cooltime 60 min
+/// (parity sin liderazgo → LONG, party.cpp:1382; sin ready → no-op
+/// silencioso). WARP (2) → `SummonToLeader` (party.cpp:1073-1137): el
+/// miembro `vid` salta al anillo del líder (SUMMON_RING, índice por pid —
+/// el C++ elige random entre las movibles; divergencia doc.); vid no
+/// miembro → INFO (Find falla → "can't find"). Otro índice → sys_err
+/// silencioso (parity).
+pub async fn handle_use_skill(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String> {
+    let Ok(p) = TPacketCGPartyUseSkill::from_bytes(pkt) else {
+        eprintln!(
+            "server_realms: channel conn {}: CG_PARTY_USE_SKILL malformado ({})",
+            session.conn_id,
+            pkt.len()
+        );
+        return Ok(Outcome::Continue);
+    };
+    let (my_vid, my_pid) = (session.player_vid(), session.row().id as u32);
+    let Some(party_id) = parties()
+        .lock()
+        .expect("parties lock")
+        .values()
+        .find(|pt| pt.members.contains_key(&my_vid))
+        .map(|pt| pt.id)
+    else {
+        return Ok(Outcome::Continue);
+    };
+    if !parties()
+        .lock()
+        .expect("parties lock")
+        .get(&party_id)
+        .is_some_and(|pt| pt.leader_pid == my_pid)
+    {
+        info(session, "<Party> Only the party leader can use party skills.").await?;
+        return Ok(Outcome::Continue);
+    }
+    match p.by_skill_index {
+        PARTY_SKILL_HEAL => {
+            let done = {
+                let mut ps = parties().lock().expect("parties lock");
+                let Some(party) = ps.get_mut(&party_id) else {
+                    return Ok(Outcome::Continue);
+                };
+                if party.heal_at > Instant::now() {
+                    return Ok(Outcome::Continue); // m_bPartyHealReady == false
+                }
+                let Some(leader) = party.members.get(&party.leader_pid) else {
+                    return Ok(Outcome::Continue);
+                };
+                let mut n = 0;
+                for m in party.members.values() {
+                    if let Some(out) = &m.out
+                        && m.map_index == leader.map_index
+                        && game_core::combat::distance_approx(m.x - leader.x, m.y - leader.y)
+                            < PARTY_DEFAULT_RANGE
+                    {
+                        let _ = out.send(PartyMsg::HealFull);
+                        n += 1;
+                    }
+                }
+                party.heal_at = Instant::now() + Duration::from_secs(PARTY_HEAL_COOLTIME_LONG_MIN * 60);
+                n
+            };
+            eprintln!(
+                "server_realms: channel conn {}: {} curó al party ({done} miembros)",
+                session.conn_id,
+                session.row().name
+            );
+        }
+        PARTY_SKILL_WARP => {
+            // SummonToLeader: el vid debe ser un MIEMBRO (parity Find →
+            // "can't find the character to summon"; memberMap.contains,
+            // party.cpp:1097-1109). El INFO es FUERA del lock (la guard no
+            // es Send — patrón del módulo).
+            let summon = {
+                let ss = sessions().lock().expect("party peers lock");
+                ss.get(&p.vid).map(|peer| peer.pid)
+            };
+            let Some(target_pid) = summon else {
+                info(session, "<Party> The character you want to summon can't be found.").await?;
+                return Ok(Outcome::Continue);
+            };
+            let summon = {
+                let ps = parties().lock().expect("parties lock");
+                let Some(party) = ps.get(&party_id) else {
+                    return Ok(Outcome::Continue);
+                };
+                match party.members.get(&target_pid) {
+                    Some(member) => match (member.out.clone(), party.members.get(&party.leader_pid))
+                    {
+                        (Some(out), Some(leader)) => {
+                            let (dx, dy) = SUMMON_RING[(target_pid % 12) as usize];
+                            Some((out, leader.x + dx, leader.y + dy))
+                        }
+                        _ => None,
+                    },
+                    None => None,
+                }
+            };
+            let Some((out, x, y)) = summon else {
+                info(session, "<Party> The character you want to summon can't be found.").await?;
+                return Ok(Outcome::Continue);
+            };
+            deliver(&out, vec![PartyMsg::Summon { x, y }]);
+            eprintln!(
+                "server_realms: channel conn {}: {} invocó a {} → {x},{y}",
+                session.conn_id,
+                session.row().name,
+                target_pid
+            );
+        }
+        _ => eprintln!(
+            "server_realms: channel conn {}: CG_PARTY_USE_SKILL índice {} \
+             desconocido (parity sys_err input_main.cpp:2414)",
+            session.conn_id, p.by_skill_index
+        ),
     }
     Ok(Outcome::Continue)
 }
@@ -1134,6 +1403,48 @@ pub async fn handle_msg(session: &mut Session, msg: PartyMsg) -> Result<(), Stri
             session.party_id = None;
             pvp_sync_party(session, None);
             Ok(())
+        }
+        PartyMsg::HealFull => {
+            // Parity PointChange(POINT_HP, MaxHP-HP) + POINT_SP
+            // (party.cpp:1064-1065): curación COMPLETA; GC_POINTS +
+            // persistencia (el mismo camino que gain_exp).
+            let max = game_core::packets::compute_max_points(session.row())
+                .map_err(|e| format!("HealFull: {e}"))?;
+            session.row_mut().hp = max[0];
+            session.row_mut().mp = max[1];
+            session
+                .send(
+                    &game_core::packets::points_packet(
+                        session.row(),
+                        session.next_exp,
+                        &session.battle,
+                    )
+                    .to_bytes(),
+                )
+                .await
+                .map_err(|e| format!("enviando GC_POINTS (heal): {e}"))?;
+            session.save();
+            Ok(())
+        }
+        PartyMsg::Summon { x, y } => {
+            // Parity WarpSet (gm.rs `goto` — bug C26 del revive): mover +
+            // persistir ANTES del GC_WARP (el DirectEnter recarga el row).
+            {
+                let row = session.row_mut();
+                row.x = x;
+                row.y = y;
+            }
+            session.motion = Some(game_core::movement::initial(x, y));
+            session.save();
+            update_position(session.player_vid(), x, y);
+            let (ip, port) = super::parse_listen(&session.config.listen)
+                .map_err(|e| format!("summon: {e}"))?;
+            let addr = game_core::packets::ip_to_inet_addr(&ip)
+                .map_err(|e| format!("summon: {e}"))?;
+            session
+                .send(&TPacketGCWarp::new(x, y, addr, port).to_bytes())
+                .await
+                .map_err(|e| format!("enviando GC_WARP (summon): {e}"))
         }
     }
 }
@@ -2093,5 +2404,99 @@ mod tests {
         assert!(matches!(&m, PartyMsg::LeftParty));
         // El registro queda vacío.
         assert!(parties().lock().expect("parties lock").is_empty());
+    }
+
+    // ------------------------------------------------------------------
+    // Roles + skills de party (CG_PARTY_SET_STATE 75 / CG_PARTY_USE_SKILL 76)
+    // ------------------------------------------------------------------
+
+    // Verifier (regla 20): 75/76 MANEJADOS — el líder asigna rol (broadcast
+    // GC_PARTY_UPDATE a todos), la curación llena HP/SP (con cooltime) y la
+    // invocación mueve al miembro al anillo + GC_WARP. Mutations que fallan:
+    // des-cablear 75/76 en game.rs (caen a `other` → sin INFO/sin UPDATE/sin
+    // heal/sin warp — los asserts de abajo se quedan sin mensaje) o quitar
+    // los gates (no-líder → sin INFO; cupo → broadcast espurio).
+    #[tokio::test]
+    async fn party_role_heal_summon_wired() {
+        let _guard = test_lock();
+        let (mut a, _a_sock) = test_session(9501, "SkillLead", 50, 1, 41, 969600, 278400).await;
+        let (mut b, mut b_sock) = test_session(9502, "SkillGuy", 45, 1, 41, 970000, 278500).await;
+        make_party(&mut a, &mut b).await;
+        for _ in 0..6 {
+            let _ = recv_msg(&mut a).await;
+        }
+        for _ in 0..6 {
+            let _ = recv_msg(&mut b).await;
+        }
+        // Un miembro NO líder asigna rol → INFO (parity input_main.cpp:2197).
+        let set = TPacketCGPartySetState::new(9502, PARTY_ROLE_ATTACKER, 1).to_bytes();
+        handle_set_state(&mut b, &set).await.expect("set_state OK");
+        let info_b = read_info(&mut b_sock).await;
+        assert_eq!(info_b[0], header::GC_CHAT);
+        assert!(String::from_utf8_lossy(&info_b[9..]).contains("leader"));
+        // El LÍDER asigna ATTACKER (2) a B → AMBOS ven el UPDATE con rol 2.
+        handle_set_state(&mut a, &set).await.expect("set_state OK");
+        for s in [&mut a, &mut b] {
+            let m = recv_msg(s).await;
+            let PartyMsg::Packet(bytes) = m else {
+                panic!("GC_PARTY_UPDATE esperado (rol asignado)");
+            };
+            assert_eq!(bytes[0], header::GC_PARTY_UPDATE);
+            assert_eq!(u32::from_le_bytes(bytes[1..5].try_into().unwrap()), 9502);
+            assert_eq!(bytes[5], PARTY_ROLE_ATTACKER, "rol nuevo en el UPDATE");
+        }
+        // B ya tiene rol → SetRole false → silencioso (party.cpp:950-951).
+        handle_set_state(&mut a, &set).await.expect("set_state OK");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), a.party_rx.recv())
+                .await
+                .is_err(),
+            "rol ocupado: sin broadcast"
+        );
+        // HEAL: adelantar el cooltime → B recibe HealFull → HP/SP a máximo.
+        {
+            let mut ps = parties().lock().expect("parties lock");
+            ps.get_mut(&9501).expect("party").heal_at = Instant::now() - Duration::from_secs(1);
+        }
+        let heal = TPacketCGPartyUseSkill::new(PARTY_SKILL_HEAL, 0).to_bytes();
+        handle_use_skill(&mut a, &heal).await.expect("heal OK");
+        let m = recv_msg(&mut b).await;
+        assert!(matches!(m, PartyMsg::HealFull), "curación al miembro");
+        apply_msg(&mut b, m).await;
+        let max = game_core::packets::compute_max_points(b.row()).expect("max");
+        assert_eq!(b.row().hp, max[0], "HP lleno (dummy 100 → max)");
+        assert_eq!(b.row().mp, max[1], "SP lleno");
+        // El GC_POINTS del heal (1021 B fijos — patrón del test de gain_exp).
+        let mut pts = vec![0u8; protocol::world::TPacketGCPoints::SIZE];
+        b_sock
+            .read_exact(&mut pts)
+            .await
+            .expect("GC_POINTS del heal");
+        assert_eq!(pts[0], protocol::world::TPacketGCPoints::HEADER, "GC_POINTS");
+        // Cooltime activo (60 min — parity sin liderazgo) → segundo heal no-op.
+        handle_use_skill(&mut a, &heal).await.expect("heal OK");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), b.party_rx.recv())
+                .await
+                .is_err(),
+            "cooltime: sin segunda curación"
+        );
+        // WARP: el líder invoca a B → posición = anillo SUMMON_RING + GC_WARP.
+        let warp = TPacketCGPartyUseSkill::new(PARTY_SKILL_WARP, 9502).to_bytes();
+        let old = (b.row().x, b.row().y);
+        handle_use_skill(&mut a, &warp).await.expect("summon OK");
+        let m = recv_msg(&mut b).await;
+        let PartyMsg::Summon { x, y } = m else {
+            panic!("Summon esperado");
+        };
+        apply_msg(&mut b, m).await;
+        assert_ne!((b.row().x, b.row().y), old, "el miembro se movió");
+        assert_eq!((b.row().x, b.row().y), (x, y), "posición = el anillo");
+        let mut pkt = vec![0u8; protocol::world::TPacketGCWarp::SIZE];
+        b_sock
+            .read_exact(&mut pkt)
+            .await
+            .expect("GC_WARP del summon");
+        assert_eq!(pkt[0], protocol::world::TPacketGCWarp::HEADER, "GC_WARP");
     }
 }

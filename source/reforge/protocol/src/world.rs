@@ -1649,6 +1649,192 @@ impl TPacketCGPartyParameter {
     }
 }
 
+/// `TPacketCGPartySetState` (7 B, header 75 — `Packet.h:875-881`): el líder
+/// asigna/revoca un rol (`by_role` 2..=7, `flag` on/off) a un miembro `pid`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketCGPartySetState {
+    pub header: u8,
+    pub pid: u32,
+    pub by_role: u8,
+    pub flag: u8,
+}
+
+impl TPacketCGPartySetState {
+    pub const SIZE: usize = 7;
+    pub const HEADER: u8 = header::CG_PARTY_SET_STATE;
+
+    pub fn new(pid: u32, by_role: u8, flag: u8) -> Self {
+        Self {
+            header: Self::HEADER,
+            pid,
+            by_role,
+            flag,
+        }
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        Ok(Self {
+            header: data[0],
+            pid: rd_u32(data, 1),
+            by_role: data[5],
+            flag: data[6],
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        b[1..5].copy_from_slice(&self.pid.to_le_bytes());
+        b[5] = self.by_role;
+        b[6] = self.flag;
+        b
+    }
+}
+
+/// `TPacketCGPartyUseSkill` (6 B, header 76 — `Packet.h:897-902`): el líder
+/// usa una skill de party (`by_skill_index` — `PARTY_SKILL_HEAL=1`/`WARP=2`;
+/// el vid objetivo del WARP).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketCGPartyUseSkill {
+    pub header: u8,
+    pub by_skill_index: u8,
+    pub vid: u32,
+}
+
+impl TPacketCGPartyUseSkill {
+    pub const SIZE: usize = 6;
+    pub const HEADER: u8 = header::CG_PARTY_USE_SKILL;
+
+    pub fn new(by_skill_index: u8, vid: u32) -> Self {
+        Self {
+            header: Self::HEADER,
+            by_skill_index,
+            vid,
+        }
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        Ok(Self {
+            header: data[0],
+            by_skill_index: data[1],
+            vid: rd_u32(data, 2),
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        b[1] = self.by_skill_index;
+        b[2..6].copy_from_slice(&self.vid.to_le_bytes());
+        b
+    }
+}
+
+/// `TPacketGCPartyLink` (9 B, header 91 — `packet.h:1557-1562`): el cliente
+/// pinta el vid del miembro en la ventana del party (parity
+/// `SendPartyLinkOneToAll`/`SendPartyLinkAllToOne`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketGCPartyLink {
+    pub header: u8,
+    pub pid: u32,
+    pub vid: u32,
+}
+
+impl TPacketGCPartyLink {
+    pub const SIZE: usize = 9;
+    pub const HEADER: u8 = header::GC_PARTY_LINK;
+
+    pub fn new(pid: u32, vid: u32) -> Self {
+        Self {
+            header: Self::HEADER,
+            pid,
+            vid,
+        }
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        Ok(Self {
+            header: data[0],
+            pid: rd_u32(data, 1),
+            vid: rd_u32(data, 5),
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        b[1..5].copy_from_slice(&self.pid.to_le_bytes());
+        b[5..9].copy_from_slice(&self.vid.to_le_bytes());
+        b
+    }
+}
+
+/// `TPacketGCPartyUnlink` (9 B, header 92 — `packet.h:1564-1569`): el vid
+/// del miembro ya no se pinta (parity `SendPartyUnlinkOneToAll`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TPacketGCPartyUnlink {
+    pub header: u8,
+    pub pid: u32,
+    pub vid: u32,
+}
+
+impl TPacketGCPartyUnlink {
+    pub const SIZE: usize = 9;
+    pub const HEADER: u8 = header::GC_PARTY_UNLINK;
+
+    pub fn new(pid: u32, vid: u32) -> Self {
+        Self {
+            header: Self::HEADER,
+            pid,
+            vid,
+        }
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::SIZE {
+            return Err(ProtocolError::BadLength {
+                expected: Self::SIZE,
+                got: data.len(),
+            });
+        }
+        Ok(Self {
+            header: data[0],
+            pid: rd_u32(data, 1),
+            vid: rd_u32(data, 5),
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut b = [0u8; Self::SIZE];
+        b[0] = self.header;
+        b[1..5].copy_from_slice(&self.pid.to_le_bytes());
+        b[5..9].copy_from_slice(&self.vid.to_le_bytes());
+        b
+    }
+}
+
 /// `TPacketGCPartyInvite` (5 B, header 77 — `packet.h:1529-1533` +
 /// `Packet.h:2051-2055`): la invitación al objetivo. `leader_vid` = el VID
 /// del líder (el cliente busca la instancia por ESE vid para pintar la
@@ -3115,6 +3301,42 @@ mod tests {
         assert_eq!(TPacketCGPartyParameter::SIZE, 2);
         assert_eq!(par.to_bytes(), [78, 1], "CG_PARTY_PARAMETER + modo");
         assert_eq!(TPacketCGPartyParameter::from_bytes(&[78, 1]).unwrap(), par);
+
+        // CG_PARTY_SET_STATE (75, 7 B) y CG_PARTY_USE_SKILL (76, 6 B).
+        let st = TPacketCGPartySetState::new(9, 2, 1);
+        assert_eq!(TPacketCGPartySetState::SIZE, 7);
+        let b = st.to_bytes();
+        assert_eq!(b[0], 75, "CG_PARTY_SET_STATE");
+        assert_eq!(&b[1..5], &9u32.to_le_bytes(), "pid");
+        assert_eq!(b[5], 2, "by_role");
+        assert_eq!(b[6], 1, "flag");
+        assert_eq!(TPacketCGPartySetState::from_bytes(&b).unwrap(), st);
+
+        let us = TPacketCGPartyUseSkill::new(1, 42);
+        assert_eq!(TPacketCGPartyUseSkill::SIZE, 6);
+        let b = us.to_bytes();
+        assert_eq!(b[0], 76, "CG_PARTY_USE_SKILL");
+        assert_eq!(b[1], 1, "by_skill_index");
+        assert_eq!(&b[2..6], &42u32.to_le_bytes(), "vid");
+        assert_eq!(TPacketCGPartyUseSkill::from_bytes(&b).unwrap(), us);
+
+        // GC_PARTY_LINK/UNLINK (91/92, 9 B — packet.h:1557-1569).
+        for (h, bytes) in [
+            (91u8, TPacketGCPartyLink::new(9, 42).to_bytes()),
+            (92u8, TPacketGCPartyUnlink::new(9, 42).to_bytes()),
+        ] {
+            assert_eq!(bytes[0], h, "header {h}");
+            assert_eq!(bytes.len(), 9);
+            assert_eq!(u32::from_le_bytes(bytes[5..9].try_into().unwrap()), 42, "vid");
+        }
+        assert_eq!(
+            TPacketGCPartyLink::from_bytes(&TPacketGCPartyLink::new(1, 2).to_bytes()).unwrap(),
+            TPacketGCPartyLink::new(1, 2)
+        );
+        assert_eq!(
+            TPacketGCPartyUnlink::from_bytes(&TPacketGCPartyUnlink::new(1, 2).to_bytes()).unwrap(),
+            TPacketGCPartyUnlink::new(1, 2)
+        );
 
         // S→C (packet.h del server).
         let ginv = TPacketGCPartyInvite::new(50_001);
