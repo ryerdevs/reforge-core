@@ -319,6 +319,24 @@ async fn handle_player_command(
             not_implemented(session, &command).await?;
             Ok(Outcome::Continue)
         }
+        // Recién añadidos (674296c): routing real → dispatch GM de handle()
+        // (transfer LOW_WIZARD, ipurge HIGH_WIZARD). TODO: lógica completa.
+        GmCommand::Transfer { .. } => {
+            eprintln!(
+                "server_realms: channel conn {}: /transfer de {} en path \
+                 jugador — inalcanzable (TODO)",
+                session.conn_id, session.row().name
+            );
+            Ok(Outcome::Continue)
+        }
+        GmCommand::Ipurge { .. } => {
+            eprintln!(
+                "server_realms: channel conn {}: /ipurge de {} en path \
+                 jugador — inalcanzable (TODO)",
+                session.conn_id, session.row().name
+            );
+            Ok(Outcome::Continue)
+        }
         // Inalcanzable: los GM de verdad (warp/item/notice/level/mob/kill/
         // purge/goto) van por el dispatch de handle() — el routing manda
         // aquí SOLO los GM_PLAYER (nivel 0). Exhaustividad por si el
