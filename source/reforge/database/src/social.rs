@@ -8,9 +8,10 @@
 //! | Messenger Add | `messenger_manager.cpp:214` | `MessengerRepo::add` / `add_mutated` | INSERT idempotente (`ON CONFLICT (account, companion) DO NOTHING` — PK natural; ver messenger.rs). |
 //! | Messenger Remove | `messenger_manager.cpp:273-274` | `MessengerRepo::remove` | DELETE por PK. |
 //! | Guild Load (boot) | `db/src/GuildManager.cpp:161` (`CGuildManager::Initialize`) | `GuildRepo::load_all` | 8 columnas (`id, name, ladder_point, win, draw, loss, gold, level`) — `ParseResult` del boot del db. |
-//! | Guild Load (uno) | `GuildManager.cpp:191` (`CGuildManager::Load`) | `GuildRepo::load` | Mismas 8 columnas + `WHERE id = $1`. |
+//! | Guild Load (uno) | `GuildManager.cpp:191` (`CGuildManager::Load`) | `GuildRepo::load_guild` | Mismas 8 columnas + `WHERE id = $1`. |
 //! | QID_GUILD_RANKING (20) | `GuildManager.cpp:201` (`QueryRanking`) | `GuildRepo::ranking` | `SELECT id, name, ladder_point ... ORDER BY ladder_point DESC LIMIT 20` (top 20). |
 //! | Grade upsert (slice F4) | `guild.cpp:104-111,799,838` | `GuildRepo::upsert_grade` | `player.guild_grade` (PK guild_id+grade): INSERT + `ON CONFLICT DO UPDATE` name/auth; auth serializado a SET textual (el legacy escribia `%d`, MariaDB canonicalizaba). |
+//! | Guild save (upsert) | `GuildManager.cpp:340/354/368/727/762` + `guild.cpp:632` | `GuildRepo::save_guild` | 8 columnas del load: INSERT + `ON CONFLICT (id) DO UPDATE` — consolida los UPDATEs parciales legacy (win/loss/draw/ladder_point/gold/level) en una sentencia idempotente. |
 //!
 //! # Estado de migracion (verificado en pg_catalog 2026-08-13)
 //!
@@ -66,6 +67,19 @@ const GUILD_GRADE_UPSERT_SQL: &str = "\
 INSERT INTO player.guild_grade (guild_id, grade, name, auth) VALUES ($1, $2, $3, $4)
 ON CONFLICT (guild_id, grade) DO UPDATE SET name = EXCLUDED.name, auth = EXCLUDED.auth";
 
+/// Upsert de guild (PK id): INSERT + ON CONFLICT (id) DO UPDATE sobre las 8
+/// columnas del load — consolida los UPDATEs parciales legacy (win/loss/draw
+/// `GuildManager.cpp:340/354/368`, ladder_point :727, gold :762,
+/// level/exp/skill_point `guild.cpp:632`) en una sentencia idempotente. El
+/// resto de columnas (master/sp/skill/token): intactas en UPDATE, defaults en
+/// INSERT (crear con master = slice futuro, `guild.cpp:84-99`).
+const GUILD_UPSERT_SQL: &str = "\
+INSERT INTO player.guild (id, name, ladder_point, win, draw, loss, gold, level)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT (id) DO UPDATE SET
+  name = EXCLUDED.name, ladder_point = EXCLUDED.ladder_point, win = EXCLUDED.win,
+  draw = EXCLUDED.draw, loss = EXCLUDED.loss, gold = EXCLUDED.gold, level = EXCLUDED.level";
+
 /// Literales SET en orden de definicion (canonicalizacion de MariaDB del SET;
 /// parity bitmask guild.h:92-95). El typo `REMOVE_MEMEBER` es legacy
 /// (guild.cpp:106/838) y el CHECK de guild_grade lo exige literal.
@@ -108,13 +122,25 @@ impl GuildRepo {
     }
 
     /// Load de una guild (`GuildManager.cpp:191`). `None` = no existe.
-    pub async fn load(&self, id: i64) -> Result<Option<GuildRow>, String> {
+    pub async fn load_guild(&self, id: i64) -> Result<Option<GuildRow>, String> {
         let client = self.connect().await?;
         let rows = client
             .query(GUILD_LOAD_SQL, &[&id])
             .await
             .map_err(|e| pg_err("GUILD_LOAD", &e))?;
         rows.first().map(guild_from_row).transpose()
+    }
+
+    /// Upsert de una guild (`GuildRow`, las 8 columnas del load): INSERT si
+    /// `id` no existe, UPDATE de las 8 columnas si existe. Idempotente.
+    pub async fn save_guild(&self, guild: &GuildRow) -> Result<(), String> {
+        let client = self.connect().await?;
+        let GuildRow { id, name, ladder_point, win, draw, loss, gold, level } = guild;
+        client
+            .execute(GUILD_UPSERT_SQL, &[id, name, ladder_point, win, draw, loss, gold, level])
+            .await
+            .map(|_| ())
+            .map_err(|e| pg_err("GUILD_UPSERT", &e))
     }
 
     /// Ranking (QID_GUILD_RANKING, `GuildManager.cpp:201`): top 20 por
@@ -242,5 +268,27 @@ mod tests {
         assert_eq!(auth_to_set(6), "REMOVE_MEMEBER,NOTICE");
         assert_eq!(auth_to_set(10), "REMOVE_MEMEBER,USE_SKILL");
         assert_eq!(auth_to_set(15), "ADD_MEMBER,REMOVE_MEMEBER,NOTICE,USE_SKILL");
+    }
+
+    /// Verifier live-PG (gated, patrón locale.rs): save→load roundtrip sobre
+    /// las 8 columnas y el camino ON CONFLICT (2º save con valores distintos
+    /// → load refleja el UPDATE, no una 2ª fila). FALLA si se revierte el
+    /// save_guild/load_guild o si el upsert no actualiza.
+    #[tokio::test]
+    #[ignore = "requiere PG real: cargo test --package database -- --ignored"]
+    async fn save_guild_roundtrip_live_pg() {
+        let pg = std::env::var("DATABASE_TEST_PG").unwrap_or_else(|_| {
+            "host=127.0.0.1 port=5432 user=mt2 password=mt2 dbname=metin2".to_string()
+        });
+        let repo = GuildRepo::new(crate::pool::new_pool(&pg, 2).expect("pool"));
+        let id = 9_000_000_001; // rango de test (ids reales u32 << 9e9)
+        let g = GuildRow { id, name: "Verifier".into(), ladder_point: 7, win: 3, draw: 1, loss: 2, gold: 500, level: 3 };
+        repo.save_guild(&g).await.expect("save INSERT");
+        assert_eq!(repo.load_guild(id).await.expect("load"), Some(g.clone()));
+        let g2 = GuildRow { ladder_point: 9, gold: 600, ..g };
+        repo.save_guild(&g2).await.expect("save ON CONFLICT");
+        assert_eq!(repo.load_guild(id).await.expect("load"), Some(g2));
+        repo.connect().await.expect("pool")
+            .execute("DELETE FROM player.guild WHERE id = $1", &[&id]).await.expect("cleanup");
     }
 }
