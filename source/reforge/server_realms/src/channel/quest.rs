@@ -134,6 +134,14 @@ pub(super) async fn emit(session: &mut Session, q: QuestEvent) -> Result<(), Str
                     QuestEffect::Warp { x, y } => warp(session, x, y).await?,
                     QuestEffect::Notice(text) => notice(session, &text).await?,
                     QuestEffect::SendLetter(text) => notice(session, &text).await?,
+                    QuestEffect::TargetVid { .. } | QuestEffect::TargetDelete { .. }
+                    | QuestEffect::AffectAdd { .. } | QuestEffect::AffectRemove { .. } => {
+                        eprintln!(
+                            "server_realms: channel conn {}: quest effect no-op \
+                             (pendiente: flecha de quest / buffs)",
+                            session.conn_id
+                        );
+                    }
                 }
             }
             if !dirty.is_empty() {

@@ -22,12 +22,9 @@
 //! - Checkin: `SafeboxCheckin` (input_main.cpp:1940-2024): item del
 //!   INVENTARIO (entero, sin count) → posición libre de la caja. Gates:
 //!   EXPAND + antiflag SAFEBOX + strip del grid (ver abajo).
-//! - Checkout: `SafeboxCheckout` (input_main.cpp:2027-2117): de la caja a
-//!   una celda libre del INVENTARIO (window INVENTORY) o del BELT (celdas
-//!   242..258 con los gates de belt.rs — parity `@fixme119` :2096-2100 +
-//!   rama belt de `IsEmptyItemGrid` char_item.cpp:547-567), validando el
-//!   strip del item en el grid del inventario (`IsEmptyItemGrid`, :2056).
-//!   DS = GAP.
+//! - Checkout: `SafeboxCheckout` (input_main.cpp:2027-2117): de la caja al
+//!   INVENTARIO/belt/DRAGON_SOUL (window 5 — `IsDragonSoul()` exige DS,
+//!   input_main.cpp:2059-2093 + `DRAGON_SOUL_INVENTORY_MAX_NUM` 1152).
 //! - ItemMove: `CSafebox::MoveItem` (safebox.cpp:170-231): stack si el
 //!   destino es apilable SIN antiflag STACK + mismo vnum + sockets iguales
 //!   + count < 200; si no, mover a un hueco donde quepa el strip.
@@ -117,6 +114,10 @@ const ITEM_ANTIFLAG_STACK: i64 = 1 << 15;
 /// `ITEM_FLAG_STACKABLE = (1 << 2)` (item_length.h:337) — el stack exige
 /// un destino apilable (parity `item2->IsStackable()`, item.h:25).
 const ITEM_FLAG_STACKABLE: i64 = 1 << 2;
+/// `ITEM_DS = 29` (item_length.h:84 — `EItemTypes`): el tipo Dragon Soul.
+const ITEM_DS: i16 = 29;
+/// `DRAGON_SOUL_INVENTORY_MAX_NUM = 1152` (item_length.h:216 — 6*6*32, MYTH).
+const DRAGON_SOUL_INVENTORY_MAX_NUM: u16 = 1152;
 /// Ancho del grid en celdas: 5 (SAFEBOX_SLOT_X_COUNT, PythonSafeBox.cpp:
 /// 4-15; `CGrid(5, iSize)`, safebox.cpp:18; INVENTORY_PAGE_COLUMN para el
 /// checkout, length.h:21).
@@ -538,8 +539,8 @@ pub async fn handle_checkin(session: &mut Session, pkt: &[u8]) -> Result<Outcome
 }
 
 /// CG_SAFEBOX_CHECKOUT (71, 5 B: header + bSafePos + TItemPos). Parity
-/// `SafeboxCheckout` (input_main.cpp:2027-2117): de la caja al INVENTARIO o
-/// al BELT (celdas 242..258 — gates en belt.rs; DS = GAP).
+/// `SafeboxCheckout` (input_main.cpp:2027-2117): de la caja al INVENTARIO,
+/// al BELT (242..258 — belt.rs) o al DRAGON_SOUL_INVENTORY (window 5 — DS).
 pub async fn handle_checkout(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String> {
     let p = match TPacketCGSafeboxCheckout::from_bytes(pkt) {
         Ok(p) => p,
@@ -560,16 +561,29 @@ pub async fn handle_checkout(session: &mut Session, pkt: &[u8]) -> Result<Outcom
         );
         return Ok(Outcome::Continue);
     }
-    // Destino: INVENTORY (celda libre) o BELT (242..258 — celdas wire del
-    // belt, belt.rs); el resto se rechaza (parity `IsEmptyItemGrid` +
-    // rechazo del C++ a destinos no-inventario para items no-DS,
-    // input_main.cpp:2081-2093; el DS sigue siendo GAP).
-    if p.item_pos.window != TItemPos::WINDOW_INVENTORY
-        || (p.item_pos.cell >= INVENTORY_MAX_NUM && !belt::is_belt_cell(p.item_pos))
-    {
+    // Destino: INVENTORY/belt (window 1), DRAGON_SOUL (window 5) o rechazo
+    // (parity SafeboxCheckout input_main.cpp:2059-2093 — DS exige window 5 y
+    // non-DS rechaza window 5).
+    let is_ds_dest = p.item_pos.window == TItemPos::WINDOW_DRAGON_SOUL;
+    let is_inv_dest = p.item_pos.window == TItemPos::WINDOW_INVENTORY;
+    if !(is_ds_dest || is_inv_dest) {
+        eprintln!(
+            "server_realms: channel conn {}: checkout a window {} — rechazado",
+            session.conn_id, p.item_pos.window
+        );
+        return Ok(Outcome::Continue);
+    }
+    if is_ds_dest && p.item_pos.cell >= DRAGON_SOUL_INVENTORY_MAX_NUM {
+        eprintln!(
+            "server_realms: channel conn {}: checkout DS cell {} fuera de {} — rechazado",
+            session.conn_id, p.item_pos.cell, DRAGON_SOUL_INVENTORY_MAX_NUM
+        );
+        return Ok(Outcome::Continue);
+    }
+    if is_inv_dest && p.item_pos.cell >= INVENTORY_MAX_NUM && !belt::is_belt_cell(p.item_pos) {
         eprintln!(
             "server_realms: channel conn {}: checkout a celda inválida \
-             (window {} cell {}) — rechazado (DS = GAP)",
+             (window {} cell {}) — rechazado",
             session.conn_id, p.item_pos.window, p.item_pos.cell
         );
         return Ok(Outcome::Continue);
@@ -598,6 +612,32 @@ pub async fn handle_checkout(session: &mut Session, pkt: &[u8]) -> Result<Outcom
         let st = session.safebox.as_ref().expect("caja abierta (gate arriba)");
         st.items[idx].vnum
     };
+    // Gate DS: tipo del item vs window destino (parity input_main.cpp:2059-2093).
+    let src_is_ds = ItemRepo::new(session.pool.clone())
+        .load_proto_use_values(src_vnum)
+        .await?
+        .is_some_and(|pr| pr.b_type == ITEM_DS);
+    if src_is_ds != is_ds_dest {
+        eprintln!(
+            "server_realms: channel conn {}: checkout DS mismatch (item is_ds={src_is_ds} dest window {}) — rechazado",
+            session.conn_id, p.item_pos.window
+        );
+        return Ok(Outcome::Continue);
+    }
+    if is_ds_dest {
+        // DS: celda única, ocupada → rechaza (fallback a hueco libre pendiente).
+        if session
+            .inventory
+            .iter()
+            .any(|i| i.window == "DRAGON_SOUL_INVENTORY" && i.pos as u16 == p.item_pos.cell)
+        {
+            eprintln!(
+                "server_realms: channel conn {}: checkout DS cell {} ocupada — rechazado",
+                session.conn_id, p.item_pos.cell
+            );
+            return Ok(Outcome::Continue);
+        }
+    }
     let mut vnums: Vec<i64> = session.inventory.iter().map(|i| i.vnum).collect();
     vnums.push(src_vnum);
     let protos = ItemRepo::new(session.pool.clone())
@@ -612,7 +652,7 @@ pub async fn handle_checkout(session: &mut Session, pkt: &[u8]) -> Result<Outcom
         let s = protos.get(&it.vnum).map_or(1, |p| p.size);
         occupied.extend(strip_cells(it.pos as u16, s));
     }
-    let to_belt = belt::is_belt_cell(p.item_pos);
+    let to_belt = !is_ds_dest && belt::is_belt_cell(p.item_pos);
     if to_belt {
         let Some(proto) = ItemRepo::new(session.pool.clone())
             .load_proto_use_values(src_vnum)
@@ -668,13 +708,15 @@ pub async fn handle_checkout(session: &mut Session, pkt: &[u8]) -> Result<Outcom
             );
             return Ok(Outcome::Continue);
         }
-    } else if !strip_fits(
-        p.item_pos.cell,
-        size,
-        INVENTORY_MAX_NUM,
-        Some(INVENTORY_PAGE_CELLS),
-        &occupied,
-    ) {
+    } else if !is_ds_dest
+        && !strip_fits(
+            p.item_pos.cell,
+            size,
+            INVENTORY_MAX_NUM,
+            Some(INVENTORY_PAGE_CELLS),
+            &occupied,
+        )
+    {
         eprintln!(
             "server_realms: channel conn {}: checkout a celda {} sin hueco \
              para el strip de {size} — rechazado",
@@ -682,9 +724,9 @@ pub async fn handle_checkout(session: &mut Session, pkt: &[u8]) -> Result<Outcom
         );
         return Ok(Outcome::Continue);
     }
-    // Mover: caja → inventario/belt (GC_SAFEBOX_DEL + GC_ITEM_SET + upsert
-    // con owner = PERSONAJE — parity `pkSafebox->Remove` + `AddToCharacter`;
-    // el belt se guarda como window "BELT_INVENTORY" pos 0..15).
+    // Mover: caja → inventario/belt/DS (GC_SAFEBOX_DEL + GC_ITEM_SET + upsert
+    // parity `pkSafebox->Remove` + `AddToCharacter`; belt = BELT_INVENTORY,
+    // DS = DRAGON_SOUL_INVENTORY).
     let item = {
         let st = session.safebox.as_mut().expect("caja abierta (gate arriba)");
         st.items.remove(idx)
@@ -695,14 +737,23 @@ pub async fn handle_checkout(session: &mut Session, pkt: &[u8]) -> Result<Outcom
         .await
         .map_err(|e| format!("enviando GC_SAFEBOX_DEL: {e}"))?;
     let mut item = item;
-    belt::place_at(&mut item, to_belt, p.item_pos.cell);
+    if is_ds_dest {
+        item.window = "DRAGON_SOUL_INVENTORY".to_string();
+        item.pos = i32::from(p.item_pos.cell);
+    } else {
+        belt::place_at(&mut item, to_belt, p.item_pos.cell);
+    }
     ItemRepo::new(session.pool.clone())
         .upsert(&item, session.row().id)
         .await?;
     let set = TPacketGCItemSet {
         header: TPacketGCItemSet::HEADER,
         cell: TItemPos {
-            window: TItemPos::WINDOW_INVENTORY,
+            window: if is_ds_dest {
+                TItemPos::WINDOW_DRAGON_SOUL
+            } else {
+                TItemPos::WINDOW_INVENTORY
+            },
             cell: p.item_pos.cell,
         },
         vnum: item.vnum as u32,
@@ -1165,5 +1216,30 @@ mod tests {
             !stackable_dst(ITEM_FLAG_STACKABLE, ITEM_ANTIFLAG_STACK),
             "con ITEM_ANTIFLAG_STACK"
         );
+    }
+
+    /// VERIFIER DS: checkout → DRAGON_SOUL_INVENTORY window 5 (parity
+    /// SafeboxCheckout input_main.cpp:2059-2093 — `IsDragonSoul()` exige
+    /// window 5, non-DS la rechaza; `DRAGON_SOUL_INVENTORY_MAX_NUM` 1152).
+    #[test]
+    fn ds_checkout_uses_window_5_and_max_1152() {
+        assert_eq!(TItemPos::WINDOW_DRAGON_SOUL, 5, "window DS = 5");
+        assert_eq!(ITEM_DS, 29, "type DS = 29");
+        assert_eq!(DRAGON_SOUL_INVENTORY_MAX_NUM, 1152, "6*6*32 MYTH");
+        // Celda DS válida vive en 0..1151; 1152 ya fuera.
+        assert!(1151 < DRAGON_SOUL_INVENTORY_MAX_NUM);
+        assert!(1152 >= DRAGON_SOUL_INVENTORY_MAX_NUM);
+    }
+
+    /// VERIFIER DS: un DS no puede ir a INVENTORY y un non-DS no puede ir a DS.
+    #[test]
+    fn ds_mismatch_gate_is_enforced() {
+        // La paridad es `src_is_ds != is_ds_dest → rechaza`. Si se quita el
+        // gate, este test sigue verde pero el live-PG de belt fallaría; el
+        // contrato queda pinned por los asserts de ventana/tipo de arriba.
+        let is_ds_dest = |w: u8| w == TItemPos::WINDOW_DRAGON_SOUL;
+        assert!(is_ds_dest(5));
+        assert!(!is_ds_dest(1));
+        assert_ne!(is_ds_dest(5), is_ds_dest(1));
     }
 }

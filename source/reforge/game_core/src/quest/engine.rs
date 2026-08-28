@@ -92,6 +92,14 @@ pub enum QuestEffect {
     Notice(String),
     /// Carta de quest (`send_letter` → GC_SCRIPT con [LETTER]).
     SendLetter(String),
+    /// Flecha de quest (parity `target.vid`, questlua_target.cpp).
+    TargetVid { name: String, vid: u32, title: String },
+    /// Borra flecha (`target.delete`).
+    TargetDelete { name: String },
+    /// Buff de quest (`affect.add_collect`).
+    AffectAdd { apply: String, value: i32, duration: i32 },
+    /// Quita buff (`affect.remove_all_collect`).
+    AffectRemove { apply: String },
 }
 
 /// Estado runtime de las quests de UN jugador.
@@ -498,15 +506,29 @@ impl QuestEngine {
                             rt.states.insert(qn.clone(), idx);
                             out.dirty.push(DirtyFlag { quest: qn.clone(), flag: format!("{qn}.__status"), value: idx as i64 });
                         }
-                        ActionName::Return => return Ok(None), // parity `return` del lua — fin del evento
+                        ActionName::TargetVid => {
+                            let name = Self::name_text(args.first().ok_or("target_vid sin name")?)?;
+                            let vid = u32::try_from(self.eval_arg(flags, &q.name, args.get(1).ok_or("target_vid sin vid")?, ctx)?).map_err(|_| "target_vid vid fuera de rango")?;
+                            let title = self.key_text(args.get(2).ok_or("target_vid sin key")?)?;
+                            out.effects.push(QuestEffect::TargetVid { name, vid, title });
+                        }
+                        ActionName::TargetDelete => {
+                            let name = Self::name_text(args.first().ok_or("target_delete sin name")?)?;
+                            out.effects.push(QuestEffect::TargetDelete { name });
+                        }
+                        ActionName::AffectAdd => {
+                            let apply = Self::name_text(args.first().ok_or("affect_add sin apply")?)?;
+                            let value = self.eval_arg(flags, &q.name, args.get(1).ok_or("affect_add sin value")?, ctx)? as i32;
+                            let duration = self.eval_arg(flags, &q.name, args.get(2).ok_or("affect_add sin duration")?, ctx)? as i32;
+                            out.effects.push(QuestEffect::AffectAdd { apply, value, duration });
+                        }
+                        ActionName::AffectRemove => {
+                            let apply = args.first().map(|v| Self::name_text(v).unwrap_or_default()).unwrap_or_default();
+                            out.effects.push(QuestEffect::AffectRemove { apply });
+                        }
+                        ActionName::Return => return Ok(None),
                         other => {
-                            // Mapeada-pero-pendiente: el catálogo DSL la
-                            // conoce, el runtime aún no la aplica (ver el
-                            // módulo). Nunca falla el evento.
-                            eprintln!(
-                                "game_core: quest {}: acción `{other:?}` mapeada-pero-pendiente (ignorada)",
-                                q.name
-                            );
+                            eprintln!("game_core: quest {}: acción `{other:?}` mapeada-pero-pendiente (ignorada)", q.name);
                         }
                     }
                 }
@@ -987,5 +1009,22 @@ quest collect_lv40 = fam(level: 40, mob: 602, herb: 30007)
         // La quest cruzada ya puede disparar su evento del nuevo state.
         let out2 = e.run(&mut rt, QuestTrigger::Letter, 5, map, now, items_ref, &mut *rng_fixed(0));
         assert!(out2.script.as_deref().unwrap_or("").contains("b[ENTER]"), "{out2:?}");
+    }
+    #[test]
+    fn target_vid_and_affect_verifier() {
+        let mut texts = HashMap::new();
+        texts.insert("title".into(), "Objetivo!".into());
+        let e = QuestEngine::load("quest q\n  state start\n    on letter\n      -> target_vid(__TARGET__, 20084, @title)\n      -> affect_add(apply.MOV_SPEED, 10, 60*60)\n      -> affect_remove(apply.MOV_SPEED)\n      -> target_delete(__TARGET__)\n").expect("parse").with_texts(texts);
+        let mut rt = QuestRuntime::default();
+        let items = HashMap::new();
+        let (_, map, now, items_ref) = ctx_bits(5, 0, &items);
+        let out = e.run(&mut rt, QuestTrigger::Letter, 5, map, now, items_ref, &mut *rng_fixed(0));
+        assert_eq!(out.effects[0], QuestEffect::TargetVid { name: "__TARGET__".into(), vid: 20084, title: "Objetivo!".into() });
+        assert_eq!(out.effects[1], QuestEffect::AffectAdd { apply: "apply.MOV_SPEED".into(), value: 10, duration: 3600 });
+        assert_eq!(out.effects[2], QuestEffect::AffectRemove { apply: "apply.MOV_SPEED".into() });
+        assert_eq!(out.effects[3], QuestEffect::TargetDelete { name: "__TARGET__".into() });
+        assert_eq!(out.script, None);
+        // mutation: without handler effects would be empty -> fails
+        assert!(out.effects.len() == 4, "verifier: 4 effects");
     }
 }
