@@ -41,10 +41,14 @@
 //! # Subset documentado
 //!
 //! - Skills de daño single-target (flags ATTACK + USE_MELEE_DAMAGE),
-//!   self-buffs (SELFONLY) y el modo ÁREA (flag SPLASH — `iSplashRange` =
+//!   self-buffs (SELFONLY), la familia PARTY (`SKILL_FLAG_PARTY` — buff al
+//!   caster + miembros de party cerca, parity `ComputeSkillParty`
+//!   char_skill.cpp:1888-1915; el legacy la compila solo con
+//!   `ENABLE_SKILL_FLAG_PARTY` — el Rust la activa siempre, data-driven) y
+//!   el modo ÁREA (flag SPLASH — `iSplashRange` =
 //!   radio, `lMaxHit` = máx víctimas, `kSplashAroundDamageAdjustPoly` =
 //!   ajuste del daño de las víctimas alrededor — parity `ComputeSkill` +
-//!   `FuncSplashDamage` + `ComputeSkillAtPosition`). PARTY, arco
+//!   `FuncSplashDamage` + `ComputeSkillAtPosition`). Arco
 //!   (USE_ARROW_DAMAGE se resuelve con el ataque melee — desviación
 //!   documentada) y el grand master (kMasterBonusPoly) quedan fuera.
 //!   HORSE (btype 5): el gate montado/desmontado está DENTRO (ver
@@ -73,6 +77,12 @@ pub mod skill_flag {
     pub const COMPUTE_MAGIC_DAMAGE: u32 = 1 << 6;
     pub const SPLASH: u32 = 1 << 7;
     pub const USE_ARROW_DAMAGE: u32 = 1 << 9;
+    /// `SKILL_FLAG_PARTY` (skill.h:39-40 — el legacy lo compila solo con
+    /// `ENABLE_SKILL_FLAG_PARTY`): el buff de la skill alcanza al caster +
+    /// los miembros de party cerca (parity `ComputeSkillParty`,
+    /// char_skill.cpp:1888-1915). El Rust lo activa SIEMPRE (data-driven:
+    /// inerte para las skills sin "PARTY" en el `setflag`).
+    pub const PARTY: u32 = 1 << 28;
 }
 
 /// `SKILL_TYPE_*` — el `btype` del skill_proto (el `dwType` del legacy:
@@ -244,6 +254,7 @@ pub fn skill_flags_from_text(text: &str) -> u32 {
             "COMPUTE_MAGIC_DAMAGE" => skill_flag::COMPUTE_MAGIC_DAMAGE,
             "SPLASH" => skill_flag::SPLASH,
             "USE_ARROW_DAMAGE" => skill_flag::USE_ARROW_DAMAGE,
+            "PARTY" => skill_flag::PARTY,
             _ => 0,
         };
     }
@@ -716,6 +727,11 @@ mod tests {
         );
         assert_eq!(skill_flags_from_text(""), 0);
         assert_eq!(skill_flags_from_text("SELFONLY"), skill_flag::SELFONLY);
+        assert_eq!(skill_flags_from_text("PARTY"), skill_flag::PARTY, "1<<28");
+        assert_eq!(
+            skill_flags_from_text("ATTACK,USE_MELEE_DAMAGE,PARTY"),
+            skill_flag::ATTACK | skill_flag::USE_MELEE_DAMAGE | skill_flag::PARTY
+        );
     }
 
     /// Los AFF_* del setaffectflag (EAffectBits — affect.h).

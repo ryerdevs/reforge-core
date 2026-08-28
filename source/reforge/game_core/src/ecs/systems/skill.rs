@@ -9,7 +9,7 @@ use crate::combat::{
     player_def_grade, PlayerState,
 };
 use crate::ecs::components::{
-    Affect, Affects, Hp, HorseRiding, Mp, Player, Position, SkillCooldowns, SkillLevels,
+    Affect, Affects, Hp, HorseRiding, Mp, Player, Position, Pvp, SkillCooldowns, SkillLevels,
 };
 use crate::ecs::events::{KillInfo, NpcEvent, SkillEvent, SplashVictimInfo};
 use crate::ecs::resources::{NpcIndex, NpcOutbox, Rand, SkillPowerTable, SkillTable, Tick};
@@ -66,6 +66,11 @@ pub(crate) fn affects_system(
 /// El mensaje del gate HORSE (EN — locale system pendiente, ADR-0009;
 /// misma divergencia documentada que channel/gm.rs).
 const HORSE_NEED_MOUNT_MSG: &str = "You need a horse to use this skill.";
+
+/// `PARTY_DEFAULT_RANGE` (party.h:12) — el rango de "cercanía" (`bNear`) de
+/// los miembros de party (party.cpp:1300): la familia PARTY buffea a los
+/// miembros dentro de esta distancia.
+const PARTY_DEFAULT_RANGE: i32 = 5000;
 
 /// El rechazo del gate HORSE: SkillResult SIN gasto (0 daño, 0 SP, sin
 /// cooldown) con un GC_CHAT INFO del motivo (parity `ChatPacket(INFO)` —
@@ -192,7 +197,8 @@ impl WorldSim {
         // pkVictim->GetY(), ...)` — el target define el centro); buff →
         // self (SELFONLY o target propio) u otro jugador.
         let mut victim_mob: Option<(i32, i32, i32, i32)> = None; // (dx, lv, def, max_hp)
-        let mut buff_target = pe;
+        let mut buff_target: Option<(u32, Entity)> = None; // (vid, entidad) del buff
+        let mut party_buff = false; // SKILL_FLAG_PARTY — expansión a la party
         let mut splash_center: Option<(i32, i32)> = None;
         if proto.is_attack() {
             if proto.flag & skill_flag::SPLASH != 0 {
@@ -228,18 +234,31 @@ impl WorldSim {
                 ));
             }
         } else {
-            if proto.flag & skill_flag::SELFONLY != 0 || target_vid == player_vid {
-                buff_target = pe;
+            // Objetivo del buff (parity UseSkill char_skill.cpp:2528-2533 — el
+            // dispatch es POR FLAG: SELFONLY → el caster; si no, PARTY →
+            // el caster (`pkVictim = this`) + la expansión a la party; si
+            // no, el jugador del wire).
+            if proto.flag & skill_flag::SELFONLY != 0 {
+                buff_target = Some((player_vid, pe));
+            } else if proto.flag & skill_flag::PARTY != 0 {
+                party_buff = true;
+                buff_target = Some((player_vid, pe));
+            } else if target_vid == player_vid {
+                buff_target = Some((player_vid, pe));
             } else if let Some(&e) = self.players.get(&target_vid) {
-                buff_target = e; // buff a otro jugador (subset — sin PARTY)
+                buff_target = Some((target_vid, e)); // buff a otro jugador
             } else {
                 return Vec::new(); // objetivo no es un jugador (mob) — fuera
             }
-            // Rango al objetivo del buff (parity ComputeSkill).
-            let dist = {
-                let Ok(ent) = self.world.get_entity(buff_target) else { return Vec::new() };
-                let Some(pos) = ent.get::<Position>() else { return Vec::new() };
-                distance_approx(px - pos.x, py - pos.y)
+            // Rango al objetivo del buff (parity ComputeSkill — el objetivo
+            // de una PARTY es el caster → rango 0 → siempre pasa).
+            let dist = match buff_target {
+                Some((_, e)) => {
+                    let Ok(ent) = self.world.get_entity(e) else { return Vec::new() };
+                    let Some(pos) = ent.get::<Position>() else { return Vec::new() };
+                    distance_approx(px - pos.x, py - pos.y)
+                }
+                None => return Vec::new(),
             };
             if proto.target_range > 0 && dist > proto.target_range as i32 + 50 {
                 return Vec::new();
@@ -437,54 +456,106 @@ impl WorldSim {
             // poly se aplica y el icono se manda al cliente).
             if amount != 0 && duration_secs > 0 {
                 let value = amount;
-                // Aplicar los buffs de pools YA (parity PointChange(MAX_HP/SP)
-                // — el máximo sube y el actual lo acompaña).
-                if let Ok(mut ent) = self.world.get_entity_mut(buff_target) {
-                    match proto.point_on {
-                        point::MAX_HP => {
-                            if let Some(mut h) = ent.get_mut::<Hp>() {
-                                h.max_hp = (h.max_hp + value).max(0);
-                                h.hp = (h.hp + value).min(h.max_hp);
+                // Destinatarios. PARTY (`SKILL_FLAG_PARTY` — parity
+                // `ComputeSkillParty` char_skill.cpp:1906-1915: si hay
+                // miembros cerca → `ForEachNearMember`; si no → `f(this)`,
+                // solo el caster): el caster + los miembros con el MISMO
+                // party_id dentro de PARTY_DEFAULT_RANGE (5000 — el `bNear`
+                // de party.cpp:1300). Desviación documentada: el ECS no
+                // tiene líder de party — el rango se mide desde el CASTER.
+                let targets: Vec<(u32, Entity)> = if party_buff {
+                    let party = self
+                        .world
+                        .get_entity(pe)
+                        .ok()
+                        .and_then(|e| e.get::<Pvp>())
+                        .and_then(|p| p.party_id);
+                    let mut targets = vec![(player_vid, pe)];
+                    if let Some(pid) = party {
+                        targets.extend(self.players.iter().filter_map(|(&vid, &e)| {
+                            if vid == player_vid {
+                                return None;
                             }
-                        }
-                        point::MAX_SP => {
-                            if let Some(mut m) = ent.get_mut::<Mp>() {
-                                m.max_mp = (m.max_mp + value).max(0);
-                                m.mp = (m.mp + value).min(m.max_mp);
+                            let Ok(ent) = self.world.get_entity(e) else { return None };
+                            let (Some(pos), Some(pvp)) =
+                                (ent.get::<Position>(), ent.get::<Pvp>())
+                            else { return None };
+                            if pvp.party_id != Some(pid)
+                                || distance_approx(px - pos.x, py - pos.y) >= PARTY_DEFAULT_RANGE
+                            {
+                                return None;
                             }
-                        }
-                        _ => {}
+                            Some((vid, e))
+                        }));
                     }
-                    if let Some(mut affects) = ent.get_mut::<Affects>() {
-                        affects.0.push(Affect {
+                    targets
+                } else {
+                    vec![buff_target.unwrap_or((player_vid, pe))]
+                };
+                // El buff es el MISMO para todos (parity: el poly se evalúa
+                // UNA vez con las vars del caster — ComputeSkill por miembro
+                // del FComputeSkillParty reutiliza el mismo iAmount/iDur,
+                // char_skill.cpp:2042-2047 y 2108-2123).
+                let elem = protocol::world::TPacketAffectElement {
+                    dw_type: skill_id,
+                    b_apply_on: proto.point_on,
+                    l_apply_value: value,
+                    dw_flag: proto.affect_flag,
+                    l_duration: duration_secs,
+                    l_sp_cost: 0,
+                };
+                for (i, &(vid, e)) in targets.iter().enumerate() {
+                    // Aplicar los buffs de pools YA (parity
+                    // PointChange(MAX_HP/SP) — el máximo sube y el actual
+                    // lo acompaña).
+                    if let Ok(mut ent) = self.world.get_entity_mut(e) {
+                        match proto.point_on {
+                            point::MAX_HP => {
+                                if let Some(mut h) = ent.get_mut::<Hp>() {
+                                    h.max_hp = (h.max_hp + value).max(0);
+                                    h.hp = (h.hp + value).min(h.max_hp);
+                                }
+                            }
+                            point::MAX_SP => {
+                                if let Some(mut m) = ent.get_mut::<Mp>() {
+                                    m.max_mp = (m.max_mp + value).max(0);
+                                    m.mp = (m.mp + value).min(m.max_mp);
+                                }
+                            }
+                            _ => {}
+                        }
+                        if let Some(mut affects) = ent.get_mut::<Affects>() {
+                            affects.0.push(Affect {
+                                skill_id,
+                                point: proto.point_on,
+                                value,
+                                flag: proto.affect_flag,
+                                duration_ms: u64::from(duration_secs.max(0) as u32) * 1000,
+                                sp_cost: 0,
+                            });
+                        }
+                    }
+                    // El caster ve su buff en el SkillResult (con el coste
+                    // SP/cooldown del uso); CADA miembro recibe su PartyBuff
+                    // (el canal lo enruta por player_vid → GC_AFFECT_ADD).
+                    events.push(if i == 0 {
+                        SkillEvent::SkillResult {
+                            player_vid,
                             skill_id,
-                            point: proto.point_on,
-                            value,
-                            flag: proto.affect_flag,
-                            duration_ms: u64::from(duration_secs.max(0) as u32) * 1000,
-                            sp_cost: 0,
-                        });
+                            victim_vid: target_vid,
+                            packets: Vec::new(),
+                            damage: 0,
+                            dead: false,
+                            victim: None,
+                            sp_cost,
+                            hp_cost,
+                            buff: Some(elem),
+                        }
+                    } else {
+                        SkillEvent::PartyBuff { player_vid: vid, skill_id, buff: elem }
                     }
+                    .into());
                 }
-                events.push(SkillEvent::SkillResult {
-                    player_vid,
-                    skill_id,
-                    victim_vid: target_vid,
-                    packets: Vec::new(),
-                    damage: 0,
-                    dead: false,
-                    victim: None,
-                    sp_cost,
-                    hp_cost,
-                    buff: Some(protocol::world::TPacketAffectElement {
-                        dw_type: skill_id,
-                        b_apply_on: proto.point_on,
-                        l_apply_value: value,
-                        dw_flag: proto.affect_flag,
-                        l_duration: duration_secs,
-                        l_sp_cost: 0,
-                    }),
-                }.into());
             } else {
                 // Sin efecto (poly 0 o sin duración) — solo el coste.
                 events.push(SkillEvent::SkillResult {
@@ -753,6 +824,7 @@ impl WorldSim {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::combat::PkMode;
     use crate::ecs::events::{CombatEvent, CombatIntent, NpcEvent, SkillEvent, SkillIntent};
     use crate::ecs::test_util::*;
     use crate::skill::SkillProto;
@@ -821,6 +893,31 @@ mod tests {
             attr_type: crate::skill::attr_type::NORMAL,
             max_hit: 1,
             target_range: 0,
+            splash_range: 0,
+            splash_adjust_poly: String::new(),
+        }
+    }
+
+    /// El proto REAL del skill 175 (Indigo Wolf Soul — la ÚNICA fila del
+    /// `skill_proto` del runtime con `setflag` = "PARTY", verificada en PG
+    /// 2026-08-28): ATT_SPEED, poly "20*k", dur 200 s, cd 300 s,
+    /// BLUE_POSSESSION, rang 1000, btype 7 (→ Normal).
+    fn skill175_proto() -> SkillProto {
+        SkillProto {
+            vnum: 175,
+            b_type: 7,
+            level_step: 1,
+            max_level: 1,
+            point_on: crate::skill::point::ATT_SPEED,
+            point_poly: "20*k".into(),
+            sp_cost_poly: "80+220*k".into(),
+            duration_poly: "200".into(),
+            cooldown_poly: "300".into(),
+            flag: crate::skill::skill_flags_from_text("PARTY"),
+            affect_flag: crate::skill::aff::BLUE_POSSESSION,
+            attr_type: crate::skill::attr_type::NORMAL,
+            max_hit: 1,
+            target_range: 1000,
             splash_range: 0,
             splash_adjust_poly: String::new(),
         }
@@ -954,6 +1051,86 @@ mod tests {
             _ => None,
         });
         assert_eq!(d3, Some(171), "sin buff otra vez (revertido)");
+    }
+
+    /// VERIFIER de la familia PARTY (`SKILL_FLAG_PARTY` — la fila REAL del
+    /// skill 175 del runtime + la tabla REAL de skill_power: k = 5000×1/100
+    /// = 50 → ATT_SPEED 20×50 = 1000, dur 200 s): el buff llega al caster
+    /// (SkillResult) Y a cada miembro de party dentro de PARTY_DEFAULT_RANGE
+    /// (5000 — parity `ComputeSkillParty` char_skill.cpp:1906-1915 +
+    /// party.cpp:1300); el miembro lejano (6000) y el no-miembro NO. Sin
+    /// party → solo el caster (parity `else f(this)`). MUTATION: falla si la
+    /// expansión a la party se elimina del process_skill.
+    #[test]
+    fn party_buff_reaches_near_members_only() {
+        let mut w = world_with(42);
+        join_with_skills_group(&mut w, 2, &[(175, 1)], 1, 5); // caster (0,0)
+        join_at(&mut w, 3, 0, 0); // miembro cerca (dist 0 < 5000)
+        join_at(&mut w, 4, 6_000, 0); // miembro lejos (dist 6000 ≥ 5000)
+        join_at(&mut w, 5, 0, 0); // no-miembro
+        for vid in [2u32, 3, 4] {
+            w.process_intent(CombatIntent::SetParty { player_vid: vid, party_id: Some(7) }.into(), 1_000);
+        }
+        w.process_intent(CombatIntent::SetParty { player_vid: 5, party_id: Some(8) }.into(), 1_000);
+        w.set_player_mp(2, 200_000); // coste SP real: 80 + 220×50 = 11080
+        load_skills(&mut w, vec![skill175_proto()]);
+        let rows: Vec<[i32; 41]> = (0..9).map(|_| [5000; 41]).collect();
+        w.world.resource_mut::<SkillPowerTable>().0 =
+            std::sync::Arc::new(database::skill_power::SkillPowerTable::from_rows(rows.clone()));
+        let events = w.process_intent(
+            SkillIntent::UseSkill { player_vid: 2, skill_id: 175, target_vid: 2, weapon: None }.into(),
+            1_000,
+        );
+        // El buff llegó SOLO al caster (SkillResult) y al miembro 3 (PartyBuff
+        // — el canal lo enruta por player_vid y manda el GC_AFFECT_ADD).
+        let mut buffed: Vec<u32> = events
+            .iter()
+            .filter_map(|e| match e {
+                NpcEvent::Skill(SkillEvent::SkillResult { player_vid, buff: Some(b), .. }) => {
+                    assert_eq!(
+                        (b.dw_type, b.b_apply_on, b.l_apply_value, b.l_duration, b.dw_flag),
+                        (175, crate::skill::point::ATT_SPEED, 1000, 200, crate::skill::aff::BLUE_POSSESSION)
+                    );
+                    Some(*player_vid)
+                }
+                NpcEvent::Skill(SkillEvent::PartyBuff { player_vid, buff: b, .. }) => {
+                    assert_eq!(
+                        (b.dw_type, b.l_apply_value, b.l_duration),
+                        (175, 1000, 200),
+                        "el miembro recibe el MISMO elemento (poly del caster)"
+                    );
+                    Some(*player_vid)
+                }
+                _ => None,
+            })
+            .collect();
+        buffed.sort_unstable();
+        assert_eq!(buffed, vec![2, 3], "caster + miembro cerca; ni 4 (lejano) ni 5 (ajeno)");
+        // El mundo tiene el Affect aplicado en caster y miembro.
+        for vid in [2u32, 3] {
+            let e = *w.players.get(&vid).expect("player");
+            let affects = w.world.get_entity(e).expect("entidad").get::<Affects>().expect("Affects");
+            assert!(affects.0.iter().any(|a| a.skill_id == 175), "affect en vid {vid}");
+        }
+        // Solitario (sin party): el buff solo al caster (parity `f(this)`).
+        let mut w2 = world_with(7);
+        join_with_skills_group(&mut w2, 2, &[(175, 1)], 1, 5);
+        w2.set_player_mp(2, 200_000);
+        load_skills(&mut w2, vec![skill175_proto()]);
+        w2.world.resource_mut::<SkillPowerTable>().0 =
+            std::sync::Arc::new(database::skill_power::SkillPowerTable::from_rows(rows.clone()));
+        let events = w2.process_intent(
+            SkillIntent::UseSkill { player_vid: 2, skill_id: 175, target_vid: 2, weapon: None }.into(),
+            1_000,
+        );
+        assert!(
+            events.iter().any(|e| matches!(e, NpcEvent::Skill(SkillEvent::SkillResult { buff: Some(_), .. }))),
+            "solitario: el caster recibe su buff"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(e, NpcEvent::Skill(SkillEvent::PartyBuff { .. }))),
+            "solitario: sin miembros → sin PartyBuff"
+        );
     }
 
     /// Rechazos silenciosos (parity: el legacy devuelve false sin respuesta):
@@ -1258,7 +1435,7 @@ mod tests {
         join_pvp(&mut w, 4, 0, 200); // PC víctima (PK off — no atacable)
         w.set_player_mp(2, 500);
         w.process_intent(
-            CombatIntent::SetPvpMode { player_vid: 3, on: true }.into(),
+            CombatIntent::SetPvpMode { player_vid: 3, mode: PkMode::Free }.into(),
             1_000,
         );
         load_skills(&mut w, vec![skill1_splash_proto()]);

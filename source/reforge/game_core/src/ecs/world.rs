@@ -231,8 +231,8 @@ impl WorldSim {
                     self.set_player_level(player_vid, level);
                     Vec::new()
                 }
-                CombatIntent::SetPvpMode { player_vid, on } => {
-                    self.set_player_pvp_mode(player_vid, on);
+                CombatIntent::SetPvpMode { player_vid, mode } => {
+                    self.set_player_pvp_mode(player_vid, mode);
                     Vec::new()
                 }
                 CombatIntent::SetParty { player_vid, party_id } => {

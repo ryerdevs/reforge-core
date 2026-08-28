@@ -297,12 +297,6 @@ pub struct Session {
     /// la cola consumen 1 flecha en vez de 2 (el mismo skill lo rechaza el
     /// cooldown del mundo).
     pub pending_arrow_shot: bool,
-    /// Flag PvP del jugador (CG_PVP 41 — lane D). Solo en MEMORIA: la tabla
-    /// `player.player` de esta variante NO tiene columna de pvp (parity: el
-    /// TPlayerTable del C++ tampoco — el modo PvP del Metin2 completo es
-    /// efímero de sesión). El cliente de esta variante nunca envía CG_PVP
-    /// (header definido, sin sender — Packet.h:53); el handler es defensivo.
-    pub pvp_mode: bool,
     /// Postura sentado del jugador (CG_CHARACTER_POSITION 28 — lane D):
     /// Sitdown/Standup. En memoria (parity: `m_pointsInstant.position` del
     /// C++ — no se persiste).
@@ -418,7 +412,6 @@ impl Session {
             social_id: String::new(),
             account_empire: None,
             pending_arrow_shot: false,
-            pvp_mode: false,
             sitting: false,
             party_id: None,
             party_tx,

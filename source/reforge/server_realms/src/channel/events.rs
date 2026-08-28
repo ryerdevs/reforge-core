@@ -12,8 +12,8 @@
 use database::affect::AffectRow;
 use database::item::ItemRepo;
 use protocol::world::{
-    TPacketGCAffectAdd, TPacketGCItemGroundAdd, TPacketGCItemGroundDel, TPacketGCItemOwnership,
-    TPacketGCItemSet, TItemPos,
+    TPacketAffectElement, TPacketGCAffectAdd, TPacketGCItemGroundAdd, TPacketGCItemGroundDel,
+    TPacketGCItemOwnership, TPacketGCItemSet, TItemPos,
 };
 use game_core::ecs::{
     CombatEvent, Intent, ItemEvent, ItemIntent, MoveEvent, NpcEvent, SkillEvent,
@@ -27,6 +27,44 @@ use crate::channel::gm::gm_info;
 /// Rechazo de pickup por peso — GC_CHAT INFO (mismo patrón que gm.rs;
 /// sin locale system → EN, divergencia documentada; parity del ChatPacket).
 const PICKUP_OVERWEIGHT_MSG: &str = "You are carrying too many items.";
+
+/// Aplica un buff recibido del mundo a la sesión (compartido por
+/// `SkillResult` y `PartyBuff` — la familia PARTY entrega UNA llamada por
+/// miembro): GC_AFFECT_ADD (126) + `session.affects` + recálculo de la
+/// velocidad si es MOV_SPEED (`GetMoveSpeed` = motion × 10000/
+/// CalculateDuration(POINT_MOV_SPEED, 10000), char.cpp:2751-2754 — el
+/// buff suma POINT_MOV_SPEED al factor).
+async fn apply_affect(session: &mut Session, elem: TPacketAffectElement) -> Result<(), String> {
+    session
+        .send(&TPacketGCAffectAdd::new(elem).to_bytes())
+        .await
+        .map_err(|e| format!("enviando GC_AFFECT_ADD: {e}"))?;
+    session.affects.retain(|a| a.b_type != elem.dw_type as i32);
+    session.affects.push(AffectRow {
+        dw_pid: session.row().id,
+        b_type: elem.dw_type as i32,
+        b_apply_on: elem.b_apply_on as i16,
+        l_apply_value: elem.l_apply_value,
+        dw_flag: i64::from(elem.dw_flag),
+        l_duration: elem.l_duration,
+        l_sp_cost: 0,
+    });
+    if elem.b_apply_on == game_core::skill::point::MOV_SPEED {
+        // El factor POINT_MOV_SPEED total = base(100) + buffs (parity
+        // PointChange — el buff SUMA al punto). La velocidad real =
+        // motion × 10000/CalculateDuration.
+        let total: i32 = 100
+            + session
+                .affects
+                .iter()
+                .filter(|a| a.b_apply_on == game_core::skill::point::MOV_SPEED as i16)
+                .map(|a| a.l_apply_value)
+                .sum::<i32>();
+        let dur = game_core::ai::calculate_duration(total, 10_000);
+        session.motion_mut().speed = (300u32.saturating_mul(10_000) / dur.max(1) as u32).max(1);
+    }
+    Ok(())
+}
 
 /// Un evento S→C del mundo → paquetes GC + estado de la sesión. `Err` =
 /// fatal (socket/PG); los rechazos internos (sin víctima, fuera de rango,
@@ -572,41 +610,9 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                 session.save();
             }
             // Buff aplicado: GC_AFFECT_ADD (126) — el icono del cliente (el
-            // mundo ya lo tiene en `Affects`). El canal guarda el buff en la
-            // sesión (afects activos) y, si es MOV_SPEED, recalcula la
-            // velocidad real del personaje (`GetMoveSpeed` =
-            // motion × 10000/CalculateDuration(POINT_MOV_SPEED, 10000),
-            // char.cpp:2751-2754 — el buff suma POINT_MOV_SPEED al factor).
+            // mundo ya lo tiene en `Affects`; ver `apply_affect`).
             if let Some(elem) = buff {
-                session
-                    .send(&TPacketGCAffectAdd::new(elem).to_bytes())
-                    .await
-                    .map_err(|e| format!("enviando GC_AFFECT_ADD: {e}"))?;
-                session.affects.retain(|a| a.b_type != elem.dw_type as i32);
-                session.affects.push(AffectRow {
-                    dw_pid: session.row().id,
-                    b_type: elem.dw_type as i32,
-                    b_apply_on: elem.b_apply_on as i16,
-                    l_apply_value: elem.l_apply_value,
-                    dw_flag: i64::from(elem.dw_flag),
-                    l_duration: elem.l_duration,
-                    l_sp_cost: 0,
-                });
-                if elem.b_apply_on == game_core::skill::point::MOV_SPEED {
-                    // El factor POINT_MOV_SPEED total = base(100) + buffs
-                    // (parity PointChange — el buff SUMA al punto). La
-                    // velocidad real = motion × 10000/CalculateDuration.
-                    let total: i32 = 100
-                        + session
-                            .affects
-                            .iter()
-                            .filter(|a| a.b_apply_on == game_core::skill::point::MOV_SPEED as i16)
-                            .map(|a| a.l_apply_value)
-                            .sum::<i32>();
-                    let dur = game_core::ai::calculate_duration(total, 10_000);
-                    session.motion_mut().speed =
-                        (300u32.saturating_mul(10_000) / dur.max(1) as u32).max(1);
-                }
+                apply_affect(session, elem).await?;
             }
             if damage > 0 {
                 let Some(v) = victim else {
@@ -633,6 +639,20 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                     session.conn_id, session.row().name
                 );
             }
+        }
+        NpcEvent::Skill(SkillEvent::PartyBuff { player_vid, skill_id, buff }) => {
+            // Família PARTY (`SKILL_FLAG_PARTY` — parity `ComputeSkillParty`,
+            // char_skill.cpp:1906-1915): el buff del skill de party llegó a
+            // ESTE miembro (routing por player_vid — el caster ve el suyo en
+            // el SkillResult). El mundo ya lo aplicó a su `Affects` — aquí
+            // solo el icono + el estado de sesión (mismo camino que el buff
+            // del SkillResult, extraído en `apply_affect`).
+            eprintln!(
+                "server_realms: channel conn {}: party buff del skill {skill_id} \
+                 aplicado a vid {player_vid}",
+                session.conn_id
+            );
+            apply_affect(session, buff).await?;
         }
         NpcEvent::Skill(SkillEvent::SplashResult {
             skill_id,

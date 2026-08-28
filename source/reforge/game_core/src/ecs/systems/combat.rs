@@ -11,7 +11,7 @@ use crate::ai::{attack_damage, change_attack_dest, mob_move_speed, move_duration
 use crate::combat::{
     attack_speed_for_weapon_bonus, can_attack, distance_approx, handle_attack,
     mob_attack_max_range, mob_attack_range_base, player_def_grade, BATTLE_TYPE_MELEE,
-    CombatState, NpcState, PlayerState, PvpContext,
+    CombatState, NpcState, PkMode, PlayerState, PvpContext,
 };
 use crate::ecs::components::{
     Affect, Affects, Aggro, AttackPos, Combat, Hp, LastAttack, Map, Mob, Mp, Player, Position, Pvp,
@@ -418,8 +418,9 @@ impl WorldSim {
         let hp = ent.get::<Hp>()?;
         let player = ent.get::<Player>()?;
         Some(PvpContext {
-            pvp_mode: pvp.mode,
+            pk_mode: pvp.mode,
             party_id: pvp.party_id,
+            alignment: 0, // GAP (2026-08-28): el lane de persistencia lo alimentará
             hp: hp.hp,
             level: player.level,
             guild_id: None,
@@ -907,12 +908,12 @@ impl WorldSim {
     /// Sincroniza el PK mode del jugador (CG_PVP 41 — el handler del canal
     /// lo manda al setear el flag de sesión; el gate `battle_is_attackable`
     /// del PvP lo consume).
-    pub(crate) fn set_player_pvp_mode(&mut self, player_vid: u32, on: bool) {
+    pub(crate) fn set_player_pvp_mode(&mut self, player_vid: u32, mode: PkMode) {
         let Some(e) = self.players.get(&player_vid).copied() else { return };
         if let Ok(mut ent) = self.world.get_entity_mut(e)
             && let Some(mut p) = ent.get_mut::<Pvp>()
         {
-            p.mode = on;
+            p.mode = mode;
         }
     }
 
@@ -930,6 +931,7 @@ impl WorldSim {
 
 #[cfg(test)]
 mod tests {
+    use crate::combat::PkMode;
     use crate::ecs::events::{CombatEvent, CombatIntent, MoveEvent, MoveIntent, NpcEvent, PlayerJoin};
     use crate::ecs::test_util::*;
 
@@ -1568,7 +1570,7 @@ mod tests {
         );
         assert!(events.is_empty(), "PK OFF → battle_is_attackable false: {events:?}");
         // Atacante PK ON → atacable: el golpe hace daño al Hp del jugador 3.
-        w.process_intent(CombatIntent::SetPvpMode { player_vid: 2, on: true }.into(), 1_000);
+        w.process_intent(CombatIntent::SetPvpMode { player_vid: 2, mode: PkMode::Free }.into(), 1_000);
         let events = w.process_intent(
             CombatIntent::Attack { player_vid: 2, victim_vid: 3, b_type: 0, weapon: None }.into(),
             1_000,
@@ -1603,10 +1605,11 @@ mod tests {
         assert_eq!(victim_hp, 100 - damage, "hp del PC tras el golpe");
         assert_eq!(w.player_hp(3), 100 - damage, "el mundo aplicó el daño al Hp del PC");
         // La VÍCTIMA con PK ON también es atacable con el atacante OFF
-        // (parity IsKillerMode — pvp.cpp:443-445). Esperando el cooldown
-        // del jugador (1250 ms → 2_500).
-        w.process_intent(CombatIntent::SetPvpMode { player_vid: 2, on: false }.into(), 2_000);
-        w.process_intent(CombatIntent::SetPvpMode { player_vid: 3, on: true }.into(), 2_000);
+        // (proxy del killer-STATE — pvp.cpp:453; el killer-flag del C++
+        // se aproxima con el modo no-Peace de la víctima). Esperando el
+        // cooldown del jugador (1250 ms → 2_500).
+        w.process_intent(CombatIntent::SetPvpMode { player_vid: 2, mode: PkMode::Peace }.into(), 2_000);
+        w.process_intent(CombatIntent::SetPvpMode { player_vid: 3, mode: PkMode::Free }.into(), 2_000);
         let events = w.process_intent(
             CombatIntent::Attack { player_vid: 2, victim_vid: 3, b_type: 0, weapon: None }.into(),
             2_500,
@@ -1625,7 +1628,7 @@ mod tests {
         let mut w = world_with(42);
         join_pvp(&mut w, 2, 0, 0);
         join_pvp(&mut w, 3, 0, 0);
-        w.process_intent(CombatIntent::SetPvpMode { player_vid: 2, on: true }.into(), 1_000);
+        w.process_intent(CombatIntent::SetPvpMode { player_vid: 2, mode: PkMode::Free }.into(), 1_000);
         w.process_intent(CombatIntent::SetParty { player_vid: 2, party_id: Some(7) }.into(), 1_000);
         w.process_intent(CombatIntent::SetParty { player_vid: 3, party_id: Some(7) }.into(), 1_000);
         let events = w.process_intent(
@@ -1655,7 +1658,7 @@ mod tests {
         let mut w = world_with(42);
         join_pvp(&mut w, 2, 0, 0);
         join_pvp(&mut w, 3, 0, 0);
-        w.process_intent(CombatIntent::SetPvpMode { player_vid: 2, on: true }.into(), 1_000);
+        w.process_intent(CombatIntent::SetPvpMode { player_vid: 2, mode: PkMode::Free }.into(), 1_000);
         // La víctima a 10 hp: un golpe (27-28) la mata.
         w.process_intent(CombatIntent::SetHp { player_vid: 3, hp: 10 }.into(), 1_000);
         let events = w.process_intent(

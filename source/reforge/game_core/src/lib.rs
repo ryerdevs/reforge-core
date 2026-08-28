@@ -53,6 +53,7 @@ pub mod map;
 pub mod movement;
 pub mod npc;
 pub mod packets;
+pub mod pvp;
 pub mod quest;
 pub mod refine;
 pub mod shop;

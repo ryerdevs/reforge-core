@@ -200,8 +200,9 @@ pub struct Combat(pub crate::combat::CombatState);
 /// `battle_is_attackable` del mundo — PvP — lo consume).
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Pvp {
-    /// PK mode ON (CG_PVP 41 — el flag de sesión del canal).
-    pub mode: bool,
+    /// PK mode del jugador (CG_PVP 41 — los `PK_MODE_*` del C++,
+    /// char.h:359-363; PEACE = sin PvP — runtime de esta variante).
+    pub mode: crate::combat::PkMode,
     /// Party del jugador (None sin party — "cannot attack same party on
     /// any pvp model", pvp.cpp:439-441).
     pub party_id: Option<u32>,

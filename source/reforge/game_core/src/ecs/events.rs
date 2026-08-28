@@ -113,7 +113,7 @@ pub enum CombatIntent {
     /// PK mode del jugador (CG_PVP 41 — el handler del canal lo manda al
     /// setear el flag de sesión; el gate PvP `battle_is_attackable` del
     /// mundo lo consume — el mundo es donde están AMBOS jugadores).
-    SetPvpMode { player_vid: u32, on: bool },
+    SetPvpMode { player_vid: u32, mode: crate::combat::PkMode },
     /// Party del jugador (el canal lo sincroniza en Joined/LeftParty —
     /// "cannot attack same party", pvp.cpp:439-441).
     SetParty {
@@ -682,6 +682,16 @@ pub enum SkillEvent {
         skill_id: u32,
         point: u8,
     },
+    /// Família PARTY (`SKILL_FLAG_PARTY` — parity `ComputeSkillParty`,
+    /// char_skill.cpp:1906-1915): el buff del skill de party llega a CADA
+    /// miembro cerca. El caster ve su icono en el `SkillResult`; cada
+    /// miembro recibe ESTE evento (routing por player_vid → GC_AFFECT_ADD
+    /// en el canal; el mundo ya lo tiene en su `Affects`).
+    PartyBuff {
+        player_vid: u32,
+        skill_id: u32,
+        buff: protocol::world::TPacketAffectElement,
+    },
     /// Modo SPLASH (área — flag SKILL_FLAG_SPLASH): el resultado COMPLETO
     /// del uso, UNA entrada por víctima (mobs Y PCs atacables dentro del
     /// radio, `lMaxHit` aplicado — parity `FuncSplashDamage`). El coste
@@ -864,6 +874,7 @@ impl SkillEvent {
     pub fn player_vid(&self) -> u32 {
         match self {
             SkillEvent::SkillResult { player_vid, .. }
+            | SkillEvent::PartyBuff { player_vid, .. }
             | SkillEvent::AffectRemoved { player_vid, .. }
             | SkillEvent::SplashResult { player_vid, .. }
             | SkillEvent::SplashVictimHit { player_vid, .. } => *player_vid,
