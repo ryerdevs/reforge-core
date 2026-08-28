@@ -19,7 +19,7 @@ use protocol::header;
 use game_core::ecs::{CombatIntent, Intent};
 
 use crate::channel::session::Session;
-use crate::channel::{chat, combat, events, items, movement, party, pvp, quest, quickslot, safebox, script, shop, skills, trade};
+use crate::channel::{chat, combat, events, items, locale, movement, party, pvp, quest, quickslot, safebox, script, shop, skills, trade};
 
 /// Loop de juego de la conexión: corre SOLO con la sesión llena (las fases
 /// 1-7 las hizo `entry::run`). `Err` = cierre con razón (fatal o protocolario
@@ -97,6 +97,9 @@ async fn game_loop(session: &mut Session) -> Result<(), String> {
                         }))?;
                     }
                     header::CG_USE_SKILL => skills::handle(session, &pkt).await?.into_result()?,
+                    // F1 pull del locale (ADR-0009 — hot reload): el cliente
+                    // re-pide la lengua EN GAME; stateless (parity auth).
+                    header::CG_LOCALE_REQUEST => locale::handle(session, &pkt).await?.into_result()?,
                     // F5.3: chat — echo GC_CHAT (4) al jugador (parity
                     // `Chat()` input_main.cpp:641-685 → `ChatPacket` →
                     // char.cpp — sin interpret_command por ahora, YAGNI).
