@@ -97,6 +97,10 @@ async fn game_loop(session: &mut Session) -> Result<(), String> {
                         }))?;
                     }
                     header::CG_USE_SKILL => skills::handle(session, &pkt).await?.into_result()?,
+                    header::CG_EVENT => events::handle_cg_event(session, &pkt).await?.into_result()?,
+                    header::CG_DUNGEON => {
+                        crate::channel::dungeon::handle(session, &pkt).await?.into_result()?;
+                    }
                     // FASE 1 caballo jugable: CG_HORSE (63, aditivo reforge —
                     // 2 B: header + bRide) monta/desmonta + persiste.
                     header::CG_HORSE => horse::handle(session, &pkt).await?.into_result()?,

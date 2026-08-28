@@ -149,6 +149,8 @@ pub mod header {
     /// Parity del flujo `/ride` (do_user_horse_ride cmd_general.cpp:37-65 +
     /// CHorseRider::StartRiding/StopRiding horse_rider.cpp:165-193).
     pub const CG_HORSE: u8 = 63;
+    /// `CG_EVENT` (62 — aditivo reforge; blank Packet.h:74): 2 B.
+    pub const CG_EVENT: u8 = 62;
     pub const CG_WARP: u8 = 65;
     pub const CG_SCRIPT_BUTTON: u8 = 66;
     /// `HEADER_CG_MESSENGER` (Packet.h:79 — 67): messenger (amigos) —
@@ -266,6 +268,8 @@ pub mod header {
     /// (parity `input.cpp:205-213`).
     pub const CG_CLIENT_VERSION2: u8 = 0xf1;
     pub const CG_LOGIN2: u8 = 109;
+    /// `HEADER_CG_DUNGEON` (110 — packet.h:86; hueco del packet_info C++).
+    pub const CG_DUNGEON: u8 = 110;
     pub const CG_LOGIN3: u8 = 111;
     /// F1 (locale, aditivo — ADR-0009): el cliente pide el bundle de texto
     /// al conectar al auth, ANTES del LOGIN3 (`CG_LOCALE_REQUEST`, 4 B).

@@ -48,6 +48,7 @@ mod belt;
 mod chat;
 mod combat;
 mod dragon_soul;
+mod dungeon;
 mod emotions;
 mod entry;
 mod events;

@@ -24,7 +24,7 @@ Checklist vs `documentation/history/plans/server-side-gap-2026-08-15.md` + estad
 - [x] weight (gate fail-open hasta importar item_proto.weight — ver pendiente)
 - [x] locale push (GC_LOCALE chunked al conectar; pull pendiente)
 - [x] dungeon/event/land/belt/dragon soul/refine stubs (d_soul upgrade stage/grade ya)
-- [x] refine full (roll 1..100 ≤ refine_proto.prob real, scroll destroy/degrade, fee, ventana — items.rs:1664; REFINE_SUCCESS_PCT 70 queda solo en game_core::refine)
+- [x] refine full (roll 1..100 ≤ refine_proto.prob real, scroll destroy/degrade, fee, ventana — items.rs:1664; prob overrides de scrolls especiales MUSIN/MEMO 100, BDRAGON 80, YONGSIN/YAGONG por nivel, HYUNIRON base+no-degrada — `game_core::refine` NUEVO: effective_prob/is_success/destroy_when_fail sobre `database::item::RefineRecipe`, verifier anti-stub, 78 líneas)
 
 - [ ] party full — core ya (invite/answer/remove/parameter/set_state 75/use_skill 76 con verifier party_role_heal_summon_wired + exp NON_PARITY/PARITY con bonus tabla CHN); falta GC_PARTY_LINK/UNLINK (la ventana funciona sin él) y +30% item del líder (requiere trackear equipo, party.rs doc GAPs)
 - [ ] safebox full — grid de size celdas (strip 5 ancho, item_proto.size real = 2679 items 2×2), gates EXPAND/antiflag SAFEBOX (667 vnums)/STACKABLE y `/safebox_change_password <old> <new>` DONE (2026-08-27, verifier checkin_gate_* + old_password_matches); falta checkout a DS/belt (safebox.rs:25)

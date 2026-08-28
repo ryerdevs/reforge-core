@@ -20,7 +20,7 @@ use game_core::ecs::{
 };
 use game_core::packets;
 
-use crate::channel::session::Session;
+use crate::channel::session::{Outcome, Session};
 use crate::channel::{is_gold_item, now32, INVENTORY_MAX_NUM, ITEM_COUNT_LIMIT};
 use crate::channel::gm::gm_info;
 
@@ -796,6 +796,23 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
     Ok(())
 }
 
+/// CG_EVENT (62, 2 B) — ADITIVO reforge (blank Packet.h:74; patrón CG_PVP: gate + log, sin eco fase 2).
+pub async fn handle_cg_event(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String> {
+    if !event_shape_ok(pkt) {
+        eprintln!(
+            "server_realms: channel conn {}: CG_EVENT malformado ({} B)",
+            session.conn_id,
+            pkt.len()
+        );
+        return Ok(Outcome::Continue);
+    }
+    Ok(Outcome::Continue)
+}
+
+fn event_shape_ok(pkt: &[u8]) -> bool {
+    pkt.len() == 2
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -808,5 +825,14 @@ mod tests {
         assert!(!is_gold_item(2), "vnum 2 no es oro");
         assert!(!is_gold_item(101), "un item normal no es oro");
         assert!(!is_gold_item(0), "0 no es oro");
+    }
+
+    /// VERIFIER wire CG_EVENT: solo 2 B exactos (mutar `==` por `>=` o `<=` falla).
+    #[test]
+    fn cg_event_shape_gate() {
+        assert!(event_shape_ok(&[62, 0]), "2 B válido");
+        assert!(event_shape_ok(&[62, 42]), "byte reservado aceptado");
+        assert!(!event_shape_ok(&[62]), "1 B → malformado");
+        assert!(!event_shape_ok(&[62, 0, 0]), "3 B → malformado");
     }
 }

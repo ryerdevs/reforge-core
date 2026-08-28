@@ -30,6 +30,7 @@ pub mod account;
 pub mod affect;
 pub mod attr;
 pub mod common;
+pub mod dragon_soul;
 pub mod economy;
 pub mod item;
 pub mod land;

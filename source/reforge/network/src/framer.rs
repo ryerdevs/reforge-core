@@ -151,6 +151,7 @@ fn game_phase_size(header: u8) -> Option<usize> {
         header::CG_LAND_TRANSFER => 9,      // 57, aditivo reforge — header+land_id+new_owner
         header::CG_ITEM_USE_TO_ITEM => 7,   // 60, header+source+target (Packet.h:549-554)
         header::CG_TARGET => 5,             // 61, header+vid (Packet.h:671-675)
+        header::CG_EVENT => 2,              // 62, aditivo reforge — header+byte (Packet.h:74 blank)
         header::CG_HORSE => 2,              // 63, ADITIVO reforge — header+bRide montar/desmontar caballo (client Packet.h:75 blank)
         header::CG_WARP => 15,              // 65, header+x+y+addr+port (Packet.h:2028-2035)
         header::CG_SCRIPT_BUTTON => 5,      // 66, header+idx (Packet.h:665-669)
@@ -184,6 +185,7 @@ fn game_phase_size(header: u8) -> Option<usize> {
         header::CG_REFINE => 3,             // 96, header+pos+type (Packet.h:976-982)
         header::CG_HACK => 257,             // 105, header+szBuf[256] (Packet.h:943-947)
         header::CG_CHANGE_NAME => TPacketCGChangeName::SIZE, // 106, header+index+name[25] (Packet.h:980-984, packet_info.cpp:223) — renombrar en la fase select (lane E)
+        header::CG_DUNGEON => 5,            // 110, aditivo reforge — header+map_index i32 (packet.h:86; el C++ no lo registra)
         header::CG_SCRIPT_SELECT_ITEM => 5, // 114, header+selection (Packet.h:1031-1035)
         header::CG_DRAGON_SOUL_REFINE => 47, // 205, header+bSubType+TItemPos[15] (DS_REFINE_WINDOW_MAX_NUM=15 — GameType.h:191) (Packet.h:2715-2722)
         header::CG_ACCE => 23,              // 211, header+subheader+bWindow+dwPrice+bPos+tPos+dwItemVnum+dwMinAbs+dwMaxAbs (Packet.h:2765-2776)
