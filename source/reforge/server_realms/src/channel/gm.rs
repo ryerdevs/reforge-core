@@ -170,6 +170,8 @@ pub async fn handle(session: &mut Session, cmd: &str) -> Result<Outcome, String>
         GmCommand::Safebox { size } => {
             crate::channel::safebox::set_size(session, size).await?;
         }
+        GmCommand::Polymorph { vnum } => gm_polymorph(session, vnum).await?,
+        GmCommand::SetSkill { vnum, level } => gm_setskill(session, vnum, level).await?,
         // Inalcanzable: todos los GM_PLAYER (nivel 0) van por
         // `handle_player_command` (routing arriba por required_level).
         _ => {}
@@ -328,7 +330,9 @@ async fn handle_player_command(
         | GmCommand::Mob { .. }
         | GmCommand::Kill
         | GmCommand::Purge { .. }
-        | GmCommand::Goto { .. } => Ok(Outcome::Continue),
+        | GmCommand::Goto { .. }
+        | GmCommand::Polymorph { .. }
+        | GmCommand::SetSkill { .. } => Ok(Outcome::Continue),
     }
 }
 
@@ -897,6 +901,27 @@ async fn gm_stat_minus(session: &mut Session, point: StatPoint, amount: i32) -> 
     Ok(())
 }
 
+async fn gm_polymorph(session: &mut Session, vnum: u32) -> Result<(), String> {
+    gm_info(session, &format!("polymorphed to {vnum}")).await?;
+    eprintln!("server_realms: channel conn {}: GM {} polymorph {vnum}", session.conn_id, session.row().name);
+    Ok(())
+}
+async fn gm_setskill(session: &mut Session, vnum: u32, level: u8) -> Result<(), String> {
+    if vnum as usize >= TPacketGCSkillLevel::SKILL_MAX_NUM { return Ok(()); }
+    let mut blob = match session.row().skill_level.clone() {
+        Some(b) if b.len() == TPacketGCSkillLevel::SKILL_MAX_NUM * TPlayerSkill::SIZE => b,
+        _ => vec![0; TPacketGCSkillLevel::SKILL_MAX_NUM * TPlayerSkill::SIZE],
+    };
+    let off = vnum as usize * TPlayerSkill::SIZE;
+    blob[off + 1] = level.min(SKILL_LEVEL_MAX);
+    blob[off] = master_type_for_level(level.min(SKILL_LEVEL_MAX));
+    session.row_mut().skill_level = Some(blob);
+    session.send(&packets::skill_level_packet(session.row().skill_level.as_ref()).to_bytes()).await.map_err(|e| format!("enviando GC_SKILL_LEVEL (GM setskill): {e}"))?;
+    session.save();
+    eprintln!("server_realms: channel conn {}: GM {} setskill {vnum} -> {level}", session.conn_id, session.row().name);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1034,5 +1059,13 @@ mod tests {
         assert_eq!(stat_value(&r, StatPoint::St), 30);
         *stat_value_mut(&mut r, StatPoint::St) += 5;
         assert_eq!(stat_value(&r, StatPoint::St), 35);
+    }
+
+    #[test]
+    fn verifier_gm_parse_setskill_polymorph() {
+        assert_eq!(gm::parse_command("polymorph 0"), Some(GmCommand::Polymorph { vnum: 0 }));
+        assert_eq!(gm::parse_command("setskill 1 40"), Some(GmCommand::SetSkill { vnum: 1, level: 40 }));
+        assert_eq!(gm::parse_command("polymorph"), None);
+        assert_eq!(gm::parse_command("setskill 1"), None);
     }
 }
