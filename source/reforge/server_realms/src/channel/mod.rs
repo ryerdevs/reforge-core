@@ -44,6 +44,7 @@
 //! pasó de 10 parámetros a método de Session. La estructura de archivos
 //! (entry/game/movement/items/...) se divide en R-s2/R-s3.
 
+mod belt;
 mod chat;
 mod combat;
 mod emotions;
@@ -53,6 +54,7 @@ mod game;
 mod gm;
 mod guild;
 mod items;
+mod land;
 mod locale;
 mod messenger;
 mod movement;

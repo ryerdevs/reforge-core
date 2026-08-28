@@ -42,3 +42,29 @@ async fn land_load_map_41_contract() {
     // Mapa sin lands -> vec vacío (el C++ no manda el paquete con 0).
     assert!(repo.load_by_map(999_999).await.expect("DB up").is_empty());
 }
+
+/// VERIFIER (identidad PG — phase land): el id lo asigna la sequence, NO un
+/// contador de proceso. Dos compras → ids distintos y ESTRICTAMENTE
+/// crecientes (> max(id) 292 del runtime); la transferencia cambia el dueño
+/// (parity `SetOwner`) y `load_by_map` lo ve. Limpieza total al final.
+#[tokio::test]
+#[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
+async fn land_buy_sequence_and_transfer_roundtrip() {
+    let repo = LandRepo::new(database::pool::new_pool(&pg_conn(), 4).expect("pool PG"));
+    let id1 = repo.buy(41, 66100, 9400, 300, 300, 10_000).await.expect("buy 1");
+    let id2 = repo.buy(41, 66200, 9400, 300, 300, 10_000).await.expect("buy 2");
+    assert!(id1 >= 293, "sigue al max(id) 292 del runtime: {id1}");
+    assert!(id2 > id1, "sequence estrictamente creciente: {id1} -> {id2}");
+    assert_eq!(repo.transfer(id1, 42).await.expect("transfer"), 1, "1 fila");
+    let l = repo
+        .load_by_map(41)
+        .await
+        .expect("load")
+        .into_iter()
+        .find(|l| l.id == id1)
+        .expect("el land comprado existe en el mapa");
+    assert_eq!(l.guild_id, 42, "dueño transferido (parity SetOwner)");
+    assert_eq!(repo.transfer(id1, 0).await.expect("revert"), 1, "revert dueño");
+    assert_eq!(repo.delete(id1).await.expect("clear 1"), 1, "limpieza 1");
+    assert_eq!(repo.delete(id2).await.expect("clear 2"), 1, "limpieza 2");
+}
