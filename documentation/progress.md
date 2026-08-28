@@ -6,43 +6,46 @@ Corre todo lo que falta para que el servidor sea mejor que el original, sin 1:1,
 ## Current
 
 - Fecha: 2026-08-28
-- HEAD: `d3479bc` (feat(refine,event,dungeon): Phase 1 wire final verifiers) — `git rev-parse HEAD` verificado, árbol limpio
-- Tests: **857** (cargo test --workspace -- --list, 2026-08-28 — conteo real de items, sin run)
+- HEAD: `674296c` (fix(gm): restore transfer/ipurge lost in parallel race) — `git rev-parse HEAD` verificado, árbol limpio
+- Tests: **NO VERIFICABLE en HEAD — el workspace no compila** (`error[E0004]` `server_realms/src/channel/gm.rs:204`: `GmCommand::Transfer`/`Ipurge` sin brazos en el match de `handle_player_command`; último conteo real: **857** en `d3479bc`)
 - Docs: `documentation/` (20 vivos — 5 hub + 14 ADR + reference/login-flow), `scripts/status.ps1|verify.ps1|handoff.ps1|clean.ps1`, CI `.github/workflows/docs.yml` ✓
-- Handoff: slices recientes ya commiteados (party 75/76, safebox grid+antiflag+change_password, weight fail-open data real, locale pull, events/dungeon schedule+lifecycle, skills PARTY+PK modes, land/belt/dragon_soul/refine Phase 1) — ver Handoff abajo
-- Deploy: `source\deploy\win` sigue corriendo el binario pre-Phase-1 — **redeploy pendiente** (nota de los slices coder)
+- Handoff: 13 commits nuevos desde d3479bc (quests say_reward/send_letter/set_quest_state, messenger OTHER_SEX_ONLY, GM polymorph/setskill/transfer/ipurge, dragon_soul fee+materiales, skills grand master + pvp penalty, guild war declare, party LINK/UNLINK, events persist id) — ver Handoff abajo
+- Deploy: `source\deploy\win` sigue corriendo el binario pre-Phase-1 — redeploy pendiente **y bloqueado: HEAD no compila** (ver Pendientes #1)
 
 ## Todos (restante)
 
-Checklist vs `documentation/history/plans/server-side-gap-2026-08-15.md` + estado real del código (HEAD `d3479bc`):
+Checklist vs `documentation/history/plans/server-side-gap-2026-08-15.md` + estado real del código (HEAD `674296c`, verificado 2026-08-28):
 
 - [x] stats 5/nivel infinito (ADR-0014)
 - [x] items attrs (roll_attrs + sockets/magic — database::attr, verifier apply_index)
 - [x] exp level-delta (tabla parity + low-mob nunca full — combat)
-- [x] guild basic/wire/grade/comment/ranking/PG persist (war = stub; member_flow_roundtrip + live PG)
-- [x] pvp can_attack + PK modes (gates guild/party/safe-zone/protect; parse 10b/2b + daño — 292a267)
-- [x] skills splash/horse/skill_power + familia PARTY (splash radius/max_hit/pvp gate; horse mounted; k_value por tabla; PARTY buff — 292a267)
+- [x] guild basic/wire/grade/comment/ranking/PG persist + war declare/score (06846f6; estados/fin en menores)
+- [x] pvp can_attack + PK modes + penalización (gates guild/party/safe-zone/protect; penalty exp/drop restaurado d8de555; war-PK sin penalidad cb5e9a5; parse 10b/2b + daño — 292a267)
+- [x] skills splash/horse/skill_power + familia PARTY + grand master (kMasterBonusPoly REAL: ecs/systems/skill.rs:329-334 + verifier `grand_master_uses_bonus_poly_and_sp` — 695418d; ATT_SPEED aplicado numéricamente combat.rs:554)
 - [x] aiflags berserk/coward/godspeed/stoneskin (ecs combat)
 - [x] weight (gate fail-open POR DISEÑO — ninguna fuente clásica tiene la columna; re-verificado 2026-08-28 PG + MariaDB + pack TEA+LZO + C++ + upstream; peso 0 nunca rechaza weight.rs:64-73; escala ÷10 pinned por verifier; importación futura = UPDATE item_proto.weight desde fuente externa)
 - [x] locale push + pull (GC_LOCALE chunked al conectar + CG_LOCALE_REQUEST → GC_LOCALE — 287e414)
 - [x] dungeon/event/land/belt/dragon soul/refine Phase 1 (wire + persist: land PG sequence 55851a6, belt cells 242..258, dragon_soul ledger identity, refine prob real)
 - [x] refine full (roll 1..100 ≤ refine_proto.prob real, scroll destroy/degrade, fee, ventana — items.rs:1664; prob overrides de scrolls especiales MUSIN/MEMO 100, BDRAGON 80, YONGSIN/YAGONG por nivel, HYUNIRON base+no-degrada — `game_core::refine` NUEVO: effective_prob/is_success/destroy_when_fail sobre `database::item::RefineRecipe`, verifier anti-stub, 78 líneas)
-- [x] party full — set_state 75/use_skill 76 con verifier party_role_heal_summon_wired (2026-08-27; heal real cooltime 60 min + summon ring vía GC_WARP; GAP: GC_PARTY_LINK/UNLINK + 30% líder — pendiente abajo)
-- [x] safebox full — grid de size celdas (strip 5 ancho, item_proto.size real = 2679 items 2×2), gates EXPAND/antiflag SAFEBOX (667 vnums)/STACKABLE y `/safebox_change_password <old> <new>` (2026-08-27, verifier checkin_gate_* + old_password_matches); checkout→belt ya (2026-08-28); GAP: checkout→DS — pendiente abajo
-- [x] events/dungeon full — schedule [start,end) + trigger (Exp/DropMultiplier) con verifiers; dungeon ciclo WAIT→START→END + wire `channel/dungeon.rs` (d3479bc); GAPs: persistencia de eventos (id = 0 hasta lane event) + raids contenido — pendiente abajo
+- [x] party full — set_state 75/use_skill 76 + **LINK/UNLINK emitidos** al crear/disolver (91b389c; link_bytes/unlink_bytes party.rs:581/584; verifier party.rs:2539-2558; heal cooltime 60 min + summon ring vía GC_WARP; residual +30% líder en menores)
+- [x] safebox full — grid de size celdas (strip 5 ancho, item_proto.size real = 2679 items 2×2), gates EXPAND/antiflag SAFEBOX (667 vnums)/STACKABLE, `/safebox_change_password <old> <new>` (2026-08-27, verifier checkin_gate_* + old_password_matches); checkout→belt ya (2026-08-28); residual checkout→DS abajo
+- [x] events/dungeon full — schedule [start,end) + trigger (Exp/DropMultiplier) con verifiers; dungeon ciclo WAIT→START→END + wire `channel/dungeon.rs` (d3479bc); **persistencia con id real** (cb5e9a5, `database/event.rs` EventRepo::create RETURNING id); raids contenido en menores
+- [x] messenger OTHER_SEX_ONLY + textos INFO en EN (d39c5e8: flag 1<<3 + `other_sex_ok` fail-open sin player.sex — emotions.rs:28-62, verifier `verifier_other_sex_only_flag_and_logic`; matrimonio stub + block/observer en menores)
+- [x] GM commands principales parseados — mob/kill/purge/goto/polymorph/setskill/transfer/ipurge (e4538d3, 539bea7, 674296c — parse + required_level en gm.rs); **PERO el dispatch NO compila (Pendiente #1)**
+- [x] dragon_soul refine FASE 2 (parcial) — fee/prob/materiales REALES de refine_proto + consumo de oro/materiales (e752323; channel/dragon_soul.rs:32-54 ds_fee/ds_is_success/roll real); crear item en menores
+- [x] events persist id lane — `database/event.rs` EventRepo::list/create/delete con RETURNING id (cb5e9a5)
 
-- [ ] party residual: GC_PARTY_LINK/UNLINK sin emitir (la ventana funciona sin él) + 30% item del líder (requiere trackear equipo, party.rs doc GAPs)
-- [ ] safebox residual: checkout → dragon soul (belt ya; safebox.rs:25)
-- [ ] messenger full — core ya (2026-08-21, persist live PG); falta OTHER_SEX_ONLY (sin player.sex), matrimonio, block-mode/observer, textos INFO en EN
-- [ ] guild war full — persist/ranking ya; falta war real (hoy stub, score verifier ya en game_core)
-- [ ] pvp full — PK mode ya; falta penalización PK (exp/drop), war-PK
-- [ ] skills full — falta grand master, buffs ATT_SPEED/CASTING al gameplay (familia PARTY ya: 292a267)
-- [ ] quests full — falta say_reward, send_letter, set_quest_state, target_vid, affect_*, timers/scheduler (corpus ~88 incompletas)
-- [ ] GM commands restantes — ~9 reales de 174 (mob, kill, purge, goto, set, makeguild, setskill, polymorph, priv_empire...)
-- [ ] dragon_soul refine real FASE 2 — materiales/fee/prob, consumir/crear items (DragonSoul.cpp:488+), grid 15 TItemPos (hoy FAIL determinista)
-- [ ] events persistencia (id lane) + raids contenido
+Pendientes reales (3):
+
+- [ ] **BUILD ROTO en HEAD `674296c`** (crítico, bloqueante): `server_realms/src/channel/gm.rs:204` — el match exhaustivo de `handle_player_command` (:326-335) no cubre `GmCommand::Transfer`/`Ipurge` añadidos por 674296c → `error[E0004]` → no compila ni el bin ni los tests; conteo no verificable (último: 857 en d3479bc); redeploy Phase 1 bloqueado. Fix = 2 brazos en el match (y dispatch real de transfer/ipurge — hoy no hay handler en channel)
+- [ ] safebox residual: checkout → dragon soul (belt ya; DS sigue GAP — safebox.rs:30/542/566/572; ningún commit desde d3479bc lo toca)
+- [ ] quests runtime restante: target_vid, affect_*, input_number, timers/scheduler (engine.rs — say_reward/send_letter d7ac399 + set_quest_state 539bea7 YA están)
+
+Menores con evidencia (no bloqueantes, sin fila propia): party +30% item líder (party.rs:46-53, requiere trackear equipo); dragon_soul crear/entregar item en éxito (channel/dragon_soul.rs:40-54 consume materiales+fee pero no crea el alma — hoy SUCCEED sin item); guild war estados WAIT/ON_WAR + fin (guild.rs:187-188 "slice futuro"; declare/score/no-penalty OK); messenger matrimonio real + block-mode/observer (emotions.rs:60 stub `is_married_to`=false; messenger.rs:39 "sistemas ausentes"); GM set/makeguild/priv_empire (no existen en parse); buff CASTING_SPEED numérico (solo const+parse skill.rs:126/243 — ATT_SPEED sí aplicado); raids contenido (dungeon.rs Raid/spawn_raid sin wiring al channel).
 
 ## Handoff
+
+- 2026-08-28 | sync progress.md a HEAD **`674296c`** (librarian): checklist actualizado tras los 13 commits post-`d3479bc` (d2b69db docs → d7ac399 quest say_reward/send_letter → d39c5e8 messenger OTHER_SEX_ONLY + matrimonio stub → e4538d3 GM polymorph/setskill → e752323 dragon_soul fee/prob/materiales → 695418d skills grand master + pvp penalty → d8de555 fix pvp penalty → 06846f6 guild war declare + raid spawn → 4bdc421 fix raid spawn → 91b389c party LINK/UNLINK → cb5e9a5 events persist id + war-PK → 539bea7 GM transfer/ipurge + set_quest_state → 674296c fix gm restore). **HALLAZGO CRÍTICO: el workspace NO compila en HEAD — `error[E0004]` `server_realms/src/channel/gm.rs:204` (match de `handle_player_command` sin brazos `Transfer`/`Ipurge`) → sin conteo de tests (último real: 857 en `d3479bc`) y redeploy bloqueado.** OJO: "safebox DS" (checkout→dragon soul) NO está hecho — safebox.rs:30/542/566/572 sigue `DS = GAP`, ningún commit lo toca (no marcado [x], reportado). Pendientes reales: (1) build roto, (2) safebox→DS, (3) quests target_vid/affect_*/input_number/timers; menores: party +30% líder, dragon_soul crear item en éxito, guild war estados, messenger matrimonio/block/observer, GM set/makeguild/priv_empire, CASTING_SPEED numérico, raids wiring. Doc-comments de código desactualizados (fuera del lane docs, reportados): party.rs:50 dice "LINK/UNLINK NO se emiten" (ya se emiten) y skill.rs:53 dice "grand master queda fuera" (ya está — ecs/systems/skill.rs:329-334).
 
 - 2026-08-28 | slice docs sync (librarian): progress.md sincronizado con HEAD `d3479bc` verificado (`git rev-parse HEAD`; ojo: el HEAD pedido `43063fb` es 6 commits anterior — 43063fb→9b8c318→4352cb8→55851a6→81d5f85→d3479bc). Checklist: [x] party 75/76, safebox grid full, weight fail-open (provenance re-verificada), locale pull, events/dungeon schedule+lifecycle, skills PARTY/PK (292a267); quedan 10 pendientes reales (messenger, quests, GM, guild war, pvp penalty, skills GM, dragon_soul FASE 2, residuales party/safebox/events). Tests **857** (--list 2026-08-28, verificado). Redeploy del binario Phase 1 al stack `source\deploy\win` sigue pendiente.
 
