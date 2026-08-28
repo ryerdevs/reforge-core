@@ -54,6 +54,7 @@ pub mod movement;
 pub mod npc;
 pub mod packets;
 pub mod quest;
+pub mod refine;
 pub mod shop;
 pub mod skill;
 pub mod trade;
