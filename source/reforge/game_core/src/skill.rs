@@ -205,6 +205,10 @@ pub struct SkillProto {
     /// `dwtargetrange` — rango del objetivo (0 = sin check — parity
     /// ComputeSkill: `dwTargetRange && dist >= range + 50` → rechazo).
     pub target_range: u32,
+    /// `szmasterbonuspoly` — poly usado si master_type≥GRAND (30+).
+    pub master_bonus_poly: String,
+    /// `szgrandmasteraddspcostpoly` — coste SP si master_type≥GRAND.
+    pub grand_add_sp_poly: String,
 }
 
 impl SkillProto {
@@ -293,6 +297,17 @@ pub fn attr_type_from_text(name: &str) -> u8 {
 pub fn skill_level_from_blob(blob: &[u8], skill_id: u32) -> u8 {
     let off = skill_id as usize * 6 + 1;
     blob.get(off).copied().unwrap_or(0)
+}
+
+/// `bMasterType` del blob (`SKILL_NORMAL=0, MASTER=1, GRAND=2, PERFECT=3` — parity `SetSkillLevel` char_skill.cpp:207-217).
+pub fn skill_master_type_from_blob(blob: &[u8], skill_id: u32) -> u8 {
+    let off = skill_id as usize * 6;
+    blob.get(off).copied().unwrap_or(0)
+}
+
+/// `master_type` derivado del nivel (parity `SetSkillLevel` 207-217: 40→3, 30→2, 20→1, else 0).
+pub fn master_type_for_level(level: u8) -> u8 {
+    if level >= 40 { 3 } else if level >= 30 { 2 } else if level >= 20 { 1 } else { 0 }
 }
 
 /// `k` del poly: `GetSkillPower(vnum, level) * bMaxLevel / 100`
@@ -561,7 +576,8 @@ impl SkillRepo {
                 "SELECT dwvnum, btype, blevelstep, bmaxlevel, szpointon, szpointpoly, \
                  szspcostpoly, szdurationpoly, szcooldownpoly, setflag, setaffectflag, \
                  eskilltype, imaxhit, dwtargetrange, dwsplashrange, \
-                 szsplasharounddamageadjustpoly \
+                 szsplasharounddamageadjustpoly, szmasterbonuspoly, \
+                 szgrandmasteraddspcostpoly \
                  FROM player.skill_proto ORDER BY dwvnum",
                 &[],
             )
@@ -587,7 +603,8 @@ impl SkillRepo {
                 "SELECT dwvnum, btype, blevelstep, bmaxlevel, szpointon, szpointpoly, \
                  szspcostpoly, szdurationpoly, szcooldownpoly, setflag, setaffectflag, \
                  eskilltype, imaxhit, dwtargetrange, dwsplashrange, \
-                 szsplasharounddamageadjustpoly \
+                 szsplasharounddamageadjustpoly, szmasterbonuspoly, \
+                 szgrandmasteraddspcostpoly \
                  FROM player.skill_proto WHERE dwvnum = $1",
                 &[&(vnum as i32)],
             )
@@ -620,6 +637,8 @@ fn skill_proto_from_row(r: &tokio_postgres::Row) -> Option<SkillProto> {
         target_range: r.get::<_, i32>(13) as u32,
         splash_range: r.get::<_, i64>(14).max(0) as u32,
         splash_adjust_poly: r.get::<_, Option<String>>(15).unwrap_or_default(),
+        master_bonus_poly: r.get::<_, Option<String>>(16).unwrap_or_default(),
+        grand_add_sp_poly: r.get::<_, Option<String>>(17).unwrap_or_default(),
     })
 }
 
@@ -824,6 +843,8 @@ mod tests {
             target_range: 0,
             splash_range: 0,
             splash_adjust_poly: String::new(),
+            master_bonus_poly: String::new(),
+            grand_add_sp_poly: String::new(),
         };
         assert!(atk.is_attack());
         let buff = SkillProto { flag: skill_flag::SELFONLY, point_on: point::DEF_GRADE_BONUS, ..atk };
@@ -852,6 +873,8 @@ mod tests {
             target_range: 0,
             splash_range: 0,
             splash_adjust_poly: String::new(),
+            master_bonus_poly: String::new(),
+            grand_add_sp_poly: String::new(),
         };
         assert!(s1.is_attack());
         assert_eq!(s1.attr_type, attr_type::MELEE);
@@ -874,9 +897,17 @@ mod tests {
             target_range: 0,
             splash_range: 0,
             splash_adjust_poly: String::new(),
+            master_bonus_poly: String::new(),
+            grand_add_sp_poly: String::new(),
         };
         assert!(!s19.is_attack());
         assert_eq!(s19.point_on, point::DEF_GRADE_BONUS);
         assert_eq!(s19.affect_flag, aff::CHEONGEUN);
+    }
+
+    #[test] fn master_type_for_level_thresholds() {
+        assert_eq!(master_type_for_level(19), 0); assert_eq!(master_type_for_level(20), 1);
+        assert_eq!(master_type_for_level(30), 2); assert_eq!(master_type_for_level(40), 3);
+        let mut b=vec![0u8;255*6]; b[6+1]=30; b[6]=2; assert_eq!(skill_master_type_from_blob(&b,1),2);
     }
 }

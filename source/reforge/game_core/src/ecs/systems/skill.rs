@@ -326,14 +326,13 @@ impl WorldSim {
                 }
             };
             let mut eval = |expr: &str| eval_poly(expr, &var, &mut roll);
-            let sp_cost = eval(&proto.sp_cost_poly).unwrap_or(0.0) as i32;
-            let hp_cost = if proto.flag & skill_flag::USE_HP_AS_COST != 0 {
-                sp_cost
-            } else {
-                0
-            };
+            let is_grand = crate::skill::master_type_for_level(sk_level) >= 2;
+            let sp_poly = if is_grand && !proto.grand_add_sp_poly.trim().is_empty() { &proto.grand_add_sp_poly } else { &proto.sp_cost_poly };
+            let sp_cost = eval(sp_poly).unwrap_or(0.0) as i32;
+            let hp_cost = if proto.flag & skill_flag::USE_HP_AS_COST != 0 { sp_cost } else { 0 };
             let cooldown_ms = (eval(&proto.cooldown_poly).unwrap_or(0.0) * 1000.0) as u64;
-            let amount = eval(&proto.point_poly).unwrap_or(0.0) as i32;
+            let pt_poly = if is_grand && !proto.master_bonus_poly.trim().is_empty() { &proto.master_bonus_poly } else { &proto.point_poly };
+            let amount = eval(pt_poly).unwrap_or(0.0) as i32;
             let duration_secs = eval(&proto.duration_poly).unwrap_or(0.0) as i32;
             (sp_cost, hp_cost, cooldown_ms, amount, duration_secs)
         };
@@ -848,6 +847,8 @@ mod tests {
             target_range: 0,
             splash_range: 0,
             splash_adjust_poly: String::new(),
+            master_bonus_poly: String::new(),
+            grand_add_sp_poly: String::new(),
         }
     }
 
@@ -873,6 +874,8 @@ mod tests {
             target_range: 0,
             splash_range: 250,
             splash_adjust_poly: "0.5".into(),
+            master_bonus_poly: String::new(),
+            grand_add_sp_poly: String::new(),
         }
     }
 
@@ -895,6 +898,8 @@ mod tests {
             target_range: 0,
             splash_range: 0,
             splash_adjust_poly: String::new(),
+            master_bonus_poly: String::new(),
+            grand_add_sp_poly: String::new(),
         }
     }
 
@@ -920,6 +925,8 @@ mod tests {
             target_range: 1000,
             splash_range: 0,
             splash_adjust_poly: String::new(),
+            master_bonus_poly: String::new(),
+            grand_add_sp_poly: String::new(),
         }
     }
 
@@ -1478,5 +1485,16 @@ mod tests {
             !events.iter().any(|e| matches!(e, NpcEvent::Skill(SkillEvent::SplashVictimHit { player_vid: 2, .. }))),
             "el caster no es víctima"
         );
+    }
+
+    #[test] fn grand_master_uses_bonus_poly_and_sp() { // verifier: 30+→bonus poly/SP (char_skill.cpp:1131,2493)
+        let mut w=world_with(42); load(&mut w,vec![(entry(101,0,0,1),mob_row(101))]); join_with_skills(&mut w,2,&[(1,30)]); w.set_player_mp(2,500);
+        let mut p=skill1_proto(); p.master_bonus_poly="-(200)".into(); p.grand_add_sp_poly="5".into(); load_skills(&mut w,vec![p]);
+        let (d,s)=w.process_intent(SkillIntent::UseSkill{player_vid:2,skill_id:1,target_vid:10_000,weapon:None}.into(),1_000).iter().find_map(|e| match e{NpcEvent::Skill(SkillEvent::SkillResult{damage,sp_cost,..})=>Some((*damage,*sp_cost)),_=>None}).unwrap();
+        assert_eq!(d,190); assert_eq!(s,5);
+        let mut w2=world_with(42); load(&mut w2,vec![(entry(101,0,0,1),mob_row(101))]); join_with_skills(&mut w2,2,&[(1,1)]); w2.set_player_mp(2,5000);
+        let mut p2=skill1_proto(); p2.master_bonus_poly="-(200)".into(); p2.grand_add_sp_poly="5".into(); load_skills(&mut w2,vec![p2]);
+        let (d2,s2)=w2.process_intent(SkillIntent::UseSkill{player_vid:2,skill_id:1,target_vid:10_000,weapon:None}.into(),1_000).iter().find_map(|e| match e{NpcEvent::Skill(SkillEvent::SkillResult{damage,sp_cost,..})=>Some((*damage,*sp_cost)),_=>None}).unwrap();
+        assert!((80..=82).contains(&d2)); assert!(s2>5);
     }
 }

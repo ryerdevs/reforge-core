@@ -36,7 +36,8 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
     let skill_id = u32::from_le_bytes([pkt[1], pkt[2], pkt[3], pkt[4]]);
     let target_vid = u32::from_le_bytes([pkt[5], pkt[6], pkt[7], pkt[8]]);
     // Filtro temprano (parity UseSkill: GetSkillLevel == 0 → rechazo sin
-    // respuesta) — el mundo re-valida.
+    // respuesta) — el mundo re-valida. Grand master (30+→master_type 2) se
+    // resuelve en el mundo via `master_bonus_poly` (char_skill.cpp:1131).
     if game_core::skill::skill_level_from_blob(
         session.row().skill_level.as_deref().unwrap_or(&[]),
         skill_id,
