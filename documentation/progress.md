@@ -5,40 +5,46 @@ Corre todo lo que falta para que el servidor sea mejor que el original, sin 1:1,
 
 ## Current
 
-- HEAD: `95bf3e0` (feat(refine): full roll with scroll verifier)
-- Tests: **822** (cargo test --workspace -- --list, 2026-08-27 — conteo real de items, sin run)
+- Fecha: 2026-08-28
+- HEAD: `d3479bc` (feat(refine,event,dungeon): Phase 1 wire final verifiers) — `git rev-parse HEAD` verificado, árbol limpio
+- Tests: **857** (cargo test --workspace -- --list, 2026-08-28 — conteo real de items, sin run)
 - Docs: `documentation/` (20 vivos — 5 hub + 14 ADR + reference/login-flow), `scripts/status.ps1|verify.ps1|handoff.ps1|clean.ps1`, CI `.github/workflows/docs.yml` ✓
-- Handoff: último commit y slices recientes (stats 5/nivel, items attrs, exp delta, guild x4, pvp, splash, horse, aiflags, weight, locale, dungeon, event, land, belt, dragon soul, refine, etc.)
+- Handoff: slices recientes ya commiteados (party 75/76, safebox grid+antiflag+change_password, weight fail-open data real, locale pull, events/dungeon schedule+lifecycle, skills PARTY+PK modes, land/belt/dragon_soul/refine Phase 1) — ver Handoff abajo
+- Deploy: `source\deploy\win` sigue corriendo el binario pre-Phase-1 — **redeploy pendiente** (nota de los slices coder)
 
 ## Todos (restante)
 
-Checklist vs `documentation/history/plans/server-side-gap-2026-08-15.md` + estado real del código (HEAD `95bf3e0`):
+Checklist vs `documentation/history/plans/server-side-gap-2026-08-15.md` + estado real del código (HEAD `d3479bc`):
 
 - [x] stats 5/nivel infinito (ADR-0014)
 - [x] items attrs (roll_attrs + sockets/magic — database::attr, verifier apply_index)
 - [x] exp level-delta (tabla parity + low-mob nunca full — combat)
 - [x] guild basic/wire/grade/comment/ranking/PG persist (war = stub; member_flow_roundtrip + live PG)
-- [x] pvp can_attack (gates guild/party/safe-zone/protect; PK mode parse 10b/2b + daño)
-- [x] skills splash/horse/skill_power (splash radius/max_hit/pvp gate; horse mounted; k_value por tabla)
+- [x] pvp can_attack + PK modes (gates guild/party/safe-zone/protect; parse 10b/2b + daño — 292a267)
+- [x] skills splash/horse/skill_power + familia PARTY (splash radius/max_hit/pvp gate; horse mounted; k_value por tabla; PARTY buff — 292a267)
 - [x] aiflags berserk/coward/godspeed/stoneskin (ecs combat)
-- [x] weight (gate fail-open hasta importar item_proto.weight — ver pendiente)
-- [x] locale push (GC_LOCALE chunked al conectar; pull pendiente)
-- [x] dungeon/event/land/belt/dragon soul/refine stubs (d_soul upgrade stage/grade ya)
+- [x] weight (gate fail-open POR DISEÑO — ninguna fuente clásica tiene la columna; re-verificado 2026-08-28 PG + MariaDB + pack TEA+LZO + C++ + upstream; peso 0 nunca rechaza weight.rs:64-73; escala ÷10 pinned por verifier; importación futura = UPDATE item_proto.weight desde fuente externa)
+- [x] locale push + pull (GC_LOCALE chunked al conectar + CG_LOCALE_REQUEST → GC_LOCALE — 287e414)
+- [x] dungeon/event/land/belt/dragon soul/refine Phase 1 (wire + persist: land PG sequence 55851a6, belt cells 242..258, dragon_soul ledger identity, refine prob real)
 - [x] refine full (roll 1..100 ≤ refine_proto.prob real, scroll destroy/degrade, fee, ventana — items.rs:1664; prob overrides de scrolls especiales MUSIN/MEMO 100, BDRAGON 80, YONGSIN/YAGONG por nivel, HYUNIRON base+no-degrada — `game_core::refine` NUEVO: effective_prob/is_success/destroy_when_fail sobre `database::item::RefineRecipe`, verifier anti-stub, 78 líneas)
+- [x] party full — set_state 75/use_skill 76 con verifier party_role_heal_summon_wired (2026-08-27; heal real cooltime 60 min + summon ring vía GC_WARP; GAP: GC_PARTY_LINK/UNLINK + 30% líder — pendiente abajo)
+- [x] safebox full — grid de size celdas (strip 5 ancho, item_proto.size real = 2679 items 2×2), gates EXPAND/antiflag SAFEBOX (667 vnums)/STACKABLE y `/safebox_change_password <old> <new>` (2026-08-27, verifier checkin_gate_* + old_password_matches); checkout→belt ya (2026-08-28); GAP: checkout→DS — pendiente abajo
+- [x] events/dungeon full — schedule [start,end) + trigger (Exp/DropMultiplier) con verifiers; dungeon ciclo WAIT→START→END + wire `channel/dungeon.rs` (d3479bc); GAPs: persistencia de eventos (id = 0 hasta lane event) + raids contenido — pendiente abajo
 
-- [ ] party full — core ya (invite/answer/remove/parameter/set_state 75/use_skill 76 con verifier party_role_heal_summon_wired + exp NON_PARITY/PARITY con bonus tabla CHN); falta GC_PARTY_LINK/UNLINK (la ventana funciona sin él) y +30% item del líder (requiere trackear equipo, party.rs doc GAPs)
-- [ ] safebox full — grid de size celdas (strip 5 ancho, item_proto.size real = 2679 items 2×2), gates EXPAND/antiflag SAFEBOX (667 vnums)/STACKABLE y `/safebox_change_password <old> <new>` DONE (2026-08-27, verifier checkin_gate_* + old_password_matches); falta checkout a DS/belt (safebox.rs:25)
+- [ ] party residual: GC_PARTY_LINK/UNLINK sin emitir (la ventana funciona sin él) + 30% item del líder (requiere trackear equipo, party.rs doc GAPs)
+- [ ] safebox residual: checkout → dragon soul (belt ya; safebox.rs:25)
 - [ ] messenger full — core ya (2026-08-21, persist live PG); falta OTHER_SEX_ONLY (sin player.sex), matrimonio, block-mode/observer, textos INFO en EN
-- [ ] guild full — persist/ranking ya; falta war real (hoy stub, score verifier ya en game_core)
+- [ ] guild war full — persist/ranking ya; falta war real (hoy stub, score verifier ya en game_core)
 - [ ] pvp full — PK mode ya; falta penalización PK (exp/drop), war-PK
-- [ ] skills full — falta familia PARTY, grand master, buffs ATT_SPEED/CASTING al gameplay
-- [ ] weight con datos reales — IMPOSIBLE sin fuente clásica (decodificado TODO el ecosistema 2026-08-28: PG + dump MariaDB + pack cliente TEA+LZO + txt C++ + upstream, ver handoff); gate fail-open verificado en weight.rs:64-73 (hasta al límite, peso 0 nunca rechaza)
-- [ ] locale pull — CG_LOCALE_REQUEST (hoy solo push)
-- [ ] events/raids/dungeons full — hoy stubs (dungeon: ids + owning party ya)
+- [ ] skills full — falta grand master, buffs ATT_SPEED/CASTING al gameplay (familia PARTY ya: 292a267)
 - [ ] quests full — falta say_reward, send_letter, set_quest_state, target_vid, affect_*, timers/scheduler (corpus ~88 incompletas)
 - [ ] GM commands restantes — ~9 reales de 174 (mob, kill, purge, goto, set, makeguild, setskill, polymorph, priv_empire...)
+- [ ] dragon_soul refine real FASE 2 — materiales/fee/prob, consumir/crear items (DragonSoul.cpp:488+), grid 15 TItemPos (hoy FAIL determinista)
+- [ ] events persistencia (id lane) + raids contenido
 
 ## Handoff
+
+- 2026-08-28 | slice docs sync (librarian): progress.md sincronizado con HEAD `d3479bc` verificado (`git rev-parse HEAD`; ojo: el HEAD pedido `43063fb` es 6 commits anterior — 43063fb→9b8c318→4352cb8→55851a6→81d5f85→d3479bc). Checklist: [x] party 75/76, safebox grid full, weight fail-open (provenance re-verificada), locale pull, events/dungeon schedule+lifecycle, skills PARTY/PK (292a267); quedan 10 pendientes reales (messenger, quests, GM, guild war, pvp penalty, skills GM, dragon_soul FASE 2, residuales party/safebox/events). Tests **857** (--list 2026-08-28, verificado). Redeploy del binario Phase 1 al stack `source\deploy\win` sigue pendiente.
 
 - 2026-08-28 | slice dragon_soul jugable FASE 1 (coder): wire CG_DRAGON_SOUL_REFINE (205, 47 B — el SIZE ya lo anclaba el framer) + tabla **`player.dragon_soul`** (ledger ADITIVO del reforge — el legacy no la tiene: el estado del alma vive en vnum+sockets, DragonSoul.cpp:593; patrón append-only de money_log, F3 tail ACID; id **GENERATED ALWAYS AS IDENTITY** → `player.dragon_soul_id_seq`, lección land: nunca un contador de proceso). `database/src/dragon_soul.rs` NUEVO (DragonSoulRepo::record — INSERT sin id + RETURNING) + `channel/dragon_soul.rs` NUEVO (parse bSubType [1]/47 B; handle_refine parity input_main.cpp:3197-3222: solo 1..4 se despachan, OPEN/resto silencio; registra en el ledger + responde GC_DRAGON_SOUL_REFINE 209 (5 B) FAIL_NOT_ENOUGH_MATERIAL con Pos NPOS — parity SendRefineResultPacket DragonSoul.cpp:970-987, la ventana del cliente no se cuelga) + dispatch en game.rs + const GC 209 en protocol. DDL aplicada al PG vivo (idempotente, `scripts/gpg/dragon_soul_table.sql`) + smoke live: INSERT con id=1 de la identity + DELETE 0 residuos. VERIFIERs **mutaciones PROBADAS rojas**: (1) parse con offset 0 en vez de 1 → parse_layout_is_byte_exact RED; (2) RECORD_SQL con `(id, player_id, refine_type)` explícito → record_identity_comes_from_pg RED. VE: workspace 0 failed (~823 tests: protocol 101, server_realms 130+1, database 92+1), clippy sin hits en los archivos nuevos (solo pre-existentes), cargo check 8-10 s. GAPs/notas: (1) el refine REAL (materiales/fee/prob, consumir/crear items — DragonSoul.cpp:488+) es fase 2 — hoy el cliente recibe FAIL determinista; (2) el grid de 15 TItemPos (stride 3 desde [2]) lo valida fase 2 (hoy parse solo lee bSubType); (3) sin test de sesión live para handle_refine (patrón land: verifier de contrato + wire); (4) redeploy del binario pendiente (el stack corre el binario viejo); (5) lane horse tocó en paralelo horse.rs/packets.rs/framer.rs/entry.rs — NO tocado (disjunto). HEAD trabajando en paralelo: lane land/belt cerrado.
 
