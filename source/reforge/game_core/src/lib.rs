@@ -31,8 +31,8 @@
 //!   remove) en dominio puro, sin I/O — la persistencia vive en `database`.
 //! - `horse` — slice horse: nivel y salud del caballo (create/feed) en
 //!   dominio puro — parity horse_rider.{h,cpp} (HORSE_MAX_LEVEL, iMaxHealth).
-//! - `dungeon` — slice stub: identidad de las mazmorras de instancia (id
-//!   único por proceso, mapa privado, party dueña) — parity dungeon.cpp.
+//! - `dungeon` — slice dungeon: instancia de mazmorra de party con ciclo
+//!   WAIT→START→END (create/enter/exit) — parity dungeon.cpp.
 //! - `dragon_soul` — slice stub: alma de dragón (paso + grado) y refine
 //!   determinista — parity item_length.h / dragon_soul_table.cpp.
 //! - `land` — slice stub: identidad de los terrenos construibles (id, dueño,

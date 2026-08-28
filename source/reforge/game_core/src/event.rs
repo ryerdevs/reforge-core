@@ -1,30 +1,43 @@
-//! EVENTOS (slice event stub): stub mínimo del sistema de eventos del
-//! Metin2 clásico (eventos temporales: Navidad, doble exp...). Pendiente
-//! del lane completo: id persistente, programación, recompensas.
+//! EVENTOS temporales programados (Navidad, doble exp...): schedule + trigger.
+//! Diseño propio — el C++ clásico solo tiene `event_queue` de timers
+//! (event.cpp/event.h), sin eventos temporales con ventana de tiempo.
 
-/// Evento: identificador, nombre y estado activo/inactivo.
-pub struct Event {
-    pub id: u64,
-    pub name: String,
-    pub active: bool,
+/// Intervalo de actividad en segundos de época UNIX (`end` exclusivo).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Schedule {
+    pub start: i64,
+    pub end: i64,
 }
 
-/// Crea un evento inactivo con el nombre dado. `id` es un stub (0) —
-/// la asignación real llegará con la persistencia (lane event, pendiente).
-pub fn create_event(name: &str) -> Event {
+/// Efecto que dispara el evento mientras está activo.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Trigger {
+    ExpMultiplier(u32),
+    DropMultiplier(u32),
+}
+
+/// Evento temporal programado.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Event {
+    pub id: u64, // 0 hasta la persistencia (lane event pendiente)
+    pub name: String,
+    pub schedule: Schedule,
+    pub trigger: Trigger,
+}
+
+/// Activo si `schedule.start <= now < schedule.end` (medio-abierto: el fin
+/// no cuenta; `start >= end` nunca está activo).
+pub fn is_active(event: &Event, now: i64) -> bool {
+    event.schedule.start <= now && now < event.schedule.end
+}
+
+/// Crea un evento con `id 0` — la asignación real llega con la persistencia.
+pub fn create_event(name: &str, start: i64, end: i64, trigger: Trigger) -> Event {
     Event {
         id: 0,
         name: name.to_string(),
-        active: false,
-    }
-}
-
-/// Devuelve una copia del evento con el estado `active` aplicado.
-pub fn set_active(event: Event, active: bool) -> Event {
-    Event {
-        id: event.id,
-        name: event.name,
-        active,
+        schedule: Schedule { start, end },
+        trigger,
     }
 }
 
@@ -32,21 +45,25 @@ pub fn set_active(event: Event, active: bool) -> Event {
 mod tests {
     use super::*;
 
-    /// VERIFIER: crear evento → inactivo con el nombre; activarlo → activo.
-    /// Mutación que falla: `set_active` que no aplica el flag, o
-    /// `create_event` que nace activo.
+    /// VERIFIER: activo solo dentro de [start, end). Mutaciones que fallan:
+    /// `<=` en el fin, `>=`/`>` en el inicio, o `start > end` activo.
     #[test]
-    fn create_and_activate_roundtrip() {
-        let ev = create_event("xmas");
-        assert!(!ev.active, "evento recién creado → inactivo");
-        assert_eq!(ev.name, "xmas");
-        assert_eq!(ev.id, 0, "stub: id 0 hasta la persistencia");
+    fn is_active_respects_schedule_bounds() {
+        let ev = create_event("xmas", 1_000, 2_000, Trigger::DropMultiplier(2));
+        assert!(!is_active(&ev, 999), "antes del inicio → inactivo");
+        assert!(is_active(&ev, 1_000), "inicio incluido → activo");
+        assert!(is_active(&ev, 1_999), "durante → activo");
+        assert!(!is_active(&ev, 2_000), "fin excluido → inactivo");
+        assert!(!is_active(&ev, 3_000), "después → inactivo");
+    }
 
-        let ev = set_active(ev, true);
-        assert!(ev.active, "set_active(true) → activo");
-        assert_eq!(ev.name, "xmas", "activar no toca el nombre");
-
-        let ev = set_active(ev, false);
-        assert!(!ev.active, "set_active(false) → inactivo de nuevo");
+    /// VERIFIER: el trigger y el nombre se conservan en el evento creado.
+    /// Mutación que falla: create_event que ignora name/trigger o nace activo.
+    #[test]
+    fn event_keeps_name_and_trigger() {
+        let ev = create_event("2x_exp", 0, 100, Trigger::ExpMultiplier(2));
+        assert_eq!(ev.name, "2x_exp");
+        assert_eq!(ev.trigger, Trigger::ExpMultiplier(2));
+        assert_eq!(ev.id, 0, "id 0 hasta la persistencia");
     }
 }
