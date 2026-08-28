@@ -33,12 +33,15 @@
 //!   dominio puro — parity horse_rider.{h,cpp} (HORSE_MAX_LEVEL, iMaxHealth).
 //! - `dungeon` — slice stub: identidad de las mazmorras de instancia (id
 //!   único por proceso, mapa privado, party dueña) — parity dungeon.cpp.
+//! - `dragon_soul` — slice stub: alma de dragón (paso + grado) y refine
+//!   determinista — parity item_length.h / dragon_soul_table.cpp.
 //! - `land` — slice stub: identidad de los terrenos construibles (id, dueño,
 //!   precio) — parity common/building.h (TLand).
 
 pub mod ai;
 pub mod belt;
 pub mod combat;
+pub mod dragon_soul;
 pub mod dungeon;
 pub mod ecs;
 pub mod event;
