@@ -29,6 +29,8 @@
 //!   remove) en dominio puro, sin I/O — la persistencia vive en `database`.
 //! - `dungeon` — slice stub: identidad de las mazmorras de instancia (id
 //!   único por proceso, mapa privado, party dueña) — parity dungeon.cpp.
+//! - `land` — slice stub: identidad de los terrenos construibles (id, dueño,
+//!   precio) — parity common/building.h (TLand).
 
 pub mod ai;
 pub mod combat;
@@ -37,6 +39,7 @@ pub mod ecs;
 pub mod event;
 pub mod gm;
 pub mod guild;
+pub mod land;
 pub mod map;
 pub mod movement;
 pub mod npc;
