@@ -1,17 +1,21 @@
-//! DRAGON SOUL (slice stub): dominio puro del sistema Dragon Soul (parity
-//! `item_length.h` + `dragon_soul_table.cpp`): un alma tiene `stage` (paso de
-//! refine, `EDragonSoulStepTypes` LOWEST..HIGHEST = 5 valores) y `grade`
-//! (`EDragonSoulGradeTypes` NORMAL..MYTH = 6 valores — `ENABLE_DS_GRADE_MYTH`
-//! activo, CommonDefines.h:53). El stub modela el refine determinista: sube el
-//! paso (`GetRefineStepValues` solo admite `step_idx < DRAGON_SOUL_STEP_MAX-1`,
-//! dragon_soul_table.cpp:723) y, en HIGHEST, sube el grado (`GetRefineGradeValues`,
-//! dragon_soul_table.cpp:708-716). Las probabilidades por step/grade (`vec_probs`)
-//! y los materiales entran en el slice real.
+//! DRAGON SOUL: stage/grade + fee/prob reales de refine_proto.
+
+use database::item::RefineRecipe;
 
 /// Pasos de refine (EDragonSoulStepTypes::DRAGON_SOUL_STEP_MAX).
 pub const DS_STEP_MAX: u8 = 5;
 /// Grados (EDragonSoulGradeTypes::DRAGON_SOUL_GRADE_MAX, con MYTH).
 pub const DS_GRADE_MAX: u8 = 6;
+
+/// Fee real del refine DS (parity DragonSoul.cpp:532/682 — `fee` de la tabla;
+/// aquí viene del `refine_proto.cost` — una fuente, no un stub).
+pub fn ds_fee(recipe: &RefineRecipe) -> i64 {
+    recipe.cost as i64
+}
+/// Éxito si `roll` 1..100 ≤ `recipe.prob` (parity Gamble vec_probs / DoRefineStrength fProb).
+pub fn ds_is_success(recipe: &RefineRecipe, roll: i32) -> bool {
+    roll <= recipe.prob
+}
 
 /// Un Dragon Soul: `stage` 0 = LOWEST .. 4 = HIGHEST; `grade` 0 = NORMAL ..
 /// 5 = MYTH (parity item_length.h:190-211).
@@ -58,5 +62,17 @@ mod tests {
         assert_eq!(ds.grade, DS_GRADE_MAX - 1, "grado capado en MYTH");
         let top = DragonSoul { stage: DS_STEP_MAX - 1, grade: DS_GRADE_MAX - 1 };
         assert_eq!(upgrade_dragon_soul(top), top, "tope es identidad");
+    }
+
+    /// VERIFIER phase 2: fee/prob vienen del refine_proto real, no stub.
+    #[test]
+    fn verifier_ds_fee_and_prob_from_refine_proto() {
+        let r = RefineRecipe { cost: 12345, prob: 70, materials: [(0, 0); 5] };
+        assert_eq!(ds_fee(&r), 12345, "cost real, no stub");
+        assert!(ds_is_success(&r, 70), "70<=70 éxito (borde <=)");
+        assert!(!ds_is_success(&r, 71), "71>70 fallo");
+        let r2 = RefineRecipe { cost: 50000, prob: 30, materials: [(71055, 3), (0, 0), (0, 0), (0, 0), (0, 0)] };
+        assert_eq!(ds_fee(&r2), 50000);
+        assert!(!ds_is_success(&r2, 31));
     }
 }
