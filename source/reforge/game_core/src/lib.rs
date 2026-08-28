@@ -27,6 +27,8 @@
 //!   caché por mapa y `is_movable(map, x, y)` en units (celdas de 50 u).
 //! - `guild` — slice social: ciclo de vida básico de una guild (create/add/
 //!   remove) en dominio puro, sin I/O — la persistencia vive en `database`.
+//! - `horse` — slice horse: nivel y salud del caballo (create/feed) en
+//!   dominio puro — parity horse_rider.{h,cpp} (HORSE_MAX_LEVEL, iMaxHealth).
 //! - `dungeon` — slice stub: identidad de las mazmorras de instancia (id
 //!   único por proceso, mapa privado, party dueña) — parity dungeon.cpp.
 //! - `land` — slice stub: identidad de los terrenos construibles (id, dueño,
@@ -39,6 +41,7 @@ pub mod ecs;
 pub mod event;
 pub mod gm;
 pub mod guild;
+pub mod horse;
 pub mod land;
 pub mod map;
 pub mod movement;
