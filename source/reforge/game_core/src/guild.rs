@@ -121,6 +121,29 @@ pub fn remove_comment(guild: &mut Guild, id: i64) -> bool {
     guild.comments.len() != before
 }
 
+/// Guerra de guilds (stub): dos contendientes + marcador por lado. Parity:
+/// score por par = `TEnemyGuild.score` vía SetWarScoreAgainstTo /
+/// GetWarScoreAgainstTo, guild_war.cpp:178-232.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GuildWar { pub guild_a: i64, pub guild_b: i64, pub score_a: u32, pub score_b: u32 }
+
+/// `start_war`: abre la guerra con marcador 0-0 (stub: sin estados
+/// GUILD_WAR_WAIT/ON_WAR — guild_war.cpp:20-23 es slice futuro).
+pub fn start_war(guild_a: i64, guild_b: i64) -> GuildWar {
+    GuildWar { guild_a, guild_b, score_a: 0, score_b: 0 }
+}
+
+/// `add_score`: guerra con `points` sumados al lado de `guild_id`
+/// (funcional, sin mutación). `guild_id` ajeno a la guerra → copia sin
+/// cambios — el C++ tampoco registra golpes de un par desconocido
+/// (GetWarScoreAgainstTo → 0, guild_war.cpp:222-232).
+pub fn add_score(war: GuildWar, guild_id: i64, points: u32) -> GuildWar {
+    let mut w = war;
+    if guild_id == w.guild_a { w.score_a += points; }
+    else if guild_id == w.guild_b { w.score_b += points; }
+    w
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,5 +200,17 @@ mod tests {
         assert!(remove_comment(&mut g, id));
         assert!(!remove_comment(&mut g, id));
         assert_eq!(add_comment(&mut g, "Heroe", "Bienvenidos!"), Ok(id + 2)); // borrado → válido otra vez
+    }
+
+    /// Verifier: FALLA si start_war no abre 0-0, add_score cuenta mal o
+    /// acepta una guild ajena a la guerra.
+    #[test]
+    fn guild_war_score_verifier() {
+        assert_eq!(start_war(1, 2), GuildWar { guild_a: 1, guild_b: 2, score_a: 0, score_b: 0 });
+        let w = add_score(start_war(1, 2), 1, 5);
+        assert_eq!(w, GuildWar { guild_a: 1, guild_b: 2, score_a: 5, score_b: 0 });
+        let w = add_score(add_score(w, 2, 3), 2, 2);
+        assert_eq!(w.score_b, 5); // 3+2 acumulado en el lado B
+        assert_eq!(add_score(w, 99, 1), w); // ajena → sin cambios
     }
 }
