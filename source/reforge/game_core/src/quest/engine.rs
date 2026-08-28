@@ -483,6 +483,21 @@ impl QuestEngine {
                             let k = args.first().ok_or_else(|| "send_letter sin clave".to_string())?;
                             out.effects.push(QuestEffect::SendLetter(self.key_text(k)?));
                         }
+                        ActionName::SetQuestState => {
+                            // Parity `_set_quest_state` (questlua_global.cpp:872-906 +
+                            // questpc.cpp:120-131): cruza a otra quest; si
+                            // quest==actual, actualiza `pqs->st` además del flag.
+                            let qn = Self::name_text(args.first().ok_or_else(|| "set_quest_state sin quest".to_string())?)?;
+                            let sn = Self::name_text(args.get(1).ok_or_else(|| "set_quest_state sin state".to_string())?)?;
+                            let Some(tq) = self.quests.iter().find(|qq| qq.name == qn) else {
+                                return Err(format!("set_quest_state quest desconocida `{qn}`"));
+                            };
+                            let Some(idx) = Self::state_index(tq, &sn) else {
+                                return Err(format!("set_quest_state state desconocido `{qn}.{sn}`"));
+                            };
+                            rt.states.insert(qn.clone(), idx);
+                            out.dirty.push(DirtyFlag { quest: qn.clone(), flag: format!("{qn}.__status"), value: idx as i64 });
+                        }
                         ActionName::Return => return Ok(None), // parity `return` del lua — fin del evento
                         other => {
                             // Mapeada-pero-pendiente: el catálogo DSL la
@@ -954,5 +969,23 @@ quest collect_lv40 = fam(level: 40, mob: 602, herb: 30007)
         let (_, map, now, items_ref) = ctx_bits(5, 0, &items);
         let out = e.run(&mut rt, QuestTrigger::Letter, 5, map, now, items_ref, &mut *rng_fixed(0));
         assert_eq!(out.effects, vec![QuestEffect::SendLetter("Carta!".into())]);
+    }
+
+    #[test]
+    fn set_quest_state_cross_quest() {
+        // Dos quests: `other` en start, `main` la cruza a `other.information`.
+        let e = QuestEngine::load(
+            "quest other\n  state start\n    on letter\n      -> say(@a)\n  state information\n    on letter\n      -> say(@b)\nquest main\n  state start\n    on letter\n      -> set_quest_state(other, information)\n",
+        )
+        .expect("parse");
+        let mut rt = QuestRuntime::default();
+        let items = HashMap::new();
+        let (_, map, now, items_ref) = ctx_bits(5, 0, &items);
+        let out = e.run(&mut rt, QuestTrigger::Letter, 5, map, now, items_ref, &mut *rng_fixed(0));
+        assert_eq!(rt.states.get("other"), Some(&2), "{:?}", rt.states);
+        assert!(out.dirty.iter().any(|d| d.quest == "other" && d.flag == "other.__status" && d.value == 2), "{:?}", out.dirty);
+        // La quest cruzada ya puede disparar su evento del nuevo state.
+        let out2 = e.run(&mut rt, QuestTrigger::Letter, 5, map, now, items_ref, &mut *rng_fixed(0));
+        assert!(out2.script.as_deref().unwrap_or("").contains("b[ENTER]"), "{out2:?}");
     }
 }
