@@ -90,6 +90,8 @@ pub enum QuestEffect {
     Warp { x: i64, y: i64 },
     /// Aviso (`notice` → GC_CHAT 4, CHAT_TYPE_NOTICE).
     Notice(String),
+    /// Carta de quest (`send_letter` → GC_SCRIPT con [LETTER]).
+    SendLetter(String),
 }
 
 /// Estado runtime de las quests de UN jugador.
@@ -471,6 +473,15 @@ impl QuestEngine {
                         ActionName::Notice => {
                             let k = args.first().ok_or_else(|| "notice sin texto".to_string())?;
                             out.effects.push(QuestEffect::Notice(self.key_text(k)?));
+                        }
+                        ActionName::SayReward => {
+                            let k = args.first().ok_or_else(|| "say_reward sin clave".to_string())?;
+                            script.push_str(&self.key_text(k)?);
+                            script.push_str("[ENTER]");
+                        }
+                        ActionName::SendLetter => {
+                            let k = args.first().ok_or_else(|| "send_letter sin clave".to_string())?;
+                            out.effects.push(QuestEffect::SendLetter(self.key_text(k)?));
                         }
                         ActionName::Return => return Ok(None), // parity `return` del lua — fin del evento
                         other => {
@@ -914,5 +925,34 @@ quest collect_lv40 = fam(level: 40, mob: 602, herb: 30007)
         let (_, map, now, items_ref) = ctx_bits(30, 1_000, &items);
         let out = e.answer(&mut rt, 1, 30, map, now, items_ref, &mut *rng_fixed(5));
         assert!(out.script.is_none() && out.effects.is_empty(), "{out:?}");
+    }
+
+    #[test]
+    fn say_reward_appends_dialog_like_say() {
+        let e = QuestEngine::load(
+            "quest r\n  state start\n    on letter\n      -> say_reward(@reward_key)\n",
+        )
+        .expect("parse");
+        let mut rt = QuestRuntime::default();
+        let items = HashMap::new();
+        let (_, map, now, items_ref) = ctx_bits(5, 0, &items);
+        let out = e.run(&mut rt, QuestTrigger::Letter, 5, map, now, items_ref, &mut *rng_fixed(0));
+        assert_eq!(out.script.as_deref(), Some("reward_key[ENTER]"), "{out:?}");
+    }
+
+    #[test]
+    fn send_letter_emits_effect_with_resolved_key() {
+        let mut texts = HashMap::new();
+        texts.insert("my_letter".into(), "Carta!".into());
+        let e = QuestEngine::load(
+            "quest r\n  state start\n    on letter\n      -> send_letter(@my_letter)\n",
+        )
+        .expect("parse")
+        .with_texts(texts);
+        let mut rt = QuestRuntime::default();
+        let items = HashMap::new();
+        let (_, map, now, items_ref) = ctx_bits(5, 0, &items);
+        let out = e.run(&mut rt, QuestTrigger::Letter, 5, map, now, items_ref, &mut *rng_fixed(0));
+        assert_eq!(out.effects, vec![QuestEffect::SendLetter("Carta!".into())]);
     }
 }

@@ -133,6 +133,7 @@ pub(super) async fn emit(session: &mut Session, q: QuestEvent) -> Result<(), Str
                     QuestEffect::RemoveItem { vnum, count } => remove_item(session, vnum, count).await?,
                     QuestEffect::Warp { x, y } => warp(session, x, y).await?,
                     QuestEffect::Notice(text) => notice(session, &text).await?,
+                    QuestEffect::SendLetter(text) => notice(session, &text).await?,
                 }
             }
             if !dirty.is_empty() {
