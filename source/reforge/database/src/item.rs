@@ -9,7 +9,7 @@
 //! | QID_ITEM_DESTROY (11) | `ClientManager.cpp:1692-1717` (`QUERY_ITEM_DESTROY`) | `delete` | `DELETE FROM player.item WHERE id = $1` (el cache del C++ decide borrar o escribir; aqui el DELETE es directo). |
 //! | QID_ITEM_AWARD_LOAD (18) / TAKEN (19) | `ItemAwardManager.cpp:59-69` / `:166-168` | `load_pending_awards` / `take_award` | 23 columnas (`id, login, vnum, count, socket0..2, attrtype0..attrvalue6, mall, why`), `WHERE taken_time IS NULL AND id > $1`; taken = `UPDATE ... SET taken_time = NOW() WHERE id = $1 AND taken_time IS NULL` (idempotente). E2E Q6 `scripts/gpg/e2e_db.sh:148`. |
 //! | ITEM_ID_RANGE | `ItemIDRangeManager.cpp:93` (BuildRange) y `:121` | `max_id_in_range` | `SELECT MAX(id) FROM player.item WHERE id >= $1 AND id <= $2` — el rango 100M-200M lo sondea el E2E Q8; `cs_dwMinimumRemainCount` (`:110`) es decision del game. |
-//! | item_proto (uso+combate) | `TItemTable` (`type`/`sub_type`/`alValues`/`wearflag`) | `load_proto_use_values` | Subset del `player.item_proto` por vnum (9 columnas) — el equivalente moderno de `PROTO_FROM_DB` (ver lib.rs). |
+//! | item_proto (uso+combate) | `TItemTable` (`type`/`sub_type`/`alValues`/`wearflag`) | `load_proto_use_values` | Subset del `player.item_proto` por vnum (18 columnas) — el equivalente moderno de `PROTO_FROM_DB` (ver lib.rs). |
 //! | Unidad ACID (materials → resultado → oro, una tx) | ROADMAP.md:172, ADR-0011 (dupe completion F5) | `exchange_mutated` / `exchange_mutations` | Skeleton: valores ABSOLUTOS (parity del save legacy) + guard de estado previo (`= $pre`) que hace el replay del WAL un no-op exacto (0 filas) y da anti doble-gasto. |
 //!
 //! Tipos PG reales (verificados en el esquema): id bigint identity BY DEFAULT,
@@ -123,8 +123,10 @@ pub struct ItemRepo {
 /// `value0..5` (`alValues`) + `wearflag` (los bits `WEARABLE_*` —
 /// item_length.h:379-392, el slot del equip lo decide `FindEquipCell`,
 /// item.cpp:509-623) + `weight` (columna `weight` del item_proto — el PESO
-/// básico del lane D; el C++ de esta variante no tiene sistema de peso, la
-/// columna llega vía mysql_proxy). El combate usa value3/4 (daño del arma)
+/// básico del lane D. La columna existe pero está a 0 en TODA la línea
+/// verificada (PG 11 002 filas, dump MariaDB, pack del cliente — ver
+/// weight.rs); el gate es fail-open hasta importar pesos clásicos). El
+/// combate usa value3/4 (daño del arma)
 /// y value5 (bonus); la armadura value1 + 2×value5; las pociones value0/1/3/4.
 /// `applies` = los 3 pares (tipo, valor) del `aApplies[ITEM_APPLY_MAX_NUM]`
 /// del TItemTable (tables.h:608-612 — columnas `applytype0..2`/
