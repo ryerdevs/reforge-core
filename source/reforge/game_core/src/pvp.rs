@@ -10,6 +10,8 @@
 //! revive en town, `UNIQUE_ITEM_SKIP_ITEM_DROP_PENALTY` equipado, level ≥ 50
 //! para el drop) antes de llamar estos cálculos.
 
+use crate::guild::GuildWar;
+
 /// Rango Lawful/Chaotic de la alineación (char.h:1360 — −200000..200000).
 pub const ALIGNMENT_MAX: i32 = 200_000;
 
@@ -161,6 +163,39 @@ pub fn drop_allowed(
     }
 }
 
+/// Guerra de guilds: ¿están en guerra? (parity `CGuild::UnderWar`, guild.cpp
+/// — `Dead` char_battle.cpp:1198-1200: `g1->UnderWar(g2->GetID())`). `None` =
+/// sin guild → nunca en guerra. Orden invariante.
+pub fn is_at_war(
+    attacker_guild: Option<i64>,
+    victim_guild: Option<i64>,
+    wars: &[GuildWar],
+) -> bool {
+    match (attacker_guild, victim_guild) {
+        (Some(a), Some(b)) if a != b => wars
+            .iter()
+            .any(|w| (w.guild_a == a && w.guild_b == b) || (w.guild_a == b && w.guild_b == a)),
+        _ => false,
+    }
+}
+
+/// PK con guerra: si ambos en guerra → 0 (parity `Dead` :1226-1231 +
+/// :1284 — `!isUnderGuildWar` gatea `ItemDropPenalty` y `UpdateAlignment`).
+pub fn pk_penalty_delta_war(
+    attacker_alignment: i32,
+    party_in_range: u32,
+    attacker_guild: Option<i64>,
+    victim_guild: Option<i64>,
+    wars: &[GuildWar],
+    roll: impl FnMut(i32, i32) -> i32,
+) -> i32 {
+    if is_at_war(attacker_guild, victim_guild, wars) {
+        0
+    } else {
+        pk_penalty_delta(attacker_alignment, party_in_range, roll)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,5 +332,24 @@ mod tests {
         assert_eq!(drop_allowed(t5, &mut roll, true), (false, false), "skip item → sin drops");
         assert_eq!(n, 6, "skip item consume los 2 rolls igual (parity :980-989)");
         assert_eq!(drop_allowed(none, |_, _| 1, false), (false, false), "tier 0-4 (pct 0) nunca dropea");
+    }
+
+    /// VERIFIER war-PK (regla 20): si ambos en guerra → 0 sin roll; fuera de
+    /// guerra delega en `pk_penalty_delta`. FALLA si se quita el gate war.
+    #[test]
+    fn war_pk_no_penalty_verifier() {
+        use crate::guild::GuildWar;
+        let wars = [GuildWar { guild_a: 1, guild_b: 2, score_a: 0, score_b: 0 }];
+        assert!(is_at_war(Some(1), Some(2), &wars));
+        assert!(is_at_war(Some(2), Some(1), &wars), "orden invariante");
+        assert!(!is_at_war(Some(1), Some(3), &wars));
+        assert!(!is_at_war(None, Some(2), &wars));
+        assert!(!is_at_war(Some(1), Some(1), &wars), "misma guild → no war");
+        // En guerra: 0 incluso con roll que daría pena fuera de guerra.
+        assert_eq!(pk_penalty_delta_war(0, 0, Some(1), Some(2), &wars, |_, _| 100), 0);
+        // Fuera de guerra: delega (roll 100 → -20000).
+        assert_eq!(pk_penalty_delta_war(0, 0, Some(1), Some(3), &wars, |_, _| 100), -20_000);
+        // Sin guilds: también pena.
+        assert_eq!(pk_penalty_delta_war(0, 0, None, None, &wars, |_, _| 100), -20_000);
     }
 }

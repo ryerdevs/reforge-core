@@ -32,6 +32,7 @@ pub mod attr;
 pub mod common;
 pub mod dragon_soul;
 pub mod economy;
+pub mod event;
 pub mod item;
 pub mod land;
 pub mod locale;
