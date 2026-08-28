@@ -7,6 +7,12 @@
 //! diálogo del cliente (spec); duplicado: COUNT(*) de guild_manager.cpp:90-107.
 //! Grades: 15 slots 1..=15 (`GUILD_GRADE_COUNT`, guild.h:11), nombre <=8
 //! (`GUILD_GRADE_NAME_MAX_LEN`, guild.h:10), auth bitmask (guild.h:92-95).
+//! (2026-08-28) Invitaciones: pendiente por invitado con TTL 10 s (parity
+//! `CGuild::m_GuildInviteEventMap`, guild.cpp:1869-1876) — `invite`/
+//! `accept_invite`/`deny_invite` más abajo.
+
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 pub const NAME_MAX: usize = 12; // GUILD_NAME_MAX_LEN, common/length.h:35
 pub const NAME_MIN: usize = 2; // mínimo del diálogo cliente (spec slice)
@@ -24,8 +30,18 @@ pub struct GuildMember { pub player_id: i64 }
 pub struct GuildComment { pub id: i64, pub author: String, pub text: String }
 
 /// Guild en memoria (`player.guild.id` / `player.guild_member` / `guild_grade`).
+/// Las pendientes de invitación viven aquí (parity `m_GuildInviteEventMap` del
+/// C++).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Guild { pub id: i64, pub name: String, pub members: Vec<GuildMember>, pub grades: Vec<GuildGrade>, pub comments: Vec<GuildComment> }
+pub struct Guild {
+    pub id: i64,
+    pub name: String,
+    pub members: Vec<GuildMember>,
+    pub grades: Vec<GuildGrade>,
+    pub comments: Vec<GuildComment>,
+    /// Invitaciones pendientes: pid del invitado → expiración.
+    pub invites: HashMap<i64, Instant>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GuildError { NameTooShort, NameTooLong, DuplicateName, DuplicateMember, DuplicateGrade, GradeFull, EmptyComment, CommentTooLong, DuplicateComment }
@@ -41,7 +57,7 @@ pub fn create_guild(id: i64, name: &str, existing: &[&str]) -> Result<Guild, Gui
     if existing.iter().any(|n| n.eq_ignore_ascii_case(name)) {
         return Err(GuildError::DuplicateName);
     }
-    Ok(Guild { id, name: name.to_owned(), members: Vec::new(), grades: Vec::new(), comments: Vec::new() })
+    Ok(Guild { id, name: name.to_owned(), members: Vec::new(), grades: Vec::new(), comments: Vec::new(), invites: HashMap::new() })
 }
 
 /// `add_member`: rechaza un `player_id` ya miembro (sin duplicados).
@@ -58,6 +74,37 @@ pub fn remove_member(guild: &mut Guild, player_id: i64) -> bool {
     let before = guild.members.len();
     guild.members.retain(|m| m.player_id != player_id);
     guild.members.len() != before
+}
+
+/// `PASSES_PER_SEC(10)` (guild.cpp:1876) — TTL de la invitación pendiente.
+pub const INVITE_TTL: Duration = Duration::from_secs(10);
+/// `GetMaxMemberCount` a nivel 1 (guild.cpp:1680: `32 + MAX(level-10,0)*2 +
+/// bonus`) — el roster del slice parte de nivel 1.
+pub const MAX_MEMBERS: usize = 32;
+
+/// `invite`: registra la pendiente; false si YA había una (guild.cpp:1869-
+/// 1870) o el roster está lleno (GERR_GUILDISFULL — guild.cpp:1862).
+pub fn invite(guild: &mut Guild, guest_pid: i64, now: Instant) -> bool {
+    if guild.invites.contains_key(&guest_pid) || guild.members.len() >= MAX_MEMBERS {
+        return false;
+    }
+    guild.invites.insert(guest_pid, now + INVITE_TTL);
+    true
+}
+
+/// `accept_invite`: consume la pendiente (parity InviteAccept guild.cpp:1902-
+/// 1903) y añade el miembro si no caducó ni está lleno (`RequestAddMember(
+/// invitee, 15)` — guild.cpp:1927; la caducidad la resuelve el evento
+/// GuildInviteEvent como deny, guild.cpp:1799-1818).
+pub fn accept_invite(guild: &mut Guild, guest_pid: i64, now: Instant) -> bool {
+    let Some(exp) = guild.invites.remove(&guest_pid) else { return false };
+    exp >= now && guild.members.len() < MAX_MEMBERS && add_member(guild, guest_pid).is_ok()
+}
+
+/// `deny_invite`: consume la pendiente sin unir (parity InviteDeny
+/// guild.cpp:1930-1941).
+pub fn deny_invite(guild: &mut Guild, guest_pid: i64) {
+    guild.invites.remove(&guest_pid);
 }
 
 /// Grade 1..=15 (1 = líder); `auth` bitmask (guild.h:92-95): ADD_MEMBER=1,
@@ -197,6 +244,37 @@ mod tests {
         assert!(remove_member(&mut g, 7));
         assert!(!remove_member(&mut g, 7));
         assert!(g.members.is_empty());
+    }
+
+    /// Verifier: FALLA si invite admite doble pendiente o roster lleno, si el
+    /// accept une sin pendiente/caducada/lleno, o si deny no consume.
+    #[test]
+    fn invite_accept_deny_lifecycle() {
+        let now = Instant::now();
+        let mut g = create_guild(1, "Valientes", &[]).unwrap();
+        assert!(invite(&mut g, 7, now));
+        assert!(!invite(&mut g, 7, now), "doble invitación");
+        assert!(!accept_invite(&mut g, 8, now), "sin pendiente");
+        assert!(!accept_invite(&mut g, 7, now + Duration::from_secs(11)), "caducada");
+        assert!(g.members.is_empty(), "la caducada no une");
+        assert!(invite(&mut g, 7, now), "re-invite (la caducada YA consumió)");
+        assert!(accept_invite(&mut g, 7, now), "acepta y une");
+        assert_eq!(g.members, vec![GuildMember { player_id: 7 }]);
+        assert!(!accept_invite(&mut g, 7, now), "pendiente ya consumida");
+        invite(&mut g, 9, now);
+        deny_invite(&mut g, 9);
+        assert!(!accept_invite(&mut g, 9, now), "deny consume la pendiente");
+        assert_eq!(g.members.len(), 1, "deny no une");
+        // Roster lleno: el invite y el accept de pendientes previas fallan.
+        let mut full = create_guild(2, "Llenos", &[]).unwrap();
+        assert!(invite(&mut full, 9999, now));
+        for i in 0..MAX_MEMBERS as i64 {
+            assert!(invite(&mut full, 1000 + i, now));
+            assert!(accept_invite(&mut full, 1000 + i, now), "miembro {i}");
+        }
+        assert!(!invite(&mut full, 9998, now), "LLENO: invite rechazado");
+        assert!(!accept_invite(&mut full, 9999, now), "LLENO: aceptar no une");
+        assert_eq!(full.members.len(), MAX_MEMBERS);
     }
 
     /// Verifier: FALLA si add_grade admite un grade duplicado (mismo nombre,

@@ -272,8 +272,9 @@ async fn game_loop(session: &mut Session) -> Result<(), String> {
                     }
                     // GUILD (slice 2026-08-27 — channel/guild.rs): CG_GUILD
                     // (80, variable por subheader — el framer lo resuelve):
-                    // CREATE (sub 1) → game_core::guild::create_guild →
-                    // GC_GUILD INFO + GC_CHAT ok/error. Memoria del proceso
+                    // CREATE (sub 1) → GC_GUILD INFO + GC_CHAT; INVITE
+                    // (sub 0) / respuesta (sub 11) → pendiente en la guild
+                    // + GC_GUILD INVITE (2026-08-28). Memoria del proceso
                     // (player.guild PG = slice futuro, GAP documentado).
                     header::CG_GUILD => {
                         crate::channel::guild::handle(session, &pkt).await?.into_result()?;

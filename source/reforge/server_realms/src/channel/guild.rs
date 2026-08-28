@@ -11,12 +11,18 @@
 //! DIVERGENCIA del wire (documentada en `protocol::guild`): sub 1 = CREATE
 //! (el legacy lo usa para REMOVE_MEMBER; la creación legacy va por 82/81).
 //! Textos INFO en EN (divergencia establecida como gm.rs/messenger.rs).
+//! INVITE/ACCEPT (2026-08-28): subs legacy 0 y 11 — sección dedicada más
+//! abajo.
 
 use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 
-use game_core::guild::{create_guild, Guild, GuildError};
+use game_core::guild::{
+    accept_invite, add_member, create_guild, deny_invite, invite, Guild, GuildError,
+};
 use protocol::{guild as pg, header};
 
+use crate::channel::chat;
 use crate::channel::session::{Outcome, Session};
 
 /// Registro de guildas del PROCESO (m_mapGuild — guild_manager.cpp:112).
@@ -37,6 +43,11 @@ fn gc_chat(empire: u8, text: &str) -> Vec<u8> {
     out
 }
 
+/// INFO a ESTA sesión (los rechazos del C++ van por ChatPacket INFO).
+async fn chat_error(session: &mut Session, text: &str) -> Result<(), String> {
+    session.send(&gc_chat(session.empire, text)).await.map_err(|e| format!("GC_CHAT (guild): {e}"))
+}
+
 /// CG_GUILD (80) — dispatch por subheader. El framer ya entregó el paquete
 /// completo; subheader sin handler → log + Continue (patrón messenger).
 pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String> {
@@ -45,6 +56,8 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
     }
     match pkt[1] {
         pg::SUB_CG_CREATE => create(session, pkt).await?,
+        pg::SUB_CG_ADD_MEMBER => handle_invite(session, pkt).await?,
+        pg::SUB_CG_INVITE_ANSWER => handle_invite_answer(session, pkt).await?,
         other => eprintln!(
             "server_realms: channel conn {}: guild subheader {other} sin handler (slice)",
             session.conn_id
@@ -67,7 +80,10 @@ async fn create(session: &mut Session, pkt: &[u8]) -> Result<(), String> {
         let mut store = guilds().lock().expect("guild store lock");
         let existing: Vec<&str> = store.iter().map(|g| g.name.as_str()).collect();
         let result = match create_guild(store.len() as i64 + 1, &name, &existing) {
-            Ok(g) => {
+            Ok(mut g) => {
+                // El creador entra como miembro (parity RequestAddMember
+                // guild.cpp:129) — base de los invites.
+                let _ = add_member(&mut g, session.row().id);
                 let msg = format!("<Guild> [{}] guild has been created.", g.name);
                 (Some(g), msg)
             }
@@ -99,6 +115,82 @@ async fn create(session: &mut Session, pkt: &[u8]) -> Result<(), String> {
         .send(&gc_chat(session.empire, &msg))
         .await
         .map_err(|e| format!("GC_CHAT (guild): {e}"))
+}
+
+// ---------------------------------------------------------------------------
+// INVITE / ACCEPT — parity Invite/InviteAccept/InviteDeny guild.cpp:1820-1941
+// + dispatch input_main.cpp:2486-2504/2749-2763. Pendiente por invitado en
+// la guild (TTL 10 s), consumida al responder; deny/caducada = silencio.
+// Sin await bajo el lock (patrón de create()). GAPs: sin auth de grade y
+// sin GC_GUILD ADD/LIST (confirm visible = GC_CHAT INFO).
+// ---------------------------------------------------------------------------
+
+async fn handle_invite(session: &mut Session, pkt: &[u8]) -> Result<(), String> {
+    if pkt.len() < pg::CG_ADD_MEMBER_TOTAL { return Ok(()); }
+    let vid = u32::from_le_bytes([pkt[2], pkt[3], pkt[4], pkt[5]]);
+    // Find(vid) — offline → error chat SIN pendiente (input_main.cpp:2489).
+    if chat::peer_name(vid).is_none() {
+        return chat_error(session, "<Guild> Cannot find the player.").await;
+    }
+    // Decisión SIN await dentro del lock; el envío va después.
+    let outcome: Result<(u32, String), Option<&str>> = {
+        let mut store = guilds().lock().expect("guild store lock");
+        if store.iter().any(|g| g.members.iter().any(|m| m.player_id == i64::from(vid))) {
+            Err(Some("<Guild> The player is already in a guild."))
+        } else {
+            match store
+                .iter_mut()
+                .find(|g| g.members.iter().any(|m| m.player_id == i64::from(session.player_vid())))
+            {
+                None => Err(Some("<Guild> You are not in a guild.")),
+                Some(g) => {
+                    if invite(g, i64::from(vid), Instant::now()) {
+                        Ok((g.id as u32, g.name.clone()))
+                    } else {
+                        Err(None) // ya pendiente (guild.cpp:1869) o lleno
+                    }
+                }
+            }
+        }
+    };
+    match outcome {
+        Ok((gid, gname)) => { let _ = chat::send_to_vid(vid, &pg::gc_guild_invite(gid, &gname)); }
+        Err(Some(msg)) => chat_error(session, msg).await?,
+        Err(None) => {}
+    }
+    Ok(())
+}
+
+/// GUILD_INVITE_ANSWER (sub 11, DWORD guild_id + BYTE accept): consume la
+/// pendiente SIEMPRE; deny/inválida/caducada → silencio; ALREADYJOIN al
+/// aceptar → error (re-verificación del C++, guild.cpp:1905-1925).
+async fn handle_invite_answer(session: &mut Session, pkt: &[u8]) -> Result<(), String> {
+    if pkt.len() < pg::CG_INVITE_ANSWER_TOTAL { return Ok(()); }
+    let gid = i64::from(u32::from_le_bytes([pkt[2], pkt[3], pkt[4], pkt[5]]));
+    let accept = pkt[6] != 0;
+    let vid = i64::from(session.player_vid());
+    let outcome: Result<bool, Option<&str>> = {
+        let mut store = guilds().lock().expect("guild store lock");
+        let already = store.iter().any(|g| g.members.iter().any(|m| m.player_id == vid));
+        let Some(g) = store.iter_mut().find(|g| g.id == gid) else { return Ok(()); };
+        if accept {
+            if already {
+                deny_invite(g, vid); // la pendiente se consume igual (:1902)
+                Err(Some("<Guild> The player is already in a guild."))
+            } else {
+                Ok(accept_invite(g, vid, Instant::now()))
+            }
+        } else {
+            deny_invite(g, vid);
+            Ok(false)
+        }
+    };
+    match outcome {
+        Ok(true) => chat_error(session, "<Guild> You have joined the guild.").await?,
+        Err(Some(msg)) => chat_error(session, msg).await?,
+        _ => {}
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -217,5 +309,44 @@ mod tests {
             "sin GC_GUILD para error"
         );
         assert_eq!(guilds().lock().unwrap().len(), before, "el inválido no se inserta");
+    }
+
+    /// VERIFIER INVITE/ACCEPT: invitar (sub 0) → GC_GUILD sub 14 de 21 B al
+    /// invitado → accept (sub 11) → miembro; re-invite a miembro →
+    /// ALREADYJOIN. FALLA si el creador no es miembro, el invite no llega o
+    /// el accept no une. La guild se limpia al final (store COMPARTIDO —
+    /// TEST_LOCK solo serializa, el orden de los tests no está garantizado).
+    #[tokio::test]
+    async fn invite_accept_flow_verifier() {
+        let _g = TEST_LOCK.lock().unwrap();
+        let (mut master, mut msock) = test_session(912, "Master", 1).await;
+        let (mut guest, mut gsock) = test_session(913, "Guest", 1).await;
+        // El invitado necesita peer de chat (Find(vid) del canal).
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let guard = crate::channel::chat::register_peer(913, "Guest".into(), 41, 0, 0, 1, tx);
+        handle(&mut master, &cg_guild_create("Invitados")).await.unwrap();
+        assert_eq!(read_packet(&mut msock).await[0], pg::GC_GUILD);
+        assert_eq!(read_packet(&mut msock).await[0], header::GC_CHAT);
+        let mut inv = vec![header::CG_GUILD, pg::SUB_CG_ADD_MEMBER];
+        inv.extend_from_slice(&913u32.to_le_bytes());
+        handle(&mut master, &inv).await.unwrap();
+        let got = rx.recv().await.expect("invite al invitado");
+        assert_eq!(got[0], pg::GC_GUILD);
+        assert_eq!(got[3], pg::SUB_GC_GUILD_INVITE);
+        assert_eq!(got.len(), 21, "sobre 4 B + gid 4 B + nombre 13 B");
+        let mut ans = vec![header::CG_GUILD, pg::SUB_CG_INVITE_ANSWER];
+        ans.extend_from_slice(&got[4..8]);
+        ans.push(1); // accept
+        handle(&mut guest, &ans).await.unwrap();
+        assert!(String::from_utf8_lossy(&read_packet(&mut gsock).await[9..]).contains("joined"));
+        let guild = || guilds().lock().unwrap().iter().find(|g| g.name == "Invitados").unwrap().members.len();
+        assert_eq!(guild(), 2, "master + invitado");
+        handle(&mut master, &inv).await.unwrap();
+        let err = read_packet(&mut msock).await;
+        assert!(String::from_utf8_lossy(&err[9..]).contains("already in a guild"));
+        assert_eq!(guild(), 2, "sin doble alta");
+        drop(guard);
+        // Limpieza del store compartido (sin colisiones con otros tests).
+        guilds().lock().unwrap().retain(|g| g.name != "Invitados");
     }
 }

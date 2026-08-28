@@ -1,13 +1,13 @@
 //! PESO (slice weight): dominio puro del sistema de peso del Metin2
 //! clásico. El C++ de esta variante NO tiene el sistema (verificado:
 //! sin `Weight` en char.cpp, sin columna weight en item_proto.txt, sin
-//! barra en el cliente). `player.item_proto.weight` = 0 en las 11 002
-//! filas (verificado 2026-08-28 también en la fuente original proto.zip,
-//! en el dump MariaDB 6 338 filas, en el item_proto del pack del cliente
-//! — 11 002 bWeight a 0, layout TItemTable_r156 pack(1) offset 60 — y en
-//! el upstream old-metin2.com: la columna WEIGHT fue ELIMINADA de la
-//! tabla en esta línea) — el gate es fail-open hasta importar pesos
-//! clásicos (pendiente progress.md:35). La fórmula es la clásica del
+//! barra en el cliente). `item_proto.weight` = 0 en TODAS las fuentes
+//! clásicas (re-verificado 2026-08-28 con TEA+LZO — key DumpProto — y el
+//! dump MariaDB): PG 11 002 filas, dump 11 002 filas (2 bloques), item_proto del pack ×3
+//! idiomas (bWeight a 0, TItemTable_r156 pack(1) offset 60), el txt del
+//! C++ 0 B, upstream old-metin2.com sin columna WEIGHT, DumpProto sin
+//! weight en su CSV — el gate es fail-open hasta que exista una fuente
+//! real (pendiente progress.md:35). La fórmula es la clásica del
 //! upstream (GetMaxWeight): escalado ×10, gate server-side.
 
 /// Peso de `count` items de un vnum: `proto.weight × count / 10` (escala
@@ -66,6 +66,10 @@ mod tests {
         assert_eq!(weight_for_item(60, 1), 6);
         assert_eq!(weight_for_item(60, 10), 60);
         assert_eq!(weight_for_item(0, 1), 0, "proto sin peso → 0 (fail-open)");
+        assert!(
+            can_carry(570, 0, 570),
+            "fail-open: hasta al límite, un item sin peso (0) nunca se rechaza"
+        );
     }
 
     #[test]

@@ -107,3 +107,7 @@ source/client/Extern/
 .pi-loop-log.jsonl
 probe.txt
 check_probe.txt
+
+# deepwork state (local only)
+.slim/deepwork/
+

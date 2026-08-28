@@ -32,13 +32,15 @@ Checklist vs `documentation/history/plans/server-side-gap-2026-08-15.md` + estad
 - [ ] guild full — persist/ranking ya; falta war real (hoy stub, score verifier ya en game_core)
 - [ ] pvp full — PK mode ya; falta penalización PK (exp/drop), war-PK
 - [ ] skills full — falta familia PARTY, grand master, buffs ATT_SPEED/CASTING al gameplay
-- [ ] weight con datos reales — item_proto.weight = 0 (11 002 filas); importar pesos para activar el gate
+- [ ] weight con datos reales — IMPOSIBLE sin fuente clásica (decodificado TODO el ecosistema 2026-08-28: PG + dump MariaDB + pack cliente TEA+LZO + txt C++ + upstream, ver handoff); gate fail-open verificado en weight.rs:64-73 (hasta al límite, peso 0 nunca rechaza)
 - [ ] locale pull — CG_LOCALE_REQUEST (hoy solo push)
 - [ ] events/raids/dungeons full — hoy stubs (dungeon: ids + owning party ya)
 - [ ] quests full — falta say_reward, send_letter, set_quest_state, target_vid, affect_*, timers/scheduler (corpus ~88 incompletas)
 - [ ] GM commands restantes — ~9 reales de 174 (mob, kill, purge, goto, set, makeguild, setskill, polymorph, priv_empire...)
 
 ## Handoff
+
+- 2026-08-28 | slice weight import real (coder): buscada fuente clásica de pesos en TODO el ecosistema — NO EXISTE ninguna con datos (re-verificado de primera mano): (1) PG item_proto 11 002 filas weight=0; (2) dump MariaDB re-parseado = 11 002 filas en 2 bloques, weight=0; (3) item_proto del pack del cliente ×3 idiomas decodificado con la pipeline REAL (MIPX 20B + MCOZ 20B + TEA-ECB-32 key DumpProto {173217,72619434,408587239,27973291} + LZO1X, probe temporal Rust) → bWeight (TItemTable_r156 pack(1) offset 60, struct 156) = 0 en las 11 002; (4) item_proto.txt del C++ 0 B; (5) DumpProto sin columna weight en su CSV (no puede transportarla); (6) upstream old-metin2.com sin columna (doc previa). Por qué fail-open: la variante nunca tuvo peso (C++ sin GetWeight/GetMaxWeight, cliente sin barra ni consumidor de bWeight) y ninguna fuente clásica conserva la columna → el gate (events.rs pickup) queda fail-open por diseño: peso 0 → weight_for_item 0 → can_carry siempre true. Importación futura = UPDATE item_proto.weight desde una fuente externa (p. ej. Metin2 upstream) — la escala correcta queda PINNED: verifier ESPADA 190 → 19 u ÷10 (weight.rs:35-62) + fail-open verificado al límite (weight.rs:64-73). Cambios: weight.rs doc + verifier fail-open (80 líneas), progress.md. VE: game_core 233 passed / 0 failed (3 weight), clippy sin warnings nuevos (solo pre-existentes protocol). Probe temporal eliminado (bin/ borrado).
 
 - 2026-08-27 | slice safebox full (coder, lane paralela del party): grid de `size` celdas (strip vertical paso 5, parity `IsEmpty(pos,1,size)` safebox.cpp:130-136) en checkin/checkout/item_move con item_proto.size real; gates EXPAND (71009) + antiflag SAFEBOX (1<<17) + STACKABLE/ANTIFLAG_STACK del stack; `/safebox_change_password` completo (gm parse + SafeboxRepo::change_password, strcasecmp del C++); verifiers: checkin_gate_rejects_antiflag_safebox (mutation PROBADA: roja al quitar el gate), _2x2_over_strip_cell, _2x2_out_of_grid, checkout_strip_respects_inventory_page_and_occupancy, stack_requires_stackable_dst_without_antiflag, old_password_matches_is_case_insensitive; smoke live PG del batch ANY($1) (9510: size 2 + antiflag) — workspace 784 passed / 0 failed; clippy sin nuevos.
 
