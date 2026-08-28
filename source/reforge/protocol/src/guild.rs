@@ -33,6 +33,9 @@ pub const SUB_CG_CREATE: u8 = 1;
 pub const SUB_CG_ADD_MEMBER: u8 = 0;
 /// Total del ADD_MEMBER: base 2 B + DWORD vid.
 pub const CG_ADD_MEMBER_TOTAL: usize = CG_FIXED + 4;
+/// `GUILD_SUBHEADER_CG_WAR_DECLARE` (aditivo reforge, CG_GUILD 80): payload DWORD target_guild + BYTE war_type (parity `RequestDeclareWar` guild_war.cpp:290 — FIELD/BATTLE/FLAG).
+pub const SUB_CG_WAR_DECLARE: u8 = 15;
+pub const CG_WAR_DECLARE_TOTAL: usize = CG_FIXED + 5;
 /// `GUILD_SUBHEADER_CG_GUILD_INVITE_ANSWER` (packet.h:1680 — 11): payload
 /// DWORD guild_id + BYTE accept (dispatch input_main.cpp:2749-2763).
 pub const SUB_CG_INVITE_ANSWER: u8 = 11;

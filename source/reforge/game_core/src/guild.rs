@@ -44,7 +44,17 @@ pub struct Guild {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GuildError { NameTooShort, NameTooLong, DuplicateName, DuplicateMember, DuplicateGrade, GradeFull, EmptyComment, CommentTooLong, DuplicateComment }
+pub enum GuildError { NameTooShort, NameTooLong, DuplicateName, DuplicateMember, DuplicateGrade, GradeFull, EmptyComment, CommentTooLong, DuplicateComment, SelfWar, AlreadyAtWar }
+
+pub const WAR_TYPE_FIELD: u8 = 0; pub const WAR_TYPE_BATTLE: u8 = 1; pub const WAR_TYPE_FLAG: u8 = 2; // length.h:634-636
+/// `declare_war`: valida auto-guerra y duplicado (parity guild_war.cpp:292-325 + GuildManager::DeclareWar 543). Ordena ids para el UNIQUE del PG.
+pub fn declare_war(existing: &[GuildWar], a: i64, b: i64, war_type: u8) -> Result<GuildWar, GuildError> {
+    if a == b { return Err(GuildError::SelfWar); }
+    if war_type > WAR_TYPE_FLAG { return Err(GuildError::NameTooLong); }
+    let (x, y) = if a < b { (a, b) } else { (b, a) };
+    if existing.iter().any(|w| { let (xa, ya) = if w.guild_a < w.guild_b { (w.guild_a, w.guild_b) } else { (w.guild_b, w.guild_a) }; xa == x && ya == y }) { return Err(GuildError::AlreadyAtWar); }
+    Ok(GuildWar { guild_a: x, guild_b: y, score_a: 0, score_b: 0 })
+}
 
 /// `create_guild`: valida nombre (2..=12 tras trim) y duplicado
 /// (case-insensitive) contra `existing`. Parity: guild_manager.cpp:90-107.
@@ -318,6 +328,16 @@ mod tests {
         let w = add_score(add_score(w, 2, 3), 2, 2);
         assert_eq!(w.score_b, 5); // 3+2 acumulado en el lado B
         assert_eq!(add_score(w, 99, 1), w); // ajena → sin cambios
+    }
+
+    /// Verifier war DECLARE: auto-guerra, tipo inválido, duplicado (orden invariante) y wire PG idempotente.
+    #[test]
+    fn guild_war_declare_verifier() {
+        assert_eq!(declare_war(&[], 1, 1, WAR_TYPE_FIELD), Err(GuildError::SelfWar));
+        assert_eq!(declare_war(&[], 1, 2, 99), Err(GuildError::NameTooLong));
+        let w = declare_war(&[], 2, 1, WAR_TYPE_FIELD).unwrap(); assert_eq!((w.guild_a, w.guild_b), (1, 2));
+        assert_eq!(declare_war(&[w], 1, 2, WAR_TYPE_FIELD), Err(GuildError::AlreadyAtWar));
+        assert_eq!(declare_war(&[w], 2, 1, WAR_TYPE_BATTLE), Err(GuildError::AlreadyAtWar));
     }
 
     /// Verifier: FALLA si add_points no crea la entrada o no acumula (o

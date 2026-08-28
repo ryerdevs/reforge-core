@@ -60,6 +60,9 @@ SELECT id, name, ladder_point, win, draw, loss, gold, level FROM player.guild WH
 const GUILD_RANKING_SQL: &str = "\
 SELECT id, name, ladder_point FROM player.guild ORDER BY ladder_point DESC LIMIT 20";
 
+/// Guild war DECLARE: PK (id_from,id_to) ordenada (parity GuildManager::DeclareWar). Idempotente.
+const GUILD_WAR_DECLARE_SQL: &str = "INSERT INTO player.guild_war (id_from, id_to) VALUES (LEAST($1,$2), GREATEST($1,$2)) ON CONFLICT DO NOTHING";
+
 /// Upsert de grade (PK `guild_id+grade`): INSERT + ON CONFLICT DO UPDATE —
 /// cubre el CREATE de grades (guild.cpp:104-111) y los UPDATE de name/auth
 /// (guild.cpp:799/838) en una sola sentencia idempotente.
@@ -160,6 +163,11 @@ impl GuildRepo {
                 ))
             })
             .collect()
+    }
+
+    /// Declara guerra PG (idempotente, ids ordenados). Parity `guild_war` PK.
+    pub async fn declare_war(&self, a: i64, b: i64) -> Result<bool, String> {
+        let c = self.connect().await?; let n = c.execute(GUILD_WAR_DECLARE_SQL, &[&a, &b]).await.map_err(|e| pg_err("GUILD_WAR_DECLARE", &e))?; Ok(n == 1)
     }
 
     /// Upsert de un grade (`player.guild_grade`, PK guild_id+grade). `grade`
