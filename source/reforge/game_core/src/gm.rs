@@ -277,6 +277,13 @@ pub enum GmCommand {
     /// `/setskill <vnum> <level>` — nivel de skill (parity do_setskill
     /// cmd_gm.cpp:2302-2336 — LOW_WIZARD; level cap 40).
     SetSkill { vnum: u32, level: u8 },
+    /// `/transfer <nombre>` — trae al jugador a la posición del GM (parity
+    /// do_transfer cmd_gm.cpp:94-142 — LOW_WIZARD; WarpSet / HEADER_GG_TRANSFER).
+    Transfer { name: String },
+    /// `/ipurge <window>` — purga items (parity do_item_purge cmd_gm.cpp:792+
+    /// — HIGH_WIZARD; windows: all / inventory|inv / equipment|equip /
+    /// dragonsoul|ds / belt).
+    Ipurge { window: String },
 }
 
 /// POINT_ST/POINT_DX/POINT_HT/POINT_IQ del do_stat (cmd_general.cpp:664-671
@@ -487,6 +494,25 @@ pub fn parse_command(cmd: &str) -> Option<GmCommand> {
             let level: u8 = it.next()?.parse().ok()?;
             Some(GmCommand::SetSkill { vnum, level: level.min(40) })
         }
+        "transfer" => {
+            let name = it.next()?.to_string();
+            if name.is_empty() {
+                return None;
+            }
+            Some(GmCommand::Transfer { name })
+        }
+        "ipurge" => {
+            let w = it.next()?;
+            let norm = match w {
+                "all" => "all",
+                "inventory" | "inv" => "inventory",
+                "equipment" | "equip" => "equipment",
+                "dragonsoul" | "ds" => "dragonsoul",
+                "belt" => "belt",
+                _ => return None,
+            };
+            Some(GmCommand::Ipurge { window: norm.to_string() })
+        }
         _ => None,
     }
 }
@@ -503,10 +529,13 @@ pub fn required_level(cmd: &GmCommand) -> i16 {
         // Lote 3 (parity cmd.cpp): mob 310 HIGH_WIZARD, kill 314
         // HIGH_WIZARD, purge 292 WIZARD, goto 296 LOW_WIZARD; stat/stat-
         // son GM_PLAYER (cmd.cpp:324-325 — el cliente los usa sin gmlist).
-        GmCommand::Polymorph { .. } | GmCommand::SetSkill { .. } => gm_level::LOW_WIZARD,
+        GmCommand::Polymorph { .. }
+        | GmCommand::SetSkill { .. }
+        | GmCommand::Transfer { .. } => gm_level::LOW_WIZARD,
         GmCommand::Mob { .. } | GmCommand::Kill => gm_level::HIGH_WIZARD,
         GmCommand::Purge { .. } => gm_level::WIZARD,
         GmCommand::Goto { .. } => gm_level::LOW_WIZARD,
+        GmCommand::Ipurge { .. } => gm_level::HIGH_WIZARD,
         // Safebox (tamaño): GM_HIGH_WIZARD (parity cmd.cpp:351).
         GmCommand::Safebox { .. } => gm_level::HIGH_WIZARD,
         GmCommand::RestartHere
@@ -1119,5 +1148,18 @@ mod tests {
         assert_eq!(parse_command("setskill"), None);
         assert_eq!(required_level(&GmCommand::Polymorph { vnum: 1 }), gm_level::LOW_WIZARD);
         assert_eq!(required_level(&GmCommand::SetSkill { vnum: 1, level: 1 }), gm_level::LOW_WIZARD);
+    }
+
+    #[test]
+    fn verifier_transfer_ipurge() {
+        assert_eq!(parse_command("transfer Pepe"), Some(GmCommand::Transfer { name: "Pepe".into() }));
+        assert_eq!(parse_command("transfer"), None);
+        assert_eq!(parse_command("ipurge all"), Some(GmCommand::Ipurge { window: "all".into() }));
+        assert_eq!(parse_command("ipurge inv"), Some(GmCommand::Ipurge { window: "inventory".into() }));
+        assert_eq!(parse_command("ipurge ds"), Some(GmCommand::Ipurge { window: "dragonsoul".into() }));
+        assert_eq!(parse_command("ipurge"), None);
+        assert_eq!(parse_command("ipurge foo"), None);
+        assert_eq!(required_level(&GmCommand::Transfer { name: "x".into() }), gm_level::LOW_WIZARD);
+        assert_eq!(required_level(&GmCommand::Ipurge { window: "all".into() }), gm_level::HIGH_WIZARD);
     }
 }
