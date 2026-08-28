@@ -18,7 +18,9 @@ function Invoke-Step([string]$name, [scriptblock]$cmd) {
 
 Push-Location $root
 try {
-    Invoke-Step 'fmt --check' { cargo fmt --manifest-path $mf --check }
+    # rustfmt 1.9 (toolchain 1.97.0) no soporta --manifest-path ("Failed to find targets");
+    # el check debe correr con cwd dentro del workspace.
+    Invoke-Step 'fmt --check' { Push-Location (Join-Path $root 'source/reforge'); try { cargo fmt -- --check } finally { Pop-Location } }
     Invoke-Step 'test --workspace -- --ignored' { cargo test --manifest-path $mf --workspace -- --ignored }
     Invoke-Step 'clippy --workspace -D warnings' { cargo clippy --manifest-path $mf --workspace -- -D warnings }
     Invoke-Step 'git diff --check' { git diff --check }

@@ -51,6 +51,7 @@ source/deploy/
 source/client/**/assets/
 
 # ---- Serverfiles (MartySama) ----
+source/server/
 source/server/**/OBJDIR/
 
 # ---- Grafos graphify (generados) ----
