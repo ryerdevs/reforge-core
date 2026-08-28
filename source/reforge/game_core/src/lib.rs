@@ -34,6 +34,7 @@ pub mod ai;
 pub mod combat;
 pub mod dungeon;
 pub mod ecs;
+pub mod event;
 pub mod gm;
 pub mod guild;
 pub mod map;
