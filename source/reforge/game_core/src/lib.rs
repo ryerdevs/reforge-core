@@ -27,9 +27,12 @@
 //!   caché por mapa y `is_movable(map, x, y)` en units (celdas de 50 u).
 //! - `guild` — slice social: ciclo de vida básico de una guild (create/add/
 //!   remove) en dominio puro, sin I/O — la persistencia vive en `database`.
+//! - `dungeon` — slice stub: identidad de las mazmorras de instancia (id
+//!   único por proceso, mapa privado, party dueña) — parity dungeon.cpp.
 
 pub mod ai;
 pub mod combat;
+pub mod dungeon;
 pub mod ecs;
 pub mod gm;
 pub mod guild;
