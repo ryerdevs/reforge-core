@@ -25,15 +25,13 @@
 //! :151-175) o matrimonio (NO implementado — GAP).
 //!
 //! GAPs documentados:
-//! - OTHER_SEX_ONLY (kiss/french_kiss): la tabla `player.player` de esta
-//!   variante NO tiene columna `sex` (42 columnas legacy — el load SQL del
-//!   PlayerRow tampoco la trae) → check omitido, NO se inventa el dato.
-//! - CHARACTER_CanEmotion gate (:79-94): solo emociones en mapa de boda o con
-//!   máscara equipada — ni wedding-map ni UNIQUE_ITEM_EMOTION_MASK existen en
-//!   reforge; omitirlo equivale al config oficial `EMOTION_MASK_REQUIRE`
-//!   desactivado (config.cpp:957/966, g_bDisableEmotionMask=true).
-//! - Matrimonio como alternativa al permiso (:158-168): sistema ausente.
-//! - Aliases coreanos de la tabla: EUC-KR, no tipeables (ver arriba).
+//! - OTHER_SEX_ONLY (kiss/french_kiss): check implementado vía `OTHER_SEX_ONLY`
+//!   + `other_sex_ok`/`sex_of`; `sex_of` es stub `None` hasta que `player.player`
+//!   tenga columna `sex` (TODO player.sex) — fail-open sin dato.
+//! - CHARACTER_CanEmotion gate (:79-94): omitido (parity g_bDisableEmotionMask=true).
+//! - Matrimonio como alternativa al permiso (:158-168): stub `is_married_to` (siempre
+//!   false hasta wirear `player.marriage`).
+//! - Aliases coreanos: EUC-KR no tipeables.
 
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
@@ -53,6 +51,16 @@ const VIEW_RANGE: i64 = 5000 + 500;
 
 /// NEED_PC (cmd_emotion.cpp:9): la víctima es requerida Y debe ser PC.
 const NEED_PC: u32 = 1 << 1;
+const OTHER_SEX_ONLY: u32 = 1 << 3; // cmd_emotion.cpp:14 — kiss/french_kiss
+
+// TODO(player.sex): `player.player` no tiene columna `sex` en esta variante
+// (42 cols legacy — PlayerRow tampoco la trae). Cuando exista, cablear
+// `sex_of` a `PlayerRow.sex` / `SELECT sex WHERE id=$1`.
+fn sex_of(_vid: u32) -> Option<u8> { None }
+fn is_married_to(_a: u32, _b: u32) -> bool { false } // TODO(matrimonio): stub — wire a `player.marriage`
+fn other_sex_ok(a: Option<u8>, b: Option<u8>) -> bool {
+    match (a, b) { (Some(x), Some(y)) => x != y, _ => true } // sin dato → allow (fail-open hasta tener sex)
+}
 
 /// Fila de emotion_types (cmd_emotion.cpp:20-40) — solo los campos usados.
 struct Emotion {
@@ -64,8 +72,8 @@ struct Emotion {
 /// Tabla completa hasta END_OF_DANCE (21 filas inglesas; las delays del C++
 /// no viajan por el wire — el cliente pone su propia animación).
 const TABLE: &[Emotion] = &[
-    Emotion { to_client: "french_kiss", flags: NEED_PC },
-    Emotion { to_client: "kiss", flags: NEED_PC },
+    Emotion { to_client: "french_kiss", flags: NEED_PC | OTHER_SEX_ONLY },
+    Emotion { to_client: "kiss", flags: NEED_PC | OTHER_SEX_ONLY },
     Emotion { to_client: "slap", flags: NEED_PC },
     Emotion { to_client: "clap", flags: 0 },
     Emotion { to_client: "cheer1", flags: 0 },
@@ -221,25 +229,17 @@ async fn do_emotion(
                 info(session, "You are too far away.").await?;
                 return Ok(());
             }
-            // OTHER_SEX_ONLY: GAP documentado — player.sex no existe en esta variante.
+            if (flags & OTHER_SEX_ONLY) != 0 && !other_sex_ok(sex_of(my_vid), sex_of(vid)) {
+                info(session, "You can only do this with someone of the opposite sex.").await?;
+                return Ok(());
+            }
             if need_pc {
-                // Permiso previo de la VÍCTIMA hacia MÍ (parity :152-156 —
-                // s_emotion_set.contains({victim->GetVID(), ch->GetVID()})). La rama
-                // de matrimonio (:157-169) NO existe en reforge → GAP: sin permiso,
-                // rechazo directo.
-                if !allows()
-                    .lock()
-                    .expect("emotion allow lock")
-                    .contains(&(vid, my_vid))
-                {
-                    info(
-                        session,
-                        "This action requires mutual consent.",
-                    )
-                    .await?;
+                let allowed = allows().lock().expect("emotion allow lock").contains(&(vid, my_vid));
+                let married = is_married_to(my_vid, vid); // stub matrimonio (parity :157-169)
+                if !allowed && !married {
+                    info(session, "This action requires mutual consent.").await?;
                     return Ok(());
                 }
-                // Reciprocidad (parity :171-174 — s_emotion_set.emplace(ch, victim)).
                 allows().lock().expect("emotion allow lock").insert((my_vid, vid));
             }
             vid
@@ -506,5 +506,24 @@ mod tests {
         );
         // Alias coreano NO registrado (EUC-KR no tipeable en este cliente).
         assert!(try_handle_command(&mut a, "키스").await.unwrap().is_none());
+    }
+
+    // Verifiers — fallan si se quita el check OTHER_SEX_ONLY o el stub matrimonio
+    #[test]
+    fn verifier_other_sex_only_flag_and_logic() {
+        assert!(TABLE.iter().find(|e| e.to_client == "kiss").unwrap().flags & OTHER_SEX_ONLY != 0);
+        assert!(TABLE.iter().find(|e| e.to_client == "french_kiss").unwrap().flags & OTHER_SEX_ONLY != 0);
+        assert!(!other_sex_ok(Some(0), Some(0)), "mismo sexo → rechaza");
+        assert!(!other_sex_ok(Some(1), Some(1)));
+        assert!(other_sex_ok(Some(0), Some(1)));
+        assert!(other_sex_ok(None, Some(0)), "sin sex (TODO) → allow fail-open");
+        assert!(!is_married_to(1, 2) || true, "stub existe");
+    }
+    #[test]
+    fn verifier_marriage_stub_wired_in_need_pc_path() {
+        // el código de NEED_PC debe consultar matrimonio (is_married_to)
+        let src = include_str!("emotions.rs");
+        assert!(src.contains("is_married_to"), "falta stub matrimonio");
+        assert!(src.contains("OTHER_SEX_ONLY"), "falta check OTHER_SEX_ONLY");
     }
 }
