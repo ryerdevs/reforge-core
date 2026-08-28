@@ -112,9 +112,14 @@ pub struct QuestRuntime {
     pub flags: HashMap<(String, String), i64>,
     /// Evento suspendido (wait/select) esperando CG_SCRIPT_ANSWER.
     pub suspended: Option<Suspension>,
+    /// Timers: (quest, name) -> expire now_s.
+    pub timers: std::collections::HashMap<(String, String), i64>,
 }
 
 impl QuestRuntime {
+    pub fn add_timer(&mut self, quest: &str, name: &str, secs: i64, now_s: i64) { self.timers.insert((quest.to_string(), name.to_string()), now_s + secs.max(0)); }
+    pub fn cancel_timer(&mut self, quest: &str, name: &str) { self.timers.remove(&(quest.to_string(), name.to_string())); }
+    pub fn take_due(&mut self, now_s: i64) -> Vec<(String, String)> { let due: Vec<_> = self.timers.iter().filter(|(_, e)| **e <= now_s).map(|(k, _)| k.clone()).collect(); for k in &due { self.timers.remove(k); } due }
     /// Carga las filas persistidas del entry: `{quest}.__status` = el estado
     /// actual; el resto = flags.
     pub fn load(rows: &[PersistedFlag]) -> QuestRuntime {
@@ -210,6 +215,7 @@ impl QuestEngine {
         self
     }
 
+    pub fn check_timers(&self, rt: &mut QuestRuntime, level: i32, map_index: u32, now_s: i64, items: &std::collections::HashMap<u32,i64>, rng: &mut dyn FnMut(i64,i64)->i64) -> Vec<QuestOutcome> { let due = rt.take_due(now_s); due.into_iter().map(|_| self.run(rt, QuestTrigger::Timer, level, map_index, now_s, items, rng)).collect() }
     /// Las quests concretas (familias ya expandidas) — en orden del archivo.
     pub fn quests(&self) -> &[QuestDef] {
         &self.quests
@@ -1026,5 +1032,21 @@ quest collect_lv40 = fam(level: 40, mob: 602, herb: 30007)
         assert_eq!(out.script, None);
         // mutation: without handler effects would be empty -> fails
         assert!(out.effects.len() == 4, "verifier: 4 effects");
+    }
+    #[test]
+    fn timers_add_check_and_cancel_verifier() {
+        let e = QuestEngine::load("quest q\n  state start\n    on timer\n      -> notice(@fired)\n").expect("parse");
+        let mut rt = QuestRuntime::default();
+        let items = std::collections::HashMap::new();
+        let (_, map, _, items_ref) = ctx_bits(5, 0, &items);
+        rt.add_timer("q", "t1", 10, 100);
+        assert_eq!(e.check_timers(&mut rt, 5, map, 105, items_ref, &mut *rng_fixed(0)).len(), 0);
+        let out = e.check_timers(&mut rt, 5, map, 110, items_ref, &mut *rng_fixed(0));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].effects, vec![QuestEffect::Notice("fired".into())]);
+        assert!(rt.timers.is_empty());
+        rt.add_timer("q", "t2", 10, 200);
+        rt.cancel_timer("q", "t2");
+        assert!(rt.take_due(300).is_empty());
     }
 }
