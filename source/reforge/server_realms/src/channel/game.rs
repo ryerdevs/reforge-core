@@ -19,7 +19,7 @@ use protocol::header;
 use game_core::ecs::{CombatIntent, Intent};
 
 use crate::channel::session::Session;
-use crate::channel::{chat, combat, events, items, land, locale, movement, party, pvp, quest, quickslot, safebox, script, shop, skills, trade};
+use crate::channel::{chat, combat, dragon_soul, events, horse, items, land, locale, movement, party, pvp, quest, quickslot, safebox, script, shop, skills, trade};
 
 /// Loop de juego de la conexión: corre SOLO con la sesión llena (las fases
 /// 1-7 las hizo `entry::run`). `Err` = cierre con razón (fatal o protocolario
@@ -97,6 +97,9 @@ async fn game_loop(session: &mut Session) -> Result<(), String> {
                         }))?;
                     }
                     header::CG_USE_SKILL => skills::handle(session, &pkt).await?.into_result()?,
+                    // FASE 1 caballo jugable: CG_HORSE (63, aditivo reforge —
+                    // 2 B: header + bRide) monta/desmonta + persiste.
+                    header::CG_HORSE => horse::handle(session, &pkt).await?.into_result()?,
                     // F1 pull del locale (ADR-0009 — hot reload): el cliente
                     // re-pide la lengua EN GAME; stateless (parity auth).
                     header::CG_LOCALE_REQUEST => locale::handle(session, &pkt).await?.into_result()?,
@@ -305,6 +308,15 @@ async fn game_loop(session: &mut Session) -> Result<(), String> {
                     header::CG_LAND_BUY => land::handle_buy(session, &pkt).await?.into_result()?,
                     header::CG_LAND_TRANSFER => {
                         land::handle_transfer(session, &pkt).await?.into_result()?;
+                    }
+                    // DRAGON SOUL (phase 1 — channel/dragon_soul.rs):
+                    // CG_DRAGON_SOUL_REFINE (205, 47 B — Packet.h:2715-2722).
+                    // Parity `CInputMain` input_main.cpp:3197-3222: registra
+                    // el refine en el ledger `player.dragon_soul` (id por la
+                    // IDENTITY de PG) y responde el FAIL determinista — la
+                    // ventana no se cuelga; el refine real es fase 2.
+                    header::CG_DRAGON_SOUL_REFINE => {
+                        dragon_soul::handle_refine(session, &pkt).await?.into_result()?;
                     }
                     // TODO(F5 npcs): game_core::npc::... para los NPCs/mobs
                     //

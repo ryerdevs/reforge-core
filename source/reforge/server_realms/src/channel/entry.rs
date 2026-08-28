@@ -1245,6 +1245,12 @@ fn enter_packets(
         packets::character_additional_info_with_parts(row, empire, parts, arrows).to_bytes().to_vec(),
         TPacketGCPhase::new(phase::GAME).to_bytes().to_vec(),
     ];
+    // FASE 1 caballo jugable: montado al entrar → el estado persistido del
+    // caballo viaja por el wire (parity EnterHorse → StartRiding →
+    // SendHorseInfo, horse_rider.cpp:74-92 + char_horse.cpp:309-345).
+    if row.horse_riding != 0 {
+        out.push(packets::horse_state_command(row, empire));
+    }
     if !lands.is_empty() {
         out.push(packets::land_list(lands));
     }

@@ -151,6 +151,7 @@ fn game_phase_size(header: u8) -> Option<usize> {
         header::CG_LAND_TRANSFER => 9,      // 57, aditivo reforge — header+land_id+new_owner
         header::CG_ITEM_USE_TO_ITEM => 7,   // 60, header+source+target (Packet.h:549-554)
         header::CG_TARGET => 5,             // 61, header+vid (Packet.h:671-675)
+        header::CG_HORSE => 2,              // 63, ADITIVO reforge — header+bRide montar/desmontar caballo (client Packet.h:75 blank)
         header::CG_WARP => 15,              // 65, header+x+y+addr+port (Packet.h:2028-2035)
         header::CG_SCRIPT_BUTTON => 5,      // 66, header+idx (Packet.h:665-669)
         // 67 (CG_MESSENGER) es VARIABLE (subheader): resuelto en try_extract
@@ -504,6 +505,9 @@ mod tests {
             packet_size(ConnectionRole::Channel, header::CG_SAFEBOX_MONEY),
             Some(6)
         );
+        // CG_HORSE (63, 2 B — header+bRide): aditivo del reforge (fase 1
+        // caballo jugable; el C++ monta por `/ride` chat, no por paquete).
+        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_HORSE), Some(2));
         // Los variables del C++ siguen fuera de la tabla fija (se resuelven
         // en try_extract — CG_CHAT/CG_WHISPER/CG_SHOP — o cierran).
         assert_eq!(packet_size(ConnectionRole::Channel, header::CG_CHAT), None);

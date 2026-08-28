@@ -143,6 +143,12 @@ pub mod header {
     pub const CG_MYSHOP: u8 = 55;
     pub const CG_ITEM_USE_TO_ITEM: u8 = 60;
     pub const CG_TARGET: u8 = 61;
+    /// `CG_HORSE` (63 — ADITIVO del reforge; `//HEADER_BLANK63` en el
+    /// cliente Packet.h:75, sin uso en el C++ congelado): montar/desmontar
+    /// el caballo — `header + bRide` (2 B; 1 = montar, 0 = desmontar).
+    /// Parity del flujo `/ride` (do_user_horse_ride cmd_general.cpp:37-65 +
+    /// CHorseRider::StartRiding/StopRiding horse_rider.cpp:165-193).
+    pub const CG_HORSE: u8 = 63;
     pub const CG_WARP: u8 = 65;
     pub const CG_SCRIPT_BUTTON: u8 = 66;
     /// `HEADER_CG_MESSENGER` (Packet.h:79 — 67): messenger (amigos) —
@@ -416,6 +422,10 @@ pub mod header {
     /// sobre de 4 B (`TPacketGCMessenger`: header+WORD size+subheader) +
     /// payload según subheader (ver `protocol::social`).
     pub const GC_MESSENGER: u8 = 74;
+    /// `HEADER_GC_DRAGON_SOUL_REFINE` (server `packet.h:268` — 209): resultado
+    /// del refino de dragon soul — `TPacketGCDragonSoulRefine` 5 B
+    /// (header+bSubType+TItemPos; Packet.h:2724-2730).
+    pub const GC_DRAGON_SOUL_REFINE: u8 = 209;
     /// `HEADER_GC_RESPOND_CHANNELSTATUS` (cliente `Packet.h:312` — 210): la
     /// respuesta al CG_STATE_CHECKER del selector de canales — `[0xd2][nSize
     /// i32][n× TChannelStatus port u16+status u8][bSuccess 0x01]` (parity

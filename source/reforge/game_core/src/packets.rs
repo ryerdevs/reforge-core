@@ -12,9 +12,10 @@
 //! - `TPacketGCCharacterAdditionalInfo` (70 B) <- `char.cpp:924-948`.
 //!
 //! Campos que el C++ calcula en runtime (speeds, affects, parts de items,
-//! pk_mode, montura, flechas, guilds) NO viven en el row persistido: se mapean
+//! pk_mode, flechas, guilds) NO viven en el row persistido: se mapean
 //! a su default (0) y quedan documentados como GAP del slice (los alimentan
-//! los subsistemas de F4/F5).
+//! los subsistemas de F4/F5). Excepción FASE 1 caballo jugable: la montura
+//! (dwMountVnum) SÍ se deriva del row (horse_riding/horse_level persistidos).
 
 use database::affect::AffectRow;
 use database::item::{ItemRow, ProtoItem};
@@ -332,7 +333,9 @@ pub fn character_add(row: &PlayerRow, mov_speed: u8) -> TPacketGCCharacterAdd {
 ///   (`GetPart(PART_MAIN/HAIR)` — el part persistido del último save).
 /// - GAP runtime: `WEAPON`/`HEAD`/`ACCE` (se derivan de los items equipados —
 ///   ver `character_additional_info_with_parts` + `equipped_parts`, F5.3),
-///   `dw_mount_vnum`, `dw_arrow` (quiver), `b_pk_mode` -> 0.
+///   `dw_arrow` (quiver) -> 0 (GAP), `b_pk_mode` -> 0.
+/// - `dw_mount_vnum` = raza del caballo montado (FASE 1 — parity
+///   `GetMountVnum`, char.cpp:935; el cliente aplica la montura al ADD,
 /// - `b_empire` viene del ACCOUNT (el row no lo tiene) — parámetro del caller
 ///   (`m_bEmpire`, `char.cpp:939`).
 /// - `dw_guild_id` = 0 (guildas F5; el C++: `GetGuild() ? GetID() : 0`).
@@ -352,7 +355,9 @@ pub fn character_additional_info(row: &PlayerRow, empire: u8) -> TPacketGCCharac
 /// mostrar el count; 0 = sin flechas — parity `GetCount()`). NOTA (C27):
 /// este paquete NO lleva b_moving_speed (packet.h:1348-1368 — el ADD (1) y
 /// el UPDATE (19) son los únicos con speeds); la velocidad con botas viaja
-/// en `character_add`/`character_update_with_parts`.
+/// en `character_add`/`character_update_with_parts`. FASE 1 caballo jugable:
+/// `dw_mount_vnum` = raza del caballo si `horse_riding` (parity
+/// `GetMountVnum` char.cpp:935 — el cliente monta al entrar, PhaseGameActor.cpp:201).
 pub fn character_additional_info_with_parts(
     row: &PlayerRow,
     empire: u8,
@@ -371,9 +376,55 @@ pub fn character_additional_info_with_parts(
         dw_level: row.level as u32,
         s_alignment: (row.alignment / 10) as i16,
         b_pk_mode: 0,
-        dw_mount_vnum: 0,
+        dw_mount_vnum: mount_vnum(row),
         dw_arrow: arrow_count,
     }
+}
+
+/// vnum de montura del wire (parity `GetMountVnum` — char.cpp:1044/935:
+/// raza del caballo montado cuando `horse_riding`, 0 si no). FASE 1 caballo
+/// jugable: el GC_CHARACTER_ADDITIONAL_INFO (entry) y el
+/// GC_CHARACTER_UPDATE (runtime) montan al cliente al reconectar/montar.
+fn mount_vnum(row: &PlayerRow) -> u32 {
+    if row.horse_riding > 0 {
+        crate::horse::horse_race_vnum(row.horse_level as u8)
+    } else {
+        0
+    }
+}
+
+/// GC_CHAT CHAT_TYPE_COMMAND (length.h:258-275) dirigido (id=0, parity
+/// ChatPacket char.cpp:3947 — mismo shape que el hook emotions/chat.rs).
+pub fn chat_command(empire: u8, payload: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(9 + payload.len());
+    out.push(protocol::header::GC_CHAT);
+    out.extend_from_slice(&((9 + payload.len()) as u16).to_le_bytes());
+    out.push(5); // CHAT_TYPE_COMMAND
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out.push(empire);
+    out.extend_from_slice(payload.as_bytes());
+    out
+}
+
+/// GC_CHAT CHAT_TYPE_COMMAND — el estado del caballo en el wire:
+/// "horse_state <level> <grade salud> <grade stamina>" (parity
+/// `SendHorseInfo` char_horse.cpp:309-345; grades 0-3 — el cliente pinta
+/// `SetHorseState`, game.py:1895-1977).
+pub fn horse_state_command(row: &PlayerRow, empire: u8) -> Vec<u8> {
+    let lvl = row.horse_level.clamp(0, crate::horse::HORSE_MAX_LEVEL as i16) as u8;
+    let (mh, ms) = (
+        i32::from(crate::horse::max_health(lvl)),
+        i32::from(crate::horse::max_stamina(lvl)),
+    );
+    let (hp, st) = (
+        row.horse_hp.clamp(0, mh as i16) as i32,
+        row.horse_stamina.clamp(0, ms as i16) as i32,
+    );
+    // Grades 0-3 (parity char_horse.cpp:313-332): la primera cota difiere —
+    // salud 0 → 0; stamina st*10 <= max → 0.
+    let hg = if hp == 0 { 0 } else if hp * 10 <= mh * 3 { 1 } else if hp * 10 <= mh * 7 { 2 } else { 3 };
+    let sg = if st * 10 <= ms { 0 } else if st * 10 <= ms * 3 { 1 } else if st * 10 <= ms * 7 { 2 } else { 3 };
+    chat_command(empire, &format!("horse_state {lvl} {hg} {sg}"))
 }
 
 /// `TPacketGCCharacterUpdate` (header 19, 51 B) — el update del personaje
@@ -387,9 +438,10 @@ pub fn character_additional_info_with_parts(
 /// secuencia de ENTRADA (el cliente lo aplica solo si el VID coincide con el
 /// `s_kNetActorData` pendiente — PythonNetworkStreamPhaseGameActor.cpp:153,
 /// 165). Speeds = GetLimitPoint (char.cpp:1025-1026; el `mov_speed` del
-/// parámetro = la velocidad con la bota equipada — C27); flags/guild/
-/// montura a 0 (sin affects/mount — F5); `s_alignment` = row.alignment/10
-/// (char.cpp:1034); `dw_arrow` = count de flechas equipadas (QUIVER).
+/// parámetro = la velocidad con la bota equipada — C27); flags/guild a 0
+/// (sin affects/guild — F5); `dw_mount_vnum` = raza del caballo montado
+/// (FASE 1 — parity `GetMountVnum` char.cpp:1044: el cliente monta/desmonta
+/// visual con cada UPDATE); `s_alignment` = row.alignment/10 (char.cpp:1034);
 pub fn character_update_with_parts(
     row: &PlayerRow,
     parts: &[u32; 5],
@@ -409,7 +461,7 @@ pub fn character_update_with_parts(
         dw_guild_id: 0,
         s_alignment: (row.alignment / 10) as i16,
         b_pk_mode: 0,
-        dw_mount_vnum: 0,
+        dw_mount_vnum: mount_vnum(row),
         dw_arrow: arrow_count,
     }
 }
@@ -1289,6 +1341,53 @@ mod tests {
         assert_eq!(&b[1..5], &(r.id as u32).to_le_bytes());
         assert_eq!(&b[9..13], &0x1002u32.to_le_bytes());
         assert_eq!(&b[47..51], &42u32.to_le_bytes());
+    }
+
+    /// VERIFIER (FASE 1 caballo jugable): el wire del caballo — el
+    /// ADDITIONAL_INFO (entry, packet.h:902) y el UPDATE (runtime,
+    /// char.cpp:1044) llevan el dwMountVnum REAL cuando `horse_riding`, y el
+    /// `horse_state` manda grades golden (parity SendHorseInfo
+    /// char_horse.cpp:313-332). Revertir el vnum a 0 o los thresholds rompe.
+    #[test]
+    fn horse_wire_mount_vnum_and_state_command() {
+        let mut r = PlayerRow::default();
+        r.id = 7;
+        r.horse_level = 5;
+        r.horse_hp = 3;
+        r.horse_stamina = 4;
+        // desmontado → vnum 0 en ambos paquetes
+        assert_eq!(character_update_with_parts(&r, &[0; 5], 0, 100).dw_mount_vnum, 0);
+        assert_eq!(character_additional_info_with_parts(&r, 1, &[0; 5], 0).dw_mount_vnum, 0);
+        // montado → raza del tier (nivel 5 → 20101)
+        r.horse_riding = 1;
+        assert_eq!(character_update_with_parts(&r, &[0; 5], 0, 100).dw_mount_vnum, 20101);
+        assert_eq!(character_additional_info_with_parts(&r, 1, &[0; 5], 0).dw_mount_vnum, 20101);
+        // horse_state: nivel 5 (max hp 8 / max st 6) — hp 3 → 30 ≤ 8×3=24?
+        // no → 30 ≤ 56 → grade 2; st 4 → 40 ≤ 6? no → ≤ 18? no → ≤ 42 → 2.
+        let cmd = horse_state_command(&r, 1);
+        assert_eq!(cmd[0], protocol::header::GC_CHAT);
+        assert_eq!(cmd[3], 5, "CHAT_TYPE_COMMAND");
+        assert_eq!(
+            String::from_utf8_lossy(&cmd[9..]),
+            "horse_state 5 2 2",
+            "payload golden (char_horse.cpp:313-332)"
+        );
+        // A tope (hp 8, st 6) → grade 3 (paridad del else final).
+        r.horse_hp = 8;
+        r.horse_stamina = 6;
+        let cmd = horse_state_command(&r, 1);
+        assert_eq!(String::from_utf8_lossy(&cmd[9..]), "horse_state 5 3 3");
+        // Grados sensibles a las cotas del C++ (char_horse.cpp:313-332):
+        // hp 6 → 60 ≤ 8×7=56? NO → grade 3 (la cota ×7 discrimina);
+        // hp 0 → grade 0; st 0 → grade 0 (la cota st*10 ≤ max discrimina).
+        r.horse_hp = 6;
+        r.horse_stamina = 6;
+        let cmd = horse_state_command(&r, 1);
+        assert_eq!(String::from_utf8_lossy(&cmd[9..]), "horse_state 5 3 3");
+        r.horse_hp = 0;
+        r.horse_stamina = 0;
+        let cmd = horse_state_command(&r, 1);
+        assert_eq!(String::from_utf8_lossy(&cmd[9..]), "horse_state 5 0 0");
     }
 
     /// ComputePoints subset — vectores REALES del runtime (4 personajes):

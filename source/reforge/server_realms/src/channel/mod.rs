@@ -47,12 +47,14 @@
 mod belt;
 mod chat;
 mod combat;
+mod dragon_soul;
 mod emotions;
 mod entry;
 mod events;
 mod game;
 mod gm;
 mod guild;
+mod horse;
 mod items;
 mod land;
 mod locale;
