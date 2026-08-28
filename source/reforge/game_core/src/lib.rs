@@ -17,6 +17,8 @@
 //!   `handle_attack(...)` para el dispatch del canal (CG_ATTACK).
 //! - `ai` — F5.3: la AI mínima de los mobs (paso de movimiento hacia el
 //!   jugador + rotación) — funciones puras que el canal usa en su tick.
+//! - `belt` — slice stub: la cinta de pociones equipable (items como lista
+//!   de vnums) — parity belt_inventory_helper.h.
 //! - `ecs` — F5.3 (ADR-0010): el mundo ECS (bevy_ecs standalone) — los
 //!   componentes del mundo (Position/Hp/Aggro/Mob/Item), los sistemas del
 //!   tick de AI (chase/attack → aggro proactivo → patrulla) y `WorldSim`,
@@ -35,6 +37,7 @@
 //!   precio) — parity common/building.h (TLand).
 
 pub mod ai;
+pub mod belt;
 pub mod combat;
 pub mod dungeon;
 pub mod ecs;
