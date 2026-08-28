@@ -147,6 +147,8 @@ fn game_phase_size(header: u8) -> Option<usize> {
         header::CG_ADD_FLY_TARGETING => 13, // 53, header+dwTargetVID+x+y (Packet.h:717-723)
         header::CG_SHOOT => 2,              // 54 (Packet.h:718-722)
         header::CG_MYSHOP => 35,            // 55, header+szSign[33]+count (SHOP_SIGN_MAX_LEN=32) (Packet.h:953-958)
+        header::CG_LAND_BUY => 29,          // 56, aditivo reforge — header+5×i32+price i64 (protocol::header)
+        header::CG_LAND_TRANSFER => 9,      // 57, aditivo reforge — header+land_id+new_owner
         header::CG_ITEM_USE_TO_ITEM => 7,   // 60, header+source+target (Packet.h:549-554)
         header::CG_TARGET => 5,             // 61, header+vid (Packet.h:671-675)
         header::CG_WARP => 15,              // 65, header+x+y+addr+port (Packet.h:2028-2035)
@@ -611,6 +613,24 @@ mod tests {
                     Err(FramingError::UnknownHeader { header: h }) if h == hdr
                 ),
                 "header 0x{hdr:02x} en auth → UnknownHeader"
+            );
+        }
+    }
+
+    #[test]
+    fn land_buy_transfer_wires() {
+        // 56/57 aditivos del reforge (phase land — protocol::header): el
+        // framer del CANAL los acepta con su tamaño exacto; el auth los
+        // rechaza (UnknownHeader). Mutar el tamaño del struct rompe esto.
+        for &(hdr, size) in &[(header::CG_LAND_BUY, 29), (header::CG_LAND_TRANSFER, 9)] {
+            assert_eq!(packet_size(ConnectionRole::Channel, hdr), Some(size));
+            assert_eq!(packet_size(ConnectionRole::Auth, hdr), None);
+            let mut pkt = vec![hdr];
+            pkt.resize(size, 0xAA);
+            assert_eq!(
+                Framer::new(ConnectionRole::Channel).push(&pkt).unwrap(),
+                vec![pkt.clone()],
+                "header 0x{hdr:02x}"
             );
         }
     }

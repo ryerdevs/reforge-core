@@ -19,7 +19,7 @@ use protocol::header;
 use game_core::ecs::{CombatIntent, Intent};
 
 use crate::channel::session::Session;
-use crate::channel::{chat, combat, events, items, locale, movement, party, pvp, quest, quickslot, safebox, script, shop, skills, trade};
+use crate::channel::{chat, combat, events, items, land, locale, movement, party, pvp, quest, quickslot, safebox, script, shop, skills, trade};
 
 /// Loop de juego de la conexión: corre SOLO con la sesión llena (las fases
 /// 1-7 las hizo `entry::run`). `Err` = cierre con razón (fatal o protocolario
@@ -297,6 +297,14 @@ async fn game_loop(session: &mut Session) -> Result<(), String> {
                     }
                     header::CG_SAFEBOX_MONEY => {
                         safebox::handle_money(session, &pkt).await?.into_result()?;
+                    }
+                    // LAND (phase 1 — channel/land.rs): CG_LAND_BUY (56) /
+                    // CG_LAND_TRANSFER (57) — aditivos del reforge (el
+                    // cliente v24 no los envía; el id lo asigna la sequence
+                    // PG, ver channel/land.rs).
+                    header::CG_LAND_BUY => land::handle_buy(session, &pkt).await?.into_result()?,
+                    header::CG_LAND_TRANSFER => {
+                        land::handle_transfer(session, &pkt).await?.into_result()?;
                     }
                     // TODO(F5 npcs): game_core::npc::... para los NPCs/mobs
                     //

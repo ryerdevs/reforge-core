@@ -194,6 +194,16 @@ pub mod header {
     /// El handler del canal es DEFENSIVO (wire byte-exacto por si un cliente
     /// lo manda).
     pub const CG_SAFEBOX_MONEY: u8 = 79;
+    /// `CG_LAND_BUY` (56 — aditivo del reforge; `//HEADER_BLANK56` en el
+    /// Packet.h del cliente y libre en el packet_info del C++): comprar un
+    /// terreno — 29 B (header + map_index/x/y/width/height, 5×i32 en células,
+    /// + price i64). El id lo asigna el SERVIDOR (`nextval` de
+    /// `player.land_id_seq`), nunca el cliente.
+    pub const CG_LAND_BUY: u8 = 56;
+    /// `CG_LAND_TRANSFER` (57 — aditivo del reforge; `//HEADER_BLANK57`):
+    /// transferir el dueño (guild) de un terreno — 9 B (header + land_id u32
+    /// + new_owner u32). Parity `CLand::SetOwner` (building.cpp:603-610).
+    pub const CG_LAND_TRANSFER: u8 = 57;
     /// `HEADER_CG_PARTY_PARAMETER` (Packet.h:90 — 78) —
     /// `TPacketCGPartyParameter` 2 B (header+bDistributeMode;
     /// Packet.h:1012-1016).

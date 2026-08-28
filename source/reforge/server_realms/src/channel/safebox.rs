@@ -23,9 +23,11 @@
 //!   INVENTARIO (entero, sin count) → posición libre de la caja. Gates:
 //!   EXPAND + antiflag SAFEBOX + strip del grid (ver abajo).
 //! - Checkout: `SafeboxCheckout` (input_main.cpp:2027-2117): de la caja a
-//!   una celda libre del INVENTARIO (window INVENTORY; DS/belt = GAP),
-//!   validando el strip del item en el grid del inventario
-//!   (`IsEmptyItemGrid`, :2056).
+//!   una celda libre del INVENTARIO (window INVENTORY) o del BELT (celdas
+//!   242..258 con los gates de belt.rs — parity `@fixme119` :2096-2100 +
+//!   rama belt de `IsEmptyItemGrid` char_item.cpp:547-567), validando el
+//!   strip del item en el grid del inventario (`IsEmptyItemGrid`, :2056).
+//!   DS = GAP.
 //! - ItemMove: `CSafebox::MoveItem` (safebox.cpp:170-231): stack si el
 //!   destino es apilable SIN antiflag STACK + mismo vnum + sockets iguales
 //!   + count < 200; si no, mover a un hueco donde quepa el strip.
@@ -88,7 +90,7 @@ use protocol::world::{
 };
 
 use crate::channel::session::{Outcome, Session};
-use crate::channel::{gm, quickslot, INVENTORY_MAX_NUM, ITEM_COUNT_LIMIT};
+use crate::channel::{belt, gm, quickslot, INVENTORY_MAX_NUM, ITEM_COUNT_LIMIT};
 
 /// `SAFEBOX_PASSWORD_MAX_LEN = 6` (tables.h:692).
 const SAFEBOX_PASSWORD_MAX_LEN: usize = 6;
@@ -536,9 +538,8 @@ pub async fn handle_checkin(session: &mut Session, pkt: &[u8]) -> Result<Outcome
 }
 
 /// CG_SAFEBOX_CHECKOUT (71, 5 B: header + bSafePos + TItemPos). Parity
-/// `SafeboxCheckout` (input_main.cpp:2027-2117): de la caja al INVENTARIO.
-/// Subset: solo window INVENTORY como destino (el C++ además maneja DS —
-/// GAP; el belt se rechaza igual que el C++ no-DS).
+/// `SafeboxCheckout` (input_main.cpp:2027-2117): de la caja al INVENTARIO o
+/// al BELT (celdas 242..258 — gates en belt.rs; DS = GAP).
 pub async fn handle_checkout(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String> {
     let p = match TPacketCGSafeboxCheckout::from_bytes(pkt) {
         Ok(p) => p,
@@ -559,13 +560,16 @@ pub async fn handle_checkout(session: &mut Session, pkt: &[u8]) -> Result<Outcom
         );
         return Ok(Outcome::Continue);
     }
-    // Destino: INVENTORY, celda libre (parity `IsEmptyItemGrid` + el rechazo
-    // del C++ a destinos no-inventario para items no-DS, input_main.cpp:
-    // 2081-2093).
-    if p.item_pos.window != TItemPos::WINDOW_INVENTORY || p.item_pos.cell >= INVENTORY_MAX_NUM {
+    // Destino: INVENTORY (celda libre) o BELT (242..258 — celdas wire del
+    // belt, belt.rs); el resto se rechaza (parity `IsEmptyItemGrid` +
+    // rechazo del C++ a destinos no-inventario para items no-DS,
+    // input_main.cpp:2081-2093; el DS sigue siendo GAP).
+    if p.item_pos.window != TItemPos::WINDOW_INVENTORY
+        || (p.item_pos.cell >= INVENTORY_MAX_NUM && !belt::is_belt_cell(p.item_pos))
+    {
         eprintln!(
             "server_realms: channel conn {}: checkout a celda inválida \
-             (window {} cell {}) — rechazado (DS/belt = GAP)",
+             (window {} cell {}) — rechazado (DS = GAP)",
             session.conn_id, p.item_pos.window, p.item_pos.cell
         );
         return Ok(Outcome::Continue);
@@ -585,7 +589,11 @@ pub async fn handle_checkout(session: &mut Session, pkt: &[u8]) -> Result<Outcom
     // pkItem->GetSize())` input_main.cpp:2056): el strip del item no puede
     // pisar celdas ocupadas ni cruzar la página de 45 (char_item.cpp:
     // 569-598). Los size de los items del inventario vienen del item_proto
-    // (batch: la caja + el inventario, una query).
+    // (batch: la caja + el inventario, una query). El BELT usa sus propios
+    // gates (tipo poción + belt equipado + grade + celda libre — parity
+    // `@fixme119` input_main.cpp:2096-2100 y la rama belt de
+    // `IsEmptyItemGrid` char_item.cpp:547-567; el `GetSize` del belt es
+    // siempre 1 — solo potions).
     let src_vnum = {
         let st = session.safebox.as_ref().expect("caja abierta (gate arriba)");
         st.items[idx].vnum
@@ -604,7 +612,63 @@ pub async fn handle_checkout(session: &mut Session, pkt: &[u8]) -> Result<Outcom
         let s = protos.get(&it.vnum).map_or(1, |p| p.size);
         occupied.extend(strip_cells(it.pos as u16, s));
     }
-    if !strip_fits(
+    let to_belt = belt::is_belt_cell(p.item_pos);
+    if to_belt {
+        let Some(proto) = ItemRepo::new(session.pool.clone())
+            .load_proto_use_values(src_vnum)
+            .await?
+        else {
+            eprintln!(
+                "server_realms: channel conn {}: checkout a belt de vnum {} \
+                 sin item_proto — rechazado",
+                session.conn_id, src_vnum
+            );
+            return Ok(Outcome::Continue);
+        };
+        if !belt::can_move_into_belt(proto.b_type, proto.b_sub_type) {
+            eprintln!(
+                "server_realms: channel conn {}: checkout a belt de vnum {} \
+                 no-poción — rechazado (parity @fixme119)",
+                session.conn_id, src_vnum
+            );
+            return Ok(Outcome::Continue);
+        }
+        let grade = {
+            let Some(belt_item) = belt::equipped_belt(&session.inventory) else {
+                eprintln!(
+                    "server_realms: channel conn {}: checkout a belt sin \
+                     cinturón equipado — rechazado (parity IsEmptyItemGrid)",
+                    session.conn_id
+                );
+                return Ok(Outcome::Continue);
+            };
+            let Some(bp) = ItemRepo::new(session.pool.clone())
+                .load_proto_use_values(belt_item.vnum)
+                .await?
+            else {
+                eprintln!(
+                    "server_realms: channel conn {}: cinturón vnum {} sin \
+                     item_proto — checkout a belt rechazado",
+                    session.conn_id, belt_item.vnum
+                );
+                return Ok(Outcome::Continue);
+            };
+            bp.values[0]
+        };
+        if !belt::is_available_cell(p.item_pos.cell, grade)
+            || session
+                .inventory
+                .iter()
+                .any(|i| i.window == "BELT_INVENTORY" && i.pos == belt::belt_pos_of(p.item_pos.cell))
+        {
+            eprintln!(
+                "server_realms: channel conn {}: checkout a belt cell {} \
+                 fuera de grade {grade} u ocupada — rechazado",
+                session.conn_id, p.item_pos.cell
+            );
+            return Ok(Outcome::Continue);
+        }
+    } else if !strip_fits(
         p.item_pos.cell,
         size,
         INVENTORY_MAX_NUM,
@@ -618,8 +682,9 @@ pub async fn handle_checkout(session: &mut Session, pkt: &[u8]) -> Result<Outcom
         );
         return Ok(Outcome::Continue);
     }
-    // Mover: caja → inventario (GC_SAFEBOX_DEL + GC_ITEM_SET + upsert con
-    // owner = PERSONAJE — parity `pkSafebox->Remove` + `AddToCharacter`).
+    // Mover: caja → inventario/belt (GC_SAFEBOX_DEL + GC_ITEM_SET + upsert
+    // con owner = PERSONAJE — parity `pkSafebox->Remove` + `AddToCharacter`;
+    // el belt se guarda como window "BELT_INVENTORY" pos 0..15).
     let item = {
         let st = session.safebox.as_mut().expect("caja abierta (gate arriba)");
         st.items.remove(idx)
@@ -630,8 +695,7 @@ pub async fn handle_checkout(session: &mut Session, pkt: &[u8]) -> Result<Outcom
         .await
         .map_err(|e| format!("enviando GC_SAFEBOX_DEL: {e}"))?;
     let mut item = item;
-    item.window = "INVENTORY".to_string();
-    item.pos = p.item_pos.cell as i32;
+    belt::place_at(&mut item, to_belt, p.item_pos.cell);
     ItemRepo::new(session.pool.clone())
         .upsert(&item, session.row().id)
         .await?;

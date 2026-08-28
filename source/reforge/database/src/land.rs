@@ -33,6 +33,25 @@ const LOAD_SQL: &str = "\
 SELECT id, map_index, x, y, width, height, guild_id \
 FROM player.land WHERE enable = 'YES' AND map_index = $1 ORDER BY id";
 
+/// Compra (phase land): insert con el id ASIGNADO POR PG (`nextval` de
+/// `player.land_id_seq` — el wire C→S no trae id; el C++ carga `dwID` de la
+/// tabla). El terreno nace SIN dueño (guild_id 0); el dueño entra por
+/// `transfer` (parity `SetOwner`, building.cpp:603-610).
+const BUY_SQL: &str = "\
+INSERT INTO player.land \
+(id, map_index, x, y, width, height, guild_id, guild_level_limit, price, enable) \
+VALUES (nextval('player.land_id_seq'), $1, $2, $3, $4, $5, 0, 0, $6, 'YES') \
+RETURNING id";
+
+/// Cambio de dueño (parity `RequestUpdate` building.cpp:612-621: el UPDATE
+/// del C++ solo toca `guild_id`; geometría/precio/enable quedan intactos).
+const TRANSFER_SQL: &str = "UPDATE player.land SET guild_id = $1 WHERE id = $2";
+
+/// Borrado FÍSICO de la fila — helper del harness (cambio de prueba): el
+/// legacy NO tiene row-delete (su `ClearLand` building.cpp:1012-1028 solo
+/// resetea el dueño y borra objects; la fila vive para el boot).
+const DELETE_SQL: &str = "DELETE FROM player.land WHERE id = $1";
+
 /// Repositorio del dominio world (land). Conexion por llamada (ADR-0008).
 pub struct LandRepo {
     pool: PgPool,
@@ -70,6 +89,42 @@ impl LandRepo {
             })
             .collect()
     }
+
+    /// Compra: inserta con id de la sequence PG y devuelve el id nuevo.
+    pub async fn buy(
+        &self,
+        map_index: i64,
+        x: i64,
+        y: i64,
+        width: i64,
+        height: i64,
+        price: i64,
+    ) -> Result<i64, String> {
+        let client = self.connect().await?;
+        let row = client
+            .query_one(BUY_SQL, &[&map_index, &x, &y, &width, &height, &price])
+            .await
+            .map_err(|e| pg_err("LAND_BUY", &e))?;
+        row.try_get(0).map_err(|e| format!("land id: {e}"))
+    }
+
+    /// Transferencia de dueño a `new_owner` (guild). 1 fila = OK.
+    pub async fn transfer(&self, land_id: i64, new_owner: i64) -> Result<u64, String> {
+        let client = self.connect().await?;
+        client
+            .execute(TRANSFER_SQL, &[&new_owner, &land_id])
+            .await
+            .map_err(|e| pg_err("LAND_TRANSFER", &e))
+    }
+
+    /// Borrado físico de la fila (helper del harness — sin parity legacy).
+    pub async fn delete(&self, land_id: i64) -> Result<u64, String> {
+        let client = self.connect().await?;
+        client
+            .execute(DELETE_SQL, &[&land_id])
+            .await
+            .map_err(|e| pg_err("LAND_DELETE", &e))
+    }
 }
 
 #[cfg(test)]
@@ -94,5 +149,27 @@ mod tests {
             "parity InitializeLandTable + filtro por mapa"
         );
         assert!(LOAD_SQL.contains("ORDER BY id"), "orden del boot");
+    }
+
+    /// VERIFIER (identidad PG — phase land): el INSERT saca el id de la
+    /// sequence (`nextval('player.land_id_seq')`), NO de un contador de
+    /// proceso (mutar a un id fijo/AtomicU32 rompe este test); el UPDATE de
+    /// transferencia solo toca `guild_id` (parity SetOwner).
+    #[test]
+    fn buy_uses_pg_sequence_and_transfer_only_touches_owner() {
+        assert!(
+            BUY_SQL.contains("nextval('player.land_id_seq')"),
+            "el id viene de PG, nunca del proceso"
+        );
+        assert!(BUY_SQL.contains("RETURNING id"), "el server devuelve el id");
+        assert!(
+            BUY_SQL.contains("guild_id, guild_level_limit, price, enable"),
+            "las 10 columnas del insert (parity InitializeLandTable)"
+        );
+        assert!(
+            TRANSFER_SQL.starts_with("UPDATE player.land SET guild_id"),
+            "solo cambia el dueño"
+        );
+        assert!(!TRANSFER_SQL.contains("map_index"), "la geometría no cambia");
     }
 }

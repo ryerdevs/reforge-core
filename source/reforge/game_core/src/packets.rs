@@ -91,6 +91,11 @@ pub mod wearable {
     pub const ABILITY: u32 = 1 << 11;
 }
 
+/// `ITEM_BELT = 32` (item_length.h:89 — el tipo de los cinturones) y
+/// `WEAR_BELT = 23` (length.h:131 — el slot de equip del belt).
+const ITEM_BELT: i16 = 32;
+const WEAR_BELT: u16 = 23;
+
 /// `FindEquipCell` parity (item.cpp:509-623): el slot del equip de un item
 /// según los bits `WEARABLE_*` de su `wearflag`. Orden EXACTO del C++
 /// (item.cpp:568-592): BODY→0, HEAD→1, FOOTS→2, WRIST→3, WEAPON→4,
@@ -98,6 +103,12 @@ pub mod wearable {
 /// `None` = no equipable (wearflag 0, o solo bits fuera del subset: HAIR,
 /// PENDANT, GLOVE — el C++ los gestiona por otros paths).
 pub fn find_equip_cell(proto: &database::item::ProtoItem) -> Option<u16> {
+    // item.cpp:558-559 — el cinturón equivale SIEMPRE a WEAR_BELT (exento
+    // del gate de wearflag 0, item.cpp:511; el orden del C++: DS → costume
+    // → belt, antes de la cadena de wearflags).
+    if proto.b_type == ITEM_BELT {
+        return Some(WEAR_BELT);
+    }
     let w = proto.wear_flag as u32;
     if w == 0 {
         return None; // item.cpp:511-519 — sin wearflag no es equipable
@@ -730,12 +741,22 @@ pub fn quickslot_packets(quickslot: Option<&Vec<u8>>) -> Vec<Vec<u8>> {
         .collect()
 }
 
+/// `BELT_INVENTORY_SLOT_START = 242` (length.h:767-775 — 180 inventario +
+/// 32 wear + 6×2 DS + 6×3 reserva): las celdas del belt en el WIRE (window
+/// INVENTORY — el cliente pinta su ventana de belt leyendo
+/// `GetItemIndex(INVENTORY, 242+i)`, uiinventory.py:247-249). El PG guarda
+/// esos items como window 'BELT_INVENTORY' pos 0..15 (parity `SaveItem`,
+/// item_manager.cpp:414-421 / `ItemLoad`, input_db.cpp:1490-1495).
+pub const BELT_INVENTORY_SLOT_START: u16 = 242;
+
 /// `Vec<ItemRow>` (los 4 windows del load) -> los paquetes `GC_ITEM_SET`
 /// (58 B c/u, header 21) en el orden del repo (id).
 ///
 /// Parity `input_db.cpp:1453-1561` (ItemLoad → AddToCharacter → paquete por
 /// item). El `window` TEXT del PG se convierte al índice del enum wire
-/// (`GameType.h:175-186`): INVENTORY=1, EQUIPMENT=2, DRAGON_SOUL=5, BELT=6.
+/// (`GameType.h:175-186`): INVENTORY=1, EQUIPMENT=2, DRAGON_SOUL=5; el
+/// BELT_INVENTORY del PG viaja como window INVENTORY con cell 242+pos (el
+/// cliente NO pinta el window 6 — ver const arriba).
 /// GAP del slice: `flags`/`anti_flags`/`highlight` a 0 (el C++ los lee del
 /// item_proto — `item->GetFlags()`; el cliente no los exige para pintar el
 /// slot) y `count` truncado a BYTE (parity del struct wire).
@@ -744,18 +765,21 @@ pub fn item_set_packets(items: &[ItemRow]) -> Vec<Vec<u8>> {
 }
 
 fn item_set_packet(it: &ItemRow) -> Vec<u8> {
-    let window = match it.window.as_str() {
-        "INVENTORY" => TItemPos::WINDOW_INVENTORY,
-        "EQUIPMENT" => TItemPos::WINDOW_EQUIPMENT,
-        "DRAGON_SOUL_INVENTORY" => TItemPos::WINDOW_DRAGON_SOUL,
-        "BELT_INVENTORY" => TItemPos::WINDOW_BELT,
+    let (window, cell) = match it.window.as_str() {
+        "INVENTORY" => (TItemPos::WINDOW_INVENTORY, it.pos as u16),
+        "EQUIPMENT" => (TItemPos::WINDOW_EQUIPMENT, it.pos as u16),
+        "DRAGON_SOUL_INVENTORY" => (TItemPos::WINDOW_DRAGON_SOUL, it.pos as u16),
+        "BELT_INVENTORY" => (
+            TItemPos::WINDOW_INVENTORY,
+            BELT_INVENTORY_SLOT_START + it.pos as u16,
+        ),
         // Defensivo: un window fuera de los 4 del load no llega nunca (la
         // query los filtra); si llegara, se descarta el paquete.
         _ => return Vec::new(),
     };
     TPacketGCItemSet {
         header: TPacketGCItemSet::HEADER,
-        cell: TItemPos { window, cell: it.pos as u16 },
+        cell: TItemPos { window, cell },
         vnum: it.vnum as u32,
         count: it.count as u8,
         flags: 0,
@@ -1127,6 +1151,16 @@ mod tests {
         assert_eq!(find_equip_cell(&p(wearable::ABILITY)), Some(11), "WEAR_ABILITY1");
         // Sin wearflag -> None (item.cpp:511-519 — no equipable).
         assert_eq!(find_equip_cell(&p(0)), None);
+        // ITEM_BELT (item.cpp:558-559): el cinturón equivale a WEAR_BELT
+        // aunque wearflag = 0 (exento del gate — item.cpp:511).
+        assert_eq!(
+            find_equip_cell(&ProtoItem {
+                b_type: ITEM_BELT,
+                ..p(0)
+            }),
+            Some(WEAR_BELT),
+            "cinturón → slot 23"
+        );
         // Solo HAIR/PENDANT/GLOVE -> None (GAP documentado — el C++ los
         // gestiona por otros paths).
         assert_eq!(find_equip_cell(&p(wearable::HAIR)), None);
@@ -1416,9 +1450,18 @@ mod tests {
                 sockets: [0, 0, 0],
                 attrs: [(0, 0); 7],
             },
+            ItemRow {
+                id: 103,
+                window: "BELT_INVENTORY".into(),
+                pos: 5,
+                count: 1,
+                vnum: 27001,
+                sockets: [0, 0, 0],
+                attrs: [(0, 0); 7],
+            },
         ];
         let pkts = item_set_packets(&items);
-        assert_eq!(pkts.len(), 2);
+        assert_eq!(pkts.len(), 3);
         assert_eq!(pkts[0].len(), 51, "TPacketGCItemSet::SIZE (packed)");
         assert_eq!(pkts[0][0], 21, "header GC_ITEM_SET");
         assert_eq!(&pkts[0][1..4], &[1, 3, 0], "window INVENTORY=1, cell=3");
@@ -1426,6 +1469,11 @@ mod tests {
         assert_eq!(pkts[0][8], 1, "count BYTE");
         assert_eq!(&pkts[0][18..26], &0xDEAD_BEEFi64.to_le_bytes(), "socket0");
         assert_eq!(&pkts[1][1..4], &[2, 1, 0], "window EQUIPMENT=2, cell=1");
+        assert_eq!(
+            &pkts[2][1..4],
+            &[1, (BELT_INVENTORY_SLOT_START + 5).to_le_bytes()[0], (BELT_INVENTORY_SLOT_START + 5).to_le_bytes()[1]],
+            "BELT_INVENTORY pos 5 → window INVENTORY cell 247 (parity input_db.cpp:1490-1495)"
+        );
         // Window fuera del load -> paquete vacío (defensivo).
         let bad = ItemRow {
             id: 102,

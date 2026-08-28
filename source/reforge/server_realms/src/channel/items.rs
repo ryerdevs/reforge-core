@@ -133,7 +133,7 @@ fn is_consumable(b_type: i16) -> bool {
     b_type == ITEM_TYPE_USE || b_type == ITEM_TYPE_AUTOUSE
 }
 use crate::channel::{
-    equipped_armor, quickslot, ITEM_COUNT_LIMIT, INVENTORY_MAX_NUM, WEAR_MAX_NUM,
+    belt, equipped_armor, quickslot, ITEM_COUNT_LIMIT, INVENTORY_MAX_NUM, WEAR_MAX_NUM,
 };
 
 /// `ITEM_GOLD_VNUM = 1` — el oro del suelo es el item vnum 1 (parity
@@ -410,21 +410,27 @@ pub async fn handle_use(session: &mut Session, pkt: &[u8]) -> Result<Outcome, St
             return Ok(Outcome::Continue);
         }
     };
-    // Buscar el item en INVENTORY o EQUIPMENT por (window, cell). El
+    // Buscar el item en INVENTORY, EQUIPMENT o BELT por (window, cell). El
     // doble-click en un item equipado manda el cell del equip (180+wear con
     // window INVENTORY o EQUIPMENT — parity `GetItem(Cell)` acepta ambos,
     // char_item.cpp:5246) y es un TOGGLE: si está equipado → desequipa
-    // (fix 2026-08-15 — antes "uso de celda 182 sin item").
+    // (fix 2026-08-15 — antes "uso de celda 182 sin item"). Las celdas
+    // 242..258 del belt se resuelven contra los rows "BELT_INVENTORY"
+    // (belt.rs — parity: en el C++ el belt vive en cells 242+ del window
+    // INVENTORY, así que `UseItem` los encuentra igual).
     let equip_window = is_equip_position(item_use.pos);
+    let belt_use = belt::is_belt_cell(item_use.pos);
     let Some(idx) = session.inventory.iter().position(|i| {
         let matches_win = if equip_window {
             // El cell 180+wear del cliente puede venir con window INVENTORY
             // o EQUIPMENT — aceptar ambos (parity IsEquipPosition).
             i.window == "EQUIPMENT" || i.window == "INVENTORY"
+        } else if belt_use {
+            i.window == "BELT_INVENTORY"
         } else {
             i.window == "INVENTORY"
         };
-        matches_win && i.pos as u16 == item_use.pos.cell
+        matches_win && belt::wire_cell(i) == item_use.pos.cell
     }) else {
         eprintln!(
             "server_realms: channel conn {}: uso de celda {} sin item",
@@ -611,7 +617,7 @@ async fn consume_one_use(session: &mut Session, idx: usize) -> Result<(), String
         // Se agotó: GC_ITEM_DEL deprecated (42 B) + delete.
         let cell = TItemPos {
             window: TItemPos::WINDOW_INVENTORY,
-            cell: session.inventory[idx].pos as u16,
+            cell: belt::wire_cell(&session.inventory[idx]),
         };
         let vnum = session.inventory[idx].vnum;
         let id = session.inventory[idx].id;
@@ -632,7 +638,7 @@ async fn consume_one_use(session: &mut Session, idx: usize) -> Result<(), String
             header: protocol::world::TPacketGCItemUpdate::HEADER,
             cell: TItemPos {
                 window: TItemPos::WINDOW_INVENTORY,
-                cell: session.inventory[idx].pos as u16,
+                cell: belt::wire_cell(&session.inventory[idx]),
             },
             count: session.inventory[idx].count as u8,
             sockets: session.inventory[idx].sockets,
@@ -813,7 +819,8 @@ async fn use_autouse_gold(
 /// BYTE num — Packet.h:593-599). Parity `MoveItem` (char_item.cpp:5609-5767):
 /// stack si el destino tiene el mismo vnum + sockets iguales + count < 200;
 /// split si `0 < num < count`; si no, mover todo. Subset: INVENTORY→
-/// INVENTORY + equipar/desequipar (Belt/DS pendiente).
+/// INVENTORY + equipar/desequipar + BELT (celdas 242..258 — gates y mapeo
+/// en belt.rs; DS pendiente).
 /// Parity `SItemPos::IsEquipPosition` (length.h:825-830): una posición es
 /// de equip si window ∈ {INVENTORY, EQUIPMENT} Y cell ∈ [INVENTORY_MAX_NUM,
 /// INVENTORY_MAX_NUM + WEAR_MAX_NUM). El drag-equip del cliente llega como
@@ -841,20 +848,25 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
     // INVENTORY→INVENTORY con cell = 180+wear; el doble-click EQUIPMENT).
     // Subset de windows: INVENTORY→INVENTORY (mover/stack/split),
     // INVENTORY→equip (equipar — parity `EquipItem` char_item.cpp:6128;
-    // wire: el cell del EQUIPMENT = INVENTORY_MAX_NUM + wear, length.h:827)
-    // y equip→INVENTORY (desequipar). Belt/DS fuera.
+    // wire: el cell del EQUIPMENT = INVENTORY_MAX_NUM + wear, length.h:827),
+    // equip→INVENTORY (desequipar) y belt↔INVENTORY/belt→belt (celdas
+    // 242..258 del window INVENTORY — belt.rs; parity IsBeltInventoryPosition
+    // length.h:836-839). DS fuera.
+    let to_belt = belt::is_belt_cell(mv.change_pos);
+    let from_belt = belt::is_belt_cell(mv.pos);
     let equipping = is_equip_position(mv.change_pos);
     let unequipping = is_equip_position(mv.pos);
     let inv_to_inv = !is_equip_position(mv.pos)
         && !is_equip_position(mv.change_pos)
         && mv.pos.window == TItemPos::WINDOW_INVENTORY
         && mv.change_pos.window == TItemPos::WINDOW_INVENTORY;
-    if !(inv_to_inv || (equipping && mv.pos.window == TItemPos::WINDOW_INVENTORY)
+    if !(inv_to_inv
+        || (equipping && mv.pos.window == TItemPos::WINDOW_INVENTORY)
         || (unequipping && mv.change_pos.window == TItemPos::WINDOW_INVENTORY))
     {
         eprintln!(
             "server_realms: channel conn {}: CG_ITEM_MOVE fuera del \
-             subset (windows {}→{}) — belt/DS pendiente",
+             subset (windows {}→{}) — DS pendiente",
             session.conn_id, mv.pos.window, mv.change_pos.window
         );
         return Ok(Outcome::Continue);
@@ -862,9 +874,15 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
     if mv.pos.cell == mv.change_pos.cell {
         return Ok(Outcome::Continue); // @fixme196 — misma posición
     }
-    let src_win = if unequipping { "EQUIPMENT" } else { "INVENTORY" };
+    // Fuente: INVENTORY (inv_to_inv/belt dest), EQUIPMENT (desequipar) o
+    // BELT_INVENTORY (celda 242..258 — wire_cell mapea 242+pos, belt.rs).
+    // Parity `GetItem(Cell)` char_item.cpp:238-269 (el C++ guarda el belt
+    // en cells 242+ del window INVENTORY).
     let src = session.inventory.iter().position(|i| {
-        i.window == src_win && i.pos as u16 == mv.pos.cell
+        let win_ok = i.window == "INVENTORY"
+            || (unequipping && i.window == "EQUIPMENT")
+            || (from_belt && i.window == "BELT_INVENTORY");
+        win_ok && belt::wire_cell(i) == mv.pos.cell
     });
     let Some(src) = src else {
         eprintln!(
@@ -1046,8 +1064,10 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
         );
         return Ok(Outcome::Continue);
     }
-    // DESEQUIPAR (EQUIPMENT→INVENTORY): el destino INVENTORY debe estar vacío.
-    if unequipping {
+    // DESEQUIPAR (EQUIPMENT→INVENTORY): el destino INVENTORY debe estar
+    // vacío. El destino BELT cae al path genérico (el C++ lo mueve por
+    // `else` — DestCell.IsEquipPosition() false, char_item.cpp:5684).
+    if unequipping && !to_belt {
         if session
             .inventory
             .iter()
@@ -1137,10 +1157,73 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
         );
         return Ok(Outcome::Continue);
     }
+    // BELT destino (celdas 242..258 — belt.rs). Gates de parity ANTES del
+    // move genérico: `CanMoveIntoBeltInventory` (MoveItem, char_item.cpp:
+    // 5645-5649) y, si el destino NO apila, `IsEmptyItemGrid` rama belt
+    // (:547-567): belt EQUIPADO + `IsAvailableCell(pos, GetValue(0))`. El
+    // stack sobre el mismo vnum apila SIN grade (el C++ apila antes de
+    // IsEmptyItemGrid — :5709 vs :5730).
+    if to_belt {
+        let Some(proto) = ItemRepo::new(session.pool.clone())
+            .load_proto_use_values(session.inventory[src].vnum)
+            .await?
+        else {
+            eprintln!(
+                "server_realms: channel conn {}: item vnum {} sin item_proto \
+                 — move a belt rechazado",
+                session.conn_id, session.inventory[src].vnum
+            );
+            return Ok(Outcome::Continue);
+        };
+        if !belt::can_move_into_belt(proto.b_type, proto.b_sub_type) {
+            eprintln!(
+                "server_realms: channel conn {}: item vnum {} no puede ir al \
+                 belt (tipo {}) — rechazado (parity CanMoveIntoBeltInventory)",
+                session.conn_id, session.inventory[src].vnum, proto.b_type
+            );
+            return Ok(Outcome::Continue);
+        }
+        let stacks = session.inventory.iter().any(|i| {
+            i.window == "BELT_INVENTORY"
+                && belt::wire_cell(i) == mv.change_pos.cell
+                && i.vnum == session.inventory[src].vnum
+                && i.sockets == session.inventory[src].sockets
+        });
+        if !stacks {
+            let Some(belt_item) = belt::equipped_belt(&session.inventory) else {
+                eprintln!(
+                    "server_realms: channel conn {}: move a belt sin cinturón \
+                     equipado — rechazado (parity IsEmptyItemGrid)",
+                    session.conn_id
+                );
+                return Ok(Outcome::Continue);
+            };
+            let Some(belt_proto) = ItemRepo::new(session.pool.clone())
+                .load_proto_use_values(belt_item.vnum)
+                .await?
+            else {
+                eprintln!(
+                    "server_realms: channel conn {}: cinturón vnum {} sin \
+                     item_proto — move a belt rechazado",
+                    session.conn_id, belt_item.vnum
+                );
+                return Ok(Outcome::Continue);
+            };
+            if !belt::is_available_cell(mv.change_pos.cell, belt_proto.values[0]) {
+                eprintln!(
+                    "server_realms: channel conn {}: celda belt {} fuera del \
+                     grade {} — rechazado (parity IsAvailableCell)",
+                    session.conn_id, mv.change_pos.cell, belt_proto.values[0]
+                );
+                return Ok(Outcome::Continue);
+            }
+        }
+    }
     // Destino ocupado: stack si mismo vnum + sockets iguales + count < límite
     // (char_item.cpp:5709-5727); si no, el C++ corta (slot ocupado no-stack).
     let dst = session.inventory.iter().position(|i| {
-        i.window == "INVENTORY" && i.pos as u16 == mv.change_pos.cell
+        (i.window == "INVENTORY" || (to_belt && i.window == "BELT_INVENTORY"))
+            && belt::wire_cell(i) == mv.change_pos.cell
     });
     if let Some(dst) = dst {
         if session.inventory[src].vnum == session.inventory[dst].vnum
@@ -1256,7 +1339,7 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
             .await?
             .map(|m| m + 1)
             .unwrap_or(100_000_000);
-        let new_item = database::item::ItemRow {
+        let mut new_item = database::item::ItemRow {
             id,
             window: "INVENTORY".to_string(),
             pos: mv.change_pos.cell as i32,
@@ -1265,6 +1348,7 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
             sockets: session.inventory[src].sockets,
             attrs: session.inventory[src].attrs,
         };
+        belt::place_at(&mut new_item, to_belt, mv.change_pos.cell);
         let set = TPacketGCItemSet {
             header: TPacketGCItemSet::HEADER,
             cell: TItemPos {
@@ -1307,7 +1391,7 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
             .send(&TPacketGCItemDelDeprecated::new(cell, 0, 0).to_bytes())
             .await
             .map_err(|e| format!("enviando GC_ITEM_DEL: {e}"))?;
-        session.inventory[src].pos = mv.change_pos.cell as i32;
+        belt::place_at(&mut session.inventory[src], to_belt, mv.change_pos.cell);
         let set = TPacketGCItemSet {
             header: TPacketGCItemSet::HEADER,
             cell: TItemPos {
