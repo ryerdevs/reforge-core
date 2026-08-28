@@ -113,6 +113,17 @@ pub enum GmCommand {
     /// cmd_general.cpp:796-799 → CloseSafebox). REAL (channel/safebox.rs:
     /// oro persistido + CHAT COMMAND "CloseSafebox").
     SafeboxClose,
+    /// `/safebox_change_password <old> <new>` — cambiar la password de la
+    /// caja (parity do_safebox_change_password cmd_general.cpp:812-838 →
+    /// GD_SAFEBOX_CHANGE_PASSWORD → RESULT_SAFEBOX_CHANGE_PASSWORD
+    /// ClientManager.cpp:991-1053; GM_PLAYER, cmd.cpp:355 — el cliente lo
+    /// manda desde el diálogo de la caja, uisafebox.py:178). REAL
+    /// (channel/safebox.rs + SafeboxRepo: old incorrecto → INFO; sin fila
+    /// → INSERT con la nueva).
+    SafeboxChangePassword {
+        old: String,
+        new: String,
+    },
     /// `/mount` — parity do_mount cmd_general.cpp:381-383: STUB VACÍO en el
     /// C++ (no hace nada). INFO.
     Mount,
@@ -371,6 +382,13 @@ pub fn parse_command(cmd: &str) -> Option<GmCommand> {
             password: it.next().unwrap_or("").to_string(),
         }),
         "safebox_close" => Some(GmCommand::SafeboxClose),
+        // Parity do_safebox_change_password cmd_general.cpp:812-817
+        // (two_arguments: old y new; faltante → cadena vacía → el handler
+        // responde INFO "wrong password").
+        "safebox_change_password" => Some(GmCommand::SafeboxChangePassword {
+            old: it.next().unwrap_or("").to_string(),
+            new: it.next().unwrap_or("").to_string(),
+        }),
         "mount" => Some(GmCommand::Mount),
         "horse_state" => Some(GmCommand::HorseState),
         "horse_level" => Some(GmCommand::HorseLevel),
@@ -488,6 +506,7 @@ pub fn required_level(cmd: &GmCommand) -> i16 {
         // cmd.cpp:352,354).
         | GmCommand::SafeboxPassword { .. }
         | GmCommand::SafeboxClose
+        | GmCommand::SafeboxChangePassword { .. }
         | GmCommand::Mount
         | GmCommand::HorseState
         | GmCommand::HorseLevel
@@ -801,6 +820,29 @@ mod tests {
         assert_eq!(
             parse_command("safebox_close"),
             Some(GmCommand::SafeboxClose)
+        );
+        assert_eq!(
+            parse_command("safebox_change_password 1111 2222"),
+            Some(GmCommand::SafeboxChangePassword {
+                old: "1111".into(),
+                new: "2222".into(),
+            }),
+            "el diálogo del cliente lo manda (uisafebox.py:178)"
+        );
+        assert_eq!(
+            parse_command("safebox_change_password 1111"),
+            Some(GmCommand::SafeboxChangePassword {
+                old: "1111".into(),
+                new: "".into(),
+            }),
+            "faltante → vacío (two_arguments; el handler lo rechaza)"
+        );
+        assert_eq!(
+            required_level(&GmCommand::SafeboxChangePassword {
+                old: "".into(),
+                new: "".into()
+            }),
+            gm_level::PLAYER
         );
         assert_eq!(parse_command("mount"), Some(GmCommand::Mount));
         assert_eq!(parse_command("horse_state"), Some(GmCommand::HorseState));

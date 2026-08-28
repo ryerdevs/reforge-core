@@ -248,6 +248,10 @@ async fn handle_player_command(
             crate::channel::safebox::close(session).await?;
             Ok(Outcome::Continue)
         }
+        GmCommand::SafeboxChangePassword { old, new } => {
+            crate::channel::safebox::change_password(session, &old, &new).await?;
+            Ok(Outcome::Continue)
+        }
         GmCommand::SetWalkMode => {
             set_walk_mode(session, true).await?;
             Ok(Outcome::Continue)
@@ -277,8 +281,9 @@ async fn handle_player_command(
         // Lote 2 — SIN sistema subyacente en reforge (regla 3): el comando
         // EXISTE en el cmd_info[] → INFO 'not implemented' (NO 'No such
         // command'). El GAP de cada uno está documentado en la variante del
-        // enum (game_core/gm.rs). Safebox/SafeboxClose/SafeboxPassword ya
-        // NO están aquí (sistema real — channel/safebox.rs).
+        // enum (game_core/gm.rs). Safebox/SafeboxClose/SafeboxPassword/
+        // SafeboxChangePassword ya NO están aquí (sistema real —
+        // channel/safebox.rs).
         GmCommand::Mount
         | GmCommand::HorseState
         | GmCommand::HorseLevel

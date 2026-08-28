@@ -13,6 +13,9 @@
 //!   "size==1 -> INSERT" se conserva; la idempotencia viene del conflict
 //!   target, no de cambiar la semantica).
 //! - `set_gold` = `QUERY_SAFEBOX_SAVE` (`ClientManager.cpp:1122-1124`).
+//! - `change_password` = `QUERY/RESULT_SAFEBOX_CHANGE_PASSWORD`
+//!   (`ClientManager.cpp:991-1053`): old insensible a mayúsculas
+//!   (`strcasecmp`), sin fila → INSERT con la nueva.
 //!
 //! Tipos PG reales: account_id bigint, size smallint, password varchar(6),
 //! gold integer.
@@ -37,6 +40,10 @@ SELECT account_id, size, password FROM player.safebox WHERE account_id = $1";
 /// SELECT del gold de la caja (columna `gold` — integer PG; la escribe
 /// `set_gold`/QUERY_SAFEBOX_SAVE).
 const GOLD_SQL: &str = "SELECT gold FROM player.safebox WHERE account_id = $1";
+
+/// Password por defecto de una caja SIN fila o con password vacía (parity
+/// `RESULT_SAFEBOX_LOAD` ClientManager.cpp:630-647 — "000000").
+const DEFAULT_PASSWORD: &str = "000000";
 
 /// Repositorio del dominio world (safebox). Conexion por llamada (ADR-0008).
 pub struct SafeboxRepo {
@@ -128,6 +135,63 @@ impl SafeboxRepo {
             .await
             .map_err(|e| pg_err("SAFEBOX_SAVE", &e))
     }
+
+    /// `/safebox_change_password <old> <new>` — parity QUERY/
+    /// RESULT_SAFEBOX_CHANGE_PASSWORD (`ClientManager.cpp:991-1053`).
+    /// `Ok(true)` = cambiada, `Ok(false)` = old incorrecto. Sin fila →
+    /// INSERT con la nueva (el C++ CREA la caja, :1026-1035 — `ON CONFLICT`
+    /// idempotente bajo replay del WAL).
+    pub async fn change_password(
+        &self,
+        account_id: i64,
+        old: &str,
+        new: &str,
+    ) -> Result<bool, String> {
+        let client = self.connect().await?;
+        let rows = client
+            .query(
+                "SELECT password FROM player.safebox WHERE account_id = $1",
+                &[&account_id],
+            )
+            .await
+            .map_err(|e| pg_err("SAFEBOX_CHANGE_PASSWORD", &e))?;
+        let Some(r) = rows.first() else {
+            client
+                .execute(
+                    "INSERT INTO player.safebox (account_id, password) VALUES ($1, $2) \
+ON CONFLICT (account_id) DO NOTHING",
+                    &[&account_id, &new],
+                )
+                .await
+                .map_err(|e| pg_err("SAFEBOX_CHANGE_PASSWORD_INSERT", &e))?;
+            return Ok(true);
+        };
+        let current: String = r.try_get(0).map_err(|e| format!("safebox.password: {e}"))?;
+        if !old_password_matches(&current, old) {
+            return Ok(false);
+        }
+        client
+            .execute(
+                "UPDATE player.safebox SET password = $2 WHERE account_id = $1",
+                &[&account_id, &new],
+            )
+            .await
+            .map_err(|e| pg_err("SAFEBOX_CHANGE_PASSWORD_UPDATE", &e))?;
+        Ok(true)
+    }
+}
+
+/// Validación del old del cambio de password (parity RESULT_SAFEBOX_CHANGE_
+/// PASSWORD, `ClientManager.cpp:1014`): fila NO vacía → `strcasecmp` del C++
+/// (insensible a mayúsculas — asimetría REAL con el LOAD, que es strcmp
+/// estricto, :630-647); fila vacía → solo la password por defecto (strcmp
+/// estricto de "000000" — sin mayúsculas no hay diferencia).
+fn old_password_matches(current: &str, old: &str) -> bool {
+    if current.is_empty() {
+        old == DEFAULT_PASSWORD
+    } else {
+        current.eq_ignore_ascii_case(old)
+    }
 }
 
 /// Decision INSERT-vs-UPDATE del C++ (`ClientManager.cpp:967-970`): `size == 1`
@@ -179,6 +243,21 @@ mod tests {
     #[test]
     fn get_gold_sql_shape() {
         assert_eq!(GOLD_SQL, "SELECT gold FROM player.safebox WHERE account_id = $1");
+    }
+
+    /// VERIFIER (mutation): el old del cambio de password se compara con
+    /// `strcasecmp` del C++ (insensible a mayúsculas, RESULT_SAFEBOX_CHANGE_
+    /// PASSWORD ClientManager.cpp:1014) — quitar `eq_ignore_ascii_case` → rojo.
+    #[test]
+    fn old_password_matches_is_case_insensitive() {
+        assert!(old_password_matches("ABCDEF", "abcdef"), "strcasecmp");
+        assert!(old_password_matches("abcdef", "ABCDEF"));
+        assert!(!old_password_matches("ABCDEF", "abcdeX"), "distintas");
+        assert!(
+            old_password_matches("", DEFAULT_PASSWORD),
+            "fila vacía → solo la por defecto"
+        );
+        assert!(!old_password_matches("", "123456"), "fila vacía ≠ otra");
     }
 
     /// set_size: parity del C++ (`ClientManager.cpp:967-970`) — size==1 INSERT

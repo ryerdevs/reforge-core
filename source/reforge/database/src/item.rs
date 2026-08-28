@@ -16,6 +16,8 @@
 //! owner_id bigint, window text (check de los 7 windows), pos integer,
 //! count/vnum/socket* bigint, attr*/attrvalue* smallint.
 
+use std::collections::HashMap;
+
 use crate::pool::{Client, PgPool};
 
 use crate::account::pg_err;
@@ -104,6 +106,12 @@ RETURNING id";
 /// Delete del destroy (`ClientManager.cpp:1702`).
 const DELETE_SQL: &str = "DELETE FROM player.item WHERE id = $1";
 
+/// Proto del safebox: `size` (celdas del grid legacy), `antiflag`/`flag`
+/// (bits `ITEM_ANTIFLAG_*`/`ITEM_FLAG_*` del TItemTable) por vnums — batch
+/// `ANY($1)` (los handlers del safebox piden el entrante + los guardados).
+const SAFEBOX_PROTO_SQL: &str = "SELECT vnum, size, antiflag, flag \
+FROM player.item_proto WHERE vnum = ANY($1)";
+
 /// Repositorio del dominio world (item). Conexion por llamada (ADR-0008).
 pub struct ItemRepo {
     pool: PgPool,
@@ -141,6 +149,18 @@ pub struct ProtoItem {
     pub magic_pct: i16,
     /// `bGainSocketPct` — nº de sockets abiertos al crear (tinyint).
     pub socket_pct: i16,
+}
+
+/// Proto del safebox por vnum (`load_safebox_proto` — columnas del
+/// TItemTable legacy): `size` en CELDAS del grid (1×1..3×3, la columna 0
+/// degenera a 1), `antiflag` = bits `ITEM_ANTIFLAG_*` (SAFEBOX = 1<<17,
+/// STACK = 1<<15, item_length.h:331-377) y `flag` = bits `ITEM_FLAG_*`
+/// (STACKABLE = 1<<2, :337).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SafeboxProto {
+    pub size: u16,
+    pub antiflag: i64,
+    pub flag: i64,
 }
 
 /// Receta de refine (parity `TRefineTable` — `tables.h:924-933` + el load
@@ -372,6 +392,43 @@ impl ItemRepo {
         let shop_buy_price = row.try_get(0).map_err(|e| format!("shop_buy_price: {e}"))?;
         let flag = row.try_get(1).map_err(|e| format!("flag: {e}"))?;
         Ok((shop_buy_price, flag))
+    }
+
+    /// Protos del SAFEBOX por vnum — batch (`vnum = ANY($1)`): los gates del
+    /// safebox (channel/safebox.rs) piden el item entrante + los guardados
+    /// juntos (caja ≤ 15 slots → una query). Columnas del TItemTable legacy:
+    /// `size` (CELDAS del grid, 1..3; 0 → 1 — fail-safe), `antiflag` (bits
+    /// `ITEM_ANTIFLAG_*`, item_length.h:331-377: SAFEBOX = 1<<17, STACK =
+    /// 1<<15) y `flag` (bits `ITEM_FLAG_*`: STACKABLE = 1<<2, :337). Los
+    /// vnums sin fila NO aparecen en el mapa (el llamador decide: size 1 /
+    /// sin flags).
+    pub async fn load_safebox_proto(
+        &self,
+        vnums: &[i64],
+    ) -> Result<HashMap<i64, SafeboxProto>, String> {
+        if vnums.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let client = self.connect().await?;
+        let rows = client
+            .query(SAFEBOX_PROTO_SQL, &[&vnums])
+            .await
+            .map_err(|e| pg_err("ITEM_PROTO_SAFEBOX", &e))?;
+        let mut out = HashMap::with_capacity(rows.len());
+        for r in rows {
+            let vnum: i64 = r.try_get(0).map_err(|e| format!("item_proto.vnum: {e}"))?;
+            // size es smallint (int2): cast después (patrón shop.rs:284-289).
+            let size: i16 = r.try_get(1).map_err(|e| format!("item_proto.size: {e}"))?;
+            out.insert(
+                vnum,
+                SafeboxProto {
+                    size: size.max(1) as u16,
+                    antiflag: r.try_get(2).map_err(|e| format!("item_proto.antiflag: {e}"))?,
+                    flag: r.try_get(3).map_err(|e| format!("item_proto.flag: {e}"))?,
+                },
+            );
+        }
+        Ok(out)
     }
 
     /// Probe del rango de ids (`ItemIDRangeManager.cpp:93,121` — E2E Q8):
@@ -691,6 +748,20 @@ attrtype6, attrvalue6",
             SAFEBOX_LOAD_SQL.contains("WHERE owner_id = $1"),
             "bind del owner (cuenta)"
         );
+    }
+
+    /// Proto del safebox: las 4 columnas del TItemTable que usan los gates
+    /// (size/antiflag/flag) + batch por vnums (`vnum = ANY($1)` — una query
+    /// para el item entrante + los guardados).
+    #[test]
+    fn safebox_proto_sql_shape_and_batch() {
+        let q = "SELECT vnum, size, antiflag, flag FROM player.item_proto \
+                 WHERE vnum = ANY($1)";
+        assert_eq!(
+            SAFEBOX_PROTO_SQL, q,
+            "columnas del TItemTable + batch ANY($1)"
+        );
+        assert!(SAFEBOX_PROTO_SQL.contains("FROM player.item_proto"), "PROTO_FROM_DB");
     }
 
     /// Upsert: ON CONFLICT (id) + variante DEFAULT para id==0; ambos con

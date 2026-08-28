@@ -20,25 +20,51 @@
 //!   los items ya se persistieron en cada mutación), `ChatPacket(COMMAND,
 //!   "CloseSafebox")` (el cliente cierra la ventana) y cooldown.
 //! - Checkin: `SafeboxCheckin` (input_main.cpp:1940-2024): item del
-//!   INVENTARIO (entero, sin count) → posición libre de la caja.
+//!   INVENTARIO (entero, sin count) → posición libre de la caja. Gates:
+//!   EXPAND + antiflag SAFEBOX + strip del grid (ver abajo).
 //! - Checkout: `SafeboxCheckout` (input_main.cpp:2027-2117): de la caja a
-//!   una celda libre del INVENTARIO (window INVENTORY; DS/belt = GAP).
+//!   una celda libre del INVENTARIO (window INVENTORY; DS/belt = GAP),
+//!   validando el strip del item en el grid del inventario
+//!   (`IsEmptyItemGrid`, :2056).
 //! - ItemMove: `CSafebox::MoveItem` (safebox.cpp:170-231): stack si el
-//!   destino tiene el mismo vnum + sockets iguales + count < 200; si no,
-//!   mover a hueco libre. `count == 0` → todo el stack.
+//!   destino es apilable SIN antiflag STACK + mismo vnum + sockets iguales
+//!   + count < 200; si no, mover a un hueco donde quepa el strip.
+//!     `count == 0` → todo el stack.
 //! - Money: `TPacketCGSafeboxMoney` (packet.h:1627-1632) — DEFENSIVO: el
 //!   C++ congelado NO registra el 79 en su framer y el cliente de la
 //!   variante nunca lo envía (`SendSafeBoxMoneyPacket` es un assert,
 //!   PythonNetworkStreamPhaseGameItem.cpp:14-17). Wire byte-exacto por si
 //!   un cliente externo lo manda.
+//! - ChangePassword: `/safebox_change_password <old> <new>`
+//!   (do_safebox_change_password cmd_general.cpp:812-838 →
+//!   RESULT_SAFEBOX_CHANGE_PASSWORD ClientManager.cpp:991-1053): old
+//!   insensible a mayúsculas; sin fila → INSERT con la nueva.
 //!
 //! # Modelo del grid (verificado cliente+server)
 //!
 //! El C++ abre `CGrid(5, iSize)` (safebox.cpp:20-23) y el cliente
 //! `SAFEBOX_SLOT_X_COUNT (5) × bSize` slots (PythonSafeBox.cpp:4-15): el
 //! tamaño (páginas, 0..3) define `slots = 5 × size`. `GC_SAFEBOX_SIZE`
-//! reenvía el valor de la DB tal cual (char.cpp:5553-5558). Subset: items
-//! 1×1 (el grid 2×2 del C++ queda fuera — GAP).
+//! reenvía el valor de la DB tal cual (char.cpp:5553-5558). Los items con
+//! `size > 1` del item_proto (celdas 1×1..3×3 — `load_safebox_proto`)
+//! ocupan un STRIP VERTICAL de celdas (pos, pos+5, …): parity
+//! `IsEmpty(pos, 1, size)` safebox.cpp:130-136 e `IsEmptyItemGrid`
+//! char_item.cpp:579-596 (el grid legacy es de 5 celdas de ancho — no es
+//! un cuadrado 2×2; el cliente renderiza la caja como slots planos,
+//! PythonSafeBox.cpp:4-38 y uisafebox.py:361). El checkout valida el mismo
+//! strip en el inventario (5×9 por página y 4 páginas — length.h:21-29 +
+//! ENABLE_EXTEND_INVEN_SYSTEM: 180 celdas).
+//!
+//! # Gates del checkin/stack (parity item_proto)
+//!
+//! `SafeboxCheckin` rechaza el item de expansión (UNIQUE_ITEM_SAFEBOX_
+//! EXPAND = 71009, input_main.cpp:1975-1979), los items con antiflag
+//! SAFEBOX (1<<17, :1981-1985) y los que no caben en el grid
+//! (`IsEmpty(p->bSafePos, 1, GetSize())`, :1969). `MoveItem` solo apila
+//! sobre destinos apilables sin antiflag STACK (`item2->IsStackable() &&
+//! !IS_SET(..., ITEM_ANTIFLAG_STACK)`, safebox.cpp:188-189). Los
+//! size/flags vienen de `player.item_proto` (667 vnums reales con el
+//! antiflag SAFEBOX; 2679 con size 2 — verificados en PG 2026-08-27).
 //!
 //! # Persistencia
 //!
@@ -77,6 +103,26 @@ const CHAT_TYPE_COMMAND: u8 = 5;
 /// Clamp del tamaño GM (parity do_safebox_size cmd_gm.cpp:1857-1871:
 /// `size > 3 || size < 0 → 0`).
 const SAFEBOX_SIZE_MAX: u8 = 3;
+/// `UNIQUE_ITEM_SAFEBOX_EXPAND = 71009` (unique_item.h:45) — el item de
+/// expansión de la caja no se puede guardar (SafeboxCheckin,
+/// input_main.cpp:1975-1979).
+const UNIQUE_ITEM_SAFEBOX_EXPAND: i64 = 71009;
+/// `ITEM_ANTIFLAG_SAFEBOX = (1 << 17)` (item_length.h:371) — items que no
+/// entran en la safebox (667 vnums reales en PG).
+const ITEM_ANTIFLAG_SAFEBOX: i64 = 1 << 17;
+/// `ITEM_ANTIFLAG_STACK = (1 << 15)` (item_length.h:369) — no apilables.
+const ITEM_ANTIFLAG_STACK: i64 = 1 << 15;
+/// `ITEM_FLAG_STACKABLE = (1 << 2)` (item_length.h:337) — el stack exige
+/// un destino apilable (parity `item2->IsStackable()`, item.h:25).
+const ITEM_FLAG_STACKABLE: i64 = 1 << 2;
+/// Ancho del grid en celdas: 5 (SAFEBOX_SLOT_X_COUNT, PythonSafeBox.cpp:
+/// 4-15; `CGrid(5, iSize)`, safebox.cpp:18; INVENTORY_PAGE_COLUMN para el
+/// checkout, length.h:21).
+const GRID_WIDTH: u16 = 5;
+/// Celdas por página del inventario: `5×9` (length.h:21-23) — el strip del
+/// checkout no puede cruzar de página (parity `IsEmptyItemGrid`,
+/// char_item.cpp:580-590; ENABLE_EXTEND_INVEN_SYSTEM → 4 páginas = 180).
+const INVENTORY_PAGE_CELLS: u16 = 45;
 
 /// Estado de la caja ABIERTA (vive en la sesión — parity `m_pkSafebox` del
 /// CHARACTER C++). `None` en la sesión = caja cerrada.
@@ -96,6 +142,44 @@ impl SafeboxState {
     pub fn slots(&self) -> u16 {
         (5 * self.size.max(0)) as u16
     }
+}
+
+/// Celdas que cubre un item de `size` celdas anclado en `pos` — strip
+/// VERTICAL de paso 5 (parity `IsEmpty(pos, 1, size)` safebox.cpp:130-136
+/// e `IsEmptyItemGrid` char_item.cpp:579-596: `bCell + 5*j`, j < size — el
+/// grid legacy del juego ES de 5 celdas de ancho, no un cuadrado 2×2).
+fn strip_cells(pos: u16, size: u16) -> Vec<u16> {
+    (0..size).map(|j| pos + GRID_WIDTH * j).collect()
+}
+
+/// ¿Cabe un item de `size` celdas con su esquina en `pos`? El strip debe
+/// quedar dentro de `cells` (y, si `page`, sin cruzar la página —
+/// `IsEmptyItemGrid`) y no pisar ninguna celda de `occupied` (parity
+/// `CGrid::IsEmpty`, grid.h:13).
+fn strip_fits(pos: u16, size: u16, cells: u16, page: Option<u16>, occupied: &[u16]) -> bool {
+    strip_cells(pos, size).into_iter().all(|c| {
+        c < cells
+            && page.is_none_or(|pc| c / pc == pos / pc)
+            && !occupied.contains(&c)
+    })
+}
+
+/// Gates puros del checkin (parity `SafeboxCheckin`, input_main.cpp:
+/// 1963-1991): no puede ser el item de EXPANSIÓN (unique_item.h:45), ni
+/// llevar el antiflag SAFEBOX (item_length.h:371), y su strip debe caber
+/// libre en el grid (`IsEmpty(p->bSafePos, 1, pkItem->GetSize())`, :1969).
+/// `size`/`antiflag` vienen del item_proto (fail-open 1/0 si no existe).
+fn checkin_gate(vnum: i64, size: u16, antiflag: i64, pos: u16, cells: u16, occupied: &[u16]) -> bool {
+    vnum != UNIQUE_ITEM_SAFEBOX_EXPAND
+        && antiflag & ITEM_ANTIFLAG_SAFEBOX == 0
+        && strip_fits(pos, size, cells, None, occupied)
+}
+
+/// ¿Se puede apilar sobre el destino? (parity `MoveItem`, safebox.cpp:
+/// 188-189: `item2->IsStackable() && !IS_SET(item2->GetAntiFlag(),
+/// ITEM_ANTIFLAG_STACK)`). Fail-closed: proto desconocido → no apilar.
+fn stackable_dst(flag: i64, antiflag: i64) -> bool {
+    flag & ITEM_FLAG_STACKABLE != 0 && antiflag & ITEM_ANTIFLAG_STACK == 0
 }
 
 /// `TPacketGCItemSet` con header `GC_SAFEBOX_SET` (85) y cell window SAFEBOX
@@ -261,6 +345,39 @@ pub async fn close(session: &mut Session) -> Result<(), String> {
     Ok(())
 }
 
+/// `/safebox_change_password <old> <new>` — cambiar la password de la caja
+/// (parity do_safebox_change_password cmd_general.cpp:812-838 →
+/// RESULT_SAFEBOX_CHANGE_PASSWORD ClientManager.cpp:991-1053: vacío o > 6
+/// → INFO; old incorrecto → INFO; sin fila → INSERT con la nueva — el C++
+/// crea la caja). INFO en EN (locale pendiente — patrón del open).
+pub async fn change_password(
+    session: &mut Session,
+    old: &str,
+    new: &str,
+) -> Result<Outcome, String> {
+    if old.is_empty()
+        || new.is_empty()
+        || old.len() > SAFEBOX_PASSWORD_MAX_LEN
+        || new.len() > SAFEBOX_PASSWORD_MAX_LEN
+    {
+        gm::gm_info(session, "<Safebox> Wrong password.").await?;
+        return Ok(Outcome::Continue);
+    }
+    let changed = SafeboxRepo::new(session.pool.clone())
+        .change_password(session.account_id, old, new)
+        .await?;
+    gm::gm_info(
+        session,
+        if changed {
+            "<Safebox> Your safebox password has been changed."
+        } else {
+            "<Safebox> The current password is wrong."
+        },
+    )
+    .await?;
+    Ok(Outcome::Continue)
+}
+
 /// `/safebox <0..3>` (GM) — tamaño de la caja (parity do_safebox_size
 /// cmd_gm.cpp:1857-1871 → ChangeSafeboxSize char.cpp:5594-5605).
 /// Divergencia documentada: el comando GM del C++ NO persiste el tamaño (lo
@@ -295,8 +412,9 @@ pub async fn set_size(session: &mut Session, size: u8) -> Result<Outcome, String
 /// CG_SAFEBOX_CHECKIN (70, 5 B: header + bSafePos + TItemPos). Parity
 /// `SafeboxCheckin` (input_main.cpp:1940-2024): el item del INVENTARIO
 /// (entero, sin count) se mueve a la posición `bSafePos` de la caja.
-/// Subset documentado: sin gates de antiflag/irremovable/locked (el C++ los
-/// lee del item_proto/flags del item — el reforge no los persiste).
+/// Gates: EXPAND/antiflag SAFEBOX/strip del grid (parity :1963-1991, con el
+/// item_proto real). GAP restante: irremovable/locked (flags del item en
+/// sesión — el reforge no los persiste).
 pub async fn handle_checkin(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String> {
     let p = match TPacketCGSafeboxCheckin::from_bytes(pkt) {
         Ok(p) => p,
@@ -337,20 +455,36 @@ pub async fn handle_checkin(session: &mut Session, pkt: &[u8]) -> Result<Outcome
         );
         return Ok(Outcome::Continue);
     };
-    // Parity `IsValidPosition` + `IsEmpty(bSafePos, size)` (safebox.cpp:233-241).
-    if u16::from(p.b_safe_pos) >= st.slots() {
-        eprintln!(
-            "server_realms: channel conn {}: checkin a pos {} fuera del \
-             grid (slots {}) — rechazado",
-            session.conn_id, p.b_safe_pos, st.slots()
-        );
-        return Ok(Outcome::Continue);
+    // Gates del checkin (parity SafeboxCheckin input_main.cpp:1963-1991):
+    // EXPAND + antiflag SAFEBOX + strip del grid (`IsEmpty(p->bSafePos, 1,
+    // pkItem->GetSize())` safebox.cpp:1969) — los size/flags vienen del
+    // item_proto (batch: el item entrante + los guardados, una query).
+    // Rechazo ANTES de tocar el inventario (parity: el C++ valida con el
+    // item puesto y solo muta al pasar todos los gates).
+    let item_vnum = session.inventory[idx].vnum;
+    let mut vnums: Vec<i64> = st.items.iter().map(|i| i.vnum).collect();
+    vnums.push(item_vnum);
+    let protos = ItemRepo::new(session.pool.clone())
+        .load_safebox_proto(&vnums)
+        .await?;
+    let proto = protos.get(&item_vnum).copied().unwrap_or_default();
+    let mut occupied = Vec::with_capacity(st.items.len());
+    for it in &st.items {
+        let size = protos.get(&it.vnum).map_or(1, |p| p.size);
+        occupied.extend(strip_cells(it.pos as u16, size));
     }
-    if st.items.iter().any(|i| i.pos as u16 == p.b_safe_pos as u16) {
+    if !checkin_gate(
+        item_vnum,
+        proto.size.max(1),
+        proto.antiflag,
+        u16::from(p.b_safe_pos),
+        st.slots(),
+        &occupied,
+    ) {
         eprintln!(
-            "server_realms: channel conn {}: checkin a pos {} ocupada — \
-             rechazado",
-            session.conn_id, p.b_safe_pos
+            "server_realms: channel conn {}: checkin de vnum {} a pos {} \
+             rechazado (EXPAND/antiflag/grid)",
+            session.conn_id, item_vnum, p.b_safe_pos
         );
         return Ok(Outcome::Continue);
     }
@@ -436,18 +570,6 @@ pub async fn handle_checkout(session: &mut Session, pkt: &[u8]) -> Result<Outcom
         );
         return Ok(Outcome::Continue);
     }
-    if session
-        .inventory
-        .iter()
-        .any(|i| i.window == "INVENTORY" && i.pos as u16 == p.item_pos.cell)
-    {
-        eprintln!(
-            "server_realms: channel conn {}: checkout a celda {} ocupada — \
-             rechazado",
-            session.conn_id, p.item_pos.cell
-        );
-        return Ok(Outcome::Continue);
-    }
     let Some(idx) = session
         .safebox
         .as_ref()
@@ -459,6 +581,43 @@ pub async fn handle_checkout(session: &mut Session, pkt: &[u8]) -> Result<Outcom
         );
         return Ok(Outcome::Continue);
     };
+    // Grid del INVENTARIO destino (parity `IsEmptyItemGrid(p->ItemPos,
+    // pkItem->GetSize())` input_main.cpp:2056): el strip del item no puede
+    // pisar celdas ocupadas ni cruzar la página de 45 (char_item.cpp:
+    // 569-598). Los size de los items del inventario vienen del item_proto
+    // (batch: la caja + el inventario, una query).
+    let src_vnum = {
+        let st = session.safebox.as_ref().expect("caja abierta (gate arriba)");
+        st.items[idx].vnum
+    };
+    let mut vnums: Vec<i64> = session.inventory.iter().map(|i| i.vnum).collect();
+    vnums.push(src_vnum);
+    let protos = ItemRepo::new(session.pool.clone())
+        .load_safebox_proto(&vnums)
+        .await?;
+    let size = protos.get(&src_vnum).map_or(1, |p| p.size);
+    let mut occupied = Vec::with_capacity(session.inventory.len());
+    for it in &session.inventory {
+        if it.window != "INVENTORY" {
+            continue;
+        }
+        let s = protos.get(&it.vnum).map_or(1, |p| p.size);
+        occupied.extend(strip_cells(it.pos as u16, s));
+    }
+    if !strip_fits(
+        p.item_pos.cell,
+        size,
+        INVENTORY_MAX_NUM,
+        Some(INVENTORY_PAGE_CELLS),
+        &occupied,
+    ) {
+        eprintln!(
+            "server_realms: channel conn {}: checkout a celda {} sin hueco \
+             para el strip de {size} — rechazado",
+            session.conn_id, p.item_pos.cell
+        );
+        return Ok(Outcome::Continue);
+    }
     // Mover: caja → inventario (GC_SAFEBOX_DEL + GC_ITEM_SET + upsert con
     // owner = PERSONAJE — parity `pkSafebox->Remove` + `AddToCharacter`).
     let item = {
@@ -551,14 +710,36 @@ pub async fn handle_item_move(session: &mut Session, pkt: &[u8]) -> Result<Outco
         return Ok(Outcome::Continue);
     };
     let want = i64::from(mv.num);
+    // Protos de la caja (size/flag/antiflag del item_proto — una query):
+    // gates del move (parity MoveItem safebox.cpp:188-225): el stack exige
+    // destino apilable SIN antiflag STACK; el hueco libre, el strip.
+    let protos = ItemRepo::new(session.pool.clone())
+        .load_safebox_proto(&st.items.iter().map(|i| i.vnum).collect::<Vec<_>>())
+        .await?;
+    let src_size = protos.get(&st.items[src_idx].vnum).map_or(1, |p| p.size);
+    let mut occupied = Vec::with_capacity(st.items.len());
+    for it in &st.items {
+        let s = protos.get(&it.vnum).map_or(1, |p| p.size);
+        occupied.extend(strip_cells(it.pos as u16, s));
+    }
     // ¿Destino ocupado?
     let dst_idx = st
         .items
         .iter()
         .position(|i| i.pos as u16 == mv.change_pos.cell);
     let Some(dst_idx) = dst_idx else {
-        // Hueco libre: mover el item (GC_SAFEBOX_DEL + GC_SAFEBOX_SET +
-        // upsert).
+        // Hueco libre: ¿cabe el strip? (parity `IsEmpty(bDestCell, 1,
+        // item->GetSize())` + grid Get/Put, safebox.cpp:211-225 — el ORIGEN
+        // sigue colocado y sus celdas bloquean).
+        if !strip_fits(mv.change_pos.cell, src_size, slots, None, &occupied) {
+            eprintln!(
+                "server_realms: channel conn {}: move a pos {} sin hueco \
+                 para el strip de {src_size} — rechazado",
+                session.conn_id, mv.change_pos.cell
+            );
+            return Ok(Outcome::Continue);
+        }
+        // Mover el item (GC_SAFEBOX_DEL + GC_SAFEBOX_SET + upsert).
         let mut item = {
             let st = session.safebox.as_mut().expect("caja abierta");
             st.items.remove(src_idx)
@@ -588,8 +769,9 @@ pub async fn handle_item_move(session: &mut Session, pkt: &[u8]) -> Result<Outco
     if src_idx == dst_idx {
         return Ok(Outcome::Continue);
     }
-    // Stack (parity safebox.cpp:187-211): mismo vnum + sockets iguales +
-    // count < 200; `num == 0` → todo el stack.
+    // Stack (parity safebox.cpp:187-211): destino apilable SIN antiflag
+    // STACK + mismo vnum + sockets iguales + count < 200; `num == 0` →
+    // todo el stack.
     let (same_vnum, same_sockets, src_count, src_id, dst_count, dst_id) = {
         let st = session.safebox.as_ref().expect("caja abierta");
         let src = &st.items[src_idx];
@@ -603,10 +785,21 @@ pub async fn handle_item_move(session: &mut Session, pkt: &[u8]) -> Result<Outco
             dst.id,
         )
     };
-    if !same_vnum || !same_sockets {
+    let dst_proto = protos
+        .get(&{
+            let st = session.safebox.as_ref().expect("caja abierta");
+            st.items[dst_idx].vnum
+        })
+        .copied()
+        .unwrap_or_default();
+    if !same_vnum
+        || !same_sockets
+        || !stackable_dst(dst_proto.flag, dst_proto.antiflag)
+    {
         eprintln!(
             "server_realms: channel conn {}: stack en safebox de vnums/\
-             sockets distintos — rechazado (parity MoveItem)",
+             sockets distintos o destino no apilable — rechazado (parity \
+             MoveItem)",
             session.conn_id
         );
         return Ok(Outcome::Continue);
@@ -829,5 +1022,84 @@ mod tests {
     fn gm_size_clamp() {
         assert_eq!(SAFEBOX_SIZE_MAX, 3);
         assert_eq!((4u8 > SAFEBOX_SIZE_MAX) as u8, 1, "4 → clamp a 0 en set_size");
+    }
+
+    // ── Grid de `size` celdas (items 2×2 — cerrado 2026-08-27) ─────────
+    // El grid legacy es de 5 celdas de ancho: un item de N celdas ocupa un
+    // strip VERTICAL (pos, pos+5, …) — parity `IsEmpty(pos,1,size)`
+    // safebox.cpp:130-136 / `bCell + 5*j` char_item.cpp:579-596.
+
+    /// Strips: paso 5, N celdas desde la esquina.
+    #[test]
+    fn strip_cells_step_is_5() {
+        assert_eq!(strip_cells(0, 1), vec![0]);
+        assert_eq!(strip_cells(0, 2), vec![0, 5]);
+        assert_eq!(strip_cells(7, 3), vec![7, 12, 17]);
+    }
+
+    /// VERIFIER (mutation): un 2×2 cuyo strip pisa la celda de otro item se
+    /// rechaza — el subset 1×1 lo aceptaba (GAP cerrado). Quitar el chequeo
+    /// de `occupied` del strip → rojo.
+    #[test]
+    fn checkin_gate_rejects_2x2_over_strip_cell() {
+        assert!(!checkin_gate(30001, 2, 0, 0, 10, &[5]), "2×2 en 0 pisa la 5");
+        assert!(checkin_gate(30001, 1, 0, 0, 10, &[5]), "1×1 en 0 no pisa la 5");
+    }
+
+    /// VERIFIER (mutation): un 2×2 que sobresale por debajo del grid se
+    /// rechaza (caja de 10 = 2 filas; esquina en la fila 1 → 3 filas).
+    #[test]
+    fn checkin_gate_rejects_2x2_out_of_grid() {
+        assert!(!checkin_gate(30001, 2, 0, 5, 10, &[]), "fila 1 + 2 > 2");
+        assert!(!checkin_gate(30001, 2, 0, 9, 10, &[]), "esquina en la última");
+        assert!(checkin_gate(30001, 2, 0, 0, 10, &[]), "esquina 0,0: 2 filas");
+    }
+
+    /// VERIFIER (mutation): el antiflag SAFEBOX (1<<17 — 667 vnums reales
+    /// en PG) bloquea el checkin (parity input_main.cpp:1981-1985). Quitar
+    /// la rama del antiflag → rojo.
+    #[test]
+    fn checkin_gate_rejects_antiflag_safebox() {
+        assert!(!checkin_gate(30001, 1, ITEM_ANTIFLAG_SAFEBOX, 0, 10, &[]));
+        assert!(checkin_gate(30001, 1, 0, 0, 10, &[]));
+    }
+
+    /// VERIFIER (mutation): el item de expansión no se guarda (parity
+    /// input_main.cpp:1975-1979 — UNIQUE_ITEM_SAFEBOX_EXPAND = 71009).
+    #[test]
+    fn checkin_gate_rejects_expand_item() {
+        assert!(!checkin_gate(UNIQUE_ITEM_SAFEBOX_EXPAND, 1, 0, 0, 10, &[]));
+    }
+
+    /// VERIFIER (mutation): el checkout al inventario respeta la página de
+    /// 45 celdas (parity IsEmptyItemGrid char_item.cpp:580-590) y el strip
+    /// (un 2×2 en 40 cruza a la página 1 → rechaza).
+    #[test]
+    fn checkout_strip_respects_inventory_page_and_occupancy() {
+        assert!(
+            !strip_fits(40, 2, INVENTORY_MAX_NUM, Some(INVENTORY_PAGE_CELLS), &[]),
+            "40+5=45 es la primera celda de la página 1"
+        );
+        assert!(
+            strip_fits(35, 2, INVENTORY_MAX_NUM, Some(INVENTORY_PAGE_CELLS), &[]),
+            "35+5=40 sigue en la página 0"
+        );
+        assert!(
+            !strip_fits(0, 2, INVENTORY_MAX_NUM, Some(INVENTORY_PAGE_CELLS), &[5]),
+            "strip pisado"
+        );
+    }
+
+    /// VERIFIER (mutation): el stack exige destino apilable SIN antiflag
+    /// STACK (parity safebox.cpp:188-189). Quitar cualquiera de los dos
+    /// checks → rojo.
+    #[test]
+    fn stack_requires_stackable_dst_without_antiflag() {
+        assert!(stackable_dst(ITEM_FLAG_STACKABLE, 0));
+        assert!(!stackable_dst(0, 0), "sin ITEM_FLAG_STACKABLE");
+        assert!(
+            !stackable_dst(ITEM_FLAG_STACKABLE, ITEM_ANTIFLAG_STACK),
+            "con ITEM_ANTIFLAG_STACK"
+        );
     }
 }
