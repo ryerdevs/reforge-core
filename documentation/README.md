@@ -9,10 +9,10 @@ powershell -File scripts/status.ps1   # snapshot: HEAD, dirty, binary, ports, CH
 powershell -File scripts/verify.ps1   # definition of done: fmt + test + clippy
 powershell -File scripts/start_win.ps1 # up: PG 5432 + auth 30001 + channel 30003
 powershell -File scripts/stop_win.ps1  # down
-cargo test --workspace                 # Rust tests (735)
+cargo test --workspace                 # Rust tests (recount at HEAD — see G1.1)
 ```
 
-## Team — preset OmO (muse-spark-1.2)
+## Team — preset OmO (`openai/gpt-5.6-luna`, variant `max`)
 
 | Agent | Role |
 |-------|------|
@@ -37,9 +37,10 @@ Each slice = 1 commit + 5 lines in `progress.md`.
 | Goal | Read |
 |------|------|
 | What is done / doing / next? | [roadmap.md](./roadmap.md) |
+| Open gaps: owner, evidence, exit criteria | [plans/gap-registry.md](./plans/gap-registry.md) |
 | DB in human language | [schema.md](./schema.md) |
 | Never repeat | [rules.md](./rules.md) |
-| Why PostgreSQL, ECS, WAL…? | [adr/](./adr/) (13 ADRs) |
+| Why PostgreSQL, ECS, WAL…? | [adr/](./adr/) (14 ADRs) |
 | Byte-exact wire contract | [reference/login-flow.md](./reference/login-flow.md) |
 | Where did we leave off? | [progress.md](./progress.md) (live handoff) |
 | What changed with evidence? | [../CHANGELOG.md](../CHANGELOG.md) |
@@ -55,6 +56,7 @@ documentation/
   schema.md            → DB
   rules.md             → never repeat (6 rules)
   progress.md          → live handoff
+  plans/               → live plans (gap-registry.md)
   adr/                 → decisions
   reference/login-flow.md
   history/             → archived

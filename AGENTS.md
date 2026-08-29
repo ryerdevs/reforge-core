@@ -206,7 +206,7 @@ wsl -d Debian-M2 -- bash /mnt/c/projects/Metin2/scripts/start_m2_min.sh
 
 ## Work rules
 
-> **Agent team:** preset OmO (muse-spark-1.2-contributor) â€” coder/fixer/oracle/explorer/librarian/designer/observer, with per-function skills.
+> **Agent team:** preset OmO (`openai/gpt-5.6-luna`, variant `max`) â€” coder/fixer/oracle/explorer/librarian/designer/observer, with per-function skills.
 
 1. Read this file and any nearby `AGENTS.md` before working.
 2. Inspect the relevant source, build and runtime before touching anything.
