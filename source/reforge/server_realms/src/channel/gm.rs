@@ -544,6 +544,9 @@ async fn warp_units(session: &mut Session, x: i32, y: i32, why: &str) -> Result<
 /// + AutoStackItemEx; el subset crea el slot — el stacking del pickup ya
 /// existe). count clamp 1..200 en el parseo.
 async fn give_item(session: &mut Session, vnum: u32, count: u32) -> Result<(), String> {
+    let count = gm::clamp_item_count(count);
+    let wire_count = u8::try_from(count)
+        .map_err(|_| format!("GM item count {count} exceeds the BYTE wire field"))?;
     // El item debe existir en el proto (parity CreateItem → nullptr → INFO).
     let Some(proto) = ItemRepo::new(session.pool.clone())
         .load_proto_use_values(i64::from(vnum))
@@ -602,7 +605,7 @@ async fn give_item(session: &mut Session, vnum: u32, count: u32) -> Result<(), S
         header: TPacketGCItemSet::HEADER,
         cell: TItemPos { window: TItemPos::WINDOW_INVENTORY, cell: slot },
         vnum,
-        count: count as u8,
+        count: wire_count,
         flags: 0,
         anti_flags: 0,
         highlight: 0,

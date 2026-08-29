@@ -14,9 +14,10 @@ Complete the remaining work needed to make the server better than the original, 
 ## Current
 
 - Date: 2026-08-29
-- HEAD: `935edf2` (`chore(git,ci): untrack frozen C++ server and fix verify fmt`) — verified with `git rev-parse HEAD`. The working tree is **not clean**: `documentation/README.md` and `documentation/progress.md` are modified; `documentation/plans/` is untracked.
+- HEAD: `96606e3` (`docs(progress): reconcile reforge gaps and handoff`) — verified with `git rev-parse HEAD` at slice start. The working tree contains only the uncommitted G0.1a code and documentation changes.
 - Tests: **891 workspace tests listed** by `cargo test --workspace -- --list` at the historical measurement point. This is not a fresh recount and is not a claim that the suite has passed.
 - Build: the previous `gm.rs` match-arm build blocker was resolved by `2c8d31a`; it is not a current blocker.
+- G0.1a audit: the effective item-stack cap remains **200**. The current item set/update/move/drop wire fields serialize counts as `BYTE` (`u8`), so 2000 is blocked pending a coordinated protocol/client migration. GM counts clamp to 200, channel consumers share the same cap, and entry serialization rejects counts above it instead of truncating them. `ItemRow.count` remains bigint-backed storage; no database schema change is needed for this audit.
 - Closed gaps: safebox checkout to Dragon Soul (`dae52e5`), quest target/affect (`dae52e5`), and quest timers (`80b33bf`) are closed. Do not list them as pending.
 - Tracker: [Gap Registry](plans/gap-registry.md) is the live per-gap tracker; historical gap analyses remain read-only.
 - Gate 2: G0, G1, G2, and G3 remain **pending execution**. The registry's closed rows record completed prerequisite work; they do not close these Gate 2 blocks.
@@ -47,7 +48,7 @@ Complete the remaining work needed to make the server better than the original, 
 
 All four work groups remain open in the [Gap Registry](plans/gap-registry.md):
 
-- [ ] **G0 — Architecture and storage:** cap decisions and disk-storage work remain to be executed and verified.
+- [ ] **G0 — Architecture and storage:** cap decisions and disk-storage work remain to be executed and verified; G0.1a is blocked by the current BYTE item-count wire.
 - [ ] **G1 — Gates, documentation, and deployment:** verification, formatting, changelog, deployment, and documentation rows remain to be executed and verified.
 - [ ] **G2 — Gameplay and content:** the remaining gameplay, social, quest, GM, data-channel, and deferred-content rows remain open in the registry.
 - [ ] **G3 — Hygiene and test debt:** stale comments and ignored-test policy remain to be executed and verified.
@@ -56,6 +57,7 @@ The registry's `C1`–`C12` rows are closed prerequisite fixes; they do not mark
 
 ## Handoff
 
+- 2026-08-29 | **G0.1a item-stack cap audit (coder):** baseline clean at `96606e3`; `ITEM_COUNT_LIMIT` remains 200 and is shared by the channel and GM paths. The client/server item count fields are BYTE-sized (`protocol/src/world.rs` item set/update/move/drop2), so the requested 2000 target is not enabled. `game_core::packets::item_set_packets` rejects counts above 200 rather than silently wrapping 2000 to 208; the GM parser/handler clamps to 200. Mutation verifiers cover the cap, shared channel value, explicit 2000 clamp, and entry-wire rejection. `ItemRow.count` stays bigint-backed; events, quests, safebox, belt, trade, economy, movement/spawn, and bench lanes were not modified. G0.1a remains **BLOCKED** until a coordinated u16 protocol/client migration and real-client stack test above 200.
 - 2026-08-29 | Gate 2 handoff sync (librarian): HEAD **`935edf2`**; working tree **not clean** (`documentation/README.md` and `documentation/progress.md` modified, `documentation/plans/` untracked); **historical measurement: 891** workspace tests listed by `cargo test --workspace -- --list`; the `gm.rs` build blocker was resolved by `2c8d31a`; safebox Dragon Soul checkout and quest target/affect/timers were closed by `dae52e5`/`80b33bf`; [Gap Registry](plans/gap-registry.md) is the current tracker; G0–G3 remain pending execution. No commit made.
 
 > Entries below this line are historical snapshots. Their counts and states are preserved for their dates; use the Current section and the live Gap Registry for present status.

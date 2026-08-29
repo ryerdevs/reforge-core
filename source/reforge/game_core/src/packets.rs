@@ -811,12 +811,22 @@ pub const BELT_INVENTORY_SLOT_START: u16 = 242;
 /// cliente NO pinta el window 6 — ver const arriba).
 /// GAP del slice: `flags`/`anti_flags`/`highlight` a 0 (el C++ los lee del
 /// item_proto — `item->GetFlags()`; el cliente no los exige para pintar el
-/// slot) y `count` truncado a BYTE (parity del struct wire).
+/// slot). Un row con count fuera del límite de stack no se serializa: hacer un
+/// cast directo a BYTE convertiría, por ejemplo, 2000 en 208.
 pub fn item_set_packets(items: &[ItemRow]) -> Vec<Vec<u8>> {
     items.iter().map(item_set_packet).collect()
 }
 
+fn item_count_to_wire(count: i64) -> Option<u8> {
+    u8::try_from(count)
+        .ok()
+        .filter(|count| u32::from(*count) <= crate::gm::ITEM_COUNT_LIMIT)
+}
+
 fn item_set_packet(it: &ItemRow) -> Vec<u8> {
+    let Some(count) = item_count_to_wire(it.count) else {
+        return Vec::new();
+    };
     let (window, cell) = match it.window.as_str() {
         "INVENTORY" => (TItemPos::WINDOW_INVENTORY, it.pos as u16),
         "EQUIPMENT" => (TItemPos::WINDOW_EQUIPMENT, it.pos as u16),
@@ -833,7 +843,7 @@ fn item_set_packet(it: &ItemRow) -> Vec<u8> {
         header: TPacketGCItemSet::HEADER,
         cell: TItemPos { window, cell },
         vnum: it.vnum as u32,
-        count: it.count as u8,
+        count,
         flags: 0,
         anti_flags: 0,
         highlight: 0,
@@ -1584,6 +1594,32 @@ mod tests {
             attrs: [(0, 0); 7],
         };
         assert!(item_set_packets(&[bad]).iter().all(|p| p.is_empty()), "SAFEBOX fuera del load");
+    }
+
+    /// VERIFIER (mutation): un count mayor que el límite efectivo no puede
+    /// llegar al wire como `BYTE`; subir el cap a 2000 o quitar el guard debe
+    /// dejar este test en rojo.
+    #[test]
+    fn item_set_packets_reject_counts_above_wire_safe_policy() {
+        use database::item::ItemRow;
+
+        let item = |count| ItemRow {
+            id: 100,
+            window: "INVENTORY".into(),
+            pos: 0,
+            count,
+            vnum: 27001,
+            sockets: [0; 3],
+            attrs: [(0, 0); 7],
+        };
+
+        let valid = item_set_packets(&[item(200)]);
+        assert_eq!(valid[0][8], 200, "200 sigue siendo el último count efectivo");
+
+        for count in [201, 2000] {
+            let packets = item_set_packets(&[item(count)]);
+            assert!(packets[0].is_empty(), "count {count} no debe truncarse al BYTE");
+        }
     }
 
     /// affect_add_packets: 22 B por affect con el mapeo del row (b_type ->

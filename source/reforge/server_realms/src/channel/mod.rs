@@ -396,7 +396,7 @@ async fn equipped_armor(
 
 /// Límite del stack de items (`g_bItemCountLimit` — config.cpp:39): usado
 /// por el pickup (stacking), el move y el uso de items.
-const ITEM_COUNT_LIMIT: i64 = 200;
+const ITEM_COUNT_LIMIT: i64 = game_core::gm::ITEM_COUNT_LIMIT as i64;
 
 /// `INVENTORY_MAX_NUM` del runtime (length.h:29 con `ENABLE_EXTEND_INVEN_SYSTEM`
 /// activo — CommonDefines.h:32): 5×9×4 = 180 celdas. El wire del equip usa
@@ -638,6 +638,15 @@ mod tests {
         for _ in 0..100 {
             assert_ne!(rand32(), 0);
         }
+    }
+
+    /// VERIFIER (mutation): todos los consumidores del canal deben usar el
+    /// mismo límite 200 que el comando GM y nunca superar el BYTE del wire.
+    #[test]
+    fn item_count_limit_is_shared_and_wire_safe() {
+        assert_eq!(ITEM_COUNT_LIMIT, 200);
+        assert_eq!(ITEM_COUNT_LIMIT, game_core::gm::ITEM_COUNT_LIMIT as i64);
+        assert!(ITEM_COUNT_LIMIT <= u8::MAX as i64);
     }
 
     /// El wiring de quests (2026-08-13): un corpus fixture (2 archivos qc)

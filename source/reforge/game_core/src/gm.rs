@@ -35,6 +35,12 @@ pub mod gm_level {
 /// `g_bItemCountLimit = 200` (config.cpp:39) — clamp del count de `/item`.
 pub const ITEM_COUNT_LIMIT: u32 = 200;
 
+/// Clamp compartido por los consumidores de stacks antes de construir un
+/// paquete. El límite sigue siendo 200 hasta que el wire deje de usar BYTE.
+pub fn clamp_item_count(count: u32) -> u32 {
+    count.clamp(1, ITEM_COUNT_LIMIT)
+}
+
 /// `gPlayerMaxLevel = 99` (config.cpp:123) — clamp del `/level`.
 pub const PLAYER_MAX_LEVEL: i32 = 99;
 
@@ -350,8 +356,8 @@ pub fn parse_command(cmd: &str) -> Option<GmCommand> {
             let count = it
                 .next()
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(1)
-                .clamp(1, ITEM_COUNT_LIMIT);
+                .unwrap_or(1);
+            let count = clamp_item_count(count);
             Some(GmCommand::GiveItem { vnum, count })
         }
         "notice" => {
@@ -668,8 +674,25 @@ mod tests {
                 count: ITEM_COUNT_LIMIT
             })
         );
+        assert_eq!(
+            parse_command("item 500 2000"),
+            Some(GmCommand::GiveItem { vnum: 500, count: 200 }),
+            "2000 no puede cruzar el límite del stack wire-safe"
+        );
         assert_eq!(parse_command("item"), None, "sin vnum");
         assert_eq!(parse_command("item abc"), None, "vnum no numérico");
+    }
+
+    /// VERIFIER (mutation): el límite efectivo debe seguir siendo 200 y caber
+    /// en los campos BYTE del wire; cambiarlo a 2000 rompe este test.
+    #[test]
+    fn item_count_policy_is_wire_safe() {
+        assert_eq!(ITEM_COUNT_LIMIT, 200);
+        assert!(ITEM_COUNT_LIMIT <= u8::MAX as u32);
+        assert_eq!(clamp_item_count(0), 1);
+        assert_eq!(clamp_item_count(200), 200);
+        assert_eq!(clamp_item_count(201), 200);
+        assert_eq!(clamp_item_count(2000), 200);
     }
 
     #[test]
