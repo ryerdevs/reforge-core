@@ -5,7 +5,7 @@ Audience: Contributors
 Last verified: 2026-08-29
 ---
 
-> Tree state at verification: baseline was clean at `96606e3`; this slice leaves only the uncommitted G0.1a code and documentation changes listed below.
+> Tree state at verification: G0.1a is committed in `5354e6f`; the working tree is clean.
 
 # Gap Registry — Open items, owners, evidence, exit criteria
 
