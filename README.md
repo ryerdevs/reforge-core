@@ -1,104 +1,109 @@
+---
+Type: Hub
+Status: Current
+Audience: All
+Last verified: 2026-08-29
+---
+
 # reforge-core
 
-> **A classic 2004 MMORPG reimagined from scratch: Rust server, PostgreSQL 18, server-authoritative architecture, designed to scale.**
+> A classic MMORPG server being structurally rewritten in Rust with a server-authoritative design and PostgreSQL 18.
 >
-> An independent alternative server for a classic Asian hack & slash game, recreated by **reverse engineering** from the original binary — no affiliation with the original developer or publisher.
+> This is an independent alternative server built by reverse engineering the original binary. It is not affiliated with the original developer or publisher and contains no original protected assets.
 
 [![Rust](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org)
 [![PostgreSQL](https://img.shields.io/badge/postgresql-18-blue.svg)](https://www.postgresql.org)
-[![License: pending decision](https://img.shields.io/badge/license-pending--decision-lightgrey.svg)](docs/plans/server-rewrite.md)
+[![License: pending decision](https://img.shields.io/badge/license-pending--decision-lightgrey.svg)](documentation/history/plans/server-rewrite.md)
 
 ---
 
 ## What is this?
 
-**reforge-core** is the complete rewrite of the server of a **classic 2004 MMORPG** (hack & slash with a persistent world, guilds and PvP) in **Rust**, with 2026 technology and one clear goal: **do more with less**.
+**reforge-core** is an incremental, structural rewrite of a classic 2004 MMORPG server. It preserves observable wire behavior where required while replacing the legacy implementation module by module.
 
-Not a line-by-line translation of the original C++ — a **structural redesign** that:
-
-- 🛡️ **Removes the hacks at the root**: server-authoritative — the client sends *intentions*, the server computes *facts*. Speedhack, god-mode, dupe and memory hacking stop existing by design.
-- 🚀 **Performs at its best**: tokio + per-region ECS, no shared locks, no SQL in the hot path. Ceiling of **1,000+ players per instance** (the original: ~300–500).
-- 🌍 **One server for everyone**: regional channels (EUW/LAN/LAS) sharing the same database — play with local ping, switch region by just logging in, unified market.
-- 🔄 **Hot reload**: texts, items and quests are edited in the DB and reloaded live — no restarts, no recompiles, no repacks.
-- 📦 **No scripting**: quests move from Lua to a **declarative own DSL** — elegant, typed, with reusable families and blocks.
-- 🗄️ **PostgreSQL 18** as transactional safety net: local WAL, idempotent `mutation_id`, RLS, failover — dupe is impossible by construction.
-
-> ⚠️ **Legal note:** this project is an independent alternative server, built by reverse engineering. It has no affiliation with the developer or publisher of the original game and includes none of their assets or protected content — only original code.
+- **Server-authoritative:** the client sends intentions; the server computes facts.
+- **Rust rewrite:** protocol, transport, authentication, world entry, movement, persistence, and gameplay modules are being replaced incrementally.
+- **Transactional persistence:** durable mutations use PostgreSQL transactions and the local WAL path.
+- **Legacy compatibility:** the original client remains the playable protocol reference while the Rust server progresses.
 
 ## Current status
 
-> Detailed, always-updated status: **`docs/CURRENT.md`** · Documentation index: **`docs/README.md`**
+> HEAD: `4579fcb` (`docs(progress): record item cap slice`), verified 2026-08-29.
+>
+> Live handoff: [documentation/progress.md](documentation/progress.md) · [Gap Registry](documentation/plans/gap-registry.md) · [documentation hub](documentation/README.md)
 
-| Phase | Status |
+| Area | Status |
 |---|---|
-| Original binary baseline verified (full login against the client) | ✅ |
-| Legacy vs 2026-standards audit | ✅ |
-| Unified rewrite plan | ✅ [plan](docs/plans/server-rewrite.md) |
-| Quest DSL spec | ✅ [spec](docs/reference/quests/quest-dsl.md) |
-| **F0** — Foundations (workspace, ADRs, byte-exact `protocol` crate) | ✅ 30/30 tests |
-| **F1** — Network and transport (tokio: listener, framer, handshake) | ✅ 23/23 tests, 56/56 workspace — integration milestone pending (WSL) |
-| **G-PG** — PostgreSQL cutover (ADR-0005) | ⏳ next — blocks F2 |
-| **F2** — Auth (F2a server-side / F2b client batch) | ⏳ blocked on G-PG + ADR-0005 |
-| F3–F6 (Rust server) | ⏳ in design |
-| F7 (new client) | ⏳ after the server |
+| Runtime | ✅ Native Windows runtime with PostgreSQL 18 and `server_realms` roles `auth`/`channel` (ADR-0012) |
+| F0/F1/G-PG/F2 | ✅ Protocol, transport, PostgreSQL cutover, authentication, world entry, and movement implemented and verified |
+| Database, WAL, ACID paths | ✅ PostgreSQL persistence, local WAL, and transactional mutation paths implemented and verified |
+| `game_core`, social, quests, GM | 🟡 Partial; see the [live handoff](documentation/progress.md) and [Gap Registry](documentation/plans/gap-registry.md) |
+| Tests | 891 workspace tests listed at a historical measurement point; this is not a fresh suite result or a pass guarantee |
+| G0–G3 | ⏳ Pending execution |
+| G0.1a item stacks | ✅ Safely enforced at an effective cap of 200; the 2000 target is blocked until a coordinated BYTE-to-u16 protocol/client migration |
+| G0.2 storage | ✅ Target cleanup and backup verified 2026-08-29; G0 remains open because other cap rows still require execution |
+| F7 Rust client rewrite | ⏳ Not started |
 
-## Architecture in 30 seconds
+## Architecture
 
+```text
+Legacy C++ client (playable reference)
+                 │
+                 ▼
+server_realms (single binary; role = auth or channel)
+        ├── protocol   (byte-exact wire contract)
+        ├── network    (Tokio transport and authentication)
+        ├── game_core  (ECS and gameplay domain)
+        └── database   (tokio-postgres, WAL, transactions)
+                              │
+                              ▼
+                    PostgreSQL 18 on Windows
 ```
-Client (frozen original binary + 2 additive packs) ──► server_realms (single binary, roles auth|channel)
-                                                           │  network (tokio: framer + handshake)
-                                                           │  realm (parallel regions, ECS)
-                                                           │  database (sqlx, never inline)
-                                                           ▼
-                                                   PostgreSQL 18 central
-```
 
-- One process per region (map clusters) with ECS (`bevy_ecs`): parallel simulation, single-writer per entity.
-- Shared central DB across channels-regions: character, gold, market and guilds unified.
-- Persistence in two classes: durable (items/gold → WAL + transaction) vs volatile (position → periodic).
-- Full design: [docs/plans/server-rewrite.md](docs/plans/server-rewrite.md) · docs: [docs/README.md](docs/README.md) · status: [docs/CURRENT.md](docs/CURRENT.md).
+ADR-0012 defines native Windows as the runtime. WSL is retained only as an on-demand environment for the frozen C++ parity oracle. RLS, failover, the versioned data manifest, and notification-driven hot reload remain future work; they are not presented as complete here.
 
-## Repository — what it contains
+## Repository map
 
-```
+```text
 source/
-├── client/     # C++ client source v40999 (protocol contract)
-├── server/     # C++ legacy server source (the reference to port)
-├── reforge/    # RUST REWRITE (Cargo workspace): protocol, network, database, realm
-│   └── server_realms/  # single binary, roles auth|channel by config
-├── tools/      # Tools: DBManager, DumpProto, Mysql2Proto, switch_compiler
-│   ├── pack/   #   Pack sources (python, uiscript, PackMakerLite)
-│   └── proto/  #   Protocol metadata
-└── deploy/     # Deployed runtime (local, not in git)
-docs/           # Documentation hub: README.md, CURRENT.md, DOCUMENTATION.md,
-                # plans/, reference/, guardrails/, decisions/ (ADRs),
-                # history/ (superseded docs; Diátaxis modes on demand)
-scripts/        # Server startup scripts (WSL/Linux)
-ROADMAP.md      # Master plan by phases
-CHANGELOG.md    # Chronological change log
-AGENTS.md       # Agent instructions, verified facts, work rules
+├── client/      # C++ client source and protocol reference
+├── server/      # frozen C++ parity oracle; local-only and not tracked by Git
+├── reforge/     # Rust workspace
+│   ├── protocol/
+│   ├── network/
+│   ├── database/
+│   ├── game_core/
+│   └── server_realms/  # one binary, auth|channel roles by config
+├── tools/       # DBManager, DumpProto, Mysql2Proto, pack and protocol tools
+└── deploy/      # local runtime/deployment artifacts; not tracked by Git
+documentation/   # documentation hub, ADRs, plans, references and history
+scripts/        # Windows runtime and operations scripts
+ROADMAP.md      # master plan
+CHANGELOG.md    # chronological evidence record
+AGENTS.md       # project instructions and verified facts
 ```
 
-> **Binaries and packs are not in git.** The installed client, the `.epk` files, the build dependencies (`source/client/Extern/`) and the runtime (`source/deploy/`, WSL mirror) stay local or are distributed as Releases.
+Build artifacts, installed clients, packs, backups, the runtime, and the frozen C++ oracle remain local or are distributed separately.
 
 ## Roadmap
 
-| Phase | Content |
-|---|---|
-| **F0** | Rust workspace, ADRs, byte-exact `protocol` crate, capture harness — ✅ |
-| **F1** | Network/transport with tokio: listener, framer, handshake — ✅ (WSL integration milestone pending) |
-| **G-PG** | PostgreSQL 18 cutover + temporary legacy adapter (ADR-0005) — blocks F2 |
-| **F2** | Auth (F2a) + first client batch (F2b) — blocked on G-PG |
-| **F3** | Data layer (PostgreSQL) + server→client data channel |
-| **F4** | World entry + UTF-8 names |
-| **F5** | Full gameplay, scale benchmark, hot reload, API + metrics |
-| **F6** | Full parity and replacement of the C++ baseline |
-| **F7** | New client (wgpu + Slint UI) |
+- Foundations, transport, PostgreSQL cutover, authentication, world entry, and movement: implemented and verified.
+- `game_core` gameplay and social/content coverage: partial; the [Gap Registry](documentation/plans/gap-registry.md) owns the open items.
+- G0–G3: pending execution.
+- F7 Rust client: not started; the decision is recorded in [ADR-0013](documentation/adr/0013-client-rewrite.md).
 
-## Want to participate?
+## Local runtime
 
-This project wants to **revive the classic genre with the community**: public protocol documentation, effective anti-bot, and a modern server operators can adopt. Issues, PRs and opinions on the plan are welcome — architecture decisions are discussed in `docs/` before being implemented.
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\start_win.ps1
+powershell -ExecutionPolicy Bypass -File scripts\status.ps1
+powershell -ExecutionPolicy Bypass -File scripts\stop_win.ps1
+```
+
+## Contributing
+
+Issues, pull requests, and architecture discussions are welcome. Read the [documentation hub](documentation/README.md) and [live handoff](documentation/progress.md) first; architecture decisions are recorded in `documentation/` before implementation.
 
 ## License
 
-**Pending decision.** MPL-2.0 is proposed (permissive for private-server operators: they can run and modify without opening their entire work) but not yet accepted by the community — no `LICENSE` file exists until it is confirmed (ROADMAP open decision, plan §13). See the open question in [docs/plans/server-rewrite.md](docs/plans/server-rewrite.md).
+**Pending decision.** MPL-2.0 is proposed, but no `LICENSE` file exists until the community confirms it. The open question is recorded in the [historical server rewrite plan](documentation/history/plans/server-rewrite.md).
