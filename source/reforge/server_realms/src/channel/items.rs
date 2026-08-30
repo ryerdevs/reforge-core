@@ -16,6 +16,7 @@
 //! errores PG/socket → Err (fatal).
 
 use database::affect::{AffectRepo, AffectRow};
+use database::economy::{checked_gold_delta, checked_gold_sub, GOLD_MAX};
 use database::item::ItemRepo;
 use protocol::world::{
     RefineMaterial, TPacketAffectElement, TPacketCGItemDrop, TPacketCGItemDrop2,
@@ -92,9 +93,6 @@ const POINT_HT: u8 = 13;
 const POINT_DX: u8 = 14;
 const POINT_IQ: u8 = 15;
 
-/// `GOLD_MAX = 2000000000` (length.h:80) — el cap del oro del PointChange.
-const GOLD_MAX: i64 = 2_000_000_000;
-
 /// Mapeo del switch USE_ABILITY_UP (parity char_item.cpp:4332-4388):
 /// value0 (APPLY_*) → (AFFECT_*, POINT_*, AFF_*). `None` = apply sin case
 /// en el C++ → sin buff y SIN consumo.
@@ -121,10 +119,11 @@ fn ability_up_apply(apply: i32) -> Option<(u32, u8, u32)> {
     }
 }
 
-/// Cap del oro de la bolsa AUTOUSE_GOLD (parity `PointChange(POINT_GOLD)` —
-/// el C++ clamp a GOLD_MAX; el row.gold es i32 y no puede excederlo).
-fn gold_after_add(current: i32, add: i32) -> i32 {
-    (i64::from(current) + i64::from(add)).min(GOLD_MAX) as i32
+/// Checked balance for the AUTOUSE_GOLD mutation. `GOLD_MAX` is an overflow
+/// guard; an addition past it is rejected rather than silently clamped.
+fn gold_after_add(current: i32, add: i32) -> Option<i32> {
+    let next = checked_gold_delta(i64::from(current), i64::from(add))?;
+    i32::try_from(next).ok()
 }
 
 /// El gate de consumibles (parity `UseItemEx`, char_item.cpp:1616+): SOLO
@@ -207,16 +206,16 @@ async fn drop_cell_or_gold(
 /// (el C++ devuelve false en silencio). El intent se envía ANTES de mutar
 /// el oro (si el mundo está muerto, el send falla y no se pierde nada).
 async fn drop_gold(session: &mut Session, gold: u32) -> Result<Outcome, String> {
-    if i64::from(gold) > i64::from(session.row().gold) {
+    let Some(new_gold) = checked_gold_sub(i64::from(session.row().gold), i64::from(gold)) else {
         eprintln!(
-            "server_realms: channel conn {}: {} — drop de {gold} oro \
-             con {} en el monedero — rechazado (parity DropGold)",
+            "server_realms: channel conn {}: {} — drop de {gold} oro con \
+             {} en el monedero — rechazado (parity DropGold)",
             session.conn_id,
             session.row().name,
             session.row().gold
         );
         return Ok(Outcome::Continue);
-    }
+    };
     let (x, y) = (session.motion().x, session.motion().y);
     session.intent(Intent::Item(ItemIntent::DropItem {
         player_vid: session.player_vid(),
@@ -229,9 +228,8 @@ async fn drop_gold(session: &mut Session, gold: u32) -> Result<Outcome, String> 
         attrs: [(0, 0); 7],
     }))?;
     {
-        let row = session.row_mut();
-        // El gate de arriba garantiza `gold <= row.gold` (i32) — cast seguro.
-        row.gold = row.gold.saturating_sub(gold as i32);
+        session.row_mut().gold = i32::try_from(new_gold)
+            .map_err(|e| format!("convirtiendo gold de DropGold: {e}"))?;
     }
     session
         .send(&packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
@@ -797,7 +795,15 @@ async fn use_autouse_gold(
         );
         return Ok(Outcome::Continue);
     }
-    session.row_mut().gold = gold_after_add(session.row().gold, amount);
+    let Some(new_gold) = gold_after_add(session.row().gold, amount) else {
+        eprintln!(
+            "server_realms: channel conn {}: bolsa de oro vnum {} excede \
+             GOLD_MAX con value0 {amount} — no consume",
+            session.conn_id, session.inventory[idx].vnum
+        );
+        return Ok(Outcome::Continue);
+    };
+    session.row_mut().gold = new_gold;
     session
         .send(&packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
         .await
@@ -1490,16 +1496,23 @@ fn count_material(inventory: &[database::item::ItemRow], vnum: i64, skip: &[usiz
         .sum()
 }
 
+/// Computes a refine fee without allowing arithmetic to wrap. Normal refine
+/// fees are multiplied by five; scroll fees use the recipe cost unchanged.
+fn checked_refine_fee(cost: i64, with_scroll: bool) -> Option<i64> {
+    if with_scroll { Some(cost) } else { cost.checked_mul(5) }
+}
+
 /// Cobra la fee del refine (parity `PayRefineFee` char.cpp:6616 sin guild →
 /// `PointChange(POINT_GOLD, -fee)` — iRemain = fee entero): descuenta el oro,
 /// manda GC_POINTS y persiste. `fee` ya incluye el ×5 del `ComputeRefineFee`
 /// cuando corresponde (el NORMAL cobra cost×5; el SCROLL cobra cost —
 /// parity literal del C++).
 async fn pay_refine_fee(session: &mut Session, fee: i64) -> Result<(), String> {
-    {
-        let row = session.row_mut();
-        row.gold = row.gold.saturating_sub(fee as i32);
-    }
+    let Some(new_gold) = checked_gold_sub(i64::from(session.row().gold), fee) else {
+        return Err(format!("refine fee {fee} deja el oro fuera de 0..={GOLD_MAX}"));
+    };
+    session.row_mut().gold = i32::try_from(new_gold)
+        .map_err(|e| format!("convirtiendo gold de refine: {e}"))?;
     session
         .send(&packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
         .await
@@ -1703,15 +1716,17 @@ async fn refine_execute(
     }
     // Fee: NORMAL → ComputeRefineFee(cost) = cost×5 (char.cpp:6598, sin
     // guild); SCROLL → prt->cost sin multiplicar (char_item.cpp:1093).
-    let fee = if scroll_idx.is_some() {
-        i64::from(recipe.cost)
-    } else {
-        i64::from(recipe.cost) * 5
+    let Some(fee) = checked_refine_fee(i64::from(recipe.cost), scroll_idx.is_some()) else {
+        eprintln!(
+            "server_realms: channel conn {}: refine de vnum {target_vnum} — fee overflow",
+            session.conn_id
+        );
+        return Ok(false);
     };
-    if i64::from(session.row().gold) < fee {
+    if fee < 0 || checked_gold_sub(i64::from(session.row().gold), fee).is_none() {
         eprintln!(
             "server_realms: channel conn {}: refine de vnum {target_vnum} — \
-             oro insuficiente ({}/{} fee)",
+             fee fuera de rango o insuficiente ({}/{} fee)",
             session.conn_id, session.row().gold, fee
         );
         return Ok(false);
@@ -1910,6 +1925,15 @@ pub async fn handle_use_to_item(session: &mut Session, pkt: &[u8]) -> Result<Out
             material_count = i as u8 + 1;
         }
     }
+    let Some(display_cost) = checked_refine_fee(i64::from(recipe.cost), false)
+        .and_then(|fee| i32::try_from(fee).ok())
+    else {
+        eprintln!(
+            "server_realms: channel conn {}: refine de vnum {target_vnum} — fee fuera del wire i32",
+            session.conn_id
+        );
+        return Ok(Outcome::Continue);
+    };
     let info = TPacketGCRefineInformation {
         header: TPacketGCRefineInformation::HEADER,
         r#type: TPacketCGRefine::TYPE_SCROLL,
@@ -1917,7 +1941,7 @@ pub async fn handle_use_to_item(session: &mut Session, pkt: &[u8]) -> Result<Out
         src_vnum: target_vnum as u32,
         result_vnum: refined_vnum as u32,
         material_count,
-        cost: recipe.cost * 5,
+        cost: display_cost,
         prob: recipe.prob,
         materials,
     };
@@ -2090,6 +2114,21 @@ mod tests {
         }
     }
 
+    /// Verifier de mutación: la multiplicación normal y la conversión al
+    /// campo i32 del wire rechazan resultados no representables, sin envolver.
+    #[test]
+    fn refine_fee_rejects_arithmetic_and_wire_overflow() {
+        assert_eq!(checked_refine_fee(1_000, false), Some(5_000));
+        assert_eq!(checked_refine_fee(1_000, true), Some(1_000));
+        assert_eq!(checked_refine_fee(i64::MAX, false), None);
+        assert!(
+            checked_refine_fee(i64::from(i32::MAX), false)
+                .and_then(|fee| i32::try_from(fee).ok())
+                .is_none(),
+            "la cuota mostrada debe caber en el wire i32"
+        );
+    }
+
     /// Lane R: el conteo de materiales excluye el skipList (@fixme346 — el
     /// item destino y el scroll no se cuentan como material) y suma los
     /// stacks del mismo vnum.
@@ -2203,13 +2242,29 @@ mod tests {
     /// GOLD_MAX = 2e9 (parity `PointChange(POINT_GOLD)` + length.h:80).
     #[test]
     fn autouse_gold_caps_at_gold_max() {
-        assert_eq!(gold_after_add(100, 50), 150, "suma normal");
-        assert_eq!(gold_after_add(0, 5000), 5000);
-        assert_eq!(gold_after_add(1_999_999_900, 500), 2_000_000_000, "cap");
-        assert_eq!(gold_after_add(2_000_000_000, 5), 2_000_000_000, "ya en el cap");
-        // El gate del handler rechaza amount <= 0 antes (no consume) — el
-        // helper puro se comporta bien igualmente.
-        assert_eq!(gold_after_add(100, 0), 100);
-        assert_eq!(gold_after_add(100, -50), 50);
+        assert_eq!(gold_after_add(100, 50), Some(150), "suma normal");
+        assert_eq!(gold_after_add(0, 5000), Some(5000));
+        assert_eq!(gold_after_add(1_999_999_900, 100), Some(GOLD_MAX as i32), "límite inclusivo");
+        assert_eq!(gold_after_add(GOLD_MAX as i32, 1), None, "overflow rechazado");
+        // El gate del handler rechaza amount <= 0 antes (no consume), pero
+        // el helper conserva los deltas negativos legítimos.
+        assert_eq!(gold_after_add(100, 0), Some(100));
+        assert_eq!(gold_after_add(100, -50), Some(50));
+        assert_eq!(gold_after_add(0, -1), None, "underflow rechazado");
+        assert_eq!(gold_after_add(-1, 1), None, "wallet inicial inválido");
+    }
+
+    /// Property verifier: el helper del consumidor nunca devuelve un balance
+    /// fuera del contrato, incluso cerca de ambos límites.
+    #[test]
+    fn autouse_gold_result_stays_in_wallet_bounds() {
+        for current in [0, 1, GOLD_MAX as i32 - 1, GOLD_MAX as i32] {
+            for add in [i32::MIN, -1, 0, 1, i32::MAX] {
+                if let Some(next) = gold_after_add(current, add) {
+                    assert!((0..=GOLD_MAX as i32).contains(&next));
+                    assert_eq!(i64::from(current) + i64::from(add), i64::from(next));
+                }
+            }
+        }
     }
 }

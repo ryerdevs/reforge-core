@@ -77,6 +77,7 @@
 
 use std::time::Duration;
 
+use database::economy::{checked_gold_delta, checked_gold_sub, is_valid_gold, GOLD_MAX};
 use database::item::{ItemRepo, ItemRow};
 use database::safebox::SafeboxRepo;
 use game_core::packets;
@@ -205,6 +206,27 @@ fn set_packet(item: &ItemRow, pos: u16) -> TPacketGCItemSet {
     }
 }
 
+/// Computes both sides of a safebox money transfer before either wallet is
+/// mutated. `SAVE` spends from the player; `WITHDRAW` credits the player.
+fn checked_safebox_money(
+    player_gold: i64,
+    box_gold: i64,
+    money: i64,
+    state: u8,
+) -> Option<(i64, i64)> {
+    match state {
+        TPacketCGSafeboxMoney::STATE_SAVE => Some((
+            checked_gold_sub(player_gold, money)?,
+            checked_gold_delta(box_gold, money)?,
+        )),
+        TPacketCGSafeboxMoney::STATE_WITHDRAW => Some((
+            checked_gold_delta(player_gold, money)?,
+            checked_gold_sub(box_gold, money)?,
+        )),
+        _ => None,
+    }
+}
+
 /// `/safebox_password <password>` — abrir la caja (parity do_safebox_password
 /// cmd_general.cpp:805-810 → ReqSafeboxLoad char.cpp:5494-5541 →
 /// RESULT_SAFEBOX_LOAD ClientManager.cpp:628-656). GAP documentado: sin
@@ -259,6 +281,11 @@ pub async fn open(session: &mut Session, password: &str) -> Result<Outcome, Stri
     // en RESULT_SAFEBOX_LOAD) — el reforge lo lee de la DB para que el
     // handler de dinero funcione entre sesiones.
     let gold = repo.get_gold(session.account_id).await?.unwrap_or(0);
+    if !is_valid_gold(i64::from(gold)) {
+        return Err(format!(
+            "SAFEBOX_GOLD: oro {gold} fuera de 0..={GOLD_MAX}"
+        ));
+    }
     let items = ItemRepo::new(session.pool.clone())
         .load_safebox(session.account_id)
         .await?;
@@ -305,6 +332,14 @@ pub async fn open(session: &mut Session, password: &str) -> Result<Outcome, Stri
 /// También lo usa el cierre de conexión (game.rs — el C++ llama
 /// CloseSafebox en CHARACTER::Destroy, char.cpp:1352).
 pub async fn close(session: &mut Session) -> Result<(), String> {
+    if let Some(st) = session.safebox.as_ref()
+        && !is_valid_gold(i64::from(st.gold))
+    {
+        return Err(format!(
+            "SAFEBOX_GOLD: oro {0} fuera de 0..={GOLD_MAX}",
+            st.gold
+        ));
+    }
     let Some(st) = session.safebox.take() else {
         return Ok(());
     };
@@ -1020,47 +1055,24 @@ pub async fn handle_money(session: &mut Session, pkt: &[u8]) -> Result<Outcome, 
         );
         return Ok(Outcome::Continue);
     }
-    let money = p.l_money as i64;
-    match p.b_state {
-        TPacketCGSafeboxMoney::STATE_SAVE => {
-            // Depositar: el monedero debe cubrirlo (parity DropGold/PointChange).
-            let player_gold = session.row().gold;
-            if money > i64::from(player_gold) {
-                eprintln!(
-                    "server_realms: channel conn {}: depósito de {money} oro \
-                     con {} en el monedero — rechazado",
-                    session.conn_id, player_gold
-                );
-                return Ok(Outcome::Continue);
-            }
-            session.row_mut().gold = player_gold - money as i32;
-            let st = session.safebox.as_mut().expect("caja abierta");
-            st.gold = st.gold.saturating_add(money as i32);
-        }
-        TPacketCGSafeboxMoney::STATE_WITHDRAW => {
-            // Retirar: la caja debe cubrirlo.
-            let box_gold = st.gold;
-            if money > i64::from(box_gold) {
-                eprintln!(
-                    "server_realms: channel conn {}: retiro de {money} oro \
-                     con {box_gold} en la caja — rechazado",
-                    session.conn_id
-                );
-                return Ok(Outcome::Continue);
-            }
-            session.row_mut().gold = session.row().gold.saturating_add(money as i32);
-            let st = session.safebox.as_mut().expect("caja abierta");
-            st.gold = box_gold - money as i32;
-        }
-        other => {
-            eprintln!(
-                "server_realms: channel conn {}: money con bState {other} — \
-                 rechazado (SAVE=0/WITHDRAW=1)",
-                session.conn_id
-            );
-            return Ok(Outcome::Continue);
-        }
-    }
+    let money = i64::from(p.l_money);
+    let Some((new_player_gold, new_box_gold)) = checked_safebox_money(
+        i64::from(session.row().gold),
+        i64::from(st.gold),
+        money,
+        p.b_state,
+    ) else {
+        eprintln!(
+            "server_realms: channel conn {}: transferencia de {money} oro \
+             fuera de 0..={GOLD_MAX} (state {}) — rechazado",
+            session.conn_id, p.b_state
+        );
+        return Ok(Outcome::Continue);
+    };
+    session.row_mut().gold = i32::try_from(new_player_gold)
+        .map_err(|e| format!("convirtiendo gold del monedero: {e}"))?;
+    session.safebox.as_mut().expect("caja abierta").gold = i32::try_from(new_box_gold)
+        .map_err(|e| format!("convirtiendo gold de la safebox: {e}"))?;
     let box_gold = session.safebox.as_ref().expect("caja abierta").gold;
     // GC_POINTS (monedero) + GC_SAFEBOX_MONEY_CHANGE (84, oro de la caja) +
     // persistencia (parity PointChange + SafeboxMoney del C++ completo).
@@ -1241,5 +1253,62 @@ mod tests {
         assert!(is_ds_dest(5));
         assert!(!is_ds_dest(1));
         assert_ne!(is_ds_dest(5), is_ds_dest(1));
+    }
+
+    /// Verifier de mutación: ambas piernas del depósito/retiro se validan
+    /// antes de cambiar cualquiera de los dos monederos.
+    #[test]
+    fn safebox_money_transfer_keeps_both_wallets_in_bounds() {
+        assert_eq!(
+            checked_safebox_money(1_000, 2_000, 300, TPacketCGSafeboxMoney::STATE_SAVE),
+            Some((700, 2_300))
+        );
+        assert_eq!(
+            checked_safebox_money(1_000, 2_000, 300, TPacketCGSafeboxMoney::STATE_WITHDRAW),
+            Some((1_300, 1_700))
+        );
+        assert_eq!(
+            checked_safebox_money(0, 2_000, 1, TPacketCGSafeboxMoney::STATE_SAVE),
+            None,
+            "depositar no puede underflowear el monedero"
+        );
+        assert_eq!(
+            checked_safebox_money(GOLD_MAX, 1, 1, TPacketCGSafeboxMoney::STATE_WITHDRAW),
+            None,
+            "retirar no puede superar GOLD_MAX"
+        );
+        assert_eq!(
+            checked_safebox_money(1, GOLD_MAX, 1, TPacketCGSafeboxMoney::STATE_SAVE),
+            None,
+            "depositar no puede superar GOLD_MAX de la caja"
+        );
+    }
+
+    /// Property verifier: cada transferencia aceptada mantiene ambos saldos
+    /// dentro de 0..=GOLD_MAX y conserva el total.
+    #[test]
+    fn safebox_money_transfer_property_preserves_total() {
+        for player in [0, 1, GOLD_MAX - 1, GOLD_MAX] {
+            for box_gold in [0, 1, GOLD_MAX - 1, GOLD_MAX] {
+                for money in [0, 1, GOLD_MAX] {
+                    for state in [
+                        TPacketCGSafeboxMoney::STATE_SAVE,
+                        TPacketCGSafeboxMoney::STATE_WITHDRAW,
+                    ] {
+                        if let Some((new_player, new_box)) =
+                            checked_safebox_money(player, box_gold, money, state)
+                        {
+                            assert!((0..=GOLD_MAX).contains(&new_player));
+                            assert!((0..=GOLD_MAX).contains(&new_box));
+                            assert_eq!(
+                                player + box_gold,
+                                new_player + new_box,
+                                "money transfer conserves total"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 }

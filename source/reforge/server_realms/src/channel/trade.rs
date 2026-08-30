@@ -18,6 +18,7 @@
 //!   1842-1852`): START=0, ITEM_ADD=1, ITEM_DEL=2, GOLD_ADD=3, ACCEPT=4,
 //!   END=5, ALREADY=6, LESS_GOLD=7.
 
+use database::economy::{checked_gold_delta, checked_gold_sub, GOLD_MAX};
 use database::item::{ItemRepo, ItemRow};
 use database::player::PlayerRepo;
 use game_core::ecs::{TradeEvent, TradeIntent};
@@ -37,9 +38,6 @@ const EXCHANGE_SUBHEADER_GC_ACCEPT: u8 = 4;
 const EXCHANGE_SUBHEADER_GC_END: u8 = 5;
 const EXCHANGE_SUBHEADER_GC_ALREADY: u8 = 6;
 const EXCHANGE_SUBHEADER_GC_LESS_GOLD: u8 = 7;
-/// `GOLD_MAX` (length.h:80) — tope del oro.
-const GOLD_MAX: i64 = 2_000_000_000;
-
 /// CG_EXCHANGE (27): parsea el subheader y manda el intent al mundo. La
 /// validación de ORO del ELK_ADD vive aquí (parity input_main.cpp:1214-1234
 /// — `AddGold` rechaza `gold > row.gold` con GC_LESS_GOLD); el overflow
@@ -92,7 +90,7 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
         3 => {
             // EXCHANGE_SUBHEADER_CG_ELK_ADD — arg1 = oro.
             let gold = i64::from(arg1);
-            if gold <= 0 || i64::from(session.row().gold) < gold {
+            if gold <= 0 || checked_gold_sub(i64::from(session.row().gold), gold).is_none() {
                 // Parity `AddGold` (exchange.cpp:240-262): LESS_GOLD al
                 // propio owner.
                 session
@@ -167,8 +165,15 @@ pub(super) async fn emit(session: &mut Session, e: TradeEvent) -> Result<(), Str
                 .map_err(|e| format!("enviando GC_EXCHANGE ITEM_DEL: {e}"))
         }
         TradeEvent::GoldAdded { is_me, gold, .. } => {
+            let Ok(gold) = u32::try_from(gold) else {
+                eprintln!(
+                    "server_realms: channel conn {}: trade oro {gold} fuera del wire DWORD",
+                    session.conn_id
+                );
+                return Ok(());
+            };
             session
-                .send(&gc_exchange(EXCHANGE_SUBHEADER_GC_GOLD_ADD, u8::from(is_me), gold as u32, TItemPos { window: 0, cell: 0 }, 0, [0; 3], [(0, 0); 7]))
+                .send(&gc_exchange(EXCHANGE_SUBHEADER_GC_GOLD_ADD, u8::from(is_me), gold, TItemPos { window: 0, cell: 0 }, 0, [0; 3], [(0, 0); 7]))
                 .await
                 .map_err(|e| format!("enviando GC_EXCHANGE GOLD_ADD: {e}"))
         }
@@ -234,6 +239,24 @@ async fn commit_fail(
     Ok(())
 }
 
+/// Validates both wallet posts of a trade before any ACID unit is built.
+/// `gold_executor`/`gold_partner` are amounts offered, not signed deltas.
+fn trade_gold_posts(
+    gold_now_executor: i64,
+    gold_now_partner: i64,
+    gold_executor: i64,
+    gold_partner: i64,
+) -> Option<(i64, i64)> {
+    if gold_executor < 0 || gold_partner < 0 {
+        return None;
+    }
+    let executor_post = checked_gold_sub(gold_now_executor, gold_executor)?;
+    let partner_post = checked_gold_sub(gold_now_partner, gold_partner)?;
+    checked_gold_delta(executor_post, gold_partner)?;
+    checked_gold_delta(partner_post, gold_executor)?;
+    Some((executor_post, partner_post))
+}
+
 /// EJECUTOR del commit (dupe-critical — el plan lo validó el mundo):
 /// 1. re-valida SU lado (parity `CExchange::Check` — exchange.cpp:283-311):
 ///    sus items ofrecidos siguen en su inventario con el count ofrecido y
@@ -268,10 +291,6 @@ async fn apply_commit(session: &mut Session, plan: &TradeCommitPlan) -> Result<(
         }
     }
     let gold_now = i64::from(session.row().gold);
-    let gold_post_own = gold_now - plan.gold_executor;
-    if gold_post_own < 0 {
-        return commit_fail(session, plan.executor, plan.partner, "oro insuficiente".into()).await;
-    }
     // (2) El oro del partner (fresco — parity `CExchange::Check` sobre el
     // company) + overflow GOLD_MAX del post propio.
     let partner_gold = PlayerRepo::new(session.pool.clone())
@@ -279,14 +298,20 @@ async fn apply_commit(session: &mut Session, plan: &TradeCommitPlan) -> Result<(
         .await?
         .map(|r| i64::from(r.gold))
         .unwrap_or(0);
-    if partner_gold - plan.gold_partner < 0 {
-        return commit_fail(session, plan.executor, plan.partner, "oro del partner insuficiente".into())
-            .await;
-    }
-    if gold_post_own + plan.gold_partner > GOLD_MAX {
-        return commit_fail(session, plan.executor, plan.partner, "GOLD_MAX del ejecutor excedido".into())
-            .await;
-    }
+    let Some((_gold_post_own, _partner_post)) = trade_gold_posts(
+        gold_now,
+        partner_gold,
+        plan.gold_executor,
+        plan.gold_partner,
+    ) else {
+        return commit_fail(
+            session,
+            plan.executor,
+            plan.partner,
+            format!("oro del trade fuera de 0..={GOLD_MAX}"),
+        )
+        .await;
+    };
     // (3) Las unidades ACID (ids nuevos del rango — patrón del split).
     let base = ItemRepo::new(session.pool.clone())
         .max_id_in_range(
@@ -332,6 +357,8 @@ async fn apply_done(
     received: &[game_core::ecs::TradeReceivedItem],
     delivered: &[ItemRow],
 ) -> Result<(), String> {
+    let new_gold = checked_gold_delta(i64::from(session.row().gold), gold_delta)
+        .ok_or_else(|| format!("trade deja el oro fuera de 0..={GOLD_MAX}"))?;
     // Items entregados: GC_ITEM_DEL + salen del inventario local.
     for d in delivered {
         if let Some(idx) = session.inventory.iter().position(|i| i.id == d.id) {
@@ -380,7 +407,8 @@ async fn apply_done(
         session.inventory.push(row);
     }
     // Oro + cierre del window + puntos.
-    session.row_mut().gold = (i64::from(session.row().gold) + gold_delta) as i32;
+    session.row_mut().gold = i32::try_from(new_gold)
+        .map_err(|e| format!("convirtiendo gold de trade: {e}"))?;
     session
         .send(&gc_exchange(EXCHANGE_SUBHEADER_GC_END, 0, 0, TItemPos { window: 0, cell: 0 }, 0, [0; 3], [(0, 0); 7]))
         .await
@@ -434,5 +462,53 @@ mod tests {
         assert_eq!(EXCHANGE_SUBHEADER_GC_END, 5);
         assert_eq!(EXCHANGE_SUBHEADER_GC_ALREADY, 6);
         assert_eq!(EXCHANGE_SUBHEADER_GC_LESS_GOLD, 7);
+    }
+
+    /// Verifier de mutación: el commit rechaza underflow, overflow del
+    /// receptor y cantidades ofrecidas negativas para AMBOS monederos.
+    #[test]
+    fn trade_gold_posts_keep_both_wallets_in_bounds() {
+        assert_eq!(trade_gold_posts(1_000, 2_000, 100, 500), Some((900, 1_500)));
+        assert_eq!(
+            trade_gold_posts(GOLD_MAX, 0, 0, GOLD_MAX),
+            None,
+            "el receptor no puede superar GOLD_MAX"
+        );
+        assert_eq!(
+            trade_gold_posts(100, 2_000, 101, 0),
+            None,
+            "el oferente no puede gastar más de su oro"
+        );
+        assert_eq!(trade_gold_posts(100, 2_000, -1, 0), None);
+        assert_eq!(trade_gold_posts(-1, 2_000, 0, 0), None);
+    }
+
+    /// Property verifier: los posts aceptados incluyen la transferencia en
+    /// ambos sentidos y permanecen en el rango inclusivo.
+    #[test]
+    fn trade_gold_posts_property_preserves_wallet_bounds() {
+        for executor in [0, 1, GOLD_MAX - 1, GOLD_MAX] {
+            for partner in [0, 1, GOLD_MAX - 1, GOLD_MAX] {
+                for offered_executor in [0, 1, executor] {
+                    for offered_partner in [0, 1, partner] {
+                        if let Some((executor_post, partner_post)) = trade_gold_posts(
+                            executor,
+                            partner,
+                            offered_executor,
+                            offered_partner,
+                        ) {
+                            assert!((0..=GOLD_MAX).contains(&executor_post));
+                            assert!((0..=GOLD_MAX).contains(&partner_post));
+                            assert!((0..=GOLD_MAX).contains(
+                                &checked_gold_delta(executor_post, offered_partner).expect("validated")
+                            ));
+                            assert!((0..=GOLD_MAX).contains(
+                                &checked_gold_delta(partner_post, offered_executor).expect("validated")
+                            ));
+                        }
+                    }
+                }
+            }
+        }
     }
 }

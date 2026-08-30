@@ -22,6 +22,7 @@
 use std::collections::HashMap;
 
 use database::item::ItemRow;
+pub use database::economy::{checked_gold_delta, checked_gold_sub, is_valid_gold, GOLD_MAX};
 
 /// `SHOP_HOST_ITEM_MAX_NUM` (cliente `Packet.h:345`, server `shop.h`) —
 /// el tope de items por tienda en el wire y en la tabla.
@@ -34,8 +35,6 @@ pub const ITEM_FLAG_COUNT_PER_1GOLD: i64 = 1 << 3;
 /// `ITEM_ANTIFLAG_SELL` (`item_length.h:362`) — items que NO se pueden
 /// vender a la tienda.
 pub const ITEM_ANTIFLAG_SELL: i64 = 1 << 8;
-/// `GOLD_MAX` (`length.h:80`) — el tope de oro del player (overflow).
-pub const GOLD_MAX: i64 = 2_000_000_000;
 /// `iVal = 3` del impuesto de venta (`shop_manager.cpp:314`).
 const SELL_TAX_PCT: i64 = 3;
 /// `dwPrice /= 5` de la venta (`shop_manager.cpp:309-311`).
@@ -101,31 +100,55 @@ impl ShopError {
 /// `shop.cpp:166-180`): `gold × count` (o `count/gold` con
 /// `ITEM_FLAG_COUNT_PER_1GOLD`).
 pub fn buy_price(item_gold: i64, count: i64, count_per_1gold: bool) -> i64 {
+    match checked_buy_price(item_gold, count, count_per_1gold) {
+        Some(price) => price,
+        None => i64::MAX,
+    }
+}
+
+/// Checked form of [`buy_price`]. Invalid or overflowing proto values are not
+/// prices that can be used for a wallet mutation.
+fn checked_buy_price(item_gold: i64, count: i64, count_per_1gold: bool) -> Option<i64> {
+    if item_gold < 0 || count < 0 {
+        return None;
+    }
     if count_per_1gold {
         if item_gold == 0 {
-            count
+            Some(count)
         } else {
-            count / item_gold
+            Some(count / item_gold)
         }
     } else {
-        item_gold * count
+        item_gold.checked_mul(count)
     }
 }
 
 /// Precio de VENTA a la tienda (parity `CShopManager::Sell` —
 /// `shop_manager.cpp:297-319`): `shop_buy_price × count / 5` − 3%.
 pub fn sell_price(shop_buy_price: i64, count: i64, count_per_1gold: bool) -> i64 {
+    match checked_sell_price(shop_buy_price, count, count_per_1gold) {
+        Some(price) => price,
+        None => i64::MAX,
+    }
+}
+
+/// Checked form of [`sell_price`].
+fn checked_sell_price(shop_buy_price: i64, count: i64, count_per_1gold: bool) -> Option<i64> {
+    if shop_buy_price < 0 || count < 0 {
+        return None;
+    }
     let base = if count_per_1gold {
         if shop_buy_price == 0 {
-            count
+            Some(count)
         } else {
-            count / shop_buy_price
+            Some(count / shop_buy_price)
         }
     } else {
-        shop_buy_price * count
+        shop_buy_price.checked_mul(count)
     };
-    let price = base / SELL_PRICE_DIVISOR;
-    price - price * SELL_TAX_PCT / 100
+    let price = base?.checked_div(SELL_PRICE_DIVISOR)?;
+    let tax = price.checked_mul(SELL_TAX_PCT)?.checked_div(100)?;
+    price.checked_sub(tax)
 }
 
 /// Recibo de compra: cómo entra el item al inventario (parity
@@ -156,8 +179,14 @@ pub fn buy(
     if shop_item.vnum <= 0 {
         return Err(ShopError::SoldOut);
     }
+    if !is_valid_gold(gold) || shop_item.price < 0 {
+        return Err(ShopError::GoldOverflow);
+    }
     if gold < shop_item.price {
         return Err(ShopError::NotEnoughMoney);
+    }
+    if checked_gold_sub(gold, shop_item.price).is_none() {
+        return Err(ShopError::GoldOverflow);
     }
     // Stack primero (parity AutoStackItemEx): mismo vnum con hueco.
     if let Some(existing) = inventory
@@ -233,8 +262,10 @@ pub fn sell(
         return Err(ShopError::NotSellable);
     }
     let qty = if qty == 0 || qty > item.count { item.count } else { qty };
-    let price = sell_price(proto.shop_buy_price, qty, proto.count_per_1gold);
-    if gold + price > GOLD_MAX {
+    let Some(price) = checked_sell_price(proto.shop_buy_price, qty, proto.count_per_1gold) else {
+        return Err(ShopError::GoldOverflow);
+    };
+    if checked_gold_delta(gold, price).is_none() {
         return Err(ShopError::GoldOverflow);
     }
     let post = item.count - qty;
@@ -303,10 +334,16 @@ impl ShopRepo {
             let flag: i64 = r.try_get(4).map_err(|e| format!("item_proto.flag: {e}"))?;
             let gold: i32 = r.try_get(5).map_err(|e| format!("item_proto.gold: {e}"))?;
             let gold = i64::from(gold);
+            let Some(price) = checked_buy_price(gold, count, flag & ITEM_FLAG_COUNT_PER_1GOLD != 0)
+            else {
+                return Err(format!(
+                    "SHOP_LOAD: invalid price for item {item_vnum} (gold {gold}, count {count})"
+                ));
+            };
             shop.items.push(ShopItem {
                 vnum: item_vnum,
                 count,
-                price: buy_price(gold, count, flag & ITEM_FLAG_COUNT_PER_1GOLD != 0),
+                price,
                 display_pos: shop.items.len() as u8,
             });
         }
@@ -385,6 +422,11 @@ mod tests {
             buy(&full, 1000, &ShopItem { vnum: 0, count: 1, price: 0, display_pos: 0 }, 200, 180),
             Err(ShopError::SoldOut)
         );
+        assert_eq!(
+            buy(&[], GOLD_MAX + 1, &item, 200, 180),
+            Err(ShopError::GoldOverflow),
+            "el wallet fuera de rango no compra"
+        );
     }
 
     /// Venta: precio ÷5 −3%, DELETE del stack cuando se vacía, qty 0 → todo.
@@ -416,6 +458,38 @@ mod tests {
             sell(&[row(3, 101, 5)], GOLD_MAX - 1, 3, 1, false, proto),
             Err(ShopError::GoldOverflow)
         );
+        assert_eq!(
+            sell(
+                &[row(3, 101, 5)],
+                100,
+                3,
+                1,
+                false,
+                SellProto { shop_buy_price: -1, count_per_1gold: false },
+            ),
+            Err(ShopError::GoldOverflow),
+            "un precio negativo no puede acreditar oro"
+        );
+        assert_eq!(
+            sell(
+                &[row(3, 101, i64::MAX)],
+                0,
+                3,
+                0,
+                false,
+                SellProto { shop_buy_price: 2, count_per_1gold: false },
+            ),
+            Err(ShopError::GoldOverflow),
+            "el cálculo de precio no puede envolver"
+        );
+    }
+
+    /// Verifier de mutación: los precios que exceden la aritmética de i64 no
+    /// se convierten en un precio negativo o acreditable.
+    #[test]
+    fn checked_sell_price_rejects_arithmetic_overflow() {
+        assert_eq!(checked_sell_price(i64::MAX, 2, false), None);
+        assert_eq!(sell_price(i64::MAX, 2, false), i64::MAX);
     }
 
     /// El repo: SQL con el orden del C++ (shop → shop_item → item_proto).

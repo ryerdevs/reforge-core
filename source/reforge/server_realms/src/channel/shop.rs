@@ -22,10 +22,11 @@
 //!   INVENTORY_FULL=7, INVALID_POS=8.
 
 use game_core::ecs::{Intent, QuestIntent, ShopEvent, ShopIntent};
-use game_core::shop::{self, BuyReceipt, ShopItem};
+use game_core::shop::{self, BuyReceipt, ShopError, ShopItem};
 
 use crate::channel::session::{Outcome, Session};
 use crate::channel::{INVENTORY_MAX_NUM, ITEM_COUNT_LIMIT};
+use database::economy::{checked_gold_delta, checked_gold_sub};
 use database::item::{ItemExchange, ItemRepo, ItemRow};
 use protocol::header;
 use protocol::world::{
@@ -236,7 +237,13 @@ async fn apply_buy(
             return Ok(());
         }
     };
-    let new_gold = gold - price;
+    let Some(new_gold) = checked_gold_sub(gold, receipt.price) else {
+        session
+            .send(&gc_shop(ShopError::GoldOverflow.wire_subheader()))
+            .await
+            .map_err(|s| format!("enviando GC_SHOP error: {s}"))?;
+        return Ok(());
+    };
     // La unidad ACID: oro (pre→post) + item (stack UPDATE o INSERT nuevo).
     let ex = match receipt {
         BuyReceipt { stack: Some((id, pre, post)), .. } => ItemExchange {
@@ -283,7 +290,8 @@ async fn apply_buy(
         return Ok(());
     }
     // Memoria + wire.
-    session.row_mut().gold = new_gold as i32;
+    session.row_mut().gold = i32::try_from(new_gold)
+        .map_err(|e| format!("convirtiendo gold de compra: {e}"))?;
     match receipt {
         BuyReceipt { stack: Some((id, pre, _)), .. } => {
             if let Some(idx) = session.inventory.iter().position(|i| i.id == id) {
@@ -366,7 +374,15 @@ async fn apply_sell(session: &mut Session, cell: u16, qty: i64) -> Result<(), St
             return Ok(());
         }
     };
-    let new_gold = gold + receipt.price;
+    let Some(new_gold) = checked_gold_delta(gold, receipt.price) else {
+        eprintln!(
+            "server_realms: channel conn {}: venta de celda {cell} excede \
+             el rango de oro 0..={}: rechazado",
+            session.conn_id,
+            database::economy::GOLD_MAX
+        );
+        return Ok(());
+    };
     let ex = ItemExchange {
         owner_id: session.row().id,
         materials: vec![receipt.material],
@@ -382,7 +398,8 @@ async fn apply_sell(session: &mut Session, cell: u16, qty: i64) -> Result<(), St
         return Ok(());
     }
     // Memoria + wire.
-    session.row_mut().gold = new_gold as i32;
+    session.row_mut().gold = i32::try_from(new_gold)
+        .map_err(|e| format!("convirtiendo gold de venta: {e}"))?;
     let mut vnum_log = 0i64;
     if let Some(idx) = session.inventory.iter().position(|i| i.pos as u16 == cell) {
         vnum_log = session.inventory[idx].vnum;
@@ -441,14 +458,23 @@ async fn send_points_and_log(
         .send(&game_core::packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
         .await
         .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
-    if let Err(e) = database::economy::EconomyRepo::new(session.pool.clone())
-        .money_log(MONEY_LOG_SHOP, vnum as i32, gold_delta as i32)
-        .await
-    {
-        eprintln!(
-            "server_realms: channel conn {}: money_log SHOP (vnum {vnum}, {gold_delta}): {e}",
+    match i32::try_from(gold_delta) {
+        Ok(gold_delta) => {
+            if let Err(e) = database::economy::EconomyRepo::new(session.pool.clone())
+                .money_log(MONEY_LOG_SHOP, vnum as i32, gold_delta)
+                .await
+            {
+                eprintln!(
+                    "server_realms: channel conn {}: money_log SHOP (vnum {vnum}, {gold_delta}): {e}",
+                    session.conn_id
+                );
+            }
+        }
+        Err(e) => eprintln!(
+            "server_realms: channel conn {}: money_log SHOP (vnum {vnum}, {gold_delta}) \
+             fuera de i32: {e}",
             session.conn_id
-        );
+        ),
     }
     Ok(())
 }

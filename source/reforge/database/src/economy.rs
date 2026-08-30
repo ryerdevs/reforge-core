@@ -38,6 +38,10 @@ pub const MONEY_LOG_DROP: i32 = 8;
 /// Centinela del enum (`length.h:706`) — los tipos validos son 1..=8.
 pub const MONEY_LOG_TYPE_MAX_NUM: i32 = 9;
 
+/// Maximum wallet balance (`length.h:80`). This is an overflow guard, not a
+/// user-facing expansion of the wallet.
+pub const GOLD_MAX: i64 = 2_000_000_000;
+
 /// INSERT del money log (`log.cpp:120`): append-only, time = NOW().
 const MONEY_LOG_SQL: &str = "\
 INSERT INTO log.money_log (time, type, vnum, gold) VALUES (NOW(), $1, $2, $3)";
@@ -82,8 +86,36 @@ pub fn validate_money_log_type(mtype: i32) -> Result<(), String> {
     Ok(())
 }
 
+/// Returns whether an absolute wallet value is representable by the game
+/// contract.
+pub fn is_valid_gold(gold: i64) -> bool {
+    (0..=GOLD_MAX).contains(&gold)
+}
+
+/// Applies a signed wallet delta without allowing overflow or an out-of-range
+/// result. Negative deltas remain valid when the resulting balance is valid.
+pub fn checked_gold_delta(current: i64, delta: i64) -> Option<i64> {
+    if !is_valid_gold(current) {
+        return None;
+    }
+    let next = current.checked_add(delta)?;
+    is_valid_gold(next).then_some(next)
+}
+
+/// Spends an absolute amount from a wallet without allowing underflow.
+pub fn checked_gold_sub(current: i64, amount: i64) -> Option<i64> {
+    if amount < 0 {
+        return None;
+    }
+    if !is_valid_gold(current) {
+        return None;
+    }
+    let next = current.checked_sub(amount)?;
+    is_valid_gold(next).then_some(next)
+}
+
 /// Guard de oro para mutations (anti-gold-dupe, ADR-0011): rechaza `gold < 0`
-/// ANTES de construir la mutation. Documentado: desde 2026-08-13 la PG tiene
+/// o `gold > GOLD_MAX` ANTES de construir la mutation. Documentado: desde 2026-08-13 la PG tiene
 /// el constraint `CHECK (gold >= 0)` en las tablas de wallet (`player.player`,
 /// `player.safebox`, `player.guild` — `scripts/gpg/alter_gold_check.sql`;
 /// `log.money_log` EXCLUIDO a proposito: el legacy registra gastos como
@@ -92,8 +124,10 @@ pub fn validate_money_log_type(mtype: i32) -> Result<(), String> {
 /// claro; la mutation usa UPDATE absoluto (parity del save legacy,
 /// idempotente por naturaleza).
 pub fn checked_gold_mutation(player_id: i64, gold: i64) -> Result<Mutation, String> {
-    if gold < 0 {
-        return Err(format!("gold negativo ({gold}) para el player {player_id} — rechazado por el guard"));
+    if !is_valid_gold(gold) {
+        return Err(format!(
+            "gold fuera de 0..={GOLD_MAX} ({gold}) para el player {player_id} — rechazado por el guard"
+        ));
     }
     Ok(Mutation::new(
         "UPDATE player.player SET gold = $2 WHERE id = $1",
@@ -150,6 +184,10 @@ mod tests {
     #[test]
     fn checked_gold_mutation_rejects_negative() {
         assert!(checked_gold_mutation(1, -5).is_err(), "gold negativo rechazado");
+        assert!(
+            checked_gold_mutation(1, 2_000_000_001).is_err(),
+            "gold por encima de GOLD_MAX rechazado"
+        );
         let m = checked_gold_mutation(1, 0).expect("0 ok");
         assert_eq!(
             m.sql,
@@ -159,5 +197,52 @@ mod tests {
         assert_eq!(m.params, vec![Param::Int(1), Param::Int(0)]);
         let m = checked_gold_mutation(2, 1_000).expect("positivo ok");
         assert_eq!(m.params, vec![Param::Int(2), Param::Int(1_000)]);
+    }
+
+    /// Property verifier: every accepted signed delta preserves the inclusive
+    /// wallet bounds, while underflow, overflow, and invalid starting values
+    /// are rejected without wrapping.
+    #[test]
+    fn checked_gold_delta_preserves_wallet_bounds() {
+        let current_values = [
+            -1,
+            0,
+            1,
+            GOLD_MAX - 1,
+            GOLD_MAX,
+            GOLD_MAX + 1,
+            i64::MIN,
+            i64::MAX,
+        ];
+        let deltas = [
+            i64::MIN,
+            -GOLD_MAX,
+            -1,
+            0,
+            1,
+            GOLD_MAX,
+            i64::MAX,
+        ];
+        for current in current_values {
+            for delta in deltas {
+                match checked_gold_delta(current, delta) {
+                    Some(next) => {
+                        assert!(is_valid_gold(current));
+                        assert!(is_valid_gold(next));
+                        assert_eq!(current.checked_add(delta), Some(next));
+                    }
+                    None => {
+                        assert!(
+                            !is_valid_gold(current)
+                                || current.checked_add(delta).is_none()
+                                || !is_valid_gold(current.checked_add(delta).unwrap_or(-1))
+                        );
+                    }
+                }
+            }
+        }
+        assert_eq!(checked_gold_sub(GOLD_MAX, GOLD_MAX), Some(0));
+        assert_eq!(checked_gold_sub(0, 1), None);
+        assert_eq!(checked_gold_sub(0, -1), None);
     }
 }
