@@ -41,15 +41,22 @@ fn f16_peer_bin() -> PathBuf {
 /// alineación), no la tolerancia de producción (flake 2026-08-16 resuelto).
 fn fake_cfg() -> HandshakeConfig {
     HandshakeConfig {
-        retry_limit: 1,
-        attempt_timeout: Duration::from_secs(5),
-        retry_delay: Duration::from_millis(10),
+        // G3.2f: bajo la suite completa el spawn del binario del peer +
+        // CPU saturada inflan el eco mas alla de 5 s + 1 retry. Subimos
+        // el limite a un valor que tolera el workspace test (no es un
+        // timeout de produccion: la cobertura real esta en channel_pg
+        // contra el binario desplegado).
+        retry_limit: 2,
+        attempt_timeout: Duration::from_secs(15),
+        retry_delay: Duration::from_millis(50),
         bias_tolerance_ms: 2000,
     }
 }
 
 /// Lado servidor (fake-auth): handshake + LOGIN3 + GC_LOGIN_FAILURE.
-#[ignore = "G3.2f: flake del spawn del peer bajo la suite completa; la cobertura real está en channel_pg contra el binario desplegado"]
+/// (G3.2f: tolerancias altas — 15s + 2 retries — aplicadas al fake-auth
+/// para tolerar la suite completa. La cobertura real contra el canal
+/// desplegado sigue en `channel_pg`.)
 async fn fake_auth_with_login3() -> std::io::Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;

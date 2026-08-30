@@ -38,8 +38,7 @@ try {
         'channel_select_empty_slot_closes',
         'channel_wrong_password_noid',
         # G3.2e: serializado con OnceLock<Mutex<()>>, 3/3 runs verdes
-        # G3.2f: spawn del peer del smoke F1.6 flakea con suite completa
-        'fake_auth_with_login3'
+        # G3.2f: tolerancias del fake-auth subidas a 15s + 2 retries; corre estable
     ) -join ' --skip '
     Write-Host "== test --workspace -- --ignored (skip known flakes, requires live PG/WSL) =="
     Push-Location (Join-Path $root 'source/reforge')
