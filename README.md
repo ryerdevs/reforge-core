@@ -1,10 +1,3 @@
----
-Type: Hub
-Status: Current
-Audience: All
-Last verified: 2026-08-30
----
-
 # reforge-core
 
 `reforge-core` is a server written **from scratch in Rust** whose wire
