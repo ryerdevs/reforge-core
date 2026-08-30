@@ -47,10 +47,11 @@
 //!   — tabla CHN por miembros cerca del líder + 5% de party veterana; SIN el
 //!   +30% de item del líder, la variante no trackea equipo) y sin la
 //!   centralización (`GetExpCentralizeCharacter`) — char_battle.cpp:
-//!   2508-2532. GAP pendiente (todo "party full"): GC_PARTY_LINK/UNLINK
-//!   (91/92) NO se emiten (el LINK pinta el vid del miembro — la ventana del
-//!   party funciona sin él) y el +30% del líder (UNIQUE_ITEM_PARTY_BONUS_EXP,
-//!   party.cpp:1653-1657) requiere trackear el equipo del líder.
+//!   2508-2532. GAP pendiente (todo "party full"): el +30% del líder
+//!   (UNIQUE_ITEM_PARTY_BONUS_EXP, party.cpp:1653-1657) requiere
+//!   trackear el equipo del líder; **GC_PARTY_LINK/UNLINK (91/92) SÍ se
+//!   emiten** (commit `91b389c`, channel/party.rs:581-584) — el LINK pinta
+//!   el vid del miembro y el UNLINK lo quita.
 //! - Roles: cupo 1 por rol (sin liderazgo en la variante — el C++ sin
 //!   leadership tiene m_anMaxRole[ATTACKER]=0, party.cpp:1365-1371, y hasta
 //!   2 con leadership ≥ 40). HealParty sin m_bCanUsePartyHeal (liderazgo ≥

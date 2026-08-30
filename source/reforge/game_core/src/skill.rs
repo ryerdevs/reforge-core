@@ -50,7 +50,8 @@
 //!   ajuste del daño de las víctimas alrededor — parity `ComputeSkill` +
 //!   `FuncSplashDamage` + `ComputeSkillAtPosition`). Arco
 //!   (USE_ARROW_DAMAGE se resuelve con el ataque melee — desviación
-//!   documentada) y el grand master (kMasterBonusPoly) quedan fuera.
+//!   documentada); **el grand master (kMasterBonusPoly) SÍ está dentro**
+//!   (commit `695418d`, ecs/systems/skill.rs:329-334, `MasterSkillPoly`).
 //!   HORSE (btype 5): el gate montado/desmontado está DENTRO (ver
 //!   `SkillType` y el `process_skill` del ecs) — el lane del caballo
 //!   alimenta el componente `HorseRiding`.
