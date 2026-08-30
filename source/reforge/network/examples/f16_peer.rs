@@ -54,8 +54,11 @@ fn hex16(h: &[u8; 16]) -> String {
     h.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Timeout global estricto de todo el peer (connect + handshake + respuesta).
-const GLOBAL_TIMEOUT: Duration = Duration::from_secs(10);
+/// Timeout global de todo el peer (connect + handshake + respuesta). 60 s:
+/// como SUBPROCESO de los tests del workspace (máquina 4 GB, CPUs saturadas)
+/// el arranque del proceso puede tardar; un timeout corto provocaba cierres
+/// limpios antes del LOGIN3 (flake 2026-08-30, verify del gate).
+const GLOBAL_TIMEOUT: Duration = Duration::from_secs(60);
 
 struct Args {
     host: String,
