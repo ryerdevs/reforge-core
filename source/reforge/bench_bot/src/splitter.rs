@@ -134,6 +134,14 @@ const EMBEDDED_SIZE: &[(u8, usize)] = &[
     (GC_HYBRIDCRYPT_SDB, 7), // 153: 7 + stream (legacy.rs)
 ];
 
+/// Headers donde el u16 LE en `[1..3]` es la longitud del PAYLOAD (no del
+/// total): el paquete completo mide `payload_len + 3` (header + campo).
+/// `GC_LOCALE` (140): `0x8c + u16 payload_len + u8 chunk_flag + chunk`
+/// (`protocol::locale.rs` — push chunked al conectar, commit `287e414`).
+const PAYLOAD_LEN_SIZE: &[(u8, usize)] = &[
+    (header::GC_LOCALE, 1), // mínimo: el byte chunk_flag
+];
+
 /// Fragmenta el flujo S→C en paquetes completos (equivalente cliente del
 /// `network::Framer` — misma semántica: paquetes partidos en varios reads y
 /// varios paquetes en un read).
@@ -192,6 +200,20 @@ impl Splitter {
             return Ok(None);
         }
         let hdr = self.buf[0];
+        if let Some((_, min)) = PAYLOAD_LEN_SIZE.iter().find(|(h, _)| *h == hdr) {
+            if self.buf.len() < 3 {
+                return Ok(None); // aún no está el campo de tamaño
+            }
+            let payload = u16::from_le_bytes([self.buf[1], self.buf[2]]) as usize;
+            if payload < *min {
+                return Err(SplitError::BadEmbeddedLength { header: hdr, size: payload });
+            }
+            let total = payload + 3; // header + campo de longitud
+            if self.buf.len() < total {
+                return Ok(None);
+            }
+            return Ok(Some(self.buf.drain(..total).collect()));
+        }
         if let Some((_, min)) = EMBEDDED_SIZE.iter().find(|(h, _)| *h == hdr) {
             if self.buf.len() < 3 {
                 return Ok(None); // aún no está el campo de tamaño
@@ -275,6 +297,9 @@ mod tests {
         // Los variables NO están en la tabla fija.
         assert_eq!(fixed_size(header::GC_CHAT), None);
         assert_eq!(fixed_size(130), None);
+        assert_eq!(fixed_size(header::GC_LOCALE), None); // sobre payload_len
+        assert_eq!(fixed_size(162), None); // CG_QUERY (C→S, datachannel)
+        assert_eq!(fixed_size(163), None); // GC_RESPONSE (sin longitud embebida)
         // Headers C→S (o ajenos) → None → desync del bot.
         assert_eq!(fixed_size(6), None);
         assert_eq!(fixed_size(0x6f), None);
@@ -303,6 +328,36 @@ mod tests {
         assert_eq!(legacy.len(), 17);
         let mut sp = Splitter::new();
         assert_eq!(sp.push(&legacy).unwrap(), vec![legacy]);
+    }
+
+    #[test]
+    fn locale_push_chunked_envelope() {
+        // GC_LOCALE (140): 0x8c + u16 payload_len + flag + chunk — el u16 es
+        // la longitud del PAYLOAD, no del total (protocol::locale.rs).
+        let mut locale = vec![header::GC_LOCALE];
+        locale.extend_from_slice(&(4u16).to_le_bytes()); // payload_len
+        locale.push(0); // chunk_flag = final
+        locale.extend_from_slice(b"abc"); // 4 B de payload con el flag
+        assert_eq!(locale.len(), 7); // 3 + 4
+        let mut sp = Splitter::new();
+        assert_eq!(sp.push(&locale).unwrap(), vec![locale.clone()]);
+
+        // Fragmentado byte a byte → un único paquete en el último byte.
+        let mut sp = Splitter::new();
+        for (i, b) in locale.iter().enumerate() {
+            let out = sp.push(&[*b]).unwrap();
+            assert_eq!(out.len(), usize::from(i + 1 == locale.len()), "byte {i}");
+        }
+        assert_eq!(sp.buffered(), 0);
+
+        // payload_len 0 → error (mínimo 1: el chunk_flag).
+        let mut bad = vec![header::GC_LOCALE];
+        bad.extend_from_slice(&0u16.to_le_bytes());
+        let mut sp = Splitter::new();
+        assert!(matches!(
+            sp.push(&bad),
+            Err(SplitError::BadEmbeddedLength { header: header::GC_LOCALE, size: 0 })
+        ));
     }
 
     #[test]
