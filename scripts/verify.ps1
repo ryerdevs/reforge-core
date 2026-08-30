@@ -30,13 +30,13 @@ try {
     $ignoredSkip = @(
         # G3.2c: party drain fragil de 3 miembros (orden del outbox)
         'member_remove_self',
-        # G3.2d: 6 tests de channel_pg con wire viejo (sin handshake)
+        # G3.2d: helper de handshake reescrito (sin handshake desde
+        # 2026-08-14); 3/6 tests verdes (full/select_empty/wrong_password).
+        # 3 quedan pendientes de rework (combat/deployed/idle): ver
+        # G3.2g/h/i en el registry.
         'channel_combat_kills_npc',
         'channel_deployed_30003_full_flow',
-        'channel_full_login_select_spawn_flow',
         'channel_idle_timeout_reset_by_traffic',
-        'channel_select_empty_slot_closes',
-        'channel_wrong_password_noid',
         # G3.2e: serializado con OnceLock<Mutex<()>>, 3/3 runs verdes
         # G3.2f: tolerancias del fake-auth subidas a 15s + 2 retries; corre estable
     ) -join ' --skip '

@@ -25,8 +25,7 @@ use std::time::Duration;
 use network::{Connection, read_exact_size};
 use protocol::world::TPacketCGMarkLogin;
 use protocol::{
-    TPacketCGHandshake, TPacketCGLogin3, TPacketCGPlayerSelect, TPacketGCLoginSuccess,
-    TPacketGCPhase, phase,
+    TPacketCGLogin3, TPacketCGPlayerSelect, TPacketGCLoginSuccess, TPacketGCPhase, phase,
 };
 use tokio::net::TcpStream;
 
@@ -82,52 +81,43 @@ fn spawn_channel(config_path: &std::path::Path) -> (Child, String) {
     (child, addr)
 }
 
+/// G3.2d: el canal ya NO handshakea desde 2026-08-14 (FIX `entry.rs:74`).
+/// El primer paquete directo es `GC_PHASE(LOGIN)` (parity client real, que
+/// desde esa fecha tampoco envía el eco del handshake). Devuelve un
+/// `server_time = 0` (placeholder — los tests que necesitan `server_time`
+/// lo leen del `GC_TIME` que llega tras los lands).
 async fn client_handshake_channel(conn: &mut Connection<TcpStream>) -> u32 {
     let phase_pkt = read_exact_size(conn, TPacketGCPhase::SIZE)
         .await
-        .expect("GC_PHASE");
-    assert_eq!(
-        TPacketGCPhase::from_bytes(&phase_pkt).unwrap().phase,
-        phase::HANDSHAKE
-    );
-    let hs_pkt = read_exact_size(conn, 13).await.expect("GC_HANDSHAKE");
-    let nonce = u32::from_le_bytes([hs_pkt[1], hs_pkt[2], hs_pkt[3], hs_pkt[4]]);
-    let dw_time = u32::from_le_bytes([hs_pkt[5], hs_pkt[6], hs_pkt[7], hs_pkt[8]]);
-    conn.send(&TPacketCGHandshake::new(nonce, dw_time, 0).to_bytes())
-        .await
-        .expect("eco");
-    let login_phase = read_exact_size(conn, TPacketGCPhase::SIZE)
-        .await
         .expect("GC_PHASE(LOGIN)");
     assert_eq!(
-        TPacketGCPhase::from_bytes(&login_phase).unwrap().phase,
-        phase::LOGIN
+        TPacketGCPhase::from_bytes(&phase_pkt).unwrap().phase,
+        phase::LOGIN,
+        "el canal actual empieza directo en LOGIN (sin handshake)"
     );
-    dw_time
+    0
 }
 
 /// La conexión del GUILD MARK del cliente real: el cliente la abre en paralelo
-/// al select (misma IP/puerto del canal) con el handle/random_key del 449 B
-/// (`PythonNetworkStreamPhaseLogin.cpp:164-165` → `GuildMarkDownloader.cpp:219-229`):
-/// recibe el handshake del server y responde `CG_MARK_LOGIN` (0x64, 9 B) EN
-/// VEZ del eco. El canal normal (`guild_mark_server` OFF) la cierra sin
-/// responder (`input.cpp:560-572`) — el cliente NO lo interpreta como fallo.
+/// al select (misma IP/puerto del canal) con el handle/random_key del 449 B.
+/// Tras la eliminación del handshake (2026-08-14, entry.rs:74) el primer
+/// paquete del server es `GC_PHASE(LOGIN)` directo; el cliente responde
+/// `CG_MARK_LOGIN` (0x64, 9 B) sin eco de handshake. El canal normal
+/// (`guild_mark_server` OFF) lo cierra sin responder
+/// (`input.cpp:560-572`) — el cliente NO lo interpreta como fallo.
 async fn mark_login_handshake(addr: &str, handle: u32, random_key: u32) {
     let stream = TcpStream::connect(addr).await.expect("connect mark");
     let mut conn = Connection::new(stream);
 
-    // El server manda el handshake a TODA conexión nueva (GC_PHASE + GC_HANDSHAKE).
+    // G3.2d: el server ahora envia GC_PHASE(LOGIN) directo (sin handshake).
     let phase_pkt = read_exact_size(&mut conn, TPacketGCPhase::SIZE)
         .await
         .expect("GC_PHASE (mark)");
     assert_eq!(
         TPacketGCPhase::from_bytes(&phase_pkt).unwrap().phase,
-        phase::HANDSHAKE
+        phase::LOGIN,
+        "el canal actual empieza directo en LOGIN (sin handshake)"
     );
-    let hs_pkt = read_exact_size(&mut conn, 13)
-        .await
-        .expect("GC_HANDSHAKE (mark)");
-    assert_eq!(hs_pkt[0], 0xff, "header GC_HANDSHAKE");
 
     // Respuesta mark: 0x64 + handle + random_key del 449 B (9 B totales).
     let mark = TPacketCGMarkLogin {
