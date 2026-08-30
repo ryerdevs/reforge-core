@@ -249,16 +249,20 @@ fn mob_row_from_row(r: &Row) -> Result<MobRow, String> {
         aggressive_sight: r
             .try_get(21)
             .map_err(|e| format!("mob_proto.aggressive_sight: {e}"))?,
-        rank: r.try_get(22).map_err(|e| format!("mob_proto.rank: {e}"))?,
+        // rank/sp_* son smallint en PG (DDL G-PG): se leen como i16 y se
+        // ensanchan a i32 (tokio-postgres no cohersa int2 -> i32 solo).
+        rank: r
+            .try_get::<usize, i16>(22)
+            .map_err(|e| format!("mob_proto.rank: {e}"))? as i32,
         sp_berserk: r
-            .try_get(23)
-            .map_err(|e| format!("mob_proto.sp_berserk: {e}"))?,
+            .try_get::<usize, i16>(23)
+            .map_err(|e| format!("mob_proto.sp_berserk: {e}"))? as i32,
         sp_stoneskin: r
-            .try_get(24)
-            .map_err(|e| format!("mob_proto.sp_stoneskin: {e}"))?,
+            .try_get::<usize, i16>(24)
+            .map_err(|e| format!("mob_proto.sp_stoneskin: {e}"))? as i32,
         sp_godspeed: r
-            .try_get(25)
-            .map_err(|e| format!("mob_proto.sp_godspeed: {e}"))?,
+            .try_get::<usize, i16>(25)
+            .map_err(|e| format!("mob_proto.sp_godspeed: {e}"))? as i32,
     })
 }
 
