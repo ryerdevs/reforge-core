@@ -54,6 +54,10 @@ source/client/**/assets/
 source/server/
 source/server/**/OBJDIR/
 
+# ---- Client source and pack (not tracked) ----
+source/client/
+source/tools/pack/
+
 # ---- Grafos graphify (generados) ----
 **/graphify-out/
 
