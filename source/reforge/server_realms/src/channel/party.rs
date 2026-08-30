@@ -2146,6 +2146,10 @@ mod tests {
         assert!(matches!(&m, PartyMsg::Packet(bytes) if bytes[0] == header::GC_PARTY_REMOVE));
         apply_msg(&mut c, m).await;
         // B (el que se va): REMOVE propio primero, luego INFO, luego LeftParty.
+        // OJO (G3.2c): este drain asume orden estricto y bajo reordenación del
+        // outbox (CHAT tras LeftParty + cierre del canal) falla — por eso el
+        // test lleva #[ignore]; la reescritura tolerante a orden está en el
+        // registro (G3.2c).
         let m = recv_msg(&mut b).await;
         assert!(matches!(&m, PartyMsg::Packet(bytes) if bytes[0] == header::GC_PARTY_REMOVE));
         apply_msg(&mut b, m).await;
