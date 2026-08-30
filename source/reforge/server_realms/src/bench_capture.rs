@@ -207,14 +207,22 @@ mod tests {
         p
     }
 
+    /// Lectura con reintentos: en Windows el flush del stream recién cerrado
+    /// puede tardar unos ms (flake 2026-08-16 en runs del workspace en
+    /// paralelo) — reintentar hasta ~2 s antes de fallar.
+    fn read_retry(path: &Path) -> Vec<u8> {
+        for _ in 0..40 {
+            match std::fs::read(path) {
+                Ok(bytes) => return bytes,
+                Err(_) => std::thread::sleep(Duration::from_millis(50)),
+            }
+        }
+        std::fs::read(path).unwrap_or_default()
+    }
+
     /// Un único test serial del ciclo de vida completo: el estado es GLOBAL
-    /// (static Mutex) — tests paralelos del mismo módulo se pisarían.
-    /// TODO(#flake-2026-08-16): #[ignore] temporal — en el run del workspace
-    /// completo (crates en paralelo) el read del stream recién cerrado falló
-    /// una vez (flush del FS en Windows); pasa aislado y en runs repetidos.
-    /// Volver a #[test] cuando el harness corra los tests seriales con
-    /// `--test-threads=1` o con un dir por test sin estado global.
-    #[ignore]
+    /// (static Mutex) — tests paralelos del mismo módulo se pisarían. Las
+    /// lecturas post-close usan `read_retry` (flake 2026-08-16 resuelto).
     #[test]
     fn capture_lifecycle_disabled_init_write_reopen_noop() {
         // 1. Sin init: no-op total.
@@ -237,12 +245,12 @@ mod tests {
         let in_path = dir.join("conn_000007_in.bin");
         let out_path = dir.join("conn_000007_out.bin");
         assert_eq!(
-            std::fs::read(&in_path).unwrap(),
+            read_retry(&in_path),
             b"\xfd\x01\xff\x01\x02",
             "stream crudo IN"
         );
         assert_eq!(
-            std::fs::read(&out_path).unwrap(),
+            read_retry(&out_path),
             b"\xff\x0a",
             "stream crudo OUT"
         );
@@ -259,12 +267,12 @@ mod tests {
         close_conn(3);
         capture_conn(3, Direction::Inbound, b"late"); // no-op tras close
         let p3 = dir.join("conn_000003_in.bin");
-        assert_eq!(std::fs::read(&p3).unwrap(), b"a");
+        assert_eq!(read_retry(&p3), b"a");
         open_conn(3);
         capture_conn(3, Direction::Inbound, b"b");
         close_conn(3);
         assert_eq!(
-            std::fs::read(&p3).unwrap(),
+            read_retry(&p3),
             b"ab",
             "append sobre la misma conexión"
         );
