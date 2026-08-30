@@ -14,6 +14,22 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-30 (3rd part)] — README framed around the reverse-engineering methodology
+
+### Changed
+
+- The public README no longer mentions any legacy artifact. The wire
+  reconstruction is the lead: traces, live observation, behavioral tests,
+  no code copied. The status matrix is generic (no named legacy assets);
+  the safe stack cap is referenced without the higher number; the rest of
+  the document and the operational/legal notice are unchanged in intent.
+
+### Notes
+
+- The wire reference, ADRs, live handoff, and gap registry remain the
+  sources of truth; the document-authority reference (F1) establishes
+  precedence.
+
 ## [2026-08-30 (2nd part)] — Gate 2 hygiene: verification, deployment, data safety, documentation governance
 
 ### Fixed
