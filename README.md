@@ -7,16 +7,16 @@ Last verified: 2026-08-30
 
 # reforge-core
 
-`reforge-core` is an independent server written from scratch in **Rust**. Its
-compatibility surface (wire format, packet framing, handshakes, login flow,
-field semantics) was reconstructed through **reverse engineering**: studying
-captured packet traces, observing the responses of an external compatible
-client, and stating each invariant as a test before broadening coverage. No
-code was copied from any other project; the implementation here is the result
-of reading behavior and writing Rust against it.
+`reforge-core` is a server written **from scratch in Rust** whose wire
+compatibility surface was reconstructed through reverse engineering. Every
+packet, frame, and field was inferred from captured traces and live
+observation of an external compatible server and client — **no code was
+copied from any other project**. The implementation here is the result of
+reading behavior and writing Rust against it.
 
 The repository is a development and test server. The status matrix separates
-verified behavior from partial and deferred work.
+verified behavior from partial and deferred work; a green row is not a
+claim of total parity or production readiness.
 
 ## What it is
 
@@ -27,7 +27,7 @@ verified behavior from partial and deferred work.
 - A structural reimplementation focused on observable contracts, durable
   state, and small, testable modules.
 
-## How the wire was reconstructed (methodology)
+## How the wire was reconstructed
 
 The project avoids two failure modes: guessing and copying. Every visible
 behavior the server exposes is anchored to one of three sources:
@@ -38,9 +38,9 @@ behavior the server exposes is anchored to one of three sources:
 - **Live observation** — the server is run alongside a compatible client and
   every command's request/response is logged. The wire spec is rewritten from
   the exchange, not from prior memory of the protocol.
-- **Behavioral tests** — every contract that the implementation claims to honor
-  has a focused unit or integration test that fails on a regression. The
-  tests, not the implementation, are the source of truth.
+- **Behavioral tests** — every contract the implementation claims to honor has
+  a focused unit or integration test that fails on a regression. The tests,
+  not the implementation, are the source of truth.
 
 The wire reference lives in
 [`documentation/reference/login-flow.md`](documentation/reference/login-flow.md);
@@ -68,11 +68,10 @@ advice.
 
 ## What is verified today
 
-This is the center of the project status. A row may be working while a related
-feature remains limited; a green row is not a claim of total parity or
-production readiness. The [live handoff](documentation/progress.md) and
-[gap registry](documentation/plans/gap-registry.md) contain the detailed state
-and evidence.
+This is the center of the project status. A row may be working while a
+related feature remains limited. The [live handoff](documentation/progress.md)
+and [gap registry](documentation/plans/gap-registry.md) contain the detailed
+state and evidence.
 
 **Legend**
 
@@ -85,7 +84,7 @@ and evidence.
 |---|---|---|---|---|
 | Runtime, login, and entry | ✅ Working and verified | Native Windows runtime with PostgreSQL; login, character selection, world entry, and movement are verified with an external compatible client. | The deployed runtime can lag the latest source until the redeployment gate closes. | [Live handoff](documentation/progress.md); [ADR-0012](documentation/adr/0012-windows-native-runtime-wsl-on-demand.md) |
 | Protocol, framing, and authentication | ✅ Working and verified | Byte-oriented codecs, framing, handshake, and the verified authentication/channel login path work. | This covers the verified compatibility flow, not every packet or feature. | [Wire reference](documentation/reference/login-flow.md); [Project rules](AGENTS.md) |
-| Database and persistence | 🟡 Partial or limited | PostgreSQL repositories, WAL idempotency, batching, and selected ACID item/economy mutations work. | Not every domain is persisted or complete, and the remaining persistence gates are open. | [ADR-0008](documentation/adr/0008-data-layer.md); [Gap Registry](documentation/plans/gap-registry.md) |
+| Database and persistence | 🟡 Partial or limited | PostgreSQL repositories, WAL idempotency, batching, and selected ACID item/economy mutations work. | Not every domain is persisted or complete; the remaining persistence gates are open. | [ADR-0008](documentation/adr/0008-data-layer.md); [Gap Registry](documentation/plans/gap-registry.md) |
 | World, ECS, and movement systems | 🟡 Partial or limited | The ECS world, dynamic spawning, walkability checks, movement envelope, combat foundations, and selected server-authoritative checks work. | Gameplay tuning, broader world behavior, and anti-cheat coverage remain incomplete; the checks are not an exhaustive anti-cheat system. | [ADR-0010](documentation/adr/0010-domain-boundaries-and-data-ownership.md); [ADR-0011](documentation/adr/0011-anti-hack-model.md) |
 | Items and economy | 🟡 Partial or limited | Attributes, sockets, refine behavior, shops, trade, safebox, belt, and the Phase 1 Dragon Soul handling are implemented in selected paths. | Dragon Soul reward-item creation and full grid validation remain; the higher stack target is still blocked. | [Live handoff](documentation/progress.md); [Gap Registry](documentation/plans/gap-registry.md) |
 | Skills and buffs | 🟡 Partial or limited | Selected skill families, server-timed affects, splash/horse/party handling, and grand-master behavior are implemented. | Numeric `CASTING_SPEED`, passive and quest-granted skills, and remaining effect coverage are still limited. | [Live handoff](documentation/progress.md); [Gap Registry](documentation/plans/gap-registry.md) |
@@ -106,10 +105,11 @@ and evidence.
   anti-cheat coverage.
 - The verified compatibility flow covers the rows marked green above; it is
   not a complete wire spec.
-- G0.1a remains at a safe cap of 200; the higher stack target is blocked by
-  the current wire's BYTE-sized item-count fields.
-- G0.1b–G0.1e are implemented and locally verified, but each remains open
-  until its remaining client or wire checks are complete.
+- The safe stack cap is enforced at the current wire size; the higher target
+  is blocked by the current wire's item-count field size.
+- The cap, distance, view, and boot-speed lanes are implemented and locally
+  verified, but each remains open until its remaining client or wire checks
+  are complete.
 - The protocol and database cover selected compatibility slices rather than
   every packet and domain.
 - Data-channel manifest, delta, and notification-driven hot reload are still
@@ -126,8 +126,8 @@ and evidence.
 2. Run the complete verification gates (format, normal suite, ignored live-PG
    suite, clippy, diff check), reconcile documentation, and redeploy the
    current Windows binary.
-3. Take selected gameplay and content gaps, with hygiene and test debt handled
-   alongside them.
+3. Take selected gameplay and content gaps, with hygiene and test debt
+   handled alongside them.
 4. Keep the standalone client work outside this repository until a separate
    project is justified and has its own decision record.
 
