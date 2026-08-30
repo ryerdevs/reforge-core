@@ -316,7 +316,20 @@ mod tests {
         );
         assert_eq!(lines[2], "3,7,11,2,5,42");
 
-        std::fs::remove_dir_all(&dir).unwrap();
-        std::fs::remove_dir_all(&dir2).unwrap();
+        // remove_dir_all con reintentos: en Windows el flush de los streams
+        // recién cerrados puede dejar el dir "no vacío" un instante
+        // (flake Os error 145, DirectoryNotEmpty — verify 2026-08-30).
+        for _ in 0..40 {
+            match std::fs::remove_dir_all(&dir) {
+                Ok(()) => break,
+                Err(_) => std::thread::sleep(Duration::from_millis(50)),
+            }
+        }
+        for _ in 0..40 {
+            match std::fs::remove_dir_all(&dir2) {
+                Ok(()) => break,
+                Err(_) => std::thread::sleep(Duration::from_millis(50)),
+            }
+        }
     }
 }
