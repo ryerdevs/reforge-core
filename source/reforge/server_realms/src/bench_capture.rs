@@ -192,6 +192,7 @@ pub fn record_metrics(m: game_core::ecs::WorldMetrics) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     fn tmp_dir(tag: &str) -> PathBuf {
         let mut p = std::env::temp_dir();
