@@ -14,6 +14,71 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-30 (2nd part)] — Gate 2 hygiene: verification, deployment, data safety, documentation governance
+
+### Fixed
+
+- **Verification gate (G1.1a):** `scripts/verify.ps1` now runs the normal
+  workspace suite BEFORE the ignored set as separate explicit steps; the
+  first full runs immediately exposed real debt that the old gate hid:
+  - skill_power wide rows (46 values) failed the parser and silently
+    fail-opened the channel load; parity `config.cpp:532-613` now accepts
+    them reading the first 41 tokens (C13, commit `5946364`).
+  - `mob_proto` rank/sp_berserk/sp_stoneskin/sp_godspeed are smallint but
+    were deserialized as i32, failing every MobRepo load at column 22
+    (C14, commit `81c934b`).
+- **Formatting and lint gate (G1.2):** one-time `cargo fmt` pass plus
+  mechanical clippy 1.97.0 fixes across the workspace (commit `6d8fdeb`);
+  `cargo clippy --workspace --all-targets -- -D warnings` is green.
+- **Flaky tests (G1.1b, G3.2a/b):** both former `#[ignore]`s are fixed and
+  re-enabled — the f16 peer smoke's fake-auth echo tolerance is now 2 s
+  (`fa41755`), the f16_peer subprocess timeout 60 s (`70246a9`), and the
+  bench_capture lifecycle retries reads and directory removal against the
+  Windows flush race (`fa41755`, `0b4d757`).
+
+### Added
+
+- **Restore drill** (`scripts/restore_drill.ps1`, commit `85bac90`) and the
+  backup/restore runbook
+  (`documentation/reference/backup-restore.md`); the drill PASSED against
+  `metin2_2026-08-29.dump` on 2026-08-30 (key-table counts recorded in the
+  runbook). Off-host dump copies remain an operator action.
+- **Document authority** (`documentation/reference/document-authority.md`,
+  commit `5937186`): single precedence (fresh verification > gap-registry >
+  progress.md > ADRs > summaries > archives), the two live state files, and
+  the claim-of-done rule. `documentation/roadmap.md` became the phase map;
+  the README routes status questions to the live files; `ROADMAP.md` carries
+  a historical banner; the external `.omo`/`.slim` trackers carry disposition
+  notes.
+- **ADR-0016** (quest engine: native DSL + qc converter + runtime engine —
+  records the shipped architecture) and **ADR-0017** (regional channels
+  deferred; one shared World per channel process) — closing the ADR
+  checkboxes ADR-0003 left open.
+- **CI documentation metadata gate** (`scripts/check_docs.ps1` + workflow
+  step, G1.18 metadata leg): validates the metadata block on every live
+  document and the existence of the two live state files.
+
+### Changed
+
+- Committed the previously uncommitted work atomically: client/pack source
+  removals + Apache-2.0 LICENSE (`270b8a7`), the four G0.1 cap lanes
+  (`74f62a7` movement, `4aaff76` spawn, `d924aaa` packets, `96e969f` gold),
+  and the documentation reconciliation (`2cf099f`).
+- **Gate policy recorded:** mixed by risk (user decision 2026-08-30) —
+  oracle/real-client checks only for desync/overflow risk (wire, caps,
+  movement); G0.1e (gold cap) closed under this policy; G0.1b/c/d narrowed
+  to their pending real-client checks.
+- **Deployment (G1.5, server side):** the deployed
+  `source/deploy/win/server_realms.exe` is SHA-256-identical to a fresh
+  release build of HEAD; ports LISTEN; wire smoke `bench_bot --bots 1
+  --login test` = 1/1 ok. The bench splitter now frames the chunked
+  `GC_LOCALE` push whose payload-length envelope it previously reported as
+  a false protocol desync (`1b595e0`). A real-client session remains the
+  operator prerequisite for closing G1.5 and the G0.1b/c/d rows.
+- Registry: mixed-by-risk policy header, closed rows G0.1e, G1.1a, G1.1b,
+  G1.2, G1.5-partial, G3.1c, G3.2a/b, and new closed rows C13/C14; quest
+  coverage table corrected against the engine (G3.1c).
+
 ## [2026-08-30] — Public repository boundary and documentation reconciliation
 
 ### Changed
