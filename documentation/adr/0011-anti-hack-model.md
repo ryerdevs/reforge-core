@@ -3,7 +3,7 @@ Type: Decision
 Status: Accepted
 Audience: Contributors, maintainers
 Date: 2026-08-12
-Last verified: 2026-08-13
+Last verified: 2026-08-30
 Supersedes: —
 Superseded by: —
 ---
@@ -42,12 +42,12 @@ is accepted without server validation.
 | Control | Where | Divergence from C++ |
 |---|---|---|
 | Timer speedhack check, always on (`iDelta` vs server delta; SlowTimer/FastTimer → kick) | movement.rs:94-104 | C++ default OFF (`gHackCheckEnable=false`, config.cpp:127; input_main.cpp:1308) |
-| Anti-teleport: per-MOVE max distance (2500/6000 units), reject without updating position | movement.rs:106-114 | `ENABLE_TP_SPEED_CHECK` commented in C++ (input_main.cpp:1463-1464) |
+| Anti-teleport: per-MOVE max distance — **6000 units inclusive, mounted and unmounted** (decision G0.1b, committed `74f62a7` 2026-08-30; the 2500 unmounted value quoted here was superseded 2026-08-29), reject without updating position | movement.rs | `ENABLE_TP_SPEED_CHECK` commented in C++ (input_main.cpp:1463-1464) |
 | Unknown header / `0x00` → connection close | framer.rs:44-47 | C++ consumes `0x00` as 1-byte no-op (input.cpp:75-76) — deliberate divergence |
 | DB down → deterministic fail-fast | world.rs:39 (`WorldStore::new` validates PG) | C++ hangs silently |
 | Inactivity timeout (per-read, reset on ANY packet incl. keepalives) instead of absolute | channel.rs:97-105,119-129 | C++ has no global timeout (channel.rs:99); the earlier absolute 15 s killed playing clients |
 | Server-clock cooldowns (1250 ms interval enforced server-side) | combat.rs handle_attack (slice 17; tests :637-661) | Client cannot attack faster than the server allows |
-| **Speed envelope** — per-MOVE `speed × server time × 1.20` tolerance, inert without an anchor | movement.rs (`PlayerMotion.speed` 300 u/s default; `MoveError::ExceedsEnvelope` :53-67; envelope = speed×(dt+100ms)/1000×1.20) — **IMPLEMENTED 2026-08-13 (40th part); TUNED 2026-08-13 (45th part, real-client evidence):** tolerance 1.2→**1.5** (`ENVELOPE_TOLERANCE` movement.rs:95), lag 100→**250 ms** (`ENVELOPE_LAG_MS` movement.rs:96-97), **Δt = max(client clock, server clock)** — the real client sends MOVEs in bursts and the server-only Δt rejected legitimate walking; the real pattern now fits with margin while the 2500 cap + C++ timers keep the anti-cheat intact (sustained speedhack >450 u/s still bounded) | C++ has no per-MOVE envelope (per-packet distance only) |
+| **Speed envelope** — per-MOVE `speed × server time × 1.20` tolerance, inert without an anchor | movement.rs (`PlayerMotion.speed` 300 u/s default; `MoveError::ExceedsEnvelope` :53-67; envelope = speed×(dt+100ms)/1000×1.20) — **IMPLEMENTED 2026-08-13 (40th part); TUNED 2026-08-13 (45th part, real-client evidence):** tolerance 1.2→**1.5** (`ENVELOPE_TOLERANCE` movement.rs:95), lag 100→**250 ms** (`ENVELOPE_LAG_MS` movement.rs:96-97), **Δt = max(client clock, server clock)** — the real client sends MOVEs in bursts and the server-only Δt rejected legitimate walking; the real pattern now fits with margin while the 6000 cap (G0.1b) + C++ timers keep the anti-cheat intact (sustained speedhack >450 u/s still bounded) | C++ has no per-MOVE envelope (per-packet distance only) |
 | **Walkability** — server-side from decoded map attributes; **re-scoped 2026-08-13 (45th part, real-client evidence):** the `server_attr` parse was CORRECT — the village source cells are legitimate ATTR_BLOCK, so the pre-move reject gate froze the player; the gate is now **anti-teleport reinforcement** (normal steps accepted, jumps onto blocked terrain rejected) | map.rs (`MapStore`, server_attr LZO1X; real map 41: 2,176,848 blocked + 1,076,378 water cells; units→cell = (x%6400)/50) + channel movement — **IMPLEMENTED 2026-08-13 (40th part)** | C++ reads pack/client-side data; PG `world.maps` remains a later data source |
 
 ### 3. Signed clock wrap — decision

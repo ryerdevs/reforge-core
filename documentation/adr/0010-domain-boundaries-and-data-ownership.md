@@ -60,9 +60,12 @@ Four layers — pure logic, ECS world state, tokio per-connection, durable store
   `schedule/executor/mod.rs:49-64`), and the channel tick chains the five
   systems sequentially by design (`game_core/src/ecs/world.rs:83-93` —
   spawn_despawn → chase_attack → aggro_detect → patrol → affects). **Parallel
-  ECS execution is a PENDING decision**: it requires enabling the
-  `multi_threaded` cargo feature (pulling `bevy_tasks`) and re-ordering or
-  unchaining the systems — the "one-line toggle" mentioned in earlier docs
+  ECS execution is a PENDING decision** (re-affirmed 2026-08-30 with the
+  wave-44 evidence: 100 bots × 60 s, world_ms median 2742 ms, AI tick < 1 ms —
+  no saturation signal yet; the F5 250/500/1000 ladder decides): it requires
+  enabling the `multi_threaded` cargo feature (pulling `bevy_tasks`) and
+  re-ordering or unchaining the systems — the "one-line toggle" mentioned in
+  earlier docs
   does not exist (there is no such flag anywhere in the workspace).
   `default-features = false` (no
   bevy_reflect).

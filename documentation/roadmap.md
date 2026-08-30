@@ -1,57 +1,39 @@
 ---
-Type: Plan
+Type: Reference
 Status: Current
 Audience: Contributors, maintainers
 Last verified: 2026-08-30
 ---
 
-# Roadmap — reforge-core
+# Phase map — reforge-core
 
-This is the one-page roadmap. [`ROADMAP.md`](../ROADMAP.md) is the master plan;
-[`progress.md`](progress.md) is the current handoff; and the
-[Gap Registry](plans/gap-registry.md) owns per-item state and exit criteria.
+This page is the **phase map only** (what F0–F7 mean and their completion
+state at a glance). It does not track per-item status:
 
-## Current state
+- Live per-item state: [Gap Registry](plans/gap-registry.md)
+- Live handoff / current snapshot: [progress.md](progress.md)
+- Precedence when documents disagree: [document-authority.md](reference/document-authority.md)
+- Long-form phase history: [`ROADMAP.md`](../ROADMAP.md) (historical master, snapshot-style)
 
-- **Rust server:** the public implementation is the workspace in
-  `source/reforge` (`protocol`, `network`, `database`, `game_core`,
-  `quest_dsl`, and `server_realms`).
-- **Runtime:** native Windows PostgreSQL plus Rust `auth` and `channel` roles;
-  the frozen C++ server is a local, on-demand parity oracle.
-- **G0:** the safe item-stack cap is 200 because the current item-count wire is
-  byte-sized. G0.1b–G0.1e are locally checked and await their Oracle Gates;
-  storage cleanup remains open.
-- **G1:** normal/ignored verification, formatting, documentation CI, and
-  redeployment remain open; the G1.14b immutable-history decision is closed, and
-  changelog freshness/current archive navigation are reconciled.
-- **G2:** gameplay, social, quest, data-channel, and deferred-content gaps
-  remain in the [Gap Registry](plans/gap-registry.md).
-- **G3:** stale code comments and ignored-test policy remain open.
-- **F7:** the standalone Rust client is deferred outside this repository by
-  [ADR-0015](adr/0015-rust-only-public-repository.md). An external compatible
-  client is used only for real-client verification.
+## Phase states (2026-08-30)
 
-## Completed foundations
+| Phase | Meaning | State |
+|---|---|---|
+| F0 | Byte-exact wire protocol | DONE (2026-08-10) |
+| F1 | Transport + handshake + auth wire | DONE (2026-08-10/11) |
+| G-PG | MariaDB → PostgreSQL migration | DONE (2026-08-10; residuals absorbed into the registry) |
+| F2 | Auth flows (LOGIN3, LOGIN_BY_KEY) | DONE (2026-08-11) |
+| F3 | Data layer (repos, WAL durable, save-by-event) | DONE (2026-08-13; formally closed 2026-08-30) |
+| F4 | World entry + ECS world | DONE (2026-08-11/13) |
+| F5 | Gameplay breadth + scale validation | IN PROGRESS — breadth largely landed; ladder 250/500/1000 bots, CPU/tick and the ECS parallelism decision (ADR-0010) remain |
+| F6 | Side-by-side parity vs the frozen C++ oracle and retirement of legacy pieces | NOT STARTED |
+| F7 | Standalone Rust client | DEFERRED outside this repository ([ADR-0015](adr/0015-rust-only-public-repository.md)) |
 
-- F0 protocol and F1 transport foundations are verified.
-- PostgreSQL is the canonical database; the legacy adapter remains a parity
-  boundary until F6.
-- World entry, the ECS world, dynamic spawning, selected gameplay slices, and
-  locale push/pull have verified implementations.
+Gate-2 execution blocks live in the registry: **G0** (caps/storage), **G1**
+(gates/docs/deploy), **G2** (gameplay/content), **G3** (hygiene).
 
-## Next actions
+## Rules of the map
 
-1. Complete Oracle Gates and remaining real-client or wire checks for G0.1b–e.
-2. Execute G1: full verification, formatting, documentation/link checks,
-   changelog reconciliation, and current-binary redeployment.
-3. Execute selected G2 gameplay/content gaps with G3 hygiene work alongside
-   them.
-4. Keep F7 outside this repository until a separate client project is
-   justified and records its own decisions.
-
-## Evidence
-
-Use the [live handoff](progress.md), [Gap Registry](plans/gap-registry.md),
-[master roadmap](../ROADMAP.md), and [changelog](../CHANGELOG.md) before marking
-an item complete. No item is complete without its recorded verification
-evidence.
+- A phase is DONE only when its milestone evidence is recorded in the registry
+  or the handoff — never by wish.
+- New work opens registry rows; it does not reopen phases here.

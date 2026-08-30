@@ -46,16 +46,17 @@ orchestrator commits one logical change after verification.
 
 | Goal | Read |
 |------|------|
-| What is done / doing / next? | [roadmap.md](./roadmap.md) |
+| What is done / doing / next? | [progress.md](./progress.md) (live handoff) + [plans/gap-registry.md](./plans/gap-registry.md) (per-gap tracker) |
 | Open gaps: owner, evidence, exit criteria | [plans/gap-registry.md](./plans/gap-registry.md) |
+| Which document decides when they disagree? | [reference/document-authority.md](./reference/document-authority.md) |
 | DB in human language | [schema.md](./schema.md) |
 | Never repeat | [rules.md](./rules.md) |
 | Why PostgreSQL, ECS, WAL…? | [adr/](./adr/) (15 ADRs; ADR-0013 is superseded) |
 | Byte-exact wire contract | [reference/login-flow.md](./reference/login-flow.md) |
-| Where did we leave off? | [progress.md](./progress.md) (live handoff) |
 | What changed with evidence? | [../CHANGELOG.md](../CHANGELOG.md) |
 | Mission + protocol + runbook | [../AGENTS.md](../AGENTS.md) |
 | Documentation policy | [DOCUMENTATION.md](./DOCUMENTATION.md) |
+| Phase history (F0–F7) | [roadmap.md](./roadmap.md) + [../ROADMAP.md](../ROADMAP.md) (historical master) |
 | Old plans, snapshots | [Historical archive index](./history-index.md) (archive is read-only) |
 
 ## Layout

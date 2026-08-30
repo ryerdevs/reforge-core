@@ -3,7 +3,7 @@ Type: Decision
 Status: Accepted
 Audience: Contributors, maintainers
 Date: 2026-08-10
-Last verified: 2026-08-12
+Last verified: 2026-08-30
 Supersedes: —
 Superseded by: —
 ---
@@ -24,7 +24,13 @@ If these are implemented inline in `protocol`, the new wire core accumulates leg
 
 1. All legacy-client compatibility code lives behind a **`protocol::legacy` module/feature boundary**: PanamaPack 151/289B, hybrid-crypt 152/153 and any other legacy-only packets are implemented there, never in the new protocol core.
 2. The boundary is documented in the [historical compatibility reference](../history/reference/protocol/legacy-compatibility.md) (packet inventory, headers, and deletion list).
-3. The compatibility layer is **deleted when the new client ships (F7)** — nothing legacy survives in the new wire.
+3. The compatibility layer is **deleted when the legacy client is retired**.
+   **Amended 2026-08-30:** the retirement trigger is **F6** (server parity
+   complete, side-by-side done — [ROADMAP Phase 6](../../ROADMAP.md)), not the
+   F7 client: [ADR-0015](0015-rust-only-public-repository.md) deferred F7
+   outside this repository, which left the original "when the new client
+   ships" trigger orphaned. ADR-0015's "separate server decision" IS this
+   amendment.
 4. **Implemented 2026-08-10 (F2a):** `protocol/src/legacy.rs` — PanamaPack 151/289B (XOR IV parity, `panama.cpp:70-93`), hybrid-crypt 152/153 (keys + SDB streams, `ClientPackageCryptInfo.cpp`), runtime-file conditional (`panama/` + `cshybridcrypt*` loading — no files → no packets, parity with the C++ auth); used by `server_realms --role auth` before `GC_AUTH_SUCCESS` (`input_db.cpp:1710-1716`).
 
 ## Alternatives considered

@@ -16,6 +16,10 @@ jobs:
         shell: pwsh
         run: |
           powershell -ExecutionPolicy Bypass -File scripts/verify.ps1
+      - name: Documentation metadata gate (G1.18)
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File scripts/check_docs.ps1
       - name: Status snapshot
         shell: pwsh
         run: |
