@@ -19,17 +19,12 @@ use crate::ecs::world::WorldSim;
 use crate::npc::{entry_spawns, SpawnEntry, SpawnKind};
 use database::npc::{MobRepo, MobRow};
 
-/// Rango de materialización del spawn dinámico (units). 8000 (petición
-/// explícita del usuario 2026-08-13: "la distancia de visión para cargar las
-/// cosas es muy pequeña, agrándala aún más" — ampliado de 5000); el coste del
-/// loop por tick (10k entradas × checks de distancia) es despreciable.
-/// 2026-08-16 (world entry fix #2): 8000 NO materializaba nada en el mapa 41
-/// — el spawn del jugador (Town.txt: celda 480,736 = 969600,278400) está a
-/// ~27k units de la zona de mobs (regen celdas y 114-629) → el mundo quedaba
-/// vacío ("0 entradas visibles materializadas"). El C++ cargaba TODOS los
-/// mobs del mapa al boot (sectree completo — sectree_manager.cpp); el spawn
-/// dinámico es una desviación del rewrite. Materializar el mapa completo:
-/// 300000 cubre la diagonal del mapa más grande (8×8 × 128 × 200 ≈ 290k).
+/// Rango de materialización del spawn dinámico (units). El C++ cargaba TODOS
+/// los mobs del mapa al boot (sectree completo — sectree_manager.cpp); el
+/// spawn dinámico es una desviación del rewrite. Materializar el mapa
+/// completo: 300000 cubre la diagonal del mapa más grande
+/// (8×8 × 128 × 200 ≈ 290k). El coste del loop por tick (10k entradas ×
+/// checks de distancia) es despreciable.
 pub const SPAWN_VIEW: i32 = 300_000;
 /// Radio de desmaterialización (units) — margen de histéresis sobre el
 /// spawn (evita el flapping en el borde). Documentado: los mobs aparecen a
@@ -38,9 +33,9 @@ pub const DESPAWN_RADIUS: i32 = 310_000;
 
 /// 0) SPAWN/DESPAWN DINÁMICO — el fix del mundo vacío (parity sectree): los
 ///    mobs se MATERIALIZAN cuando un jugador de su mapa está a ≤ SPAWN_VIEW
-///    (8000) de su punto de spawn y se DESMATERIALIZAN cuando están a
-///    más de DESPAWN_RADIUS (10000) de TODOS los jugadores (o el mapa se quedó
-///    sin jugadores). Los mobs EN COMBATE (hp < max o con aggro) NO se
+///    de su punto de spawn y se DESMATERIALIZAN cuando están a más de
+///    DESPAWN_RADIUS de TODOS los jugadores (o el mapa se quedó sin jugadores).
+///    Los mobs EN COMBATE (hp < max o con aggro) NO se
 ///    desmaterializan (parity: el C++ no los quita del sectree — evita el
 ///    reset de HP al kite). Los ADD(+INFO) los construye `entry_spawns`
 ///    (puro) — el cliente los recibe al ACERCARSE.
@@ -380,6 +375,24 @@ mod tests {
         assert_eq!(w.npc_count(), 2);
     }
 
+    /// VERIFIER (mutation): la vista es inclusiva en 300000 y excluye el
+    /// siguiente valor de `distance_approx`; cambiar `<=` por `<` deja este
+    /// test en rojo.
+    #[test]
+    fn spawn_view_boundary_is_inclusive() {
+        assert_eq!(SPAWN_VIEW, 300_000);
+        assert_eq!(distance_approx(312_196, 0), SPAWN_VIEW);
+        assert_eq!(distance_approx(312_197, 0), SPAWN_VIEW + 1);
+
+        let mut at_boundary = world_with(42);
+        load(&mut at_boundary, vec![(entry(101, 312_196, 0, 1), mob_row(101))]);
+        assert_eq!(spawn_events(&join(&mut at_boundary)).len(), 1, "el borde de spawn es inclusivo");
+
+        let mut outside = world_with(42);
+        load(&mut outside, vec![(entry(101, 312_197, 0, 1), mob_row(101))]);
+        assert!(spawn_events(&join(&mut outside)).is_empty(), "fuera de SPAWN_VIEW no se materializa");
+    }
+
     /// El despawn: un mob intacto a > DESPAWN_RADIUS de TODOS los jugadores
     /// se desmaterializa (GC_CHARACTER_DEL al jugador).
     #[test]
@@ -399,6 +412,38 @@ mod tests {
         assert!(events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Despawned { vid: 10_000, .. }))), "{events:?}");
         assert_eq!(w.npc_count(), 0);
         assert!(w.update(500).is_empty(), "desmaterializado: sin más eventos");
+    }
+
+    /// VERIFIER (mutation): la histéresis mantiene el mob en el radio exacto y
+    /// lo quita solo al superarlo; cambiar `>` por `>=` deja el primer check
+    /// en rojo.
+    #[test]
+    fn despawn_radius_is_exclusive_and_hysteretic() {
+        assert_eq!(DESPAWN_RADIUS, 310_000);
+        assert_eq!(DESPAWN_RADIUS - SPAWN_VIEW, 10_000);
+        assert_eq!(distance_approx(322_602, 0), DESPAWN_RADIUS);
+        assert_eq!(distance_approx(322_603, 0), DESPAWN_RADIUS + 1);
+
+        let mut w = world_with(42);
+        let mut row = mob_row(101);
+        row.ai_flag = Some("NOMOVE".into());
+        load(&mut w, vec![(entry(101, 0, 0, 1), row)]);
+        join(&mut w);
+
+        w.process_intent(MoveIntent::Move { player_vid: 2, x: 317_399, y: 0 }.into(), 1_000);
+        let events = w.update(500);
+        assert!(!events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Despawned { .. }))));
+        assert_eq!(w.npc_count(), 1, "la franja de histéresis conserva el mob");
+
+        w.process_intent(MoveIntent::Move { player_vid: 2, x: 322_602, y: 0 }.into(), 1_000);
+        let events = w.update(500);
+        assert!(!events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Despawned { .. }))));
+        assert_eq!(w.npc_count(), 1, "el borde de despawn se conserva");
+
+        w.process_intent(MoveIntent::Move { player_vid: 2, x: 322_603, y: 0 }.into(), 2_000);
+        let events = w.update(500);
+        assert!(events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Despawned { vid: 10_000, .. }))));
+        assert_eq!(w.npc_count(), 0, "más allá del radio se desmaterializa");
     }
 
     /// Los mobs EN COMBATE (hp < max o con aggro) NO se desmaterializan
