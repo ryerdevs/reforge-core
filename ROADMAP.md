@@ -7,6 +7,13 @@ Last verified: 2026-08-30
 
 # ROADMAP — reforge-core server
 
+> **Historical master plan (phase history).** The live state does NOT live here:
+> per-item tracking is [documentation/plans/gap-registry.md](documentation/plans/gap-registry.md)
+> and the session handoff is [documentation/progress.md](documentation/progress.md)
+> (see [document authority](documentation/reference/document-authority.md) for
+> precedence). This file preserves the F0–F7 phase design and dated execution
+> history; older values quoted below may be superseded by the registry.
+
 > **Living plan.** This document is the project's master plan and is updated every session.
 > Tracking methodology: `AGENTS.md` (rules + verified state) + `CHANGELOG.md` (chronological record) + `ROADMAP.md` (this plan) + `documentation/adr/` (ADRs).
 > **Progress rule: no phase is complete without verification evidence** (rule 5 of AGENTS.md).
