@@ -37,8 +37,7 @@ try {
         'channel_idle_timeout_reset_by_traffic',
         'channel_select_empty_slot_closes',
         'channel_wrong_password_noid',
-        # G3.2e: flake de paralelismo en land_pg (fila compartida)
-        'land_load_map_41',
+        # G3.2e: serializado con OnceLock<Mutex<()>>, 3/3 runs verdes
         # G3.2f: spawn del peer del smoke F1.6 flakea con suite completa
         'fake_auth_with_login3'
     ) -join ' --skip '

@@ -12,11 +12,23 @@
 //! ```
 
 use database::land::LandRepo;
+use std::sync::{Mutex, OnceLock};
 
 const DEFAULT_PG: &str = "host=127.0.0.1 port=5432 user=mt2 password=mt2 dbname=metin2";
 
 fn pg_conn() -> String {
     std::env::var("DATABASE_TEST_PG").unwrap_or_else(|_| DEFAULT_PG.to_string())
+}
+
+/// Serializa los dos tests PG de `land_pg` (G3.2e): el test de load_by_map
+/// ve el set estable de 18 lands del runtime, y el test de buy/transfer
+/// inserta/borra temporales en la misma tabla. Sin el guard, los dos tests
+/// corriendo en paralelo pueden hacer que el de load vea filas insertadas
+/// por el otro o se pisen los borrados. El mismo guard cubre también a
+/// tests PG de otros módulos que tocan `player.land`.
+fn land_pg_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
 }
 
 /// load_by_map(41): 18 lands (parity log del core: "map 41 count 18"), con
@@ -26,6 +38,7 @@ fn pg_conn() -> String {
 #[tokio::test]
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
 async fn land_load_map_41_contract() {
+    let _g = land_pg_lock().lock().unwrap_or_else(|e| e.into_inner());
     let repo = LandRepo::new(database::pool::new_pool(&pg_conn(), 4).expect("pool PG"));
     let lands = repo.load_by_map(41).await.expect("LAND_LOAD no falla");
     assert_eq!(
@@ -61,6 +74,7 @@ async fn land_load_map_41_contract() {
 #[tokio::test]
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
 async fn land_buy_sequence_and_transfer_roundtrip() {
+    let _g = land_pg_lock().lock().unwrap_or_else(|e| e.into_inner());
     let repo = LandRepo::new(database::pool::new_pool(&pg_conn(), 4).expect("pool PG"));
     let id1 = repo
         .buy(41, 66100, 9400, 300, 300, 10_000)
