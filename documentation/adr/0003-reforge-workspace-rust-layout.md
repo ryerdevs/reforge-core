@@ -12,11 +12,20 @@ Superseded by: ADR-0004 (flat layout, no `crates/`; `network`/`database`/`game_c
 
 ## Context
 
-The project rewrites the Metin2 server in Rust (ROADMAP F0–F7, unified plan `docs/plans/server-rewrite.md` — the original draft remains as historical in `docs/history/2026-08-09-server-rewrite-draft.md`). The legacy C++ code lives in `source/{client,server,tools,deploy}` (the client pack in `source/tools/pack`) and must remain **intact and stable** during the whole migration (AGENTS.md rule: two source copies, the WSL one compiles the server; the C++ baseline is the test oracle).
+The project rewrites the compatible server in Rust (ROADMAP F0–F7, with the
+former unified plan preserved in
+[`../history/plans/server-rewrite.md`](../history/plans/server-rewrite.md)). The
+legacy C++ source and client material are local historical/oracle inputs and
+must remain **intact and stable** during the migration; they are not part of the
+public Rust-server checkout (see ADR-0015).
 
 The user decided (2026-08-10): the new Rust server goes in a **new folder** `source/reforge`, inside the same repository, to avoid modifying anything of the C++ baseline.
 
-The F0 plan requires: "Cargo workspace with crates: `protocol`, `net`, `db`, `game`, `auth`" + "Implement the `protocol` crate (login flow) with golden tests of the spec structs". The byte-exact contract is already specified (`docs/reference/protocol/login-flow.md` — replaces the original spec `docs/superpowers/specs/2026-08-08-wire-protocol-login-flow.md`).
+The F0 plan requires: "Cargo workspace with crates: `protocol`, `net`, `db`,
+`game`, `auth`" + "Implement the `protocol` crate (login flow) with golden
+tests of the spec structs". The byte-exact contract is specified in the
+[current login-flow reference](../reference/login-flow.md); it replaces the
+original specification preserved in the historical archive.
 
 ## Decision
 

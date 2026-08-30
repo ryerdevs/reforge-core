@@ -1,11 +1,44 @@
-# ROADMAP — Metin2 server rewrite in Rust
+---
+Type: Plan
+Status: Current
+Audience: Contributors, maintainers
+Last verified: 2026-08-30
+---
+
+# ROADMAP — reforge-core server
 
 > **Living plan.** This document is the project's master plan and is updated every session.
-> Tracking methodology: `AGENTS.md` (rules + verified state) + `CHANGELOG.md` (chronological record) + `ROADMAP.md` (this plan) + `docs/decisions/` (ADRs).
+> Tracking methodology: `AGENTS.md` (rules + verified state) + `CHANGELOG.md` (chronological record) + `ROADMAP.md` (this plan) + `documentation/adr/` (ADRs).
 > **Progress rule: no phase is complete without verification evidence** (rule 5 of AGENTS.md).
-> **Canonical design reference:** `docs/plans/server-rewrite.md` (single-file plan). The previous single-file draft (`docs/history/2026-08-09-server-rewrite-draft.md`) is preserved as historical.
+> **Canonical design reference:** the current status and sequence are maintained in this file and [`documentation/progress.md`](documentation/progress.md); the former single-file plans are preserved as historical.
 
-## Current state (2026-08-15)
+## Current state (2026-08-30)
+
+- **Public repository boundary (ADR-0015):** the public implementation is the
+  authored Rust server in `source/reforge`, together with its supporting
+  documentation, scripts, and metadata. Client source, pack source, generated
+  client artifacts, and frozen C++ oracle source are not tracked or distributed
+  here.
+- **Compatibility verification:** real-client checks continue with an external,
+  operator-provided compatible client. The client and its assets are prerequisites
+  for those checks only; server builds and ordinary tests do not require them.
+- **G0:** G0.1a is safely capped at 200 because the current item-count wire is
+  byte-sized; G0.1b–G0.1e are locally checked and await their Oracle Gates. G0.2
+  remains open in the [Gap Registry](documentation/plans/gap-registry.md).
+- **G1–G3:** verification/deployment/documentation, gameplay/content, and hygiene
+  work remain open as listed in the [Gap Registry](documentation/plans/gap-registry.md).
+- **Documentation navigation:** current guidance uses `documentation/` and
+  `documentation/history-index.md`; the archive itself remains read-only. The
+  historical hub's pre-migration metadata is recorded as the explicit G1.14b
+  policy exception, and documentation CI expansion remains G1.18.
+- **F7:** the standalone Rust client is deferred outside this repository. ADR-0015
+  supersedes ADR-0013; no client workspace or client build plan is active here.
+
+The detailed dated entries below are preserved execution history. The active
+sequence, owners, and exit criteria live in the current phase sections and the
+[live handoff](documentation/progress.md).
+
+## Historical state snapshots
 
 - **50th part (2026-08-15) — MOB COMBAT PARITY (C29-C32):** the 4 CRITICAL mob behaviors
   from the legacy analysis, all committed + deployed (binary 5,297,664 B; stack up
@@ -21,7 +54,7 @@
   **(4) C32 change attack position** (`9a0b618`): `change_attack_dest` + `AttackPos` —
   pursuing mobs reposition laterally every 10 s/1 s (char.cpp:5436-5462) and stop
   clumping; `Mob.rank` (BOSS=4 excluded). **Full server-side gap analysis** written
-  (`docs/plans/server-side-gap-2026-08-15.md`): 2 exploration lanes — 146 C++ .cpp
+  ([historical analysis](documentation/history/plans/server-side-gap-2026-08-15.md)): 2 exploration lanes — 146 C++ .cpp
   (~104.7k LOC) vs 46 Rust .rs (~23k) = 4.5× less code, ~40% coverage; 28 ranked missing
   behaviors. **CRITICAL: refine (CG_ITEM_USE_TO_ITEM + CG_REFINE sin dispatch),
   stat_points (no handler — progression blocked), party, PvP. HIGH: safebox, numeric
@@ -30,7 +63,7 @@
   STONESKIN), death penalty. NEXT block: stat points → party → refine → gold pickup →
   numeric buffs → safebox → exp curve → AIFLAGs.**
 
-- **49th part (2026-08-15) — BASE JUGABLE FIXES + FULL LEGACY-MOB ANALYSIS:** the 5 original loop bugs (drag-equip INVENTORY, GC_ITEM_DEL vnum=0, CG_SHOP header 50, player commands + revive, CG_TARGET 61→GC_TARGET 63) were fixed/verified in earlier loop iterations (ASSUMPTIONS.md). This part added the real-feel fixes: **(1) Revive-city (C26)** — city revive now teleports to the village (969600/278400) + HP/MP restore (`4f00706`). **(2) Boots speed (C27)** — `APPLY_MOV_SPEED` boots wired to the envelope, cap 200 (`41a244f`). **(3) Mobs separation (C28)** — per-map snapshot + SEP_MOBS 60 u + flank ±90° + spawn jitter (`41a244f`+`261d0c7`). **(4) Mobs respawn (C23)** — `time==0` never respawns (sentinel), top-up = max_count−alive, despawn no longer cancels pending (`41a244f`+`261d0c7`). **Verifier mobs v2: PASS** (3 mutation tests discriminate each fix; 3× `cargo test --workspace` = 647 passed / 0 failed). Redeployed — stack up (auth :30001 + channel :30003), binary hash 0953602509f8809c06bf718c681fc4d7. **(5) NEW `docs/plans/mob-legacy-behavior.md` (`841101a`)** — the COMPLETE C++ mob AI captured with file:line (state machine, FindVictim, attack cooldown ~2 s vs 250 ms — C29, motion-based speed ~300 u/s vs column — C30, exact range ×1.15/×0.9 — C31, change-attack-position that prevents clumping — C32, **the "knockdown" does NOT exist server-side — AIFLAG_FALL is dead code; client animation only**). 21 missing behaviors, C29–C32 in the bug-registry (`af0be90`). **(6) Backlog committed** — 59 files from waves 44–46 that were documented but never committed (`d2c0831`; clean tree). **NEXT (block): C29 mob attack cooldown + C30 motion-based speed + C31 exact range + C32 change-attack-position.**
+- **49th part (2026-08-15) — BASE JUGABLE FIXES + FULL LEGACY-MOB ANALYSIS:** the 5 original loop bugs (drag-equip INVENTORY, GC_ITEM_DEL vnum=0, CG_SHOP header 50, player commands + revive, CG_TARGET 61→GC_TARGET 63) were fixed/verified in earlier loop iterations (ASSUMPTIONS.md). This part added the real-feel fixes: **(1) Revive-city (C26)** — city revive now teleports to the village (969600/278400) + HP/MP restore (`4f00706`). **(2) Boots speed (C27)** — `APPLY_MOV_SPEED` boots wired to the envelope, cap 200 (`41a244f`). **(3) Mobs separation (C28)** — per-map snapshot + SEP_MOBS 60 u + flank ±90° + spawn jitter (`41a244f`+`261d0c7`). **(4) Mobs respawn (C23)** — `time==0` never respawns (sentinel), top-up = max_count−alive, despawn no longer cancels pending (`41a244f`+`261d0c7`). **Verifier mobs v2: PASS** (3 mutation tests discriminate each fix; 3× `cargo test --workspace` = 647 passed / 0 failed). Redeployed — stack up (auth :30001 + channel :30003), binary hash 0953602509f8809c06bf718c681fc4d7. **(5) NEW [historical mob-behavior analysis](documentation/history/plans/mob-legacy-behavior.md) (`841101a`)** — the COMPLETE C++ mob AI captured with file:line (state machine, FindVictim, attack cooldown ~2 s vs 250 ms — C29, motion-based speed ~300 u/s vs column — C30, exact range ×1.15/×0.9 — C31, change-attack-position that prevents clumping — C32, **the "knockdown" does NOT exist server-side — AIFLAG_FALL is dead code; client animation only**). 21 missing behaviors, C29–C32 in the bug-registry (`af0be90`). **(6) Backlog committed** — 59 files from waves 44–46 that were documented but never committed (`d2c0831`; clean tree). **NEXT (block): C29 mob attack cooldown + C30 motion-based speed + C31 exact range + C32 change-attack-position.**
 
 - **WAVE 46 (DAWN) — QUEST-BOOT A/B FIX + HANDSHAKE LENIENCY + PANIC FIX (2026-08-14, 46th part):** **(1) Root cause of the post-quests "no connect" ISOLATED with A/B** — the corpus load (194 files, ~2 s) ran SYNCHRONOUSLY before the accept loop → the client hit the kernel backlog and closed (A/B: `quest_path` empty → connects). **FIX: background load** (`tokio::spawn` — accept instant, quests ~2 s later, fail-open; channel/mod.rs:132-147). **(2) Handshake leniency** — after 32 retries (~17.6 s) the channel NO LONGER closes: sends `GC_PHASE(LOGIN)` and waits for the LOGIN3 up to **45 s** (test `channel_slow_client_login3_after_retries_exhausted`, channel_smoke.rs:174). **(3) Close panic fix** — `session.rs save()` expected `motion()` on pre-ENTERGAME closed connections → worker panic; position sync only when motion is set (session.rs:449-457). **(4) channel.inf** — saved index "1" (4-channel era) vs the 1-channel dict → KeyError → corrected to 0; client UI fallback finding (pack). **(5) Shops data linked** — `player.shop` 1–6 → 20002/20006/20023/20025/20029/20030 (visible NPCs), 9 → 20042, 1002 → 20341, 1003 → 20343; **shop opening IN DIAGNOSIS (coder)**. **(6) Quest dialog** — engine sends raw keys ("gameforge.map_warp._20_sayTitle"); **text resolution IN DIAGNOSIS (coder)**. **Verified live**: stable entry (3 handshake fixes), position persisted across reconnects, 331 movement lines (map crossing), 194 quests in background, 0 panics. Deploys 01:50 `941F1B54` / 02:05 `2E9CC162` / **02:11 `015FB634` (current stack auth.021225/channel.021225)**; **573 tests** (616 attrs); ops dot-source + `-HsDebug`. **NEXT: shop opening (coder) → quest text resolution (coder) → skills GAPs (SPLASH/PARTY/HORSE, buffs) → GM mob spawn → quest converter completion (~88) → ladder 250/500/1000 → per-tick CPU → ECS parallelism decision (ADR-0010 §1).**
 
@@ -43,7 +76,7 @@
 - **5-FRONT PARALLEL WAVE (2026-08-13, 39th part):** **(1) ECS migration DONE** (cod-2) — bevy_ecs 0.19 World: `game_core/src/ecs.rs` (986 lines; components Vid/Position/Hp/Aggro/Mob/Item/Player, resources Tick/Rand/NpcOutbox/SpawnCache, systems chase_attack/aggro_detect/patrol, `WorldSim`); channel.rs → World; workspace **359 passed / 0 failed**, clippy clean, release green, deployed (ports 30001/30003); deviations accepted (single-threaded ECS schedule — the `multi_threaded` toggle does not exist, ADR-0010 §1; SpawnCache as resource, World per-connection → **spawn dinámico IN PROGRESS**, armor at entry/equip/unequip). **(2) WAL idempotency DONE** (fix-2) — safebox/messenger INSERTs `ON CONFLICT DO NOTHING`; `replay_wal` PG test UN-GATED, 2/2 green (2.34 s); database 79 attrs. **(3) dwLoginKey real flow DONE** (cod-3) — real `LoginKeyStore` in auth.rs (LOGIN_BY_KEY via LOGIN3 passwd[17], no wire change, 18 auth tests); F2a debt closed at the auth. **(4) Client UTF-8 overrides DONE** (fix-1) — `net.SetLocaleName`/`net.SetItemLocaleName` hooks, exe 5,130,752 B deployed, API inert until the data channel. **(5) Benchmark harness DONE** (fix-3) — new `bench_bot` crate (27 attrs; smoke: 1 bot login→world 1321 ms, no speedhack kick) + `bench_capture.rs`/`--bench-capture` (4 channel call sites to wire). `start_win.ps1` launch-only. **NEXT: spawn dinámico IN PROGRESS → benchmark harness channel wiring → walkability queued.**
 - **WSL RETIREMENT EXECUTED + WORLD-ENTRY FIXES (2026-08-12, 38th part):** ADR-0012 Phase 1 DONE + **real-client verified on the all-Windows stack (login → select → world → movement WORKS)**. Native Windows: PG 18.4 service `postgresql-metin2` (127.0.0.1:5432, db `metin2`, role mt2/mt2, `LC_COLLATE='C'`; restore from the WSL dump verified — counts match: spawns 145,876, mob_names 8,628, item_names 34,281), Rust auth :30001 + channel :30003 native from `source\deploy\win` (`auth.toml`/`channel.toml`, `timeout_ms 120000`), `serverinfo.py` → 127.0.0.1 + repack, `scripts/start_win.ps1`/`stop_win.ps1`; MariaDB archived (`mariadb_full_2026-08-12.sql`, 5.7 MB) + stopped; WSL = on-demand oracle box only (frozen C++ + proxy, cap 1 GB, off when unused). World-entry fixes (all deployed + verified): (a) `replay_once` via `tokio::sync::OnceCell` (`world.rs:40-79` — nested-runtime panic), (b) `SPAWN_VIEW` 2500 (`channel.rs:390` — 23,032-mob spawn flood, 11 visible now), (c) ADD speeds 100/100 (`packets.rs:265` — was 0 → frozen/invisible player), (d) mob ADD `move_speed` (`npc.rs:760`), (e) MainCharacter HEADER 113→15 (`protocol/src/world.rs:861-875` — 1-byte stream desync). "0 items" = NOT a bug (22 rows, all `owner_id 2`). Backup cadence live (`scripts/backup_win.ps1`, retention 7); 53-commit backlog **PUSHED (origin/main = `294edb1`, 0 ahead)**.
 - **WSL RETIREMENT DECIDED + ADR-0012 (2026-08-12, 37th part):** user decision — migrate the whole runtime to **native Windows**; WSL becomes a minimal **on-demand oracle box** (frozen C++ binaries + mysql_proxy only), shut down when unused, deleted at F6. Phase 1 in progress: PG 18 → Windows native (dump/restore), MariaDB archived + stopped, Rust auth/channel native (127.0.0.1), serverinfo.py → 127.0.0.1 + repack, `scripts/start_win.ps1`; WSL cleanup (PG/MariaDB/toolchains out, /home/m2/source archived, cap 1 GB). Phase 2 at F6: side-by-side vs the on-demand oracle, then `wsl --unregister Debian-M2`. Two-source-copies rule dies for the server (no more WSL builds). See ADR-0012.
-- **PLAN CONSOLIDATION + ORACLE REVIEW (2026-08-12, 36th part):** all docs joined into `docs/plans/master-plan.md` (ROADMAP + canonical design + locale plan + ADRs 0001–0011 + CURRENT snapshot). Oracle review applied (H.1–H.5): **the ECS migration slice is next** (user-confirmed — mob density is the core requirement; ADR-0010:148-150) followed by a **provisional N-bot benchmark**; **Slint standalone → F7** and **REST/metrics → post-cutover** (deferral, ADR-0007 amended); **F3 milestone redefined** (the C++ game runs on PG via `mysql_proxy`, never the Rust `database` crate); real-client E2E smoke gate every N slices; docs sweep (CURRENT/README/ADR statuses fixed; **53 commits ahead — push pending user confirmation**).
+- **PLAN CONSOLIDATION + ORACLE REVIEW (2026-08-12, 36th part):** all docs joined into the [historical consolidated plan](documentation/history/plans/master-plan.md) (ROADMAP + canonical design + locale plan + ADRs 0001–0011 + CURRENT snapshot). Oracle review applied (H.1–H.5): **the ECS migration slice is next** (user-confirmed — mob density is the core requirement; ADR-0010:148-150) followed by a **provisional N-bot benchmark**; **Slint standalone → F7** and **REST/metrics → post-cutover** (deferral, ADR-0007 amended); **F3 milestone redefined** (the C++ game runs on PG via `mysql_proxy`, never the Rust `database` crate); real-client E2E smoke gate every N slices; docs sweep (CURRENT/README/ADR statuses fixed; **53 commits ahead — push pending user confirmation**).
 - **F5.3 SLICE 17 — ATTACK_SPEED DEL ARMA (2026-08-12, 26th part):** implemented directly by the orchestrator (no delegation). `realm::combat::attack_speed_for_weapon` (pure, parity `GET_ATTACK_SPEED` battle.cpp:757-782: 1000×100/80 = 1250 ms ANI default, ani.cpp:121; DAGGER/CLAW → /2 = 625, battle.cpp:774-779) + tests (manos 1250, espada 1250, daga 625, garra 625, no-weapon sin /2); channel `CG_ATTACK` resuelve el arma antes y ajusta `player.attack_speed_ms` (el cooldown usa el intervalo del arma). Verified: workspace green (excluding pre-existing cold-start-flaky `f16_peer_smoke`), clippy clean. Pending: tabla `.msa` real, `dw_arrow` (quiver), skills, walkability (`IsMovablePosition`), NPCs interactivos/tiendas.
 - **F5.3 SLICE 16 — FINDEQUIPCELL: VALIDACIÓN DE TIPO AL EQUIPAR (2026-08-12, 25th part):** implemented directly by the orchestrator (no delegation). `ProtoItem.wear_flag` (item_proto.wearflag — bits `WEARABLE_*`); `realm::packets::find_equip_cell` (pure — slot según el orden EXACTO de los else-if del C++, item.cpp:568-592: BODY=0..ABILITY=11; None = no equipable) + tests; `CG_ITEM_MOVE` equipar valida que el slot candidato == `find_equip_cell` (parity `EquipItem`→`FindEquipCell`, char_item.cpp:6139) — rechaza items no equipables y slots equivocados. Verified: workspace green (excluding pre-existing cold-start-flaky `f16_peer_smoke`), clippy clean. Pending: UNIQUE/ABILITY multi-slot (el C++ busca el primero libre), `attack_speed` del arma (DONE 26th part), `dw_arrow` (quiver), skills, walkability.
 - **F5.3 SLICE 15 — COMPUTEPARTS: EL PERSONAJE MUESTRA EL ARMA/ARMADURA (2026-08-12, 24th part):** implemented directly by the orchestrator (no delegation). `realm::packets::equipped_parts` (pure — part = vnum del item, `item.cpp:793,833`; slot por cell wire `EQUIP_CELL_BASE=180+wear`, length.h:827: BODY→ARMOR, HEAD→HEAD, WEAPON→WEAPON; HAIR del row; ACCE=0) + test; `character_additional_info_with_parts` (variante con parts; `character_additional_info` delega — semántica C++ corregida: sin items `PART_MAIN`=0, el `part_base` del row es la apariencia base); canal: equipar/desequipar/revive/entry reenvían el ADDITIONAL_INFO con los parts computados. Verified: workspace green (excluding pre-existing cold-start-flaky `f16_peer_smoke`), clippy clean. Pending: `IsEquipable`/`CanEquipNow` al equipar (DONE 25th part), `attack_speed` del arma, `dw_arrow` (quiver), skills, walkability.
@@ -62,16 +95,16 @@
 - **F3 PHASE 2 — WAL LOCAL A DISCO + REPLAY (2026-08-12, 11th part):** implemented directly by the orchestrator (no delegation, per fix-3's 8-point review spec). `database::wal::WalSink` durable-first: each batch persists to `{wal_dir}/{uuidv7}.wal` (JSONL + sync_all) BEFORE applying to PG; the file is deleted ONLY post-COMMIT; on error it stays for the next-boot `replay_wal` (pure fn, one batch per file, one tx + audit, idempotent). Inverse JSON parser without serde (round-trip exact for Text/Bytes/Int/Null — `\x` escaped = valid JSON). Idempotency audit documented (5 wired paths idempotent; 2 plain-INSERT paths NOT wired: `safebox.set_size` size==1, `messenger.add`). `WorldStore::new`/`with_audit_table` rebuild the same WAL→Batcher→PG wiring (never silently disabled); replay ONCE per process (`OnceLock`); dir = env `REALM_WAL_DIR` or `./wal`. Verified: workspace tests green (database 48/48 incl. 4 new WAL tests), clippy no new warnings. Pending: gated `replay_wal` PG test (not run — user directive), pre-existing wal.rs clippy (2), social/economy/log stubs (fix-3: correct answer).
 - **F5.3 SLICE 2 — ITEM DROPS + PICKUP (2026-08-12, 10th part):** implemented directly by the orchestrator (no delegation). Mob kills now drop the primary item (`mob_proto.drop_item` × `drop_rate` config) on the ground (`GC_ITEM_GROUND_ADD` 58 B with `ENABLE_ITEM_GROUND_EX` + `GC_ITEM_OWNERSHIP` with the player name); `CG_ITEM_PICKUP` validates distance ≤ 600 (parity `CItem::DistanceValid`), finds the first free inventory cell (0..90, `INVENTORY_MAX_NUM`), sends `GC_ITEM_SET` + `GC_ITEM_GROUND_DEL` and persists with `ItemRepo::upsert` (id from `ITEM_ID_RANGE` 100M-200M). Verified: workspace tests green, clippy clean on touched files. Pending: `etc_drop_item`/`common_drop_item` tables (CP949-name TRAP), item stacking, ownership expiry, multicast.
 - **F5.3 SLICE 1 — KILL REWARDS + CHAT + CLIENT LOCALE CACHE (2026-08-12, 9th part):** implemented directly by the orchestrator (no delegation — the fixer lanes returned reviews instead of code). **Rust:** mob kills now award exp/gold (`kill_reward` pure fn, rates from config), level-up loop (exp_table via CommonRepo), re-sent `GC_POINTS`, durable save (Batcher); chat `CG_CHAT`→`GC_CHAT` echo (framer variable-size + handler); `MobRow` + exp/gold_min/gold_max. **Client C++:** the 4 F1 patches from the fix-2 audit applied — `CItemData` locale name provider (pack fallback), `CPythonLocale::Utf8ToDisplay` (UTF-8→codepage, kills the "JabalÃ" mojibake), empty-bundle no-disconnect, `CPythonNonPlayer::GetName` cache-first. Client rebuilt (5,128,192 B, SHA 26DC9FDD) and deployed. Verified: `cargo test --workspace` green, clippy no new warnings, MSBuild 0 errors (no gated PG tests — user directive). Next: NPC AI, movement broadcast, WAL local-disk+replay (fix-3 8-point spec).
-- **F0 CLOSED + F1 IMPORTER LIVE (2026-08-12):** spawn-resolve perf fix VERIFIED end-to-end from WSL (`channel_pg` 6/6; `entry + 23033 spawns en 12.2 s` vs the previous 3–4 min stall); test bug fixed (`channel_pg.rs:887` inverted logic — the 2 s timeout is the SUCCESS case); F0 cleanup done (user-approved: `DROP SCHEMA world` debris + `scripts/gpg/migrate_spawns.py`). **ADR-0009 written** (server-side locale, Proposed) + design closed in `docs/plans/locale-redesign.md` (8 `common.*` locale tables + `world.maps`/`world.spawns`, EN fallback, hot reload, language selector). **New crate `locale_import`** (one subcommand per domain, idempotent, reuses the verified `realm::npc` parser) — schema applied (`scripts/gpg/f1-locale-world-schema.sql`) and **live data verified by orchestrator**: mob_names 8,628 (es/en/de × 2,876), item_names 34,281, item_descriptions 22,674, ui_texts 3,903, message_texts 12,489 (16 langs), `world.maps` 65, `world.spawns` 145,876 (map 41: 10,026 entries / Σ 23,033 — parity with `map41_spawns.rs`). Workspace all green, clippy clean. Gaps documented: `item_icons` (EPK extraction, parked for panel), `map_names` (no text source — images). **NEXT: F1 wire slice** (`CG_LOCALE_REQUEST`/`GC_LOCALE` + client cache — **client side DONE 2026-08-12 9th part: cache integration + UTF-8 conversion + item provider; server auth side already implemented**).
+- **F0 CLOSED + F1 IMPORTER LIVE (2026-08-12):** spawn-resolve perf fix VERIFIED end-to-end from WSL (`channel_pg` 6/6; `entry + 23033 spawns en 12.2 s` vs the previous 3–4 min stall); test bug fixed (`channel_pg.rs:887` inverted logic — the 2 s timeout is the SUCCESS case); F0 cleanup done (user-approved: `DROP SCHEMA world` debris + `scripts/gpg/migrate_spawns.py`). **ADR-0009 written** (server-side locale, Proposed) + design closed in the [historical locale plan](documentation/history/plans/locale-redesign.md) (8 `common.*` locale tables + `world.maps`/`world.spawns`, EN fallback, hot reload, language selector). **New crate `locale_import`** (one subcommand per domain, idempotent, reuses the verified `realm::npc` parser) — schema applied (`scripts/gpg/f1-locale-world-schema.sql`) and **live data verified by orchestrator**: mob_names 8,628 (es/en/de × 2,876), item_names 34,281, item_descriptions 22,674, ui_texts 3,903, message_texts 12,489 (16 langs), `world.maps` 65, `world.spawns` 145,876 (map 41: 10,026 entries / Σ 23,033 — parity with `map41_spawns.rs`). Workspace all green, clippy clean. Gaps documented: `item_icons` (EPK extraction, parked for panel), `map_names` (no text source — images). **NEXT: F1 wire slice** (`CG_LOCALE_REQUEST`/`GC_LOCALE` + client cache — **client side DONE 2026-08-12 9th part: cache integration + UTF-8 conversion + item provider; server auth side already implemented**).
 - **G-PG CUTOVER COMPLETE + F1.6 VERIFIED (2026-08-10, loop):** ADR-0005 Accepted (gate 4/4); PostgreSQL 18.4 (PGDG) on WSL Debian-M2 — db `metin2`, schemas account/player/common/log; phase-1 subset migrated (30 tables + 26 log DDL + `account.mysql_hash_password` pgcrypto, parity_check 30/30); `mysql_proxy` adapter (`source/reforge/mysql_proxy`, wire v10 + translate + session, 53 tests — 4 gate bugs fixed) — **the C++ baseline boots and serves the REAL client on PostgreSQL: `test`/`1234` → character select, `LoginSuccess` 21:39:34, boot parity A/B green vs the MariaDB baseline; MariaDB frozen as migration source (srv1 runtime now on PG via the proxy, conf variants `*_pg`)**. F1.6 transport verified (`f16_peer` ↔ live auth, no floods). **F2a UNBLOCKED** (first slice: auth over PG; pending there: sqlx/PgPool decision, crate gaps 22P02/42703/22021).
 - **C++ baseline verified:** full login working (auth + channel + character select) with the real client. Account `test` / `1234`.
 - **RUST REWRITE STARTED (2026-08-10):** ADR-0003 + ADR-0004 + flat workspace `source/reforge` — `protocol` (F0: byte-exact wire, 30/30), `network` (F1: tokio + framer + handshake, 23/23), `database` (F3), `realm` (F4+) + single binary `server_realms` with `auth|channel` roles by config (3/3). **56/56 tests.** Key finding: spec §3 sizes for `TSimplePlayer` (71B packed, not 76B natural) and `TPacketGCLoginSuccess` (449B, not 474B) corrected with dual-toolchain evidence; errata in spec §7. Adversarial review (oracle): no critical findings. Legacy runtime: `source/deploy` (unchanged). Binary configs: **TOML** (decision 2026-08-10). Pending: PanamaPack 151 + hybrid-crypt 152/153 isolated in `protocol::legacy` at F2 (ADR-0006), real capture harness (WSL), crate gaps 22P02/42703/22021 + sqlx/PgPool decision (F2a).
 - **PLAN REORDER (2026-08-10):** **G-PG (PostgreSQL cutover) comes before F2** — **one canonical PostgreSQL** (no dual-store; MariaDB used only as migration/export source; the C++ baseline operates on the same PG through the temporary adapter); F2 is split into **F2a** (server-side auth) / **F2b** (client batch 1) and is **blocked until the PostgreSQL cutover + ADR-0005**; compatibility packets (PanamaPack 151/289B, hybrid-crypt 152/153) are **isolated in `protocol::legacy`** (ADR-0006) and deleted at the new client; **no partial Rust embedded in the legacy client during F0–F6** (ADR-0007, accepted — the already-agreed boundary); dependency deferrals documented (clap/config-rs → F2, sqlx → G-PG/F3, bevy_ecs → F4).
 - **WORLD-ENTRY CRASH — CLOSED (2026-08-09):** root cause in the client — heap over-read in `string_replace_word` (PythonSkill.cpp:62). 2-line fix deployed (`metin2client.exe` 5,115,904 B, 14:12, hash C7EAD7CC) + garbage coordinates fixed (`UPDATE player SET x=969600, y=278400`). **Closed by field test 2/2 (2026-08-09):** two consecutive world entries with the recovered characters. Details in AGENTS.md and CHANGELOG.
 - **Language System 1.2.6:** integrated and loading (16 languages, 764–775 entries each). Server-side text gaps A+B+C and the 181 missing keys — **superseded by the new design** (server→client texts by manifest, plan §5.6).
-- **Unified rewrite plan written (2026-08-09):** `docs/plans/server-rewrite.md` — architecture, anti-hack, DB, quest DSL, migration, regional channels, modifiable client. 12 open questions for external reviewers.
+- **Unified rewrite plan written (2026-08-09):** the [historical server plan](documentation/history/plans/server-rewrite.md) — architecture, anti-hack, DB, quest DSL, migration, regional channels, modifiable client. 12 open questions for external reviewers.
 - **Legacy vs 2026-standards audit completed:** 14 P0/P1/P2 decisions NOT carried over (with file:line evidence) + 7 things done right and kept. Estimated gain: 2–5x CPU, 1,000+ players/instance ceiling.
-- **Quests: own DSL DECIDED (no Lua):** spec in `docs/reference/quests/quest-dsl.md` (integrated in the plan §11). Families + blocks + imports remove the ~2,500 duplicated lines of the 194-quest corpus.
+- **Quests: own DSL DECIDED (no Lua):** spec in the [historical quest DSL reference](documentation/history/reference/quests/quest-dsl.md) (integrated in the plan §11). Families + blocks + imports remove the ~2,500 duplicated lines of the 194-quest corpus.
 - **Client: ≤1 week per change effort rule** (nothing forbidden; cost/benefit). 7 additive modifications identified with evidence (version check, hardware ID, server time, dwLoginKey, pull packets 162+, UTF-8 overrides, channel list from auth + config via manifest).
 - Graphify graphs (2026-08-10): server **13,200 nodes / 33,251 edges**, client **17,501 nodes / 39,258 edges**, merged **30,701 / 72,509** (refresh after code changes).
 - C++ baseline pending: verify crash fix, review 17 pre-existing boot SYSERRs.
@@ -83,7 +116,7 @@
 3. **Server-authoritative**: the client sends intentions, the server computes facts; the client is a view, never a source of truth.
 4. **The DB does not compute, it guarantees**: game logic lives in Rust; PostgreSQL enforces integrity (constraints, transactions, locks, RLS, audit).
 5. **Verifiable incremental replacement** (strangler fig): each Rust module preserves the observable behavior of its C++ counterpart and passes verification (parity harness) before moving on.
-6. **Client frozen as contract during F0–F6**, with one exception: additive changes ≤1 week that unblock the server side (cost/benefit rule, not prohibition — ADR-0007).
+6. **External compatible client frozen as contract during F0–F6**: it is used for server verification but is not part of this repository; client changes and packaging are outside this plan (ADR-0015).
 7. **Parity only where it matters**: observable behavior is preserved; internal code need not look the same.
 8. **ADR before implementing**: domain boundaries, data ownership, protocols, concurrency, failures and migration are decided in writing first.
 9. **Hot reload by design**: texts, items, quests and config are edited in the DB and reloaded at runtime (NOTIFY + manifest) — no restarts, no recompiles.
@@ -96,8 +129,8 @@ Goal: Rust workspace skeleton + architecture decisions closed by ADR + protocol 
 
 - [x] **ADR-0002: unify `game` + `db`** (ACCEPTED: one process per region, db as crate; legacy shim during F3–F5, unification in F6)
 - [x] Rust stack researched and fixed: **tokio 1.49 + bevy_ecs standalone + config-rs + clap 4.6 + tracing + proptest**; **tokio-postgres 0.7 decided as the DB driver (ADR-0008 Accepted 2026-08-11 — sqlx 0.9 not adopted; the WAL phase is DONE 2026-08-12 and the decision stands; a pool can be added later via deadpool-postgres without a driver change)** (no mlua — quests in own DSL; regions + ECS, not actors)
-- [x] Crate `protocol`: **byte-exact login-flow spec completed** (`docs/reference/protocol/login-flow.md` — supersedes the 2026-08-08 wire-protocol spec draft)
-- [x] **Unified plan written** (`docs/plans/server-rewrite.md` — original draft `docs/history/2026-08-09-server-rewrite-draft.md` preserved as historical)
+- [x] Crate `protocol`: **byte-exact login-flow spec completed** (`documentation/reference/login-flow.md` — supersedes the 2026-08-08 wire-protocol spec draft)
+- [x] **Unified plan written** (the former single-file plan is preserved under `documentation/history/plans/`; this roadmap is the active plan)
 - [x] Legacy audit complete (plan §3.3)
 - [x] **ADR-0003: Rust workspace in `source/reforge`** (location, layout, policies, ownership boundary — 2026-08-10; partially superseded by ADR-0004: flat layout + names)
 - [x] **ADR-0004: structure and names** (2026-08-10): flat layout `protocol`/`network`/`database`/`game_core` (renamed from `realm` 2026-08-13) + single binary `server_realms` with roles (auth|channel by config), `[workspace.dependencies]` + lint `unsafe_code = "forbid"`, rust-toolchain 1.97.0, legacy runtime `source/deploy` (unchanged)
@@ -111,7 +144,7 @@ Goal: Rust workspace skeleton + architecture decisions closed by ADR + protocol 
 - [x] **Cargo workspace in `source/reforge`** (2026-08-10, flat layout — ADR-0004): crates `protocol`, `network`, `database`, `game_core` (renamed from `realm` 2026-08-13) + binary `server_realms` (role `auth|channel` by config) — edition 2024, resolver 3, `[workspace.dependencies]`, lints, rust-toolchain 1.97.0, `**/target/` ignored. `cargo build` OK (56/56 tests)
 - [x] **Crate `protocol` implemented (2026-08-10)**: 17 packets of the login flow (spec §3) + TSimplePlayer 71B packed — zero-deps, manual LE, panic-free parsing. **30/30 tests** (golden byte vectors + roundtrips + sizes + bad-lengths). Adversarial review (oracle): no critical findings. **F0 milestone (LOGIN3 byte-exact) MET at crate level** — only the real capture harness is missing
 - [x] Verification harness: real packet capture (tcpdump/Wireshark against the C++ server) as golden tests — **MET 2026-08-11: `scripts/gpg/capture_auth.sh` + `extract_pcap_login3.py` → golden fixture `protocol/tests/golden/auth_login3_40999.bin` (88B, md5 6a93aa8f) + `golden_auth.rs` — the real captured LOGIN3 parses and re-serializes byte-for-byte identical**
-- [x] **GitHub repository**: **`github.com/ryerdevs/reforge-core` (PUBLIC, origin, gh auth `ryerdevs`)** — sources only; binaries/packs/backups to Releases or external storage; `.gitignore` for build artifacts, installed clients, graphify-out, .opencode. **Backlog PUSHED 2026-08-12: `origin/main = 294edb1` = HEAD (0 ahead / 0 behind, verified).** The 4 GB host holds the ONLY copy (history + PG + WAL + client) — nightly `scripts/backup_win.ps1` (oracle H.2).
+- [x] **GitHub repository**: **`github.com/ryerdevs/reforge-core` (PUBLIC, origin, gh auth `ryerdevs`)** — authored Rust server and its supporting docs/scripts/metadata; client and pack sources, generated client artifacts, and backups stay external. `.gitignore` covers excluded content and build artifacts. **`origin/main = 8cc42af` = HEAD (0 ahead / 0 behind, verified 2026-08-30).** The external compatible client is a local verification prerequisite only.
 
 **F0 milestone:** one real captured LOGIN3 parses and re-serializes byte-for-byte identical. — **MET 2026-08-11 (golden capture, 88B auth LOGIN3 with version+hwid).**
 
@@ -164,18 +197,18 @@ Goal: PostgreSQL 18 becomes **the single canonical store** (ADR-0001 target) bef
 - [x] Hardware ID in LOGIN3 (hardware bans, anti-multibox) — *2026-08-11: 88B auth LOGIN3 with MachineGuid hwid (Hwid.h); stored in `account.hwid` on PG; verified end-to-end*
 - [x] Server time (timers consistent with the server clock) — *verified already working (handshake `ELTimer_SetServerMSec` alignment + `GC_TIME` at world entry); no change needed — recon 2026-08-11*
 
-**Compatibility packets (isolated — ADR-0006):** PanamaPack (151, 289B) + hybrid-crypt (152/153) are implemented only inside `protocol::legacy` — never in the new wire core. Boundary documented in `docs/reference/protocol/legacy-compatibility.md`; the whole layer is deleted at the new client (F7).
+**Compatibility packets (isolated — ADR-0006):** PanamaPack (151, 289B) + hybrid-crypt (152/153) are implemented only inside `protocol::legacy` — never in the new wire core. Their inventory and deletion context are recorded in the [historical compatibility reference](documentation/history/reference/protocol/legacy-compatibility.md); removal remains an F6/server-boundary decision and is not an active client task in this repository.
 
 **F2 milestone:** login against the Rust auth on PostgreSQL (F2a) + the recompiled client passes the version check (F2b). — **F2a half MET 2026-08-10** (real client login → select screen through the Rust auth on PostgreSQL); **F2b DONE 2026-08-11** (recompiled client passes the version check — 88B LOGIN3 with version + hwid, verified end-to-end; version 99999 rejected, 68B backward-compatible).
 
 ### Phase 3 — Data layer + data channel
 
-Goal: `database` crate organized by domains behind a backend trait + porting onto PostgreSQL (G-PG already done) + pull-based data packets in the client.
+Goal: `database` crate organized by domains behind a backend trait + porting onto PostgreSQL (G-PG already done) + pull-based data packets consumed by the compatible client.
 
 - [ ] Crate `database` organized by domain modules: account/world/social/economy/log (separate PG schemas, per-schema permissions, RLS) — **PostgreSQL-only after G-PG** (no MariaDB backend; MariaDB is only the migration/export source) — *started 2026-08-11: `account` domain (`AccountRepo::login`/`set_lang`/`set_hwid`, 7 unit + 2 gated integration tests 2/2 vs real PG); world/social/economy/log stubs; auth migration to the repo pending*
 - [x] Backend: `postgres` — **tokio-postgres 0.7 decided (ADR-0008, 2026-08-11)**: proven end-to-end here (auth serving real clients, proxy); 0 new deps; contract complete (transactions, LISTEN/NOTIFY, prepared). sqlx not adopted (WAL phase done 2026-08-12 — decision stands); pool later via deadpool-postgres without a driver change. No `direct-sql` backend.
 - [ ] Port by QID: login → player load/save → items → social — *login (account) + player load/save (world) ported 2026-08-11; items/social next*
-- [x] Durable pipeline: **local WAL per region + `mutation_id` + batch ≤100ms + idempotent replay** (`ON CONFLICT DO NOTHING`) — *2026-08-11: `database/src/wal.rs` (uuidv7 + Batcher ≤100ms one-tx + idempotent replay + audit same-tx; integration 2/2 vs real PG; DDL exported, not applied); realm wiring + local replay after crash pending*
+- [x] Durable pipeline: **local WAL per region + `mutation_id` + batch ≤100ms + idempotent replay** (`ON CONFLICT DO NOTHING`) — *2026-08-11: `database/src/wal.rs` (uuidv7 + Batcher ≤100ms one-tx + idempotent replay + audit same-tx; integration 2/2 vs real PG; DDL exported, not applied); `game_core` wiring + local replay after crash pending*
 - [ ] SQL routing: `SQL_ACCOUNT` vs `SQL_PLAYER` (fix #8); `QUERY_LOGIN` 13 columns (fix #7) — ported semantics on PostgreSQL
 - [x] Data comparison harness extended to all ported QIDs (groundwork from G-PG) — *snapshot mode 2026-08-11: `--make-snapshot` (cutover reference) + `--snapshot` (PG vs reference, deterministic; 27 OK / 4 operational DIFFs post-cleanup)*
 - [x] **Client: additive pull-based packets** (headers 162+: CG_QUERY/GC_RESPONSE; table registration + case in PhaseLogin) — the data channel §5.6 — *2026-08-11: `protocol::datachannel` (162/163 minimal wire) + client PhaseLogin contract registration (inert — framing map pending with the channel activation)*
@@ -191,21 +224,21 @@ Goal: character select + spawn with parity + UTF-8 name overrides.
 
 - [x] `CG_PLAYER_SELECT` (header 6) → `GC_LOGIN_SUCCESS3` — **MET 2026-08-11** (world entry milestone, line below)
 - [x] Character spawn, map (`Venter_the_east.mp3`), stats — **MET 2026-08-11** (world entry milestone, line below)
-- [ ] **Client: in-memory overrides** (new override API to be added around `CPythonNonPlayer`/`CItemData` after `LoadLocaleData` — no `SetLocaleName`/`SetItemLocaleName` exist in the legacy client; they must be written first) — the server sends UTF-8 names from the DB; goodbye mojibake and the CP949 trap
+- [x] **External compatibility client: in-memory overrides** — the override API was implemented outside this repository; server-side locale delivery remains tracked by G2.10. The public checkout does not contain the client source or build pipeline.
 - [ ] ~~Entities: minimal Entity core + ECS systems (bevy_ecs standalone) — NEVER port char.cpp as a single class~~ — **SUPERSEDED by ADR-0010 (Accepted 2026-08-12):** the accepted architecture is pure-function domain modules + **bevy_ecs World** (adopted 2026-08-12 — user decision, mob-farming density is the core requirement) + per-connection session state + `WorldStore`; ECS entry decided, F5 benchmark validates. Line kept as history.
 
 **F4 milestone:** the real client enters the world against the Rust core with correct names. — **MET 2026-08-11** (world entry + sustained session through the Rust channel: select → DirectEnter → loading → map 41 with the character, 50+ s; world empty — NPCs are F5; names from the client's pack).
 
 ### Phase 5 — Basic gameplay + scale
 
-Goal: playable core by domains, side-by-side, scale benchmark, and the rest of the client.
+Goal: playable server core by domains, side-by-side parity, and scale benchmark. An external compatible client remains the verification surface.
 
 - [ ] Movement: per-entity speed envelope + map walkability + correction (anti-speedhack) + lag tolerance
 - [ ] Combat: full server-side damage + server-clock cooldowns + range/LoS
 - [ ] Drops, items, inventory: atomic transactions (materials → result → gold in one commit)
 - [ ] NPCs, quests (DSL engine + automatic corpus converter + parity harness), chat, shops, safebox, trade, GM
-- [ ] **Client: channel list from the auth** (override of serverinfo.py — goodbye baked IP)
-- [ ] **Client: config via manifest** (rates, visible limits — tuning without recompiling)
+- [ ] ~~**Client: channel list from the auth** (override of serverinfo.py — goodbye baked IP)~~ — **Deferred outside this repository by [ADR-0015](documentation/adr/0015-rust-only-public-repository.md).** Revisit only in a separate client project.
+- [ ] ~~**Client: config via manifest** (rates, visible limits — tuning without recompiling)~~ — **Deferred outside this repository by [ADR-0015](documentation/adr/0015-rust-only-public-repository.md).** Server-side data-channel work remains G2.10.
 - [ ] Hot reload operational: NOTIFY → reload → manifest bump → delta
 - [ ] ~~**Slint standalone** (login/select/HUD UI against the real server, in parallel — reused in F7; standalone per ADR-0007)~~ — **DEFERRED to F7 (2026-08-12, oracle review H.3):** built in F5 it would target the legacy wire and be re-ported against the new protocol at F7 — double protocol work, no server-side unblock; ADR-0007 amended. Line kept as history.
 - [ ] Scale benchmark: N bots × N regions (gate before considering multi-process)
@@ -213,7 +246,7 @@ Goal: playable core by domains, side-by-side, scale benchmark, and the rest of t
 
 **F5.3 — gameplay vertical slices (operational taxonomy, 2026-08-12):** the canonical plan defines F5 as one phase; F5.3 is the execution taxonomy used by CHANGELOG/current state (not a plan sub-phase — no F5.1/F5.2 are defined). 17 slices implemented directly by the orchestrator (2026-08-12, all per-crate `cargo test` green + clippy clean):
 
-- [x] **s1** kill rewards (exp/gold + level-up loop) + chat (`CG_CHAT`/`GC_CHAT`) + client locale cache (4 C++ patches: item provider, `Utf8ToDisplay`, empty-bundle, non-player name cache)
+- [x] **s1** kill rewards (exp/gold + level-up loop) + chat (`CG_CHAT`/`GC_CHAT`) + external compatibility-client locale cache (four client-side patches, outside this repository)
 - [x] **s2** item drops on kill + pickup (`GC_ITEM_GROUND_ADD/DEL`, ownership, `ITEM_ID_RANGE`)
 - [x] **s3** NPC AI: aggro + chase + `GC_MOVE` broadcast (`game_core::ai`)
 - [x] **s4** mob attack in range (`FUNC_ATTACK` + `GC_DAMAGE_INFO`)
@@ -247,15 +280,17 @@ Goal: playable core by domains, side-by-side, scale benchmark, and the rest of t
 
 **F6 milestone:** the Rust server replaces the C++ one in test production without client changes.
 
-### Phase 7 — Client (after the server)
+### Phase 7 — Standalone client (deferred outside this repository)
 
-> Open decisions are resolved by their own ADRs. The UI is designed in Slint (standalone app at F7 — **deferred from F5 on 2026-08-12, review H.3**: built in F5 it would target the legacy wire and be re-ported against the new protocol at F7 —, integrated as texture into the new client). The client is rebuilt with **bevy** (engine + ECS — same ecosystem as the server; decided 2026-08-12, replaces the wgpu-from-scratch plan); the existing Slint UI is reused (the `.slint` files survive). Per ADR-0007, nothing Rust is embedded in the legacy client during F0–F6 — the new client is standalone.
+F7 is not an active phase of this server repository. [ADR-0015](documentation/adr/0015-rust-only-public-repository.md)
+supersedes the former client plan: the public checkout contains no client
+workspace, client build pipeline, pack-conversion pipeline, or client assets.
+Real-client verification continues with an external, operator-provided
+compatible client. A future client project must make its own engine, UI,
+protocol, encryption, asset, and licensing decisions.
 
-- [ ] Rust client (bevy — decided 2026-08-12; same ecosystem as the server), new protocol, real encryption
-- [ ] Integrated Slint UI (login → select → HUD — the F5 standalone work is kept)
-- [ ] Legacy client limits (24 chars, 5 characters, stack 200) revisable with the new client
-- [ ] Pack formats: only the tools are preserved (PackMakerLite, TEA/LZO, DumpProto) if reused
-- [ ] Delete `protocol::legacy` (ADR-0006) — nothing legacy survives in the new wire
+- [ ] Future standalone client project — deferred until a separate repository and decision record are justified.
+- [ ] Server-side removal of `protocol::legacy` remains an F6 replacement-boundary task, not a client-repository task.
 
 ## Dependency deferrals (2026-08-10)
 
@@ -270,31 +305,29 @@ Ponytail rule: dependencies enter only when the phase requires them.
 ## Open decisions (for ADRs and reviewers)
 
 1. **Quest DSL** (spec §11) — **RESOLVED 2026-08-13 (40th part, `quest_dsl` crate):** native `between`; `if` 1 level + else; `select` with `as` capture; `@key` literal keys; `.quest` extension; explicit `timer` trigger (alias). Core DONE (13 tests); qc→DSL converter IN PROGRESS.
-2. **F7 client**: engine (bevy + Slint — decided 2026-08-12), new protocol, encryption — no detail until F6.
+2. **F7 client**: deferred outside this repository by ADR-0015; the future project will decide its engine, UI, protocol, encryption, assets, and license.
 3. **Cross-server regions**: physical location of special-region processes (next to the central DB proposed).
 4. **Unified trade**: bid closing with the DB clock (principle decided; auction details in F5).
 5. **License**: MPL-2.0 proposed (AGPL repels pserver operators) — confirm with the community.
 6. **Web API + metrics timing**: from F5 (proposed) vs after the cutover.
 7. **ADR-0005 and ADR-0006 are Accepted** (PostgreSQL cutover + legacy compat boundary — verified in the ADR files: 0005 gate 4/4 closed 2026-08-10; 0006 implemented in F2a 2026-08-10). ADR-0007 is Accepted for the already-agreed boundary only.
 
-## GitHub repository (current — 2026-08-12)
+## GitHub repository (current — 2026-08-30)
 
-- **Remote**: `origin` → **`https://github.com/ryerdevs/reforge-core`** (PUBLIC, `gh` auth as `ryerdevs`). **Backlog PUSHED 2026-08-12 (38th part):** `origin/main = 294edb1` = local HEAD (0 ahead / 0 behind, verified). The 4 GB host still holds the ONLY copy (history + PG + WAL + client) — nightly `scripts/backup_win.ps1` covers the data-loss risk (oracle H.2).
-- **Sources only to the repo** (~150–200 MB): `source\server`, `source\client` (no build artifacts), `source\tools\pack` (no .epk), `source\tools` (includes `proto\`), `scripts\`, `docs\`, `AGENTS.md`, `ROADMAP.md`, `CHANGELOG.md`.
-- **NOT in the repo**: `Extern\` (dependencies), build artifacts (obj/bin/Debug/Release ~2.4 GB), `graphify-out\`, `.opencode\`, `systems\`.
-- **Outside the repo since 2026-08-11** (cleanup): installed `client\` (2.2 GB) and `archive\` backups (1.6 GB) → `C:\projects\metin2-extra\`; `client-om2\` deleted. Rust build artifacts stay in `source\reforge\target` (gitignored).
-- **Binaries** (installed client, .epk, builds) → GitHub Releases (does not count against the repo limit) or external storage; generated by the build scripts.
-- **Backup cadence (2026-08-12, oracle review H.2) — LIVE:** nightly `scripts\backup_win.ps1` (native `pg_dump -Fc` of `metin2` → `C:\projects\metin2-extra\backups\metin2_<yyyy-MM-dd>.dump`, retention 7); push policy executed (origin/main = `294edb1`).
-- Root `.gitignore` covers the above patterns (already applied at the first push).
+- **Remote**: `origin` → **`https://github.com/ryerdevs/reforge-core`** (public). **`origin/main = 8cc42af` = HEAD** (0 ahead / 0 behind, verified 2026-08-30 before the current uncommitted slice).
+- **Public repository contents**: authored Rust server in `source\reforge`, supporting tools in `source\tools`, `scripts\`, `documentation\`, and root metadata such as `AGENTS.md`, `ROADMAP.md`, and `CHANGELOG.md`.
+- **Not in the public repository**: the frozen C++ oracle (`source\server`), client source (`source\client`), pack source (`source\tools\pack`), installed clients, generated binaries, packs, extracted assets, backups, dependencies, and build artifacts. The first three source paths may exist locally for parity or cleanup but are ignored or untracked.
+- **External verification prerequisite**: an operator-provided compatible client and its assets. The repository does not build, repack, or distribute them.
+- **Backup cadence (live)**: nightly `scripts\backup_win.ps1` writes native PostgreSQL dumps to `C:\projects\metin2-extra\backups\` with retention 7.
+- Root `.gitignore` covers excluded client, pack, runtime, and build patterns.
 
 ## How the count is kept
 
-- **`docs/README.md`** — documentation index (entry point to all docs).
-- **`docs/CURRENT.md`** — current verified state of the project.
-- **`docs/DOCUMENTATION.md`** — documentation rules and workflow (Keep a Changelog, ADR template, graph workflow).
-- **`docs/decisions/`** — ADRs. Every architecture decision is written BEFORE implementation.
-- **`docs/plans/server-rewrite.md`** — the canonical design reference (single file).
-- **`docs/history/`** — superseded/historical plans, specs and status docs (nothing is deleted; old `docs/superpowers/` content is indexed there).
-- **`docs/guardrails/`** — lessons and rules not to repeat (index + 5 files, each rule with Rule/Why/Evidence/Consequence/Status).
-- **`docs/reference/`** — protocol, quests and compatibility reference (`docs/reference/protocol/login-flow.md`, `docs/reference/protocol/legacy-compatibility.md`, `docs/reference/quests/quest-dsl.md`).
-- **Graphs** — `graphify update` on `source\server` and `source\client` after relevant code changes; re-merge to the root (`graphify merge-graphs server client --out graphify-out\graph.json`).
+- **`documentation/README.md`** — documentation index and five-minute cheat sheet.
+- **`documentation/DOCUMENTATION.md`** — mandatory documentation policy.
+- **`documentation/progress.md`** — current verified status and session handoff.
+- **`documentation/adr/`** — ADRs. Every architecture decision is written before implementation.
+- **`documentation/plans/`** — active plans, including the gap registry.
+- **`documentation/history/`** — read-only superseded plans, references, and snapshots.
+- **`documentation/reference/`** — current protocol and other technical references.
+- **Graphs** — refresh only the graph for the checked-out public Rust server after relevant Rust changes; do not treat external client or frozen-oracle graphs as repository dependencies.

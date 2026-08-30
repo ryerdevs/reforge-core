@@ -3,7 +3,7 @@ Type: Decision
 Status: Accepted
 Audience: Contributors, maintainers
 Date: 2026-08-10
-Last verified: 2026-08-10
+Last verified: 2026-08-30
 Supersedes: —
 Superseded by: —
 ---
@@ -12,7 +12,7 @@ Superseded by: —
 
 > **Status note:** Accepted — scope limited to the already-agreed boundary (see Decision).
 >
-> **AMEND (2026-08-12):** the standalone Slint app is **deferred from F5 to F7** — oracle review of the consolidated plan (`docs/plans/master-plan.md`, recommendation H.3): built in F5 it would target the legacy wire and be re-ported against the new protocol at F7 (double protocol work) and it unblocks nothing server-side. The boundary decision itself (no partial Rust embedded in the legacy client during F0–F6) is unchanged.
+> **AMEND (2026-08-12):** the standalone Slint app is **deferred from F5 to F7** — the oracle review recorded in the [historical consolidated plan](../history/plans/master-plan.md) recommended avoiding double protocol work: an F5 app would target the legacy wire and be re-ported against the new protocol at F7, while unblocking nothing server-side. The boundary decision itself (no partial Rust embedded in the legacy client during F0–F6) is unchanged. ADR-0015 later deferred F7 outside this repository.
 
 ## Context
 

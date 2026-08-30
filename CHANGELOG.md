@@ -1,3 +1,10 @@
+---
+Type: History
+Status: Current
+Audience: Contributors, maintainers
+Last verified: 2026-08-30
+---
+
 # Changelog
 
 All notable changes to this project are documented in this file.
@@ -6,6 +13,77 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.html)) once releases exist; until then, entries are grouped by date.
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
+
+## [2026-08-30] — Public repository boundary and documentation reconciliation
+
+### Changed
+
+- Accepted [ADR-0015](documentation/adr/0015-rust-only-public-repository.md),
+  superseded ADR-0013, and recorded that F7 remains outside this server
+  repository. Client and pack source remain excluded; real-client checks use an
+  external compatible client.
+- Reconciled the current documentation hubs, the live gap registry, ADR links,
+  and dated `ROADMAP.md` references with the `documentation/` layout. Historical
+  documents were not edited.
+- Added `documentation/history-index.md` as the current navigation successor for
+  the immutable archive. The old `documentation/history/README.md` remains an
+  untouched pre-migration snapshot with its original links and metadata.
+- Recorded the explicit decision to keep that historical snapshot byte-for-byte
+  immutable, including its pre-migration metadata; G1.14b is therefore closed
+  as a narrow documented exception, while new and edited documents follow the
+  current documentation policy.
+- Added metadata to the historical `ASSUMPTIONS.md` snapshot and refreshed
+  `source/reforge/README.md` as an English, current workspace hub without
+  carrying forward stale test totals.
+- Recorded the uncommitted G0.1b–G0.1e cap lanes and the staged client/pack
+  removals in the current handoff; this documentation slice made no Rust-source
+  changes and created no commit.
+
+## [2026-08-29] — Cap audit and status reconciliation
+
+### Changed
+
+- `5354e6f` enforced the wire-safe item-stack policy: the effective cap remains
+  200, counts above that value are rejected at entry serialization, and the
+  requested 2000 target remains blocked by the current byte-sized wire fields.
+- `96606e3`, `4579fcb`, and `5a0ac99` reconciled the live handoff, gap registry,
+  and public status documentation with the cap audit and current repository
+  state.
+
+### Verification
+
+- The cap policy and mutation verifiers are recorded in the live
+  [handoff](documentation/progress.md) and [Gap Registry](documentation/plans/gap-registry.md).
+
+## [2026-08-28] — Phase 1 verification and repository cleanup
+
+### Added
+
+- The Phase 1 verification block covered stats, item attributes, experience
+  deltas, guild and party behavior, PvP gates and penalties, skills and affects,
+  locale push/pull, events, dungeons, land, belt, Dragon Soul, refine, weight,
+  and GM command verifiers. The current capability list and remaining gaps are
+  maintained in the [live handoff](documentation/progress.md).
+- Quest target/affect and timer coverage, safebox-to-Dragon-Soul checkout, and
+  the restored GM transfer/purge command arms were verified and recorded in the
+  closed rows of the [Gap Registry](documentation/plans/gap-registry.md); full
+  transfer/purge dispatch remains tracked in G2.6a–G2.6b.
+
+### Changed
+
+- `935edf2` removed the frozen C++ oracle from the Git index while retaining it
+  as a local-only parity source and corrected the verification script's format
+  invocation. The public boundary is documented by [ADR-0015](documentation/adr/0015-rust-only-public-repository.md).
+
+## [2026-08-27] — Gameplay verification foundations
+
+### Added
+
+- The verification block established the current five-stat-points-per-level
+  rule, item and experience checks, guild foundations, PvP attack gates, party
+  actions, skill families and effects, locale delivery, and the initial event,
+  land, belt, horse, refine, Dragon Soul, and safebox coverage. Each remaining
+  gap and its exit criterion is listed in the [Gap Registry](documentation/plans/gap-registry.md).
 
 ## [2026-08-21] (63rd part) — Repo consolidated + structural debt closed + MESSENGER/EMOTIONS block
 

@@ -13,7 +13,8 @@ Superseded by: —
 ## Context
 
 F3 (ROADMAP Phase 3, first slice) starts the `database` crate. The design target is set in
-`docs/plans/server-rewrite.md` §5.5: a crate organized **by domain** (account/world/social/
+the historical server plan ([§5.5](../history/plans/server-rewrite.md#55-data-layer)):
+a crate organized **by domain** (account/world/social/
 economy/log), each with its own schema, permissions per schema, and repositories as the only
 access path. Two decisions are due now:
 

@@ -1,3 +1,10 @@
+---
+Type: Snapshot
+Status: Historical
+Audience: Contributors
+Last verified: 2026-08-15
+---
+
 # ASSUMPTIONS (loop "Base jugable", 2026-08-15)
 
 ## Contexto verificado

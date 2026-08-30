@@ -1,6 +1,6 @@
 ---
 Type: Decision
-Status: Accepted (2026-08-12)
+Status: Accepted
 Audience: Contributors, maintainers
 Date: 2026-08-12
 Last verified: 2026-08-13
@@ -123,8 +123,8 @@ headroom and AI-tick under 500 ms — but it is no longer the gate for entry.
 ### 5. Wire debt — explicit inventory with F7 removal plan
 
 Mapped at the boundary, absent from the domain model, deleted wholesale at F7
-(ADR-0006 deletion pattern; inventory mirrored in
-`docs/reference/protocol/legacy-compatibility.md`):
+(ADR-0006 deletion pattern; inventory mirrored in the
+[historical compatibility reference](../history/reference/protocol/legacy-compatibility.md)):
 
 | # | Quirk | Where it lives today |
 |---|---|---|

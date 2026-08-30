@@ -10,7 +10,7 @@ Last verified: 2026-08-12
 > Extracted from the legacy C++ server on 2026-08-08 using the graphify graph (coordinates in §6).
 > This document is the byte-exact contract for the `protocol` crate of the Rust rewrite (ROADMAP Phase 0).
 > Verified against: `packet.h`, `packet_info.cpp`, `input_auth.cpp`, `input_login.cpp`, `input_db.cpp`, `desc.cpp`, `common/tables.h`, `length.h`, `db/src/ClientManagerLogin.cpp`, `ClientManager.cpp`, `QID.h`.
-> Related: legacy-only packets 151/152/153 live under the compatibility boundary — see [legacy-compatibility.md](legacy-compatibility.md). Canonical plan: [../../plans/server-rewrite.md](../../plans/server-rewrite.md).
+> Related: legacy-only packets 151/152/153 live under the compatibility boundary — see [the historical compatibility reference](../history/reference/protocol/legacy-compatibility.md). Canonical plan: [the historical server plan](../history/plans/server-rewrite.md).
 
 ## 1. Constants
 
@@ -110,7 +110,7 @@ Build flags that change sizes: `ENABLE_ACCE_COSTUME_SYSTEM` (+4B in TSimplePlaye
 
 ## 8. Legacy compatibility packets (151/152/153)
 
-PanamaPack (151) and hybrid-crypt (152/153) are legacy-client-only constructs: the server sends them on every successful auth before `GC_AUTH_SUCCESS`, and the legacy client needs them to decrypt its pack entries. They are deliberately isolated in `protocol::legacy` and will be **deleted at F7** — see [legacy-compatibility.md](legacy-compatibility.md) for the packet inventory, layouts, why the legacy client requires them, and the deletion list.
+PanamaPack (151) and hybrid-crypt (152/153) are legacy-client-only constructs: the server sends them on every successful auth before `GC_AUTH_SUCCESS`, and the legacy client needs them to decrypt its pack entries. They are deliberately isolated in `protocol::legacy`; their eventual removal is an F6/F7 boundary decision outside the current public client scope. See the [historical compatibility reference](../history/reference/protocol/legacy-compatibility.md) for the packet inventory, layouts, and deletion context.
 
 **Out of F0 scope (pending for later phases):**
 - **F1 (net):** keepalive/framing — `CG_TIME_SYNC` (0xfc, 13B = sizeof(TPacketCGHandshake)), `CG_PONG` (0xfe), `GC_PING` (44). The channel and the auth interleave them; Login3 parsing would fail if they were not filtered.

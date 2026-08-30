@@ -2,10 +2,10 @@
 Type: Snapshot
 Status: Current
 Audience: Contributors
-Last verified: 2026-08-29
+Last verified: 2026-08-30
 ---
 
-# Progress — Metin2 Reforge
+# Progress — reforge-core server
 
 ## Goal
 
@@ -13,13 +13,20 @@ Complete the remaining work needed to make the server better than the original, 
 
 ## Current
 
-- Date: 2026-08-29
-- HEAD: `5354e6f` (`fix(items): enforce wire-safe stack counts`) — verified with `git rev-parse HEAD`. The working tree is clean.
-- Tests: **891 workspace tests listed** by `cargo test --workspace -- --list` at the historical measurement point. This is not a fresh recount and is not a claim that the suite has passed.
+- Date: 2026-08-30
+- HEAD: `8cc42af` (`docs(readme): show implementation status matrix`) — verified with `git rev-parse HEAD`. The working tree is dirty: G0.1b–G0.1e code changes, the staged client/pack removals, and these documentation updates are uncommitted.
+- Tests: G0.1b focused run **12 passed**; G0.1c focused run **13 passed**; G0.1d focused run **22 passed**; detached focused `database`/`game_core`/`server_realms` run for G0.1e **147 passed, 0 failed, 4 ignored**. The latter reported warnings only (existing/unused). No full workspace recount was run in this slice.
 - Build: the previous `gm.rs` match-arm build blocker was resolved by `2c8d31a`; it is not a current blocker.
+- Repository boundary: the public checkout contains the authored Rust server and its supporting documentation/tooling, not client source or pack source. Real-client checks use an external, operator-provided compatible client. F7 is deferred outside this repository by [ADR-0015](adr/0015-rust-only-public-repository.md), which supersedes ADR-0013.
 - G0.1a audit: the effective item-stack cap remains **200**. The current item set/update/move/drop wire fields serialize counts as `BYTE` (`u8`), so 2000 is blocked pending a coordinated protocol/client migration. GM counts clamp to 200, channel consumers share the same cap, and entry serialization rejects counts above it instead of truncating them. `ItemRow.count` remains bigint-backed storage; no database schema change is needed for this audit.
+- G0.1b movement: the retained absolute `CG_MOVE` limit is **6000 units inclusive** for mounted and unmounted movement. The lane widened deltas and squared distance to `i128`; the movement envelope, default speed, and anti-cheat tolerance values were not changed. This row is **IN PROGRESS — ready for Oracle Gate**, not closed.
+- G0.1c spawn: the retained production values are `SPAWN_VIEW = 300000` and `DESPAWN_RADIUS = 310000`, with predicates unchanged. Boundary/hysteresis mutation coverage passed in the focused 13-test run. This row is **IN PROGRESS — ready for Oracle Gate**, not closed.
+- G0.1d boot speed: the retained cap is **200 before BYTE serialization**, with wide/saturating accumulation and capped ADD/UPDATE fields. The focused 22-test run passed and the mutation baseline failed as expected; no real-client check was run. This row is **IN PROGRESS — ready for Oracle Gate**, not closed.
+- G0.1e gold: the retained `GOLD_MAX` is **2_000_000_000**. Checked delta/sub bounds cover the economy, shop, and channel gold consumers; the focused detached run passed 147 tests with 0 failures and 4 ignored. This row is **IN PROGRESS — ready for Oracle Gate**, not closed.
 - Closed gaps: safebox checkout to Dragon Soul (`dae52e5`), quest target/affect (`dae52e5`), and quest timers (`80b33bf`) are closed. Do not list them as pending.
 - Tracker: [Gap Registry](plans/gap-registry.md) is the live per-gap tracker; historical gap analyses remain read-only.
+- Documentation policy: [DOCUMENTATION.md](DOCUMENTATION.md) is the current policy; the copy under `history/` is retained as read-only migration history.
+- Archive navigation: [history-index.md](history-index.md) is the current successor hub; `history/README.md` remains an immutable pre-migration snapshot and is not a source of truth.
 - Gate 2: G0, G1, G2, and G3 remain **pending execution**. The registry's closed rows record completed prerequisite work; they do not close these Gate 2 blocks.
 - Deploy: `source\deploy\win` still runs the pre-Phase-1 binary; redeploy remains pending and is no longer blocked by the historical `gm.rs` compile failure (see G1.5 in the tracker).
 
@@ -48,8 +55,8 @@ Complete the remaining work needed to make the server better than the original, 
 
 All four work groups remain open in the [Gap Registry](plans/gap-registry.md):
 
-- [ ] **G0 — Architecture and storage:** cap decisions and disk-storage work remain to be executed and verified; G0.1a is safely enforced at 200 but blocked at the requested 2000 by the current BYTE item-count wire.
-- [ ] **G1 — Gates, documentation, and deployment:** verification, formatting, changelog, deployment, and documentation rows remain to be executed and verified.
+- [ ] **G0 — Architecture and storage:** G0.1b–G0.1e are implementation-complete for their focused checks and ready for Oracle Gate, but remain open; G0.1a is safely enforced at 200 but blocked at the requested 2000 by the current BYTE item-count wire, and disk-storage work remains open.
+- [ ] **G1 — Gates, documentation, and deployment:** normal/ignored verification, formatting, documentation CI, and redeployment remain open; G1.14b's immutable-history decision is closed, and changelog freshness/current archive navigation are reconciled.
 - [ ] **G2 — Gameplay and content:** the remaining gameplay, social, quest, GM, data-channel, and deferred-content rows remain open in the registry.
 - [ ] **G3 — Hygiene and test debt:** stale comments and ignored-test policy remain to be executed and verified.
 
@@ -58,7 +65,11 @@ The registry's `C1`–`C12` rows are closed prerequisite fixes; they do not mark
 ## Handoff
 
 - 2026-08-29 | **G0.1a item-stack cap audit (coder):** baseline `96606e3`; committed as `5354e6f`. `ITEM_COUNT_LIMIT` remains 200 and is shared by the channel and GM paths. The client/server item count fields are BYTE-sized (`protocol/src/world.rs` item set/update/move/drop2), so the requested 2000 target is not enabled. `game_core::packets::item_set_packets` rejects counts above 200 rather than silently wrapping 2000 to 208; the GM parser/handler clamps to 200. Mutation verifiers cover the cap, shared channel value, explicit 2000 clamp, and entry-wire rejection. `ItemRow.count` stays bigint-backed; events, quests, safebox, belt, trade, economy, movement/spawn, and bench lanes were not modified. G0.1a remains **BLOCKED** until a coordinated u16 protocol/client migration and real-client stack test above 200.
-- 2026-08-29 | Gate 2 handoff sync (librarian): superseded by the committed documentation reconciliation at `96606e3` and G0.1a at `5354e6f`; current HEAD and working-tree state are recorded in Current above.
+- 2026-08-29 | **G0.1b–G0.1e cap lanes (coder):** against baseline `5a0ac99`, the four code lanes remain uncommitted. **G0.1b:** only `game_core/src/movement.rs`; inclusive 6000 mounted/unmounted limit preserved, `i128` distance arithmetic added, 12 focused tests passed, and no envelope/default-speed/anti-cheat-tolerance change. **G0.1c:** only `game_core/src/ecs/systems/spawn.rs`; production 300000/310000 constants and predicates unchanged, boundary/hysteresis mutation coverage passed, and 13 focused tests passed. **G0.1d:** only `game_core/src/packets.rs`; cap 200 remains before BYTE ADD/UPDATE serialization, wide/saturating accumulation is covered, 22 focused tests passed, mutation baseline failed as expected, and no real-client check was run. **G0.1e:** economy/shop/channel gold consumers retain `GOLD_MAX = 2_000_000_000`, checked delta/sub bounds, and property coverage; the detached focused run finished **147 passed, 0 failed, 4 ignored** with warnings only (existing/unused). `git diff --check` was clean for the lanes. All four rows are **IN PROGRESS — ready for Oracle Gate**, not `CLOSED`.
+- 2026-08-29 | Prior Gate 2 handoff sync (librarian): superseded by the G0.1b–e handoff above; the earlier documentation reconciliation was committed at `96606e3` and G0.1a at `5354e6f`.
+- 2026-08-30 | **Public repository boundary and documentation reconciliation (librarian):** ADR-0015 accepted; the authored Rust server remains the public implementation scope, client and pack sources remain outside the repository, and real-client verification uses an external compatible client. ADR-0013 is superseded and F7 is deferred outside this repository. The current documentation policy and live hubs were restored/reconciled; the staged removals and documentation changes are intentionally uncommitted; no Rust source was changed by this documentation slice.
+- 2026-08-30 | **Archive navigation and metadata follow-up (librarian):** added the current `documentation/history-index.md` successor without editing `documentation/history/**`; reconciled the hub and registry freshness rows; added metadata to the historical `ASSUMPTIONS.md` snapshot and refreshed `source/reforge/README.md` as a current workspace hub. G1.14b was then resolved by the explicit decision to preserve `history/README.md` byte-for-byte, including its pre-migration metadata; G1.18 remains open for CI implementation. No Rust source was changed.
+- 2026-08-30 | **G1.14b history-policy decision (librarian):** the user chose immutable preservation of `documentation/history/README.md`, including its original metadata. The current [archive index](history-index.md) records this narrow exception; the historical file remains untouched, and all new or edited documents continue to follow [DOCUMENTATION.md](DOCUMENTATION.md).
 
 > Entries below this line are historical snapshots. Their counts and states are preserved for their dates; use the Current section and the live Gap Registry for present status.
 

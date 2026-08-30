@@ -1,21 +1,45 @@
-﻿# Metin2 Agent Instructions
+﻿---
+Type: Reference
+Status: Current
+Audience: Contributors, maintainers
+Last verified: 2026-08-30
+---
+
+# reforge-core Agent Instructions
 
 ## Mission
 
-**Metin2 will be completely rewritten in Rust with modern technologies.** This is the project's main goal.
+**The compatible server will be completely rewritten in Rust with modern technologies.** This is the project's main goal.
 
 - **Motto: do more with less.** Less code, less complexity, fewer dependencies â€” more clarity, more robustness, more performance.
 - **Strategy: incremental module-by-module replacement.** The legacy C++ server is replaced piece by piece with verifiable Rust modules. Each module must preserve observable behavior and pass verification before moving on.
 - The rewrite is a structural redesign, not a line-by-line translation. Architecture decisions (domain boundaries, data ownership, protocols, concurrency, failures, migration) are recorded as ADRs before implementation.
 
-## Current phase (2026-08-13) â€” NATIVE WINDOWS RUNTIME (ADR-0012), world entry + ECS World working
+## Public repository boundary (ADR-0015)
 
-**The runtime moved to NATIVE WINDOWS (ADR-0012, executed + verified 2026-08-12):** PostgreSQL 18.4 native at 127.0.0.1:5432 (service `postgresql-metin2`, NETWORK SERVICE account, binaries `C:\projects\metin2-extra\pg18\pgsql\bin`, data `C:\projects\metin2-extra\pg18\data`, db `metin2`, role mt2/mt2, `LC_COLLATE='C'`, pgcrypto in schema `account` â€” `mysql_hash_password` works with `search_path account,public`). Rust auth + channel run native from `source\deploy\win\` (`auth.toml`/`channel.toml`: listen `127.0.0.1:30001`/`30003`, PG `127.0.0.1:5432`, `timeout_ms 120000`, `map_path = source\deploy\main\srv1\share\locale\spain\map`). The client connects to `127.0.0.1` (serverinfo.py repacked). Start/stop: `powershell -ExecutionPolicy Bypass -File scripts\start_win.ps1` / `stop_win.ps1`. MariaDB archived (`C:\projects\metin2-extra\archive\mariadb_full_2026-08-12.sql`, 5.7 MB) + stopped in WSL. WSL (Debian-M2) is now an **on-demand oracle box only**: frozen C++ binaries + `mysql_proxy`, cap 1 GB, off when unused; `/home/m2/source` archived later; full delete at F6.
+- The public repository contains the authored Rust server in `source/reforge`
+  and the documentation, scripts, and supporting metadata needed to develop and
+  verify it.
+- Client source, pack source or assets, generated client binaries, and frozen
+  C++ oracle source are not public repository contents. Do not add them back to
+  the index or describe them as build inputs for this checkout.
+- Real-client checks use an external, operator-provided compatible client. Its
+  installation and assets are local prerequisites and are not distributed here.
+- F7—the standalone Rust client—is deferred outside this repository. ADR-0015
+  supersedes ADR-0013; do not create a `source/client_rust` workspace in this
+  repository.
 
-**World entry WORKS on the all-Windows stack (real-client verified 2026-08-12: login â†’ select â†’ world â†’ movement):**
+## Current phase (2026-08-30) â€” NATIVE WINDOWS RUNTIME (ADR-0012), world entry + ECS World working
+
+**The runtime moved to NATIVE WINDOWS (ADR-0012, executed + verified 2026-08-12):** PostgreSQL 18.4 native at 127.0.0.1:5432 (service `postgresql-metin2`, NETWORK SERVICE account, binaries `C:\projects\metin2-extra\pg18\pgsql\bin`, data `C:\projects\metin2-extra\pg18\data`, db `metin2`, role mt2/mt2, `LC_COLLATE='C'`, pgcrypto in schema `account` â€” `mysql_hash_password` works with `search_path account,public`). Rust auth + channel run native from `source\deploy\win\` (`auth.toml`/`channel.toml`: listen `127.0.0.1:30001`/`30003`, PG `127.0.0.1:5432`, `timeout_ms 120000`, `map_path = source\deploy\main\srv1\share\locale\spain\map`). An external compatible client can connect to `127.0.0.1`; its source and assets are outside this repository. Start/stop: `powershell -ExecutionPolicy Bypass -File scripts\start_win.ps1` / `stop_win.ps1`. MariaDB archived (`C:\projects\metin2-extra\archive\mariadb_full_2026-08-12.sql`, 5.7 MB) + stopped in WSL. WSL (Debian-M2) is now an **on-demand oracle box only**: frozen C++ binaries + `mysql_proxy`, cap 1 GB, off when unused; `/home/m2/source` archived later; full delete at F6.
+
+**World entry WORKS on the all-Windows stack (verified with an external compatible client on 2026-08-12: login â†’ select â†’ world â†’ movement):**
 
 - (a) `replay_once` async via `tokio::sync::OnceCell` (`game_core/src/world.rs:40-79`) â€” fixed the nested-runtime panic that killed the channel.
-- (b) `SPAWN_VIEW` 2500-entry filter (`server_realms/src/channel.rs:390-393`) â€” fixed the 23,032-mob spawn flood that froze the client (11 visible now).
+- (b) Dynamic spawn materialization is now owned by `game_core/src/ecs/systems/spawn.rs`: `SPAWN_VIEW = 300000` and `DESPAWN_RADIUS = 310000`. The earlier 2500-entry filter was a historical world-entry fix; the current predicates are covered by the G0.1c checks in the Gap Registry.
+- The dated wave notes below preserve execution history. For current limits,
+  open gates, and repository scope, use `documentation/progress.md`,
+  `ROADMAP.md`, and `documentation/DOCUMENTATION.md`.
 - (c) character ADD `b_moving_speed`/`b_attack_speed` 100/100 (`game_core/src/packets.rs:265`, parity `char.cpp:2245-2246`; were 0 â†’ client `SetMoveSpeed(0)` â†’ player frozen + buried under terrain = invisible; root cause found by the fixer with client-side evidence `InstanceBase.cpp:824`, `ActorInstance.cpp:191-219`).
 - (d) mob spawn ADDs now carry `move_speed` (`game_core/src/npc.rs:760`, parity `char.cpp:2257`).
 - (e) `TPacketGCMainCharacter` HEADER 113â†’15 (`protocol/src/world.rs:861-875`; the client maps 15 = 47 B plain, 113 = 48 B EMPIRE variant â€” 113/47 B desynced the stream by 1 byte, latent).
@@ -103,21 +127,19 @@ Chain of fixes applied in that session (each verified empirically):
 
 | Path | What it is |
 | --- | --- |
-| `C:\projects\metin2-extra\client` | Installed client (metin2client.exe v1.0.40999.1 â€” RECOMPILED 2026-08-08 with the fix; pack\*.epk, config, mark) â€” **MOVED OUTSIDE THE REPO 2026-08-11** (cleanup; testing only) |
+| `C:\projects\metin2-extra\client` | External compatible client installation (local verification only; not distributed or built by this repository) |
 | `client-om2\` | Reference client source ("Old Metin2 Project", corresponds to tmp4-server) â€” **DELETED** (cleanup 2026-08-11) |
-| `source\client\` | CLIENT SOURCE (S3llMetin2 v24 / MartySama). Build: MSBuild `Metin2Client.sln` (in `source\client\`) Release\|Win32 (VS Build Tools 18). Build deps in `source\client\Extern\` (gitignored) |
 | `source\server\` | SERVER SOURCE (MartySama 5.9) â€” **FROZEN ORACLE (user decision 2026-08-12, ADR-0012): NEVER rebuilt**. `{common,db,game,libgame,liblua,libpoly,libsql,libthecore}`, Makefile ported to Debian/gcc â€” the Linux ELF binaries run only in the on-demand WSL box |
-| `source\reforge\` | **RUST REWRITE (new, 2026-08-10, flat layout â€” ADR-0004)** â€” Cargo workspace: `protocol` (F0: byte-exact wire, 30/30), `network` (F1: tokio+framer+handshake, 23/23; includes `auth` module for F2), `database` (F3), `game_core` (F4+ â€” renamed from `realm` 2026-08-13, 42nd part), `server_realms` (single binary, roles `auth\|channel` by config â€” provisional user name). ADR-0003/0004. **Do not touch the C++ baseline from here; the baseline is the oracle** |
+| `source\reforge\` | **RUST SERVER REWRITE (new, 2026-08-10, flat layout â€” ADR-0004)** â€” Cargo workspace: `protocol` (F0: byte-exact wire, 30/30), `network` (F1: tokio+framer+handshake, 23/23; includes `auth` module for F2), `database` (F3), `game_core` (F4+ â€” renamed from `realm` 2026-08-13, 42nd part), `server_realms` (single binary, roles `auth\|channel` by config â€” provisional user name). ADR-0003/0004. **Do not touch the C++ baseline from here; the baseline is the oracle** |
 | `source\deploy\` | Deployed runtime (gitignored): `win\` = **native Windows Rust runtime** (`server_realms.exe`, `auth.toml`/`channel.toml`, `logs\` â€” ADR-0012); `main\srv1\{db,auth1,chan\chX\coreY}` = frozen C++ WSL instances (parity oracle, never rebuilt) |
-| `source\tools\pack\` | Client pack source (`root\serverinfo.py` = server list; `PackMakerLite.exe` + `.json` = repack tool) |
-| `source\tools\` | Tools: `DBManager` (PHP/bash txtâ†”mysql import/export), `DumpProto`, `Mysql2Proto` (MySQLâ†’proto export), `switch_compiler.py` |
+| `source\tools\` | Supporting data and protocol tools that remain in the server repository; client and pack sources are excluded by ADR-0015 |
 | `source\tools\proto\` | Protocol metadata |
 | `C:\projects\metin2-extra\pg18` | Native PostgreSQL 18.4 (ADR-0012): binaries `pg18\pgsql\bin`, data `pg18\data`, Windows service `postgresql-metin2` (NETWORK SERVICE) |
 | `C:\projects\metin2-extra\backups` | PG dumps â€” `metin2_pg_2026-08-12.dump` (migration, restore verified) + nightly `metin2_<yyyy-MM-dd>.dump` from `scripts\backup_win.ps1` (retention 7) |
 | `C:\projects\metin2-extra\archive` | Backups (client + source + `mariadb_full_2026-08-12.sql` 5.7 MB) â€” **MOVED OUTSIDE THE REPO 2026-08-11** (cleanup) |
 | `.commandcode\` | Skills |
 | `C:\projects\metin2-extra\` | OUTSIDE THE REPO (cleanup 2026-08-11): installed `client\` (2.2 GB), `archive\` backups (1.6 GB) |
-| `documentation/` | Lean documentation hub: `README.md` (index + cheat sheet), `roadmap.md`, `schema.md`, `rules.md`, `adr/` (13 ADRs), `reference/login-flow.md`, `history/` (archived, read-only). `documentation/progress.md` is the live handoff |
+| `documentation/` | Lean documentation hub: `README.md` (index + cheat sheet), `roadmap.md`, `schema.md`, `rules.md`, `adr/` (15 ADRs, with ADR-0013 superseded), `reference/login-flow.md`, `history/` (archived, read-only). `documentation/progress.md` is the live handoff |
 | `ROADMAP.md`, `CHANGELOG.md` | Master plan of the Rust rewrite and chronological change record |
 | `scripts\` | Windows runtime + ops (ADR-0012 primary): `start_win.ps1`, `stop_win.ps1`, `backup_win.ps1` (nightly pg_dump, retention 7); WSL parity/recovery (historical path): `start_m2_min.sh`, `start_m2_full.sh`, `mem_audit.sh`, `watch_*.sh` |
 
@@ -132,14 +154,14 @@ Chain of fixes applied in that session (each verified empirically):
 
 ## CRITICAL RULE: the C++ server is FROZEN (supersedes the "two copies" rule, 2026-08-12)
 
-- **Since ADR-0012 (2026-08-12) the C++ server is NEVER rebuilt** (user decision: the Linux ELF binaries are the parity oracle and run only in the on-demand WSL box). There are no more WSL builds â€” `C:\projects\Metin2\source` (Windows) is now the ONLY source copy; the Rust rewrite and the client live only on Windows.
-- The client IS compiled from the Windows copy (`source\client`).
+- **Since ADR-0012 (2026-08-12) the C++ server is NEVER rebuilt** (user decision: the Linux ELF binaries are the parity oracle and run only in the on-demand WSL box). There are no more WSL builds â€” `C:\projects\Metin2\source` (Windows) is now the only local source copy; the authored Rust server is the public implementation.
+- The compatible client is external to this repository and is used only for local verification. This repository does not compile or package it.
 - Historical rule (until 2026-08-12): `/home/m2/source` (WSL) was the copy that compiled the server (`VERSION.txt` baked that path); the previous model's disaster came from editing both copies inconsistently and from opposing protocol defines between client and server â€” after any change both copies had to be synced (diff/md5sum) and the protocol defines verified on both sides.
 - CAUTION (still true for WSL parity sessions): WSL crashes can LOSE writes without flushing (ext4) â€” after deploying binaries in WSL, run `sync` and verify with md5sum.
 
 ## Protocol facts (verified 2026-08-08)
 
-- Client v40999 (`source\client`), server `__GAME_VERSION__` 41023 (`source\server`).
+- External compatible client v40999, server `__GAME_VERSION__` 41023 from the frozen local oracle (`source\server`).
 - Header tables coherent between server and both clients (handshake 0xff/0xfe, LOGIN3=111, GC_AUTH_SUCCESS=150, GC_LOGIN_SUCCESS=6, GC_LOGIN_SUCCESS_NEWSLOT=0x20, GC_EMPIRE=90...).
 - Login flow: client â†’ auth(30001): GC_PHASE + GC_HANDSHAKE (with clock-bias retries ~40-80ms) â†’ CG_HANDSHAKE echo â†’ LOGIN3(65 bytes: 0x6F + name[31] + pwd[17] + keys[16]) â†’ QID_AUTH_LOGIN (SQL in db) â†’ strcmp(hash with *, stored hash) â†’ GC_AUTH_SUCCESS(0x96+key+result) â†’ client closes auth â†’ connects to the channel(30003) â†’ LOGIN3 â†’ GD_LOGIN â†’ QUERY_LOGIN (13 columns) â†’ RESULT_LOGIN â†’ GC_EMPIRE(0x5a+empire) + SendLoginSuccessPacket â†’ character select.
 - **Encryption: `_IMPROVED_PACKET_ENCRYPTION_` OFF on both sides; `USE_NO_PACKET_ENCRYPTION` ON (plaintext).** Sequence OFF on both. If one side changes, change the other.
@@ -156,7 +178,7 @@ Chain of fixes applied in that session (each verified empirically):
 # 1. Start: PG service postgresql-metin2 -> Rust auth :30001 -> Rust channel :30003
 powershell -ExecutionPolicy Bypass -File scripts\start_win.ps1
 # 2. Verify: ports 5432, 30001, 30003 (the script prints OK/FALTA per port)
-# 3. Test login in the client (C:\projects\metin2-extra\client\metin2client.exe, test/1234)
+# 3. Test login in an externally supplied compatible client (test/1234)
 # 4. Logs: source\deploy\win\logs\{auth,channel}.{out,err}.log
 # 5. Stop: powershell -ExecutionPolicy Bypass -File scripts\stop_win.ps1
 # 6. Nightly backup: powershell -ExecutionPolicy Bypass -File scripts\backup_win.ps1
@@ -176,8 +198,7 @@ wsl -d Debian-M2 -- bash /mnt/c/projects/Metin2/scripts/start_m2_min.sh
 - **Memory:** the full C++ stack (9 cores) blows this machine's memory (4 GB host; WSL cap 1 GB since ADR-0012). Use `start_m2_min.sh` for parity sessions; the daily stack is the Windows one.
 - **WSL unstable (parity sessions):** `Wsl/Service/E_UNEXPECTED` crashes during heavy I/O â€” 4 GB RAM machine, Windows 10 22H2, WSL 2.7.3, WHEA PCIe errors. Config in `C:\Users\Ricardo Casamayor\.wslconfig` (memory=1GB, swap=8GB). After each crash: `wsl --shutdown` â†’ `start_m2_min.sh`.
 - **Compile the C++ server: NEVER (frozen, ADR-0012).** Historical instruction (until 2026-08-12, kept for the record): in WSL â€” libraries first (`cd /home/m2/source/metin2_server/Srcs/Server && make -C liblua/5.0 && make -C libsql && make -C libgame/src && make -C libpoly && make -C libthecore/src`), then `make -C game/src` â†’ `game_r41023` and `make -C db/src` â†’ `db_r41023`; deploy to `main/srv1/share/bin/{game,db}` and restart auth+cores. **Always `sync` after deploy.**
-- **Recompile the client:** MSBuild `source\client\Metin2Client.sln` /p:Configuration=Release /p:Platform=Win32 â†’ `source\client\bin\Release\metin2client.exe` â†’ copy to `C:\projects\metin2-extra\client\metin2client.exe`.
-- **Repack the pack:** edit `source\tools\pack\root\*.py` â†’ `cd source\tools\pack && PackMakerLite.exe --nolog --parallel -p root` â†’ copy `root.epk`/`root.eix` to `C:\projects\metin2-extra\client\pack\`.
+- **Client verification:** use an externally supplied, properly licensed compatible client. Client compilation, pack conversion, and client asset distribution are outside this repository (ADR-0015).
 - **Mandatory boot order (Windows):** PG service â†’ Rust auth â†’ Rust channel (`start_win.ps1` does it). Parity boot order (WSL): mariadb(archived â€” proxy only) â†’ srv1-db â†’ srv1-auth1 â†’ cores.
 
 ## Known pending items (2026-08-08, updated)
@@ -220,9 +241,9 @@ wsl -d Debian-M2 -- bash /mnt/c/projects/Metin2/scripts/start_m2_min.sh
 10. **Work in parallel (speed):** when there are independent tasks, deploy specialized agents in the background simultaneously (@explorer for discovery, @librarian for documentation/research, @coder for implementation, @fixer (quality guardian: attacks + writes/expands tests) for review, @oracle for supervision). Do not serialize work that can run in parallel; reconcile results when returning.
 11. **Plan mode by default:** for any architecture or rewrite task, FIRST plan and discuss with the user (alternatives, risks, ADR before implementing). Do not write rewrite code without explicit plan confirmation.
 12. **Permanent pushback (devil's advocate):** the user explicitly asked: before accepting any plan of theirs, evaluate it critically and, if a significantly better option exists, propose it with concrete arguments (repo facts, measurements, risks). If the plan is solid, validate it with evidence instead of inventing fake pushback. Never accept a plan without analysis.
-13. **Graphs first (permanent user rule):** for ANY code search/explore/modify/refactor task, ALWAYS consult the graphify graphs BEFORE grep/glob/blind reading: `graphify query "..." --graph <merged>` for focused questions, `graphify explain/path/god-nodes` for specific nodes, or `GRAPH_REPORT.md` for broad context. The user should not have to ask: it is automatic in every code task. Available graphs: `graphify-out/graph.json` (root = server+client merge), `source\server\graphify-out\graph.json`, `source\client\graphify-out\graph.json`.
+13. **Graphs first (permanent user rule):** for ANY code search/explore/modify/refactor task, ALWAYS consult the graphify graphs BEFORE grep/glob/blind reading: `graphify query "..." --graph <merged>` for focused questions, `graphify explain/path/god-nodes` for specific nodes, or `GRAPH_REPORT.md` for broad context. The user should not have to ask: it is automatic in every code task. Use only graphs that exist for the checked-out source; the public server graph is the relevant graph for this repository, while old client graphs are external/historical inputs.
 14. **Ponytail personality (permanent):** the orchestrator always operates with the ponytail philosophy: YAGNI, the minimal solution that works, stdlib/native before dependencies, one line before fifty, do not write code that is not needed, do not over-build. Apply to all rewrite and baseline code. Never cut validation, security or accessibility â€” small is a consequence of necessary, not of trimming.
-15. **NEVER block the chat with long-running commands (permanent):** any command that takes >15 s (builds, server start/restart, deployments, dumps, restores) MUST run **detached/background** (`Start-Process ... -RedirectStandardOutput <log>` or a background task) and the orchestrator **ends the turn immediately** after launching â€” the user must be able to keep writing while it runs. Verify on the NEXT turn with quick read-only checks (<10 s each: log tails, `netstat`, `Get-Process`). NEVER chain buildâ†’copyâ†’restartâ†’verify in one synchronous call. Single quick commands (<15 s) are fine. Guardrail: `documentation/guardrails/operations.md` Â§11.
+15. **NEVER block the chat with long-running commands (permanent):** any command that takes >15 s (builds, server start/restart, deployments, dumps, restores) MUST run **detached/background** (`Start-Process ... -RedirectStandardOutput <log>` or a background task) and the orchestrator **ends the turn immediately** after launching â€” the user must be able to keep writing while it runs. Verify on the NEXT turn with quick read-only checks (<10 s each: log tails, `netstat`, `Get-Process`). NEVER chain buildâ†’copyâ†’restartâ†’verify in one synchronous call. Single quick commands (<15 s) are fine. Guardrail: `documentation/history/guardrails/operations.md` Â§11 (historical evidence).
 16. **NEVER chain server operations in one command (permanent, refinement of rule 15):** stopping a process, copying a binary, starting a server and verifying ports are **separate single-purpose commands**, each <10 s, NEVER concatenated with `;` in one call (2026-08-13: the stop+copy+start+verify one-liner hung 4+ times and blocked the chat every time â€” the output truncated mid-command). If a launch is needed: run ONLY the `Start-Process` line(s), then **end the turn**; check `netstat`/logs on the next turn. Do not "finish the job" in one shot at the cost of blocking the user.
 17. **Conventional Commits in English (permanent, 2026-08-15):** every commit message follows [Conventional Commits](https://www.conventionalcommits.org/) â€” `type(scope): description` in English, imperative present tense, no period at the end. Types: `feat` (new behavior), `fix` (bug fix), `docs` (documentation only), `refactor` (no behavior change), `perf` (performance), `test` (tests only), `chore` (build/tooling/backlog, e.g. committing work that was never committed), `revert`. One logical change = one commit (**atomicity** â€” no "fix A + fix B" mixes: enables `git bisect` and clean reverts). The scope is optional but recommended (`fix(movement)`, `feat(channel)`). Historical commits using the old styles (`[fix]`, Spanish, multi-purpose) are preserved verbatim â€” never rewritten (published history). Do not rewrite pushed history.
 18. **Automate in scripts, don't improvise:** anything repeatable goes to `scripts/*.ps1` (`status.ps1` snapshot, `verify.ps1` definition of done, `start_win.ps1`). The model runs the script, it does not invent commands.
@@ -238,15 +259,16 @@ The project follows the standard pattern for AI-agent projects (AGENTS.md + CHAN
 **Documentation is written in English** (technical terms, code identifiers and commands stay as-is). Historical/superseded content is marked and kept â€” never deleted (no-hide-history rule).
 
 - **`documentation/README.md` — index + one-page cheat sheet (quick start, team, cycle).
+- **`documentation/DOCUMENTATION.md`** — mandatory documentation policy and review checklist.
 - **`documentation/roadmap.md`** â€” one-page roadmap.
 - **`documentation/schema.md`** â€” database schema.
 - **`documentation/rules.md`** â€” rules never to repeat (consolidates guardrails).
 - **`documentation/adr/`** â€” ADRs (renamed from `decisions/`; template: Status/Date/Context/Decision/Alternatives/Consequences). Every architecture decision is written BEFORE implementation.
 - **`documentation/reference/login-flow.md`** â€” wire contract.
-- **`documentation/history/`** â€” archived docs (read-only); old `documentation/superpowers/` content is preserved and indexed there.
+- **`documentation/history/`** â€” archived docs (read-only); old planning and specification material is preserved and indexed there.
 - **`documentation/progress.md`** â€” live handoff, source of truth between sessions (read at start, updated at close â€” rule 19).
 - **`CHANGELOG.md`**, **`ROADMAP.md`** (root) â€” kept as historical/master record.
-- **Graphs** â€” after relevant code changes, refresh with `graphify update` on `source\server` and `source\client`, and re-merge to the root (`graphify merge-graphs server client --out graphify-out\graph.json`). The `graphify` MCP (global opencode config) serves the merged graph at `C:\projects\Metin2\graphify-out\graph.json` â€” visible as connected in the omo-slim TUI. See rule 13.
+- **Graphs** â€” after relevant Rust-server code changes, refresh the graph for the checked-out server source and re-merge only existing graph inputs. Do not treat an external client graph as a repository dependency. See rule 13.
 
 ## Guardrails for the Rust rewrite
 
@@ -255,6 +277,7 @@ The project follows the standard pattern for AI-agent projects (AGENTS.md + CHAN
 - Keep the C++ baseline stable and reproducible while a module is ported; verify behavior parity per module.
 - Compatibility adapters between the Rust server and the legacy must be explicit: legacy peer protocol (ADR-0002 shim), PostgreSQL cutover adapter (ADR-0005 â€” Accepted 2026-08-10, gate 4/4; `mysql_proxy` live), legacy wire/pack boundary `protocol::legacy` (ADR-0006 â€” Accepted 2026-08-10, implemented in F2a).
 - No partial Rust embedded in the legacy client during F0â€“F6 (ADR-0007 â€” accepted for the already-agreed boundary).
-- Newer ADRs: **ADR-0008** (Accepted 2026-08-11 â€” data layer: tokio-postgres 0.7, save-by-event + WAL durable, RLS post-WAL, Patroni F5/F6), **ADR-0009** (Accepted 2026-08-12 â€” server-side locale: server owns all text per language), **ADR-0010** (Accepted 2026-08-12 â€” domain boundaries: pure-function modules + **bevy_ecs World adopted** (user decision: mob-farming density is the core requirement) + per-connection state + WorldStore; F5 benchmark validates), **ADR-0011** (Accepted 2026-08-12 â€” anti-hack model: always-on controls, signed clock wrap decided; server-authoritative invariant), **ADR-0012** (Accepted + executed 2026-08-12 â€” runtime hosting: native Windows + WSL on-demand oracle box until F6; the C++ binaries are frozen and NEVER rebuilt).
+- Newer ADRs: **ADR-0008** (Accepted 2026-08-11 â€” data layer: tokio-postgres 0.7, save-by-event + WAL durable, RLS post-WAL, Patroni F5/F6), **ADR-0009** (Accepted 2026-08-12 â€” server-side locale: server owns all text per language), **ADR-0010** (Accepted 2026-08-12 â€” domain boundaries: pure-function modules + **bevy_ecs World adopted** (user decision: mob-farming density is the core requirement) + per-connection state + WorldStore; F5 benchmark validates), **ADR-0011** (Accepted 2026-08-12 â€” anti-hack model: always-on controls, signed clock wrap decided; server-authoritative invariant), **ADR-0012** (Accepted + executed 2026-08-12 â€” runtime hosting: native Windows + WSL on-demand oracle box until F6; the C++ binaries are frozen and NEVER rebuilt), **ADR-0013** (Superseded 2026-08-30 by ADR-0015 â€” former client rewrite plan), **ADR-0014** (Accepted 2026-08-27 â€” five stat points per level), and **ADR-0015** (Accepted 2026-08-30 â€” Rust-only public repository boundary).
 - Current Rust workspace: `source/reforge` (ADR-0003/0004) â€” flat layout, `unsafe_code = "forbid"`, `server_realms` single binary with roles by config.
+
 

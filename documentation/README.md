@@ -1,4 +1,11 @@
-﻿# Documentation — Metin2 Reforge
+﻿---
+Type: Hub
+Status: Current
+Audience: All
+Last verified: 2026-08-30
+---
+
+# Documentation — reforge-core
 
 Welcome. Everything you need in 5 minutes.
 
@@ -9,7 +16,9 @@ powershell -File scripts/status.ps1   # snapshot: HEAD, dirty, binary, ports, CH
 powershell -File scripts/verify.ps1   # definition of done: fmt + test + clippy
 powershell -File scripts/start_win.ps1 # up: PG 5432 + auth 30001 + channel 30003
 powershell -File scripts/stop_win.ps1  # down
-cargo test --workspace                 # Rust tests (recount at HEAD — see G1.1)
+Set-Location source\reforge
+cargo test --workspace                 # Rust tests
+Set-Location ..\..
 ```
 
 ## Team — preset OmO (`openai/gpt-5.6-luna`, variant `max`)
@@ -30,7 +39,8 @@ cargo test --workspace                 # Rust tests (recount at HEAD — see G1.
 status.ps1 → slice → verify.ps1 → atomic commit → update documentation/progress.md
 ```
 
-Each slice = 1 commit + 5 lines in `progress.md`.
+Each slice updates the canonical docs and the `progress.md` handoff; the
+orchestrator commits one logical change after verification.
 
 ## Index — What to Read
 
@@ -40,26 +50,29 @@ Each slice = 1 commit + 5 lines in `progress.md`.
 | Open gaps: owner, evidence, exit criteria | [plans/gap-registry.md](./plans/gap-registry.md) |
 | DB in human language | [schema.md](./schema.md) |
 | Never repeat | [rules.md](./rules.md) |
-| Why PostgreSQL, ECS, WAL…? | [adr/](./adr/) (14 ADRs) |
+| Why PostgreSQL, ECS, WAL…? | [adr/](./adr/) (15 ADRs; ADR-0013 is superseded) |
 | Byte-exact wire contract | [reference/login-flow.md](./reference/login-flow.md) |
 | Where did we leave off? | [progress.md](./progress.md) (live handoff) |
 | What changed with evidence? | [../CHANGELOG.md](../CHANGELOG.md) |
 | Mission + protocol + runbook | [../AGENTS.md](../AGENTS.md) |
-| Old plans, snapshots | [history/](./history/) (read-only) |
+| Documentation policy | [DOCUMENTATION.md](./DOCUMENTATION.md) |
+| Old plans, snapshots | [Historical archive index](./history-index.md) (archive is read-only) |
 
 ## Layout
 
 ```
 documentation/
   README.md            → you are here (index + cheat sheet)
+  DOCUMENTATION.md     → mandatory documentation policy
   roadmap.md           → done / doing / future
   schema.md            → DB
-  rules.md             → never repeat (6 rules)
+  rules.md             → never repeat (7 rules)
   progress.md          → live handoff
   plans/               → live plans (gap-registry.md)
-  adr/                 → decisions
+  adr/                 → architecture decisions
   reference/login-flow.md
-  history/             → archived
+  history-index.md     → current navigation for the archive
+  history/             → archived, read-only
 scripts/
   status.ps1 / verify.ps1 / handoff.ps1 / start_win.ps1
 source/reforge/        → Rust (protocol, network, database, game_core, server_realms)
@@ -71,4 +84,4 @@ source/reforge/        → Rust (protocol, network, database, game_core, server_
 
 ## Stack
 
-Rust 1.97 + bevy_ecs + tokio-postgres 0.7 + PostgreSQL 18 native Windows + frozen C++ oracle
+Rust 1.97 + bevy_ecs + tokio-postgres 0.7 + PostgreSQL 18 on native Windows + frozen C++ oracle

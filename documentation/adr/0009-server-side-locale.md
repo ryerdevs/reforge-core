@@ -1,6 +1,6 @@
 ---
 Type: Decision
-Status: Accepted (2026-08-12)
+Status: Accepted
 Audience: Contributors, maintainers
 Last verified: 2026-08-12
 ---
@@ -9,7 +9,8 @@ Last verified: 2026-08-12
 
 ## Status
 
-Accepted (2026-08-12). Design closed with the user — see `docs/plans/locale-redesign.md`.
+Accepted (2026-08-12). Design closed with the user — see the [historical locale
+plan](../history/plans/locale-redesign.md).
 
 ## Context
 
@@ -78,6 +79,7 @@ Negative / costs:
 
 ## References
 
-- Plan: `docs/plans/locale-redesign.md`
+- Plan: [historical locale redesign](../history/plans/locale-redesign.md)
 - Recon 2026-08-11: client text surface (exp-1), server locale machinery (exp-2)
-- Legacy context: `AGENTS.md` §17, `docs/reference/legacy/language-system.md`
+- Legacy context: [`AGENTS.md`](../../AGENTS.md), [historical language-system
+  reference](../history/reference/legacy/language-system.md)

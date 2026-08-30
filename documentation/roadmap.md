@@ -1,27 +1,57 @@
-# Roadmap — Metin2 Reforge
+---
+Type: Plan
+Status: Current
+Audience: Contributors, maintainers
+Last verified: 2026-08-30
+---
 
-Hoja de ruta viva. Lo hecho está verificado con test/log/cliente.
+# Roadmap — reforge-core
 
-## Hecho
+This is the one-page roadmap. [`ROADMAP.md`](../ROADMAP.md) is the master plan;
+[`progress.md`](progress.md) is the current handoff; and the
+[Gap Registry](plans/gap-registry.md) owns per-item state and exit criteria.
 
-- **F0 Foundations** — workspace Rust + protocol byte-exact (30/30) + login real
-- **F1 Network** — tokio + framer + handshake (25/25)
-- **G-PG Cutover** — PostgreSQL 18 única DB, `mysql_proxy`, parity 30/30, login real en PG
-- **F2 Auth** — `server_realms` auth 30001 + channel 30003, world entry funciona
-- **F3 Data** — WAL durable + `game_core` + bevy_ecs World + spawn dinámico
-- **F5 Gameplay** — 63 parts: shops, trade, quest runtime, skills, refine, party, PvP, safebox (733 tests)
+## Current state
 
-## Haciendo
+- **Rust server:** the public implementation is the workspace in
+  `source/reforge` (`protocol`, `network`, `database`, `game_core`,
+  `quest_dsl`, and `server_realms`).
+- **Runtime:** native Windows PostgreSQL plus Rust `auth` and `channel` roles;
+  the frozen C++ server is a local, on-demand parity oracle.
+- **G0:** the safe item-stack cap is 200 because the current item-count wire is
+  byte-sized. G0.1b–G0.1e are locally checked and await their Oracle Gates;
+  storage cleanup remains open.
+- **G1:** normal/ignored verification, formatting, documentation CI, and
+  redeployment remain open; the G1.14b immutable-history decision is closed, and
+  changelog freshness/current archive navigation are reconciled.
+- **G2:** gameplay, social, quest, data-channel, and deferred-content gaps
+  remain in the [Gap Registry](plans/gap-registry.md).
+- **G3:** stale code comments and ignored-test policy remain open.
+- **F7:** the standalone Rust client is deferred outside this repository by
+  [ADR-0015](adr/0015-rust-only-public-repository.md). An external compatible
+  client is used only for real-client verification.
 
-- Docs unificados (esta reorg) + harness `planning/progress.md` + preset OmO muse-spark
-- Audit 18 todos → archivado como diagnóstico, se ejecuta just-in-time por slice
+## Completed foundations
 
-## Futuro
+- F0 protocol and F1 transport foundations are verified.
+- PostgreSQL is the canonical database; the legacy adapter remains a parity
+  boundary until F6.
+- World entry, the ECS world, dynamic spawning, selected gameplay slices, and
+  locale push/pull have verified implementations.
 
-- **F5 tail** — stat_points, party finish, refine polish, gold pickup, numeric buffs
-- **F6** — unificación game+db, Patroni, 100% Rust, WSL `unregister`
-- **F7** — cliente Rust (Bevy + slint), borrar `protocol::legacy`
+## Next actions
 
-## Regla
+1. Complete Oracle Gates and remaining real-client or wire checks for G0.1b–e.
+2. Execute G1: full verification, formatting, documentation/link checks,
+   changelog reconciliation, and current-binary redeployment.
+3. Execute selected G2 gameplay/content gaps with G3 hygiene work alongside
+   them.
+4. Keep F7 outside this repository until a separate client project is
+   justified and records its own decisions.
 
-Nada es “done” sin evidencia: test/log/cliente o `verify.ps1` verde.
+## Evidence
+
+Use the [live handoff](progress.md), [Gap Registry](plans/gap-registry.md),
+[master roadmap](../ROADMAP.md), and [changelog](../CHANGELOG.md) before marking
+an item complete. No item is complete without its recorded verification
+evidence.

@@ -1,6 +1,6 @@
 ---
 Type: Decision
-Status: Accepted (2026-08-12)
+Status: Accepted
 Audience: Contributors, maintainers
 Date: 2026-08-12
 Last verified: 2026-08-12

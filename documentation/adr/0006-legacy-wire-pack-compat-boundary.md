@@ -23,7 +23,7 @@ If these are implemented inline in `protocol`, the new wire core accumulates leg
 ## Decision (accepted)
 
 1. All legacy-client compatibility code lives behind a **`protocol::legacy` module/feature boundary**: PanamaPack 151/289B, hybrid-crypt 152/153 and any other legacy-only packets are implemented there, never in the new protocol core.
-2. The boundary is documented in `docs/reference/protocol/legacy-compatibility.md` (packet inventory, headers, deletion list).
+2. The boundary is documented in the [historical compatibility reference](../history/reference/protocol/legacy-compatibility.md) (packet inventory, headers, and deletion list).
 3. The compatibility layer is **deleted when the new client ships (F7)** — nothing legacy survives in the new wire.
 4. **Implemented 2026-08-10 (F2a):** `protocol/src/legacy.rs` — PanamaPack 151/289B (XOR IV parity, `panama.cpp:70-93`), hybrid-crypt 152/153 (keys + SDB streams, `ClientPackageCryptInfo.cpp`), runtime-file conditional (`panama/` + `cshybridcrypt*` loading — no files → no packets, parity with the C++ auth); used by `server_realms --role auth` before `GC_AUTH_SUCCESS` (`input_db.cpp:1710-1716`).
 

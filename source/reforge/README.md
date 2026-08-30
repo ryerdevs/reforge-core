@@ -1,32 +1,47 @@
-# reforge — reescritura del servidor Metin2 en Rust
+---
+Type: Hub
+Status: Current
+Audience: Contributors
+Last verified: 2026-08-30
+---
 
-Reescritura incremental (strangler fig) del servidor C++ legacy de Metin2.
-La línea base C++ es el oráculo de comportamiento; cada crate se verifica
-contra ella antes de avanzar (ROADMAP.md, ADR-0003, ADR-0004).
+# `reforge` Rust workspace
 
-## Estructura
+This directory contains the public Rust server workspace. It is an incremental,
+server-authoritative reimplementation: the frozen C++ server is a local parity
+oracle, not a build input for this checkout. See [ADR-0003](../../documentation/adr/0003-reforge-workspace-rust-layout.md),
+[ADR-0012](../../documentation/adr/0012-windows-native-runtime-wsl-on-demand.md),
+and [ADR-0015](../../documentation/adr/0015-rust-only-public-repository.md).
 
-| Ruta | Crate | Rol |
-|---|---|---|
-| `protocol/` | protocol | Paquetes byte-exactos del wire (F0): flujo de login — 81 tests |
-| `network/` | network | Transporte tokio (F1): listener, connection, framer + auth (F2) — 28 tests |
-| `database/` | database | Capa de datos por dominios (F3): account/world/social/economy/log + WAL durable (ADR-0008) — 70 tests |
-| `game_core/` | game_core | Lógica de juego por regiones (F4+): funciones puras (combate, ai, packets) + **bevy_ecs World** (adoptado 2026-08-12, ADR-0010 §2 — user decision: mob-farming density) + estado por conexión + `WorldStore` — 64 tests |
-| `server_realms/` | server_realms | Binario único con roles: `--role auth` / `--role channel` — 42 tests |
-| `mysql_proxy/` | mysql_proxy | Adaptador temporal MySQL→PostgreSQL para el C++ legacy (G-PG, ADR-0005): wire v10 + translate + session — 67 tests; se elimina en F6 |
-| `locale_import/` | locale_import | Importer de locales a PG (F1, ADR-0009): un subcomando por dominio — 19 tests |
+## Crates
 
-## Glosario de nombres (ADR-0004)
+| Path | Role |
+|---|---|
+| `protocol/` | Byte-oriented client/server packets and compatibility codecs. |
+| `network/` | Tokio TCP transport, framing, handshake, and authentication support. |
+| `database/` | PostgreSQL repositories, batching, and WAL-backed mutations. |
+| `game_core/` | Pure gameplay modules plus the `bevy_ecs` world and systems. |
+| `server_realms/` | One binary with `auth` and `channel` roles selected by configuration. |
+| `mysql_proxy/` | Temporary MySQL-to-PostgreSQL adapter for local legacy parity work. |
+| `locale_import/` | Locale-data importer for PostgreSQL. |
+| `bench_bot/` | Compatibility and benchmark bot harness. |
+| `quest_dsl/` | Quest language AST, parser, conversion, and related tooling. |
 
-- **network** — antes `net`: transporte TCP y framing.
-- **database** — antes `db`: capa de datos.
-- **game_core** — antes `realm` (renombrado 2026-08-13), y este antes `game`: la región de juego (un proceso por región, ADR-0002).
-- **auth** — no es un crate: es un módulo de `network` y un rol del binario `server_realms`.
+`auth` is a module of `network` and a role of `server_realms`, not a separate
+workspace crate. The workspace membership is defined in [`Cargo.toml`](Cargo.toml).
 
-## Build / test
+## Verification
 
-```bash
-cargo build   # workspace completo
-cargo test    # 371 tests (conteo de atributos #[test]/#[tokio::test] por crate, 2026-08-12:
-              #   protocol 81, network 28, database 70, game_core 64, server_realms 42, mysql_proxy 67, locale_import 19)
+Run these commands from this directory:
+
+```powershell
+cargo build --workspace
+cargo test --workspace
+cargo fmt -- --check
+cargo clippy --workspace -- -D warnings
 ```
+
+For current status, verified test counts, open gaps, and the next handoff, use
+the [project documentation hub](../../documentation/README.md) and
+[`documentation/progress.md`](../../documentation/progress.md). Test totals are
+not duplicated here because they change as verifiers are added.

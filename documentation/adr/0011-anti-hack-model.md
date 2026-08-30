@@ -1,6 +1,6 @@
 ---
 Type: Decision
-Status: Accepted (2026-08-12)
+Status: Accepted
 Audience: Contributors, maintainers
 Date: 2026-08-12
 Last verified: 2026-08-13
@@ -103,7 +103,7 @@ for clock-bias ±2³¹.
 ## Consequences
 
 - Always-on enforcement (0x00, timers, teleport) is policy, not accident: the
-  divergences are listed in `docs/reference/protocol/legacy-compatibility.md`.
+  divergences are listed in the [historical compatibility reference](../history/reference/protocol/legacy-compatibility.md).
 - The wrap change is one function + one regression test; kick behavior is
   preserved.
 - F5 slices implement the pending controls in order: **walkability + speed

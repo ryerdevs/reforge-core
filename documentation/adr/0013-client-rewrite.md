@@ -1,18 +1,23 @@
 ---
 Type: Decision
-Status: Accepted (2026-08-13); amended 2026-08-13 after oracle review
+Status: Superseded
 Audience: Contributors, maintainers
 Date: 2026-08-13
-Last verified: 2026-08-13
+Last verified: 2026-08-30
 Supersedes: —
-Superseded by: —
+Superseded by: ADR-0015
 ---
 
 # ADR-0013: Client rewrite in Rust — Bevy 0.19, slint UI, build-time legacy asset conversion
 
 ## Status
 
-Accepted (2026-08-13); **amended 2026-08-13 after oracle review** (amendments A–G applied — see the Amendments section below). User decision: the Rust rewrite extends to the client; the 14 decisions D1–D14 below are agreed as recorded. The sequenced plan lives in [`../plans/client-rewrite.md`](../plans/client-rewrite.md).
+**Superseded on 2026-08-30 by [ADR-0015](0015-rust-only-public-repository.md).**
+The decision record is retained for historical context. Its proposed client
+workspace, client build pipeline, and pack-conversion pipeline are not active
+parts of this server repository; F7 is deferred outside it. The former
+sequenced plan is preserved at
+[`../history/plans/client-rewrite.md`](../history/plans/client-rewrite.md).
 
 ## Context
 
@@ -82,7 +87,7 @@ Applied after the architecture oracle review (verified by the orchestrator). In-
 - **D — slint license (D6):** slint RETAINED (user decision 2026-08-13); license terms verified at the F0 spike; if the free/logo-credit terms do not hold → egui fallback (MIT/Apache) or a commercial license at distribution.
 - **E — client_net scope:** network note expanded (handshake with clock-bias retries, phase machine, TimeSync, LOGIN_BY_KEY reconnect, LOGIN3 variants).
 - **F — Blind spots:** see "Implementation notes" below (items 1–9).
-- **G — Dev-time reductions:** applied to `../plans/client-rewrite.md` — prior-art reuse (G1), F1 cut (G2), F4→F5 merge (G3), WYSIWYG deferral (G4), golden screenshots (G5), PNG-only until parity (G6).
+- **G — Dev-time reductions:** applied to `../history/plans/client-rewrite.md` — prior-art reuse (G1), F1 cut (G2), F4→F5 merge (G3), WYSIWYG deferral (G4), golden screenshots (G5), PNG-only until parity (G6).
 
 ## Implementation notes (oracle review 2026-08-13)
 
@@ -100,6 +105,6 @@ Blind spots from the review, carried into the plan (risks/sections there):
 
 ## Not decided in this ADR
 
-- Exact F2–F4 content ordering beyond the F0/F1 milestones — sequenced in `../plans/client-rewrite.md`, mirroring the server's F5.3 slice order (movement → combat → items → NPCs → quests → shops/trade).
+- Exact F2–F4 content ordering beyond the F0/F1 milestones — sequenced in `../history/plans/client-rewrite.md`, mirroring the server's F5.3 slice order (movement → combat → items → NPCs → quests → shops/trade).
 - Server-side F7 items (real encryption, "new protocol" beyond the current `protocol` crate contract) — coordinated with the server lane when they land.
 - Git LFS activation, Linux release packaging, audio asset format strategy, and the legacy-client retirement date (a post-F5-parity decision point).

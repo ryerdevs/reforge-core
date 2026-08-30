@@ -1,20 +1,36 @@
+---
+Type: Reference
+Status: Current
+Audience: Contributors, maintainers
+Last verified: 2026-08-30
+---
+
 # Schema — PostgreSQL 18
 
-DB `metin2` en `127.0.0.1:5432` (service `postgresql-metin2`, role mt2/mt2).
+Database `metin2` runs at `127.0.0.1:5432` through the
+`postgresql-metin2` service with role `mt2/mt2`.
 
 ## Schemas
 
-- **account** — `account`, `player_index` (login, empire, pids)
-- **player** — `player`, `item`, `quest`, `skill_proto`, `mob_proto`, `shop`, `guild_*`
-- **common** — `locale`, `gmlist`, `skill_power`
-- **log** — `money_log`, `audit`
+- **account** — `account`, `player_index` (login, empire, and character IDs)
+- **player** — `player`, `item`, `quest`, `skill_proto`, `mob_proto`, `shop`, and
+  `guild_*`
+- **common** — locale data, `gmlist`, and `skill_power`
+- **log** — `money_log` and `audit`
 
-## Reglas
+## Invariants
 
-- `CHECK gold >= 0` en 3 wallets (money_log excluido)
-- `WAL` → `Batcher` (100ms) → PG, replay idempotente `ON CONFLICT DO NOTHING`
-- `pgcrypto` en `account` — `mysql_hash_password(pw) = '*' + UPPER(SHA1(UNHEX(SHA1(pw))))`
+- `CHECK (gold >= 0)` is applied to the three wallet tables; `money_log` is
+  append-only and excluded from that wallet constraint.
+- Mutations flow `WAL → Batcher (100 ms) → PostgreSQL`; replay is idempotent with
+  `ON CONFLICT DO NOTHING`.
+- `pgcrypto` in `account` provides
+  `mysql_hash_password(pw) = '*' + UPPER(SHA1(UNHEX(SHA1(pw))))`.
 
 ## Fuente
 
-`source/reforge/database/src/` — repos por dominio. DDL en `scripts/gpg/`.
+## Sources
+
+- Domain repositories: [`source/reforge/database/src/`](../source/reforge/database/src/)
+- PostgreSQL migrations: [`scripts/gpg/`](../scripts/gpg/)
+- Data-layer decision: [ADR-0008](adr/0008-data-layer.md)
