@@ -56,7 +56,10 @@ impl SafeboxRepo {
     }
 
     async fn connect(&self) -> Result<Client, String> {
-        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
+        self.pool
+            .get()
+            .await
+            .map_err(|e| format!("PG pool get: {e}"))
     }
 
     /// Size del safebox (QID_SAFEBOX_SIZE, `char.cpp:5741`). `None` = la
@@ -242,7 +245,10 @@ mod tests {
     /// `set_gold` — QUERY_SAFEBOX_SAVE, ClientManager.cpp:1122-1124).
     #[test]
     fn get_gold_sql_shape() {
-        assert_eq!(GOLD_SQL, "SELECT gold FROM player.safebox WHERE account_id = $1");
+        assert_eq!(
+            GOLD_SQL,
+            "SELECT gold FROM player.safebox WHERE account_id = $1"
+        );
     }
 
     /// VERIFIER (mutation): el old del cambio de password se compara con
@@ -285,15 +291,25 @@ mod tests {
     #[test]
     fn set_size_mutation_uses_shared_sql_and_params() {
         let m = set_size_mutation(42, 1);
-        assert_eq!(m.sql, set_size_statement(1), "mismo SQL (una fuente de verdad)");
+        assert_eq!(
+            m.sql,
+            set_size_statement(1),
+            "mismo SQL (una fuente de verdad)"
+        );
         assert_eq!(m.params, vec![Param::Int(42), Param::Int(1)]);
         assert_eq!(m.id[6] >> 4, 7, "version 7 del uuidv7");
-        assert!(m.payload_json().contains(&uuidv7_string(&m.id)), "audit payload con mutation_id");
+        assert!(
+            m.payload_json().contains(&uuidv7_string(&m.id)),
+            "audit payload con mutation_id"
+        );
 
         let m = set_size_mutation(42, 4);
         assert_eq!(m.sql, set_size_statement(4), "rama UPDATE comparte SQL");
         assert_eq!(m.params, vec![Param::Int(42), Param::Int(4)]);
-        assert!(!m.sql.contains("ON CONFLICT"), "UPDATE por PK: idempotente sin conflict");
+        assert!(
+            !m.sql.contains("ON CONFLICT"),
+            "UPDATE por PK: idempotente sin conflict"
+        );
     }
 
     /// Wiring del Batcher: `set_size_mutated` llega como mutation al sink —
@@ -306,7 +322,12 @@ mod tests {
         #[derive(Clone, Default)]
         struct CountingSink(Arc<Mutex<Vec<Vec<Mutation>>>>);
         impl MutationSink for CountingSink {
-            fn apply(&mut self, batch: Vec<Mutation>) -> impl std::future::Future<Output = Result<(), String>> + Send {
+            // RPITIT + Send: firma del trait, igual que los sinks reales.
+            #[allow(clippy::manual_async_fn)]
+            fn apply(
+                &mut self,
+                batch: Vec<Mutation>,
+            ) -> impl std::future::Future<Output = Result<(), String>> + Send {
                 async move {
                     self.0.lock().unwrap().push(batch);
                     Ok(())
@@ -316,7 +337,10 @@ mod tests {
 
         let sink = CountingSink::default();
         let batcher = Batcher::spawn(std::time::Duration::from_millis(100), 64, sink.clone());
-        let repo = SafeboxRepo::new(crate::pool::new_pool("host=127.0.0.1 port=1 user=x password=x dbname=x", 2).expect("pool"));
+        let repo = SafeboxRepo::new(
+            crate::pool::new_pool("host=127.0.0.1 port=1 user=x password=x dbname=x", 2)
+                .expect("pool"),
+        );
         repo.set_size_mutated(&batcher, 42, 1);
         repo.set_size_mutated(&batcher, 42, 4);
         // Fases del reloj pausado (patron de player.rs/wal.rs): 1) el worker
@@ -326,7 +350,7 @@ mod tests {
         tokio::task::yield_now().await;
         tokio::time::advance(std::time::Duration::from_millis(120)).await;
         for _ in 0..200 {
-            if sink.0.lock().unwrap().len() >= 1 {
+            if !sink.0.lock().unwrap().is_empty() {
                 break;
             }
             tokio::task::yield_now().await;

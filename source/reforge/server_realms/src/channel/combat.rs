@@ -9,8 +9,8 @@
 use database::item::ItemRepo;
 use game_core::ecs::{CombatIntent, Intent};
 
-use crate::channel::session::{Outcome, Session};
 use crate::channel::INVENTORY_MAX_NUM;
+use crate::channel::session::{Outcome, Session};
 
 /// CG_ATTACK (8): valida el parseo y manda el intent `Attack` al mundo (la
 /// resolución — cooldown/rango/daño — la hace `WorldSim::process_attack`).
@@ -30,17 +30,20 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
         eprintln!(
             "server_realms: channel conn {}: CG_ATTACK tipo {} de {} — \
              skills pendientes (F5.2+)",
-            session.conn_id, attack.b_type, session.row().name
+            session.conn_id,
+            attack.b_type,
+            session.row().name
         );
         return Ok(Outcome::Continue);
     }
     // F5.3 (items): el ARMA equipada (WEAR_WEAPON = 4 → cell =
     // INVENTORY_MAX_NUM + 4 = 184) — su ProtoItem (value3/4 daño, value5
     // bonus) y el attack_speed del arma (GET_ATTACK_SPEED).
-    let weapon = if let Some(w) = session.inventory.iter().find(|i| {
-        i.window == "EQUIPMENT"
-            && i.pos as u16 == INVENTORY_MAX_NUM + 4
-    }) {
+    let weapon = if let Some(w) = session
+        .inventory
+        .iter()
+        .find(|i| i.window == "EQUIPMENT" && i.pos as u16 == INVENTORY_MAX_NUM + 4)
+    {
         ItemRepo::new(session.pool.clone())
             .load_proto_use_values(w.vnum)
             .await?

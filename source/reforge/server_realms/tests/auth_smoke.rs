@@ -11,7 +11,7 @@ use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-use network::{read_exact_size, Connection};
+use network::{Connection, read_exact_size};
 use protocol::{TPacketCGHandshake, TPacketCGLogin3, TPacketGCAuthSuccess, TPacketGCPhase, phase};
 use tokio::net::TcpStream;
 
@@ -48,7 +48,10 @@ fn spawn_auth(config_path: &std::path::Path) -> (Child, String) {
             if reader.read_line(&mut line).unwrap_or(0) == 0 {
                 break;
             }
-            if let Some(addr) = line.trim().strip_prefix("server_realms: auth escuchando en ") {
+            if let Some(addr) = line
+                .trim()
+                .strip_prefix("server_realms: auth escuchando en ")
+            {
                 let _ = tx.send(addr.to_string());
                 break;
             }
@@ -97,20 +100,28 @@ async fn auth_handles_login3_with_db_down() {
     let (mut child, addr) = spawn_auth(&config_path);
 
     let result = async {
-        let stream = TcpStream::connect(&addr).await.map_err(|e| format!("connect {addr}: {e}"))?;
+        let stream = TcpStream::connect(&addr)
+            .await
+            .map_err(|e| format!("connect {addr}: {e}"))?;
         let mut conn = Connection::new(stream);
         client_handshake(&mut conn).await;
 
         // LOGIN3 al auth = 68 B (65 + lang[3], packet_info.cpp:157).
         let login3 = TPacketCGLogin3::new_auth("test", "1234", [0; 4], "es").to_bytes_auth();
-        conn.send(&login3).await.map_err(|e| format!("LOGIN3: {e}"))?;
+        conn.send(&login3)
+            .await
+            .map_err(|e| format!("LOGIN3: {e}"))?;
 
         // Respuesta: GC_AUTH_SUCCESS (6 B) — con la DB caída, bResult=0 y
         // key=0 (parity input_db.cpp:1719-1726: el C++ nunca manda
         // GC_LOGIN_FAILURE por credenciales).
-        let hdr = read_exact_size(&mut conn, 1).await.map_err(|e| format!("header respuesta: {e}"))?;
+        let hdr = read_exact_size(&mut conn, 1)
+            .await
+            .map_err(|e| format!("header respuesta: {e}"))?;
         assert_eq!(hdr[0], 0x96, "GC_AUTH_SUCCESS (0x96)");
-        let rest = read_exact_size(&mut conn, 5).await.map_err(|e| format!("resto: {e}"))?;
+        let rest = read_exact_size(&mut conn, 5)
+            .await
+            .map_err(|e| format!("resto: {e}"))?;
         let mut pkt = hdr;
         pkt.extend_from_slice(&rest);
         let auth = TPacketGCAuthSuccess::from_bytes(&pkt).map_err(|e| e.to_string())?;
@@ -135,20 +146,31 @@ async fn auth_accepts_full_login3_with_good_version() {
     let (mut child, addr) = spawn_auth(&config_path);
 
     let result = async {
-        let stream = TcpStream::connect(&addr).await.map_err(|e| format!("connect {addr}: {e}"))?;
+        let stream = TcpStream::connect(&addr)
+            .await
+            .map_err(|e| format!("connect {addr}: {e}"))?;
         let mut conn = Connection::new(stream);
         client_handshake(&mut conn).await;
 
         let login3 = TPacketCGLogin3::new_auth("test", "1234", [0; 4], "es")
             .to_bytes_auth_with(Some(40999), Some([0xAB; 16]));
         assert_eq!(login3.len(), 88, "LOGIN3 auth completo (F2b)");
-        conn.send(&login3).await.map_err(|e| format!("LOGIN3: {e}"))?;
+        conn.send(&login3)
+            .await
+            .map_err(|e| format!("LOGIN3: {e}"))?;
 
         // El version gate pasa → el auth responde GC_AUTH_SUCCESS (bResult=0
         // por la DB caída) — no un cierre por versión.
-        let hdr = read_exact_size(&mut conn, 1).await.map_err(|e| format!("header: {e}"))?;
-        assert_eq!(hdr[0], 0x96, "GC_AUTH_SUCCESS — la version buena no se rechaza");
-        let rest = read_exact_size(&mut conn, 5).await.map_err(|e| format!("resto: {e}"))?;
+        let hdr = read_exact_size(&mut conn, 1)
+            .await
+            .map_err(|e| format!("header: {e}"))?;
+        assert_eq!(
+            hdr[0], 0x96,
+            "GC_AUTH_SUCCESS — la version buena no se rechaza"
+        );
+        let rest = read_exact_size(&mut conn, 5)
+            .await
+            .map_err(|e| format!("resto: {e}"))?;
         let mut pkt = hdr;
         pkt.extend_from_slice(&rest);
         let auth = TPacketGCAuthSuccess::from_bytes(&pkt).map_err(|e| e.to_string())?;
@@ -171,7 +193,9 @@ async fn auth_rejects_bad_version_with_clean_close() {
     let (mut child, addr) = spawn_auth(&config_path);
 
     let result = async {
-        let stream = TcpStream::connect(&addr).await.map_err(|e| format!("connect {addr}: {e}"))?;
+        let stream = TcpStream::connect(&addr)
+            .await
+            .map_err(|e| format!("connect {addr}: {e}"))?;
         let mut conn = Connection::new(stream);
         client_handshake(&mut conn).await;
 
@@ -179,7 +203,9 @@ async fn auth_rejects_bad_version_with_clean_close() {
         let login3 = TPacketCGLogin3::new_auth("test", "1234", [0; 4], "es")
             .to_bytes_auth_with(Some(99_999), Some([0xCD; 16]));
         assert_eq!(login3.len(), 88);
-        conn.send(&login3).await.map_err(|e| format!("LOGIN3: {e}"))?;
+        conn.send(&login3)
+            .await
+            .map_err(|e| format!("LOGIN3: {e}"))?;
 
         // El auth cierra sin responder → EOF limpio.
         let mut b = [0u8; 1];
@@ -231,5 +257,8 @@ async fn auth_times_out_silent_connection() {
     let _ = child.kill();
     let _ = child.wait();
     let _ = std::fs::remove_file(&config_path);
-    assert!(closed.unwrap_or(false), "el auth debe cerrar la conexión muda por timeout");
+    assert!(
+        closed.unwrap_or(false),
+        "el auth debe cerrar la conexión muda por timeout"
+    );
 }

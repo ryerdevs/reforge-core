@@ -60,10 +60,13 @@ pub async fn click(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String>
         "server_realms: channel conn {}: CG_ON_CLICK recibido (npc vid {})",
         session.conn_id, npc_vid
     );
-    session.intent(ShopIntent::Open {
-        player_vid: session.player_vid(),
-        npc_vid,
-    }.into())?;
+    session.intent(
+        ShopIntent::Open {
+            player_vid: session.player_vid(),
+            npc_vid,
+        }
+        .into(),
+    )?;
     // F5 quests (wiring 2026-08-13): el mismo click dispara el trigger
     // Chat(vnum) de las quests del NPC (el mundo resuelve el vnum del vid) —
     // si el NPC tiene quests de chat, el diálogo GC_SCRIPT sale (sin quests
@@ -105,7 +108,13 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
                 );
                 return Ok(Outcome::Continue);
             }
-            session.intent(ShopIntent::Buy { player_vid: pv, pos: pkt[3] }.into())?;
+            session.intent(
+                ShopIntent::Buy {
+                    player_vid: pv,
+                    pos: pkt[3],
+                }
+                .into(),
+            )?;
         }
         2 => {
             // SHOP_SUBHEADER_CG_SELL: + {cell} (1 B — input_main.cpp:1065-1075).
@@ -117,10 +126,13 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
                 );
                 return Ok(Outcome::Continue);
             }
-            session.intent(ShopIntent::Sell {
-                player_vid: pv,
-                cell: u16::from(pkt[2]),
-            }.into())?;
+            session.intent(
+                ShopIntent::Sell {
+                    player_vid: pv,
+                    cell: u16::from(pkt[2]),
+                }
+                .into(),
+            )?;
         }
         3 => {
             // SHOP_SUBHEADER_CG_SELL2: + {cell, count} (2 B —
@@ -133,11 +145,14 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
                 );
                 return Ok(Outcome::Continue);
             }
-            session.intent(ShopIntent::Sell2 {
-                player_vid: pv,
-                cell: u16::from(pkt[2]),
-                count: u32::from(pkt[3]),
-            }.into())?;
+            session.intent(
+                ShopIntent::Sell2 {
+                    player_vid: pv,
+                    cell: u16::from(pkt[2]),
+                    count: u32::from(pkt[3]),
+                }
+                .into(),
+            )?;
         }
         other => {
             eprintln!(
@@ -164,24 +179,27 @@ pub(super) async fn emit(session: &mut Session, e: ShopEvent) -> Result<(), Stri
                 let item = items.iter().find(|it| usize::from(it.display_pos) == i);
                 push_shop_item(&mut out, item);
             }
-            session.send(&out).await.map_err(|e| format!("enviando GC_SHOP START: {e}"))
-        }
-        ShopEvent::Closed { .. } => {
             session
-                .send(&gc_shop(SHOP_SUBHEADER_GC_END))
+                .send(&out)
                 .await
-                .map_err(|e| format!("enviando GC_SHOP END: {e}"))
+                .map_err(|e| format!("enviando GC_SHOP START: {e}"))
         }
-        ShopEvent::BuyResult { pos, vnum, count, price, .. } => {
-            apply_buy(session, pos, vnum, count, price).await
-        }
+        ShopEvent::Closed { .. } => session
+            .send(&gc_shop(SHOP_SUBHEADER_GC_END))
+            .await
+            .map_err(|e| format!("enviando GC_SHOP END: {e}")),
+        ShopEvent::BuyResult {
+            pos,
+            vnum,
+            count,
+            price,
+            ..
+        } => apply_buy(session, pos, vnum, count, price).await,
         ShopEvent::SellResult { cell, count, .. } => apply_sell(session, cell, count).await,
-        ShopEvent::BuyRejected { error, .. } => {
-            session
-                .send(&gc_shop(error.wire_subheader()))
-                .await
-                .map_err(|e| format!("enviando GC_SHOP error: {e}"))
-        }
+        ShopEvent::BuyRejected { error, .. } => session
+            .send(&gc_shop(error.wire_subheader()))
+            .await
+            .map_err(|e| format!("enviando GC_SHOP error: {e}")),
         ShopEvent::SellRejected { .. } => {
             // Parity: `CShopManager::Sell` no manda paquetes de error (solo
             // chat — sistema pendiente) — silencio.
@@ -220,9 +238,20 @@ async fn apply_buy(
     count: i64,
     price: i64,
 ) -> Result<(), String> {
-    let item = ShopItem { vnum, count, price, display_pos: pos };
+    let item = ShopItem {
+        vnum,
+        count,
+        price,
+        display_pos: pos,
+    };
     let gold = i64::from(session.row().gold);
-    let receipt = match shop::buy(&session.inventory, gold, &item, ITEM_COUNT_LIMIT, INVENTORY_MAX_NUM) {
+    let receipt = match shop::buy(
+        &session.inventory,
+        gold,
+        &item,
+        ITEM_COUNT_LIMIT,
+        INVENTORY_MAX_NUM,
+    ) {
         Ok(r) => r,
         Err(e) => {
             eprintln!(
@@ -246,13 +275,20 @@ async fn apply_buy(
     };
     // La unidad ACID: oro (pre→post) + item (stack UPDATE o INSERT nuevo).
     let ex = match receipt {
-        BuyReceipt { stack: Some((id, pre, post)), .. } => ItemExchange {
+        BuyReceipt {
+            stack: Some((id, pre, post)),
+            ..
+        } => ItemExchange {
             owner_id: session.row().id,
             materials: vec![(id, pre, post)],
             result: None,
             gold: Some((gold, new_gold)),
         },
-        BuyReceipt { stack: None, new_pos, .. } => {
+        BuyReceipt {
+            stack: None,
+            new_pos,
+            ..
+        } => {
             let id = ItemRepo::new(session.pool.clone())
                 .max_id_in_range(100_000_000, 200_000_000)
                 .await?
@@ -290,10 +326,13 @@ async fn apply_buy(
         return Ok(());
     }
     // Memoria + wire.
-    session.row_mut().gold = i32::try_from(new_gold)
-        .map_err(|e| format!("convirtiendo gold de compra: {e}"))?;
+    session.row_mut().gold =
+        i32::try_from(new_gold).map_err(|e| format!("convirtiendo gold de compra: {e}"))?;
     match receipt {
-        BuyReceipt { stack: Some((id, pre, _)), .. } => {
+        BuyReceipt {
+            stack: Some((id, pre, _)),
+            ..
+        } => {
             if let Some(idx) = session.inventory.iter().position(|i| i.id == id) {
                 session.inventory[idx].count = pre + count;
                 let up = TPacketGCItemUpdate {
@@ -312,7 +351,11 @@ async fn apply_buy(
                     .map_err(|e| format!("enviando GC_ITEM_UPDATE: {e}"))?;
             }
         }
-        BuyReceipt { stack: None, new_pos, .. } => {
+        BuyReceipt {
+            stack: None,
+            new_pos,
+            ..
+        } => {
             let row = ItemRow {
                 id: ex.result.as_ref().map(|(r, _)| r.id).unwrap_or(0),
                 window: "INVENTORY".into(),
@@ -324,7 +367,10 @@ async fn apply_buy(
             };
             let set = TPacketGCItemSet {
                 header: TPacketGCItemSet::HEADER,
-                cell: TItemPos { window: TItemPos::WINDOW_INVENTORY, cell: new_pos },
+                cell: TItemPos {
+                    window: TItemPos::WINDOW_INVENTORY,
+                    cell: new_pos,
+                },
                 vnum: vnum as u32,
                 count: count as u8,
                 flags: 0,
@@ -398,15 +444,18 @@ async fn apply_sell(session: &mut Session, cell: u16, qty: i64) -> Result<(), St
         return Ok(());
     }
     // Memoria + wire.
-    session.row_mut().gold = i32::try_from(new_gold)
-        .map_err(|e| format!("convirtiendo gold de venta: {e}"))?;
+    session.row_mut().gold =
+        i32::try_from(new_gold).map_err(|e| format!("convirtiendo gold de venta: {e}"))?;
     let mut vnum_log = 0i64;
     if let Some(idx) = session.inventory.iter().position(|i| i.pos as u16 == cell) {
         vnum_log = session.inventory[idx].vnum;
         session.inventory[idx].count = receipt.material.2;
         if session.inventory[idx].count <= 0 {
             let del = TPacketGCItemDelDeprecated::new(
-                TItemPos { window: TItemPos::WINDOW_INVENTORY, cell },
+                TItemPos {
+                    window: TItemPos::WINDOW_INVENTORY,
+                    cell,
+                },
                 0,
                 0,
             );
@@ -418,7 +467,10 @@ async fn apply_sell(session: &mut Session, cell: u16, qty: i64) -> Result<(), St
         } else {
             let up = TPacketGCItemUpdate {
                 header: TPacketGCItemUpdate::HEADER,
-                cell: TItemPos { window: TItemPos::WINDOW_INVENTORY, cell },
+                cell: TItemPos {
+                    window: TItemPos::WINDOW_INVENTORY,
+                    cell,
+                },
                 count: session.inventory[idx].count as u8,
                 sockets: session.inventory[idx].sockets,
                 attrs: session.inventory[idx].attrs,
@@ -436,8 +488,9 @@ async fn apply_sell(session: &mut Session, cell: u16, qty: i64) -> Result<(), St
 /// del crate database (ItemRepo::load_sell_proto) y el pool compartido
 /// (ADR-0008 2: sin SQL directo fuera del crate).
 async fn sell_proto(pool: &database::pool::PgPool, vnum: i64) -> Result<shop::SellProto, String> {
-    let (shop_buy_price, flag) =
-        database::item::ItemRepo::new(pool.clone()).load_sell_proto(vnum).await?;
+    let (shop_buy_price, flag) = database::item::ItemRepo::new(pool.clone())
+        .load_sell_proto(vnum)
+        .await?;
     Ok(shop::SellProto {
         shop_buy_price,
         count_per_1gold: flag & game_core::shop::ITEM_FLAG_COUNT_PER_1GOLD != 0,
@@ -455,7 +508,10 @@ async fn send_points_and_log(
     gold_delta: i64,
 ) -> Result<(), String> {
     session
-        .send(&game_core::packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
+        .send(
+            &game_core::packets::points_packet(session.row(), session.next_exp, &session.battle)
+                .to_bytes(),
+        )
         .await
         .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
     match i32::try_from(gold_delta) {
@@ -498,13 +554,16 @@ mod tests {
         assert_eq!(item.len(), 47, "packet_shop_item: 4+4+4+1+1+12+21");
         assert_eq!(gc_shop(0).len(), 4, "TPacketGCShop: header+size+subheader");
         let start_len = 4 + 4 + SHOP_HOST_ITEM_MAX_NUM * 47;
-        assert_eq!(start_len, 1888, "START: TPacketGCShop + owner_vid + 40 items");
+        assert_eq!(
+            start_len, 1888,
+            "START: TPacketGCShop + owner_vid + 40 items"
+        );
         let mut out = Vec::new();
         out.push(header::GC_SHOP);
         out.extend_from_slice(&(start_len as u16).to_le_bytes());
         out.push(SHOP_SUBHEADER_GC_START);
         out.extend_from_slice(&7u32.to_le_bytes());
-        for i in 0..SHOP_HOST_ITEM_MAX_NUM {
+        for _i in 0..SHOP_HOST_ITEM_MAX_NUM {
             push_shop_item(&mut out, None);
         }
         assert_eq!(out.len(), 4 + 4 + 1880, "el paquete completo del START");

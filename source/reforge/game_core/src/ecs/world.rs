@@ -23,7 +23,7 @@ use crate::ecs::systems::combat::{aggro_detect_system, chase_attack_system};
 use crate::ecs::systems::movement::patrol_system;
 use crate::ecs::systems::skill::affects_system;
 use crate::ecs::systems::spawn::spawn_despawn_system;
-use crate::npc::{load_map_spawns, MobCache, SpawnEntry};
+use crate::npc::{MobCache, SpawnEntry, load_map_spawns};
 use database::npc::{MobRepo, MobRow};
 
 /// El mundo ECS del canal (ADR-0010 §1): el `World` de bevy + el `Schedule`
@@ -51,7 +51,8 @@ pub struct WorldSim {
     /// Trade activo por jugador — AMBOS vids del par apuntan al MISMO
     /// `Arc<Mutex<TradePair>>` (la mutación desde cualquiera de los dos
     /// lados ve el estado del otro — el clone los habría divergido).
-    pub(crate) trades: HashMap<u32, std::sync::Arc<std::sync::Mutex<crate::ecs::systems::social::TradePair>>>,
+    pub(crate) trades:
+        HashMap<u32, std::sync::Arc<std::sync::Mutex<crate::ecs::systems::social::TradePair>>>,
 }
 
 impl WorldSim {
@@ -87,14 +88,23 @@ impl WorldSim {
         // Cadena: parity del ORDEN del tick del canal (spawn → chase → detect
         // → patrol → affects) y sin ambigüedad entre sistemas (comparten
         // recursos).
-        schedule.add_systems((
-            spawn_despawn_system,
-            chase_attack_system,
-            aggro_detect_system,
-            patrol_system,
-            affects_system,
-        ).chain());
-        Self { world, schedule, players: HashMap::new(), open_shops: HashMap::new(), trades: HashMap::new() }
+        schedule.add_systems(
+            (
+                spawn_despawn_system,
+                chase_attack_system,
+                aggro_detect_system,
+                patrol_system,
+                affects_system,
+            )
+                .chain(),
+        );
+        Self {
+            world,
+            schedule,
+            players: HashMap::new(),
+            open_shops: HashMap::new(),
+            trades: HashMap::new(),
+        }
     }
 
     /// Carga (una vez por mapa) la tabla COMPLETA de spawns: `load_map_spawns`
@@ -108,7 +118,12 @@ impl WorldSim {
         repo: &MobRepo,
         map_path: &str,
     ) -> Result<Vec<NpcEvent>, String> {
-        if !self.world.resource::<SpawnTable>().maps.contains_key(&join.map_index) {
+        if !self
+            .world
+            .resource::<SpawnTable>()
+            .maps
+            .contains_key(&join.map_index)
+        {
             let spawns = load_map_spawns(join.map_index, map_path)
                 .map_err(|e| format!("spawns del mapa {}: {e}", join.map_index))?;
             let resolved = self.resolve_spawns(repo, &spawns).await.unwrap_or_default();
@@ -116,7 +131,10 @@ impl WorldSim {
                 .into_iter()
                 .map(|(entry, mob)| SpawnTableEntry { entry, mob })
                 .collect();
-            self.world.resource_mut::<SpawnTable>().maps.insert(join.map_index, entries);
+            self.world
+                .resource_mut::<SpawnTable>()
+                .maps
+                .insert(join.map_index, entries);
         }
         Ok(self.join_player_ready(join))
     }
@@ -136,9 +154,17 @@ impl WorldSim {
         let e = self
             .world
             .spawn((
-                Map { map_index: join.map_index },
-                Position { x: join.x, y: join.y },
-                Hp { hp: join.hp, max_hp: join.max_hp },
+                Map {
+                    map_index: join.map_index,
+                },
+                Position {
+                    x: join.x,
+                    y: join.y,
+                },
+                Hp {
+                    hp: join.hp,
+                    max_hp: join.max_hp,
+                },
                 Player {
                     vid: join.vid,
                     level: join.level,
@@ -151,7 +177,10 @@ impl WorldSim {
                     iq: join.iq,
                 },
                 Combat(CombatState::new()),
-                Mp { mp: join.mp, max_mp: join.max_mp },
+                Mp {
+                    mp: join.mp,
+                    max_mp: join.max_mp,
+                },
                 SkillLevels(join.skill_level),
                 SkillCooldowns::default(),
                 Affects::default(),
@@ -171,7 +200,10 @@ impl WorldSim {
             .into_iter()
             .map(|(entry, mob)| SpawnTableEntry { entry, mob })
             .collect();
-        self.world.resource_mut::<SpawnTable>().maps.insert(map_index, entries);
+        self.world
+            .resource_mut::<SpawnTable>()
+            .maps
+            .insert(map_index, entries);
     }
 
     /// Saca al jugador del mundo (disconnect — el RAII de la conexión manda
@@ -209,12 +241,16 @@ impl WorldSim {
                 Vec::new()
             }
             Intent::Combat(c) => match c {
-                CombatIntent::Attack { player_vid, victim_vid, b_type, weapon } => {
-                    self.process_attack(player_vid, victim_vid, b_type, weapon.as_ref(), now_ms)
-                }
-                CombatIntent::Target { player_vid, target_vid } => {
-                    self.process_target(player_vid, target_vid)
-                }
+                CombatIntent::Attack {
+                    player_vid,
+                    victim_vid,
+                    b_type,
+                    weapon,
+                } => self.process_attack(player_vid, victim_vid, b_type, weapon.as_ref(), now_ms),
+                CombatIntent::Target {
+                    player_vid,
+                    target_vid,
+                } => self.process_target(player_vid, target_vid),
                 CombatIntent::SetHp { player_vid, hp } => {
                     self.set_player_hp(player_vid, hp);
                     Vec::new()
@@ -235,21 +271,40 @@ impl WorldSim {
                     self.set_player_pvp_mode(player_vid, mode);
                     Vec::new()
                 }
-                CombatIntent::SetParty { player_vid, party_id } => {
+                CombatIntent::SetParty {
+                    player_vid,
+                    party_id,
+                } => {
                     self.set_player_party(player_vid, party_id);
                     Vec::new()
                 }
                 // GM commands (lote 3, 2026-08-17) — spawn/kill/purge/stat.
-                CombatIntent::GmSpawn { player_vid, map_index, x, y, count, mob } => {
-                    self.spawn_gm_mob(player_vid, map_index, x, y, count, mob)
-                }
-                CombatIntent::GmKill { player_vid, target_vid } => {
-                    self.gm_kill(player_vid, target_vid)
-                }
-                CombatIntent::GmPurge { player_vid, map_index, x, y, all } => {
-                    self.gm_purge(player_vid, map_index, x, y, all)
-                }
-                CombatIntent::SetStats { player_vid, st, dx, iq, ht } => {
+                CombatIntent::GmSpawn {
+                    player_vid,
+                    map_index,
+                    x,
+                    y,
+                    count,
+                    mob,
+                } => self.spawn_gm_mob(player_vid, map_index, x, y, count, mob),
+                CombatIntent::GmKill {
+                    player_vid,
+                    target_vid,
+                } => self.gm_kill(player_vid, target_vid),
+                CombatIntent::GmPurge {
+                    player_vid,
+                    map_index,
+                    x,
+                    y,
+                    all,
+                } => self.gm_purge(player_vid, map_index, x, y, all),
+                CombatIntent::SetStats {
+                    player_vid,
+                    st,
+                    dx,
+                    iq,
+                    ht,
+                } => {
                     self.set_player_stats(player_vid, st, dx, iq, ht);
                     Vec::new()
                 }
@@ -269,16 +324,27 @@ impl WorldSim {
                 self.set_player_position(player_vid, x, y);
                 Vec::new()
             }
-            Intent::Skill(SkillIntent::UseSkill { player_vid, skill_id, target_vid, weapon }) => {
-                self.process_skill(player_vid, skill_id, target_vid, weapon.as_ref(), now_ms)
-            }
+            Intent::Skill(SkillIntent::UseSkill {
+                player_vid,
+                skill_id,
+                target_vid,
+                weapon,
+            }) => self.process_skill(player_vid, skill_id, target_vid, weapon.as_ref(), now_ms),
             Intent::Item(item) => match item {
-            ItemIntent::DropItem { player_vid, vnum, count, x, y, z, sockets, attrs } => {
-                self.process_drop(player_vid, vnum, count, x, y, z, sockets, attrs)
-            }
-                ItemIntent::PickupItem { player_vid, item_vid } => {
-                    self.process_pickup(player_vid, item_vid)
-                }
+                ItemIntent::DropItem {
+                    player_vid,
+                    vnum,
+                    count,
+                    x,
+                    y,
+                    z,
+                    sockets,
+                    attrs,
+                } => self.process_drop(player_vid, vnum, count, x, y, z, sockets, attrs),
+                ItemIntent::PickupItem {
+                    player_vid,
+                    item_vid,
+                } => self.process_pickup(player_vid, item_vid),
                 ItemIntent::RemoveItem { item_vid } => {
                     self.remove_item(item_vid);
                     Vec::new()
@@ -323,7 +389,9 @@ impl WorldSim {
 
     /// HP actual del jugador en el mundo (0 sin jugador — tests/harness).
     pub fn player_hp(&self, player_vid: u32) -> i32 {
-        let Some(e) = self.players.get(&player_vid).copied() else { return 0 };
+        let Some(e) = self.players.get(&player_vid).copied() else {
+            return 0;
+        };
         self.world
             .get_entity(e)
             .ok()
@@ -368,7 +436,14 @@ mod tests {
         load(&mut w, vec![(entry(101, 0, 0, 1), row)]);
         assert_eq!(w.metrics(), WorldMetrics::default());
         join(&mut w); // 1 tick + Spawned
-        w.process_intent(CombatIntent::SetHp { player_vid: 2, hp: 50 }.into(), 1_000);
+        w.process_intent(
+            CombatIntent::SetHp {
+                player_vid: 2,
+                hp: 50,
+            }
+            .into(),
+            1_000,
+        );
         let m = w.metrics();
         assert_eq!(m.ticks, 1, "el join corre el primer tick");
         assert_eq!(m.intents_processed, 1);

@@ -29,18 +29,19 @@ use database::common::CommonRepo;
 use database::item::ItemRepo;
 use database::land::LandRepo;
 use database::player::{PlayerCreate, PlayerSummary};
-use network::Connection;
-use protocol::world::{TPacketGCChannel, TPacketGCTime};
-use protocol::world::TPacketCGMarkLogin;
-use protocol::{
-    header, phase, TPacketCGChangeName, TPacketCGEmpire, TPacketCGLogin3, TPacketCGPlayerCreate,
-    TPacketCGPlayerDelete, TPacketCGPlayerSelect, TPacketGCDestroyCharacterSuccess,
-    TPacketGCChangeName, TPacketGCCreateFailure, TPacketGCEmpire, TPacketGCLoginFailure,
-    TPacketGCLoginSuccess, TPacketGCPhase, TPacketGCPlayerCreateSuccess, PLAYER_PER_ACCOUNT,
-};
 use game_core::ecs::{Intent, PlayerJoin, QuestIntent};
 use game_core::packets;
 use game_core::world::WorldStore;
+use network::Connection;
+use protocol::world::TPacketCGMarkLogin;
+use protocol::world::{TPacketGCChannel, TPacketGCTime};
+use protocol::{
+    PLAYER_PER_ACCOUNT, TPacketCGChangeName, TPacketCGEmpire, TPacketCGLogin3,
+    TPacketCGPlayerCreate, TPacketCGPlayerDelete, TPacketCGPlayerSelect, TPacketGCChangeName,
+    TPacketGCCreateFailure, TPacketGCDestroyCharacterSuccess, TPacketGCEmpire,
+    TPacketGCLoginFailure, TPacketGCLoginSuccess, TPacketGCPhase, TPacketGCPlayerCreateSuccess,
+    header, phase,
+};
 use tokio::net::TcpStream;
 
 use crate::auth::{is_valid_login_string, normalize_login};
@@ -73,7 +74,10 @@ pub async fn run(session: &mut Session) -> Result<(), String> {
         .send(&TPacketGCPhase::new(phase::LOGIN).to_bytes())
         .await
         .map_err(|e| format!("enviando GC_PHASE(LOGIN): {e}"))?;
-    eprintln!("server_realms: channel conn {}: enviado GC_PHASE(LOGIN)", session.conn_id);
+    eprintln!(
+        "server_realms: channel conn {}: enviado GC_PHASE(LOGIN)",
+        session.conn_id
+    );
 
     // 2. Primer paquete: el LOGIN3 del canal (65 B) o el CG_MARK_LOGIN
     //    (0x64, 9 B) de la conexión paralela del guild mark — sin handshake
@@ -96,7 +100,10 @@ pub async fn run(session: &mut Session) -> Result<(), String> {
 async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<(), String> {
     let login = normalize_login(&login3.login);
     let passwd = cstr(&login3.passwd).to_string();
-    eprintln!("server_realms: channel conn {}: LOGIN3 login={login}", session.conn_id);
+    eprintln!(
+        "server_realms: channel conn {}: LOGIN3 login={login}",
+        session.conn_id
+    );
 
     // 4. Validaciones (parity input_login.cpp:97-147 + db.cpp:244-365).
     if !is_valid_login_string(&login) {
@@ -116,10 +123,16 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
 
     // 5. Credenciales vs PG (QUERY_LOGIN — 13 columnas; el canal C++ hace
     //    GD_LOGIN → db → RESULT_LOGIN, `db.cpp:244-365`).
-    let acc = match AccountRepo::new(session.pool.clone()).login(&login, &passwd).await {
+    let acc = match AccountRepo::new(session.pool.clone())
+        .login(&login, &passwd)
+        .await
+    {
         Ok(Some(acc)) => acc,
         Ok(None) => {
-            eprintln!("server_realms: channel conn {}: NOID {login}", session.conn_id);
+            eprintln!(
+                "server_realms: channel conn {}: NOID {login}",
+                session.conn_id
+            );
             send_login_failure(&mut session.conn, session.conn_id, "NOID").await?;
             return Ok(());
         }
@@ -158,9 +171,15 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
     // 6. WorldStore (repos sobre el pool COMPARTIDO + el Batcher UNICO del
     //    canal - ya no un Batcher por jugador) + empire + paquete del select.
     //    El sanity y el replay del WAL ya ocurrieron en el arranque del canal.
-    session.store = Some(WorldStore::new(session.pool.clone(), session.batcher.clone()));
+    session.store = Some(WorldStore::new(
+        session.pool.clone(),
+        session.batcher.clone(),
+    ));
     session.empire = empire_byte(acc.empire);
-    eprintln!("server_realms: channel conn {}: empire={}", session.conn_id, session.empire);
+    eprintln!(
+        "server_realms: channel conn {}: empire={}",
+        session.conn_id, session.empire
+    );
 
     // GC_EMPIRE (0x5a) + GC_PHASE(SELECT) + 449 B (parity input_db.cpp:169-183).
     session
@@ -171,10 +190,19 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
         .send(&TPacketGCPhase::new(phase::SELECT).to_bytes())
         .await
         .map_err(|e| format!("enviando GC_PHASE(SELECT): {e}"))?;
-    let success = build_login_success(session.store(), acc.id, session.conn_id, &session.config.listen)
-        .await?;
+    let success = build_login_success(
+        session.store(),
+        acc.id,
+        session.conn_id,
+        &session.config.listen,
+    )
+    .await?;
     let bytes = success.to_bytes();
-    assert_eq!(bytes.len(), TPacketGCLoginSuccess::SIZE, "449 B (invariante wire)");
+    assert_eq!(
+        bytes.len(),
+        TPacketGCLoginSuccess::SIZE,
+        "449 B (invariante wire)"
+    );
     session
         .send(&bytes)
         .await
@@ -206,13 +234,13 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
             }
             SelectKind::Select => {
                 break TPacketCGPlayerSelect::from_bytes(&pkt)
-                    .map_err(|e| format!("CG_PLAYER_SELECT: {e}"))?
+                    .map_err(|e| format!("CG_PLAYER_SELECT: {e}"))?;
             }
             SelectKind::Other => {
                 return Err(format!(
                     "channel conn {}: header inesperado 0x{:02x} esperando el select",
                     session.conn_id, pkt[0]
-                ))
+                ));
             }
         }
     };
@@ -223,7 +251,10 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
 
     let Some(row) = session.store().select_player(acc.id, select.index).await? else {
         // Parity input_login.cpp:266-271 ("player index not found" -> CLOSE).
-        eprintln!("server_realms: channel conn {}: slot vacío/inválido — cierre", session.conn_id);
+        eprintln!(
+            "server_realms: channel conn {}: slot vacío/inválido — cierre",
+            session.conn_id
+        );
         return Ok(());
     };
     session.row = Some(row);
@@ -242,7 +273,8 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
         eprintln!(
             "server_realms: channel conn {}: posición ({ox},{oy}) inválida en el mapa {} — \
              fallback a la primera celda movible ({fx},{fy})",
-            session.conn_id, session.row().map_index
+            session.conn_id,
+            session.row().map_index
         );
     }
     // F5.1: el estado de movimiento del jugador (posición del load). El ANCLA
@@ -252,10 +284,11 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
     // (input_main.cpp:1501) se miden desde aquí; con el canal sin handshake
     // (2026-08-14) el reloj del cliente queda anclado al AUTH y el desfase de
     // arranque entre procesos queda dentro del umbral.
-    session.motion = Some(game_core::movement::initial(session.row().x, session.row().y));
-    session
-        .motion_mut()
-        .anchor_server_time = now32();
+    session.motion = Some(game_core::movement::initial(
+        session.row().x,
+        session.row().y,
+    ));
+    session.motion_mut().anchor_server_time = now32();
     eprintln!(
         "server_realms: channel conn {}: player_load {} id={} lvl={} x={} y={} map={}",
         session.conn_id,
@@ -285,14 +318,17 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
     session.inventory = ItemRepo::new(session.pool.clone())
         .load_by_owner(session.row().id)
         .await?;
-    session.affects = AffectRepo::new(session.pool.clone()).load(session.row().id).await?;
+    session.affects = AffectRepo::new(session.pool.clone())
+        .load(session.row().id)
+        .await?;
     // Battle points (ComputeBattlePoints — char.cpp:2051-2152): el arma
     // equipada (daño value0/value1 → la ventana del cliente) + la armadura
     // (el iArmor). Se cachean en la sesión (los GC_POINTS de todos los caminos
     // los leen) y van en el POINTS del entry.
     let weapon_proto = super::equipped_weapon_proto(&session.pool, &session.inventory).await?;
     let armor_sum = super::equipped_armor(&session.inventory, &session.pool).await?;
-    session.battle = packets::compute_battle_points(session.row(), weapon_proto.as_ref(), armor_sum);
+    session.battle =
+        packets::compute_battle_points(session.row(), weapon_proto.as_ref(), armor_sum);
     for pkt in entry_packets(
         session.row(),
         session.next_exp,
@@ -300,7 +336,10 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
         &session.affects,
         &session.battle,
     ) {
-        session.send(&pkt).await.map_err(|e| format!("enviando entry: {e}"))?;
+        session
+            .send(&pkt)
+            .await
+            .map_err(|e| format!("enviando entry: {e}"))?;
     }
     eprintln!(
         "server_realms: channel conn {}: entry enviado (LOADING + MAIN_CHARACTER + {} quickslots + \
@@ -336,11 +375,14 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
                 return Err(format!(
                     "channel conn {}: header inesperado 0x{other:02x} esperando CG_ENTERGAME",
                     session.conn_id
-                ))
+                ));
             }
         }
     }
-    eprintln!("server_realms: channel conn {}: CG_ENTERGAME recibido", session.conn_id);
+    eprintln!(
+        "server_realms: channel conn {}: CG_ENTERGAME recibido",
+        session.conn_id
+    );
 
     // ------------------------------------------------------------------
     // ENTERGAME (parity input_login.cpp:611-656): ADD (1) + INFO (136) via
@@ -353,7 +395,8 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
     if lands.is_empty() {
         eprintln!(
             "server_realms: channel conn {}: mapa {} sin lands — el C++ no manda el paquete (building.cpp:969)",
-            session.conn_id, session.row().map_index
+            session.conn_id,
+            session.row().map_index
         );
     }
     // C27 (velocidad de botas): la velocidad computada del personaje — el
@@ -380,14 +423,23 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
         .map(|d| d.as_secs() as u32)
         .unwrap_or(0);
     enter.push(TPacketGCTime::new(now).to_bytes().to_vec());
-    enter.push(TPacketGCChannel::new(session.config.channel).to_bytes().to_vec());
+    enter.push(
+        TPacketGCChannel::new(session.config.channel)
+            .to_bytes()
+            .to_vec(),
+    );
     for pkt in enter {
-        session.send(&pkt).await.map_err(|e| format!("enviando enter: {e}"))?;
+        session
+            .send(&pkt)
+            .await
+            .map_err(|e| format!("enviando enter: {e}"))?;
     }
     eprintln!(
         "server_realms: channel conn {}: ENTERGAME enviado (ADD + INFO + GC_PHASE(GAME) + {} lands \
          + GC_TIME + GC_CHANNEL {}) — el cliente está DENTRO del mapa",
-        session.conn_id, lands.len(), session.config.channel
+        session.conn_id,
+        lands.len(),
+        session.config.channel
     );
     // MESSENGER (bloque 2026-08-21): la lista de amigos al entrar al mundo
     // (parity input_login.cpp:639 — `MessengerManager::Login(ch->GetName())`
@@ -475,14 +527,19 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
     eprintln!(
         "server_realms: channel conn {}: {} en el mundo compartido (mapa {}) — \
          los adds de los mobs visibles llegan por la cola",
-        session.conn_id, session.row().name, session.row().map_index
+        session.conn_id,
+        session.row().name,
+        session.row().map_index
     );
 
     // F5 quests (wiring 2026-08-13): el runtime de quests del jugador - las
     // filas persistidas (player.quest) alimentan el engine (flags +
     // {quest}.__status). Sin filas o con error: runtime vacio (fail-open -
     // las quests de chat siguen disponibles, sin estado previo).
-    match database::quest::QuestRepo::new(session.pool.clone()).load(session.row().id).await {
+    match database::quest::QuestRepo::new(session.pool.clone())
+        .load(session.row().id)
+        .await
+    {
         Ok(rows) => {
             let flags: Vec<game_core::quest::PersistedFlag> = rows
                 .into_iter()
@@ -561,7 +618,8 @@ async fn recv_login3(session: &mut Session) -> Result<Option<TPacketCGLogin3>, S
             // (0xd2): [bHeader][nSize:4][TChannelStatus port:2+status:1][0x01]
             // — el cliente hace Initialize()/Disconnect al recibirla.
             header::CG_STATE_CHECKER => {
-                let resp = channel_status_packet(&session.config.listen, session.config.no_more_clients);
+                let resp =
+                    channel_status_packet(&session.config.listen, session.config.no_more_clients);
                 session
                     .send(&resp)
                     .await
@@ -577,11 +635,13 @@ async fn recv_login3(session: &mut Session) -> Result<Option<TPacketCGLogin3>, S
                 return Err(format!(
                     "channel conn {}: header inesperado 0x{other:02x} esperando el LOGIN3",
                     session.conn_id
-                ))
+                ));
             }
         }
     };
-    TPacketCGLogin3::from_bytes(&pkt).map(Some).map_err(|e| format!("LOGIN3: {e}"))
+    TPacketCGLogin3::from_bytes(&pkt)
+        .map(Some)
+        .map_err(|e| format!("LOGIN3: {e}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -650,8 +710,8 @@ const CREATE_Y: i32 = 278400;
 /// `TPacketGCPlayerCreateSuccess` (73 B — el cliente rellena el slot del
 /// select con el TSimplePlayer, `__RecvPlayerCreateSuccessPacket`).
 async fn select_create(session: &mut Session, pkt: &[u8]) -> Result<(), String> {
-    let p = TPacketCGPlayerCreate::from_bytes(pkt)
-        .map_err(|e| format!("CG_CHARACTER_CREATE: {e}"))?;
+    let p =
+        TPacketCGPlayerCreate::from_bytes(pkt).map_err(|e| format!("CG_CHARACTER_CREATE: {e}"))?;
     let name = cstr(&p.name).to_string();
     eprintln!(
         "server_realms: channel conn {}: CG_CHARACTER_CREATE index={} name={name} job={} shape={}",
@@ -808,8 +868,8 @@ async fn select_create(session: &mut Session, pkt: &[u8]) -> Result<(), String> 
 /// lee de conf.txt — PLAYER_DELETE_LEVEL_LIMIT[_LOWER]; con los defaults
 /// 251/0 cualquier nivel es borrable — el rewrite no tiene el config).
 async fn select_delete(session: &mut Session, pkt: &[u8]) -> Result<(), String> {
-    let p = TPacketCGPlayerDelete::from_bytes(pkt)
-        .map_err(|e| format!("CG_CHARACTER_DELETE: {e}"))?;
+    let p =
+        TPacketCGPlayerDelete::from_bytes(pkt).map_err(|e| format!("CG_CHARACTER_DELETE: {e}"))?;
     eprintln!(
         "server_realms: channel conn {}: CG_CHARACTER_DELETE index={} private_code={}",
         session.conn_id,
@@ -910,7 +970,11 @@ async fn select_empire(session: &mut Session, pkt: &[u8]) -> Result<(), String> 
     }
     // Persiste el imperio + mueve los personajes a la aldea (WorldStore::
     // set_empire — mapa 41/UNITS 969600-278400, el único mapa del canal).
-    if let Err(e) = session.store().set_empire(session.account_id, p.b_empire).await {
+    if let Err(e) = session
+        .store()
+        .set_empire(session.account_id, p.b_empire)
+        .await
+    {
         // Fail-open: sin respuesta, el cliente reintenta (parity — el C++
         // tampoco responde si el db falla: no llega el DG_EMPIRE_SELECT).
         eprintln!(
@@ -937,8 +1001,7 @@ async fn select_empire(session: &mut Session, pkt: &[u8]) -> Result<(), String> 
 /// personaje tiene el flag `bChangeName`; nombre inválido → failure bType=0;
 /// nombre tomado → failure bType=1; ok → GC_CHANGE_NAME (107, 30 B).
 async fn select_change_name(session: &mut Session, pkt: &[u8]) -> Result<(), String> {
-    let p = TPacketCGChangeName::from_bytes(pkt)
-        .map_err(|e| format!("CG_CHANGE_NAME: {e}"))?;
+    let p = TPacketCGChangeName::from_bytes(pkt).map_err(|e| format!("CG_CHANGE_NAME: {e}"))?;
     let name = cstr(&p.name).to_string();
     eprintln!(
         "server_realms: channel conn {}: CG_CHANGE_NAME index={} name={name}",
@@ -1102,7 +1165,8 @@ fn validated_load_position(session: &Session) -> Option<(i32, i32)> {
         eprintln!(
             "server_realms: channel conn {}: walkability no disponible (mapa {}): {e} — \
              fail-open (la posición cargada se mantiene)",
-            session.conn_id, session.row().map_index
+            session.conn_id,
+            session.row().map_index
         );
         return None;
     }
@@ -1129,7 +1193,8 @@ fn validated_load_position(session: &Session) -> Option<(i32, i32)> {
             eprintln!(
                 "server_realms: channel conn {}: mapa {} sin celdas movibles — \
                  la posición cargada se mantiene",
-                session.conn_id, session.row().map_index
+                session.conn_id,
+                session.row().map_index
             );
             None
         }
@@ -1161,23 +1226,38 @@ async fn build_login_success(
         [None, None, None, None, None];
     for (i, pid) in slots.iter().enumerate() {
         if let Some(pid) = pid
-            && let Some(s) = summaries.iter().find(|s| s.id == *pid) {
-                players[i] = Some(s.clone());
-            }
+            && let Some(s) = summaries.iter().find(|s| s.id == *pid)
+        {
+            players[i] = Some(s.clone());
+        }
     }
     eprintln!(
         "server_realms: 449 B con server de juego {}:{} (DirectEnter)",
         ip, port
     );
-    Ok(packets::login_success(&players, handle, crate::channel::rand32(), server_ip, port))
+    Ok(packets::login_success(
+        &players,
+        handle,
+        crate::channel::rand32(),
+        server_ip,
+        port,
+    ))
 }
 
 /// `GC_LOGIN_FAILURE` con log (patrón del auth).
-async fn send_login_failure(conn: &mut Connection<TcpStream>, conn_id: u32, status: &str) -> Result<(), String> {
+async fn send_login_failure(
+    conn: &mut Connection<TcpStream>,
+    conn_id: u32,
+    status: &str,
+) -> Result<(), String> {
     eprintln!("server_realms: channel: GC_LOGIN_FAILURE {status}");
-    crate::channel::session::conn_send(conn, conn_id, &TPacketGCLoginFailure::new(status).to_bytes())
-        .await
-        .map_err(|e| format!("enviando GC_LOGIN_FAILURE: {e}"))
+    crate::channel::session::conn_send(
+        conn,
+        conn_id,
+        &TPacketGCLoginFailure::new(status).to_bytes(),
+    )
+    .await
+    .map_err(|e| format!("enviando GC_LOGIN_FAILURE: {e}"))
 }
 
 /// C-string → `&str` (hasta el primer NUL; bytes no-UTF8 → vacío defensivo).
@@ -1215,8 +1295,16 @@ fn entry_packets(
         packets::main_character(row).to_bytes().to_vec(),
     ];
     out.extend(packets::quickslot_packets(row.quickslot.as_ref()));
-    out.push(packets::points_packet(row, next_exp, battle).to_bytes().to_vec());
-    out.push(packets::skill_level_packet(row.skill_level.as_ref()).to_bytes().to_vec());
+    out.push(
+        packets::points_packet(row, next_exp, battle)
+            .to_bytes()
+            .to_vec(),
+    );
+    out.push(
+        packets::skill_level_packet(row.skill_level.as_ref())
+            .to_bytes()
+            .to_vec(),
+    );
     out.extend(packets::item_set_packets(items));
     out.extend(packets::affect_add_packets(affects));
     out
@@ -1242,7 +1330,9 @@ fn enter_packets(
         packets::character_add(row, mov_speed).to_bytes().to_vec(),
         // El ADDITIONAL_INFO (136) NO lleva b_moving_speed (packet.h:
         // 1348-1368 — la velocidad con botas viaja en el ADD y el UPDATE).
-        packets::character_additional_info_with_parts(row, empire, parts, arrows).to_bytes().to_vec(),
+        packets::character_additional_info_with_parts(row, empire, parts, arrows)
+            .to_bytes()
+            .to_vec(),
         TPacketGCPhase::new(phase::GAME).to_bytes().to_vec(),
     ];
     // FASE 1 caballo jugable: montado al entrar → el estado persistido del
@@ -1315,13 +1405,23 @@ mod tests {
             l_duration: 5,
             l_sp_cost: 6,
         }];
-        let pkts = entry_packets(&row, 300, &items, &affects, &packets::BattlePoints::default());
+        let pkts = entry_packets(
+            &row,
+            300,
+            &items,
+            &affects,
+            &packets::BattlePoints::default(),
+        );
         // 2 (LOADING+15) + 36 quickslots + 2 (16+76) + 1 item + 1 affect.
         assert_eq!(pkts.len(), 42, "2 + 36 + 2 + 1 + 1");
         assert_eq!(pkts[0].len(), TPacketGCPhase::SIZE);
         assert_eq!(pkts[0][0], header::GC_PHASE);
         assert_eq!(pkts[0][1], phase::LOADING, "parity input_db.cpp:428");
-        assert_eq!(pkts[1].len(), TPacketGCMainCharacter::SIZE, "47 B (layout del cliente, sin empire)");
+        assert_eq!(
+            pkts[1].len(),
+            TPacketGCMainCharacter::SIZE,
+            "47 B (layout del cliente, sin empire)"
+        );
         assert_eq!(pkts[1][0], TPacketGCMainCharacter::HEADER);
         // Quickslots: 36 × 4 B en orden (parity input_db.cpp:455-456).
         for (i, q) in pkts[2..38].iter().enumerate() {
@@ -1338,17 +1438,40 @@ mod tests {
         assert_eq!(pkts[41].len(), TPacketGCAffectAdd::SIZE, "affect add 22 B");
         assert_eq!(pkts[41][0], TPacketGCAffectAdd::HEADER, "header 126");
         // MainCharacter: vid@1, lx@34 (spot).
-        assert_eq!(u32::from_le_bytes([pkts[1][1], pkts[1][2], pkts[1][3], pkts[1][4]]), 2);
-        assert_eq!(i32::from_le_bytes([pkts[1][34], pkts[1][35], pkts[1][36], pkts[1][37]]), 969600);
+        assert_eq!(
+            u32::from_le_bytes([pkts[1][1], pkts[1][2], pkts[1][3], pkts[1][4]]),
+            2
+        );
+        assert_eq!(
+            i32::from_le_bytes([pkts[1][34], pkts[1][35], pkts[1][36], pkts[1][37]]),
+            969600
+        );
         // Points: level@5 = 5 (parity char.cpp:1562), NEXT_EXP@17 = 300,
         // MAX_HP@25 = 1850 (650 + 30×40 — dummy job=1/ASSASSIN, ht=30).
-        assert_eq!(i32::from_le_bytes([pkts[38][5], pkts[38][6], pkts[38][7], pkts[38][8]]), 5);
-        assert_eq!(i32::from_le_bytes([pkts[38][17], pkts[38][18], pkts[38][19], pkts[38][20]]), 300, "NEXT_EXP");
-        assert_eq!(i32::from_le_bytes([pkts[38][25], pkts[38][26], pkts[38][27], pkts[38][28]]), 1850, "MAX_HP > 0 (ComputePoints subset)");
+        assert_eq!(
+            i32::from_le_bytes([pkts[38][5], pkts[38][6], pkts[38][7], pkts[38][8]]),
+            5
+        );
+        assert_eq!(
+            i32::from_le_bytes([pkts[38][17], pkts[38][18], pkts[38][19], pkts[38][20]]),
+            300,
+            "NEXT_EXP"
+        );
+        assert_eq!(
+            i32::from_le_bytes([pkts[38][25], pkts[38][26], pkts[38][27], pkts[38][28]]),
+            1850,
+            "MAX_HP > 0 (ComputePoints subset)"
+        );
         // MOV_SPEED@77 (1 + 19×4) = 100 (parity char.cpp:2245).
-        assert_eq!(i32::from_le_bytes([pkts[38][77], pkts[38][78], pkts[38][79], pkts[38][80]]), 100);
+        assert_eq!(
+            i32::from_le_bytes([pkts[38][77], pkts[38][78], pkts[38][79], pkts[38][80]]),
+            100
+        );
         // Sin items/affects: 40 paquetes (2 + 36 + 2).
-        assert_eq!(entry_packets(&row, 300, &[], &[], &packets::BattlePoints::default()).len(), 40);
+        assert_eq!(
+            entry_packets(&row, 300, &[], &[], &packets::BattlePoints::default()).len(),
+            40
+        );
     }
 
     /// Enter (ENTERGAME): ADD + INFO + GAME (+ land list si hay lands) —
@@ -1385,7 +1508,10 @@ mod tests {
         // ADDITIONAL_INFO (136) NO lleva speed (packet.h:1348-1368 — solo
         // ADD y UPDATE tienen b_moving_speed).
         let pkts = enter_packets(&row, 3, &[], &parts, 0, 110);
-        assert_eq!(pkts[0][26], 110, "b_moving_speed@26 del ADD (C27 botas +10)");
+        assert_eq!(
+            pkts[0][26], 110,
+            "b_moving_speed@26 del ADD (C27 botas +10)"
+        );
     }
 
     /// Tamaños del wire del flujo select/spawn (invariante byte-exacto).
@@ -1411,7 +1537,11 @@ mod tests {
         assert_eq!(select_kind(header::CG_CHARACTER_SELECT), SelectKind::Select);
         assert_eq!(select_kind(header::CG_TIME_SYNC), SelectKind::Keepalive);
         assert_eq!(select_kind(header::CG_PONG), SelectKind::Keepalive);
-        assert_eq!(select_kind(0x7f), SelectKind::Other, "solo headers desconocidos cierran");
+        assert_eq!(
+            select_kind(0x7f),
+            SelectKind::Other,
+            "solo headers desconocidos cierran"
+        );
     }
 
     /// `check_name` del rewrite (parity `check_name_alphabet` + trigger
@@ -1423,7 +1553,10 @@ mod tests {
         assert!(check_name(&"x".repeat(24)), "máximo 24");
         assert!(!check_name(""), "vacío");
         assert!(!check_name("a"), "menor a 2 (parity strlen < 2)");
-        assert!(!check_name(&"x".repeat(25)), "mayor a 24 (el buffer es [25])");
+        assert!(
+            !check_name(&"x".repeat(25)),
+            "mayor a 24 (el buffer es [25])"
+        );
         assert!(!check_name("Warrior!"), "símbolo");
         assert!(!check_name("War rior"), "espacio");
         assert!(!check_name("ñandu"), "no-ASCII (parity isalpha/isdigit)");
@@ -1447,28 +1580,52 @@ mod tests {
 
     /// Stats iniciales del create (parity JobInitialPoints constants.cpp:18-21
     /// + NewPlayerTable2 input_login.cpp:434-441): hp = max_hp + ht×hp_per_ht,
-    /// mp = max_sp + iq×sp_per_iq, stamina = max_stamina.
+    ///   mp = max_sp + iq×sp_per_iq, stamina = max_stamina.
     #[test]
     fn job_initial_points_parity() {
         // JOB_WARRIOR: st6 ht4 dx3 iq3, 600/200, 40/20, 800.
         let (st, ht, dx, iq, max_hp, max_sp, hph, sph, stamina) = job_initial_points(0);
         assert_eq!((st, ht, dx, iq), (6, 4, 3, 3));
-        assert_eq!(max_hp + i32::from(ht) * hph, 760, "hp del warrior (600 + 4×40)");
-        assert_eq!(max_sp + i32::from(iq) * sph, 260, "mp del warrior (200 + 3×20)");
+        assert_eq!(
+            max_hp + i32::from(ht) * hph,
+            760,
+            "hp del warrior (600 + 4×40)"
+        );
+        assert_eq!(
+            max_sp + i32::from(iq) * sph,
+            260,
+            "mp del warrior (200 + 3×20)"
+        );
         assert_eq!(stamina, 800, "stamina inicial (max_stamina)");
         // JOB_ASSASSIN.
         let (st, ht, dx, iq, max_hp, max_sp, hph, sph, _) = job_initial_points(1);
         assert_eq!((st, ht, dx, iq), (4, 3, 6, 3));
-        assert_eq!(max_hp + i32::from(ht) * hph, 770, "hp del assassin (650 + 3×40)");
-        assert_eq!(max_sp + i32::from(iq) * sph, 260, "mp del assassin (200 + 3×20)");
+        assert_eq!(
+            max_hp + i32::from(ht) * hph,
+            770,
+            "hp del assassin (650 + 3×40)"
+        );
+        assert_eq!(
+            max_sp + i32::from(iq) * sph,
+            260,
+            "mp del assassin (200 + 3×20)"
+        );
         // JOB_SURA.
         let (st, ht, dx, iq, max_hp, _, hph, _, _) = job_initial_points(2);
         assert_eq!((st, ht, dx, iq), (5, 3, 3, 5));
-        assert_eq!(max_hp + i32::from(ht) * hph, 770, "hp del sura (650 + 3×40)");
+        assert_eq!(
+            max_hp + i32::from(ht) * hph,
+            770,
+            "hp del sura (650 + 3×40)"
+        );
         // JOB_SHAMAN (default del match).
         let (st, ht, dx, iq, max_hp, _, hph, _, _) = job_initial_points(3);
         assert_eq!((st, ht, dx, iq), (3, 4, 3, 6));
-        assert_eq!(max_hp + i32::from(ht) * hph, 860, "hp del shaman (700 + 4×40)");
+        assert_eq!(
+            max_hp + i32::from(ht) * hph,
+            860,
+            "hp del shaman (700 + 4×40)"
+        );
     }
 
     /// Estado del canal (GC_RESPOND_CHANNELSTATUS 0xd2 — parity
@@ -1480,8 +1637,16 @@ mod tests {
         let pkt = channel_status_packet("127.0.0.1:30003", false);
         assert_eq!(pkt.len(), 9, "1 + 4 + 2 + 1 + 1");
         assert_eq!(pkt[0], header::GC_RESPOND_CHANNELSTATUS, "0xd2");
-        assert_eq!(i32::from_le_bytes([pkt[1], pkt[2], pkt[3], pkt[4]]), 1, "nSize 1");
-        assert_eq!(u16::from_le_bytes([pkt[5], pkt[6]]), 30003, "puerto del canal");
+        assert_eq!(
+            i32::from_le_bytes([pkt[1], pkt[2], pkt[3], pkt[4]]),
+            1,
+            "nSize 1"
+        );
+        assert_eq!(
+            u16::from_le_bytes([pkt[5], pkt[6]]),
+            30003,
+            "puerto del canal"
+        );
         assert_eq!(pkt[7], 1, "status recomendado (STATE_DICT[1])");
         assert_eq!(pkt[8], 1, "bSuccess (parity — el cliente lo ignora)");
         // no_more_clients → status 0 (offline, parity desc_client.cpp:294-295).

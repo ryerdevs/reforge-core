@@ -42,11 +42,11 @@ use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
-use network::{read_exact_size, Connection};
+use network::{Connection, read_exact_size};
 use protocol::header;
 use protocol::phase;
 use protocol::{
-    TPacketGCAuthSuccess, TPacketCGHandshake, TPacketCGLogin3, TPacketGCHandshake, TPacketGCPhase,
+    TPacketCGHandshake, TPacketCGLogin3, TPacketGCAuthSuccess, TPacketGCHandshake, TPacketGCPhase,
 };
 
 /// HWID como hex para el log (16 B → 32 chars).
@@ -67,7 +67,9 @@ struct Args {
 
 fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut it = args.iter();
-    let host = it.next().ok_or("uso: f16_peer <host> <port> [--login3] [--version <n>] [--hwid <hex32>]")?;
+    let host = it
+        .next()
+        .ok_or("uso: f16_peer <host> <port> [--login3] [--version <n>] [--hwid <hex32>]")?;
     let port = it
         .next()
         .ok_or("uso: f16_peer <host> <port> [--login3] [--version <n>] [--hwid <hex32>]")?
@@ -81,7 +83,10 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             "--login3" => login3 = true,
             "--version" => {
                 let v = it.next().ok_or("--version requiere un valor (u32)")?;
-                version = Some(v.parse::<u32>().map_err(|e| format!("version inválida: {e}"))?);
+                version = Some(
+                    v.parse::<u32>()
+                        .map_err(|e| format!("version inválida: {e}"))?,
+                );
             }
             "--hwid" => {
                 let v = it.next().ok_or("--hwid requiere 32 chars hex (16 bytes)")?;
@@ -102,7 +107,13 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     if hwid.is_some() && version.is_none() {
         return Err("--hwid requiere --version (el hwid va tras la version en el LOGIN3)".into());
     }
-    Ok(Args { host: host.clone(), port, login3, version, hwid })
+    Ok(Args {
+        host: host.clone(),
+        port,
+        login3,
+        version,
+        hwid,
+    })
 }
 
 #[tokio::main]
@@ -117,7 +128,10 @@ async fn main() -> ExitCode {
     };
     match timeout(GLOBAL_TIMEOUT, run(&args)).await {
         Err(_) => {
-            eprintln!("F16: TIMEOUT global ({} s) — el auth no completó el handshake", GLOBAL_TIMEOUT.as_secs());
+            eprintln!(
+                "F16: TIMEOUT global ({} s) — el auth no completó el handshake",
+                GLOBAL_TIMEOUT.as_secs()
+            );
             ExitCode::from(1)
         }
         Ok(Err(e)) => {
@@ -149,7 +163,11 @@ async fn run(args: &Args) -> Result<(), String> {
         gc_phase.phase
     );
     if gc_phase.phase != phase::HANDSHAKE {
-        return Err(format!("GC_PHASE inesperado: phase={} (esperado HANDSHAKE={})", gc_phase.phase, phase::HANDSHAKE));
+        return Err(format!(
+            "GC_PHASE inesperado: phase={} (esperado HANDSHAKE={})",
+            gc_phase.phase,
+            phase::HANDSHAKE
+        ));
     }
 
     let hs_pkt = read_exact_size(&mut conn, TPacketGCHandshake::SIZE)
@@ -169,7 +187,9 @@ async fn run(args: &Args) -> Result<(), String> {
     //    servidor (parity cliente legacy `ELTimer_SetServerMSec`) y l_delta=0:
     //    el auth valida `now - (dwTime + lDelta)` ∈ [0, 50] ms (desc.cpp:701).
     let echo = TPacketCGHandshake::new(gc_hs.dw_handshake, gc_hs.dw_time, 0).to_bytes();
-    conn.send(&echo).await.map_err(|e| format!("enviando CG_HANDSHAKE: {e}"))?;
+    conn.send(&echo)
+        .await
+        .map_err(|e| format!("enviando CG_HANDSHAKE: {e}"))?;
     println!(
         "F16: -> CG_HANDSHAKE (0xff, {} B) nonce=0x{:08x} dwTime={} lDelta=0 (reloj alineado al servidor)",
         TPacketCGHandshake::SIZE,
@@ -190,7 +210,9 @@ async fn run(args: &Args) -> Result<(), String> {
     // F2b: `--version`/`--hwid` añaden los campos aditivos (72/88 B).
     let login3 = TPacketCGLogin3::new_auth("test", "1234", [0; 4], "es");
     let login3 = login3.to_bytes_auth_with(args.version, args.hwid);
-    conn.send(&login3).await.map_err(|e| format!("enviando CG_LOGIN3: {e}"))?;
+    conn.send(&login3)
+        .await
+        .map_err(|e| format!("enviando CG_LOGIN3: {e}"))?;
     println!(
         "F16: -> CG_LOGIN3 (0x{:02x}, {} B) login=test pwd=1234 keys=0 lang=es version={:?} hwid={}",
         header::CG_LOGIN3,
@@ -257,14 +279,19 @@ async fn run(args: &Args) -> Result<(), String> {
             // Keepalives (F1.4): time sync 13 B, pongs 1 B — se consumen y se
             // sigue esperando la respuesta.
             header::CG_TIME_SYNC => {
-                let _ = read_exact_size(&mut conn, 12).await.map_err(|e| format!("keepalive 0xfc: {e}"))?;
+                let _ = read_exact_size(&mut conn, 12)
+                    .await
+                    .map_err(|e| format!("keepalive 0xfc: {e}"))?;
                 println!("F16: <- CG_TIME_SYNC (0xfc, 13 B) — filtrado");
             }
             header::CG_PONG => {
                 println!("F16: <- CG_PONG (0xfe, 1 B) — filtrado");
             }
             header::GC_PING => {
-                println!("F16: <- GC_PING (0x{:02x}, 1 B) — filtrado", header::GC_PING);
+                println!(
+                    "F16: <- GC_PING (0x{:02x}, 1 B) — filtrado",
+                    header::GC_PING
+                );
             }
             // PanamaPack 151 + hybrid-crypt 152/153: el auth los envía ANTES
             // del GC_AUTH_SUCCESS en login exitoso (spec login-flow.md:73,
@@ -272,13 +299,18 @@ async fn run(args: &Args) -> Result<(), String> {
             // protocol::legacy, ADR-0006): se reportan y se SIGUE esperando
             // el GC_AUTH_SUCCESS (el auth no responde nada más después).
             151..=153 => {
-                println!("F16: <- 0x{:02x} (PanamaPack/hybrid-crypt — login OK, auth completo)", hdr_pkt[0]);
+                println!(
+                    "F16: <- 0x{:02x} (PanamaPack/hybrid-crypt — login OK, auth completo)",
+                    hdr_pkt[0]
+                );
                 // consumir el resto del paquete: u16 size + i32 len + stream.
                 let size_hdr = read_exact_size(&mut conn, 6)
                     .await
                     .map_err(|e| format!("leyendo size de 0x{:02x}: {e}", hdr_pkt[0]))?;
                 let size = u16::from_le_bytes([size_hdr[0], size_hdr[1]]) as usize;
-                let stream_len = i32::from_le_bytes([size_hdr[2], size_hdr[3], size_hdr[4], size_hdr[5]]) as usize;
+                let stream_len =
+                    i32::from_le_bytes([size_hdr[2], size_hdr[3], size_hdr[4], size_hdr[5]])
+                        as usize;
                 let _ = read_exact_size(&mut conn, stream_len)
                     .await
                     .map_err(|e| format!("leyendo stream de 0x{:02x}: {e}", hdr_pkt[0]))?;

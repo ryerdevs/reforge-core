@@ -96,7 +96,12 @@ pub fn ms_stats(values: &[u64]) -> Option<MsStats> {
         (v[n / 2 - 1] + v[n / 2]) / 2
     };
     let p95_idx = (n as f64 * 0.95).ceil() as usize - 1;
-    Some(MsStats { min: v[0], median, p95: v[p95_idx.min(n - 1)], max: v[n - 1] })
+    Some(MsStats {
+        min: v[0],
+        median,
+        p95: v[p95_idx.min(n - 1)],
+        max: v[n - 1],
+    })
 }
 
 /// Agregados del run.
@@ -167,8 +172,19 @@ pub fn render_table(reports: &[BotReport], summary: &Summary) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "{:>4}  {:<16} {:<13} {:>7} {:>7} {:>7} {:>8} {:>7} {:>6} {:>6} {:>5} {:>5}  {}\n",
-        "#", "login", "status", "auth_ms", "login_ms", "sel_ms", "world_ms", "alive_s",
-        "rx_pkts", "tx_pkts", "moves", "spawns", "note"
+        "#",
+        "login",
+        "status",
+        "auth_ms",
+        "login_ms",
+        "sel_ms",
+        "world_ms",
+        "alive_s",
+        "rx_pkts",
+        "tx_pkts",
+        "moves",
+        "spawns",
+        "note"
     ));
     for r in reports {
         out.push_str(&format!(
@@ -188,7 +204,10 @@ pub fn render_table(reports: &[BotReport], summary: &Summary) -> String {
             r.note
         ));
     }
-    let w = summary.world_ms.map(|s| format!("{}", s.median)).unwrap_or_else(|| "-".into());
+    let w = summary
+        .world_ms
+        .map(|s| format!("{}", s.median))
+        .unwrap_or_else(|| "-".into());
     out.push_str(&format!(
         "ok {}/{} | world_ms (ok): min {:?} | median {} | p95 {:?} | max {:?} | rx {} pkt/{} B | tx {} pkt/{} B | moves {} | spawns {}\n",
         summary.ok,
@@ -251,15 +270,16 @@ pub fn esc_json(s: &str) -> String {
 }
 
 /// JSON del run (formato fijo del harness — sin serde).
-pub fn render_json(
-    reports: &[BotReport],
-    summary: &Summary,
-    meta: &[(&str, String)],
-) -> String {
+pub fn render_json(reports: &[BotReport], summary: &Summary, meta: &[(&str, String)]) -> String {
     let mut out = String::new();
     out.push_str("{\n  \"meta\": {");
     for (i, (k, v)) in meta.iter().enumerate() {
-        out.push_str(&format!("{}{:?}: {:?}", if i > 0 { ", " } else { "" }, k, v));
+        out.push_str(&format!(
+            "{}{:?}: {:?}",
+            if i > 0 { ", " } else { "" },
+            k,
+            v
+        ));
     }
     out.push_str("},\n  \"summary\": {");
     out.push_str(&format!(
@@ -394,9 +414,16 @@ mod tests {
 
     #[test]
     fn json_output_is_parseable_shape() {
-        let reps = vec![report(0, Status::Ok, Some(50), ""), report(1, Status::Desync, None, "0x99")];
+        let reps = vec![
+            report(0, Status::Ok, Some(50), ""),
+            report(1, Status::Desync, None, "0x99"),
+        ];
         let s = summarize(&reps);
-        let json = render_json(&reps, &s, &[("bots", "2".into()), ("duration_s", "5".into())]);
+        let json = render_json(
+            &reps,
+            &s,
+            &[("bots", "2".into()), ("duration_s", "5".into())],
+        );
         // forma: clave/valor presentes y escapados
         assert!(json.starts_with("{\n  \"meta\""));
         assert!(json.contains("\"status\": \"ok\""));

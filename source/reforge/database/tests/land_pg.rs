@@ -28,14 +28,25 @@ fn pg_conn() -> String {
 async fn land_load_map_41_contract() {
     let repo = LandRepo::new(database::pool::new_pool(&pg_conn(), 4).expect("pool PG"));
     let lands = repo.load_by_map(41).await.expect("LAND_LOAD no falla");
-    assert_eq!(lands.len(), 18, "18 lands del mapa 41 (parity log del core)");
+    assert_eq!(
+        lands.len(),
+        18,
+        "18 lands del mapa 41 (parity log del core)"
+    );
     let ids: Vec<i64> = lands.iter().map(|l| l.id).collect();
-    assert!(ids.windows(2).all(|w| w[0] < w[1]), "ORDER BY id (parity boot)");
+    assert!(
+        ids.windows(2).all(|w| w[0] < w[1]),
+        "ORDER BY id (parity boot)"
+    );
     assert_eq!(ids[0], 201, "primer land del mapa 41 (runtime)");
     assert_eq!(ids[17], 218, "último land del mapa 41 (runtime)");
     for l in &lands {
         assert_eq!(l.map_index, 41);
-        assert!(l.width > 0 && l.height > 0, "dimensiones positivas: {:?}", l);
+        assert!(
+            l.width > 0 && l.height > 0,
+            "dimensiones positivas: {:?}",
+            l
+        );
         assert!(l.x > 0 && l.y > 0, "coordenadas en células: {:?}", l);
         assert!(l.guild_id >= 0, "guild_id (0 = sin guild)");
     }
@@ -51,10 +62,19 @@ async fn land_load_map_41_contract() {
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
 async fn land_buy_sequence_and_transfer_roundtrip() {
     let repo = LandRepo::new(database::pool::new_pool(&pg_conn(), 4).expect("pool PG"));
-    let id1 = repo.buy(41, 66100, 9400, 300, 300, 10_000).await.expect("buy 1");
-    let id2 = repo.buy(41, 66200, 9400, 300, 300, 10_000).await.expect("buy 2");
+    let id1 = repo
+        .buy(41, 66100, 9400, 300, 300, 10_000)
+        .await
+        .expect("buy 1");
+    let id2 = repo
+        .buy(41, 66200, 9400, 300, 300, 10_000)
+        .await
+        .expect("buy 2");
     assert!(id1 >= 293, "sigue al max(id) 292 del runtime: {id1}");
-    assert!(id2 > id1, "sequence estrictamente creciente: {id1} -> {id2}");
+    assert!(
+        id2 > id1,
+        "sequence estrictamente creciente: {id1} -> {id2}"
+    );
     assert_eq!(repo.transfer(id1, 42).await.expect("transfer"), 1, "1 fila");
     let l = repo
         .load_by_map(41)
@@ -64,7 +84,11 @@ async fn land_buy_sequence_and_transfer_roundtrip() {
         .find(|l| l.id == id1)
         .expect("el land comprado existe en el mapa");
     assert_eq!(l.guild_id, 42, "dueño transferido (parity SetOwner)");
-    assert_eq!(repo.transfer(id1, 0).await.expect("revert"), 1, "revert dueño");
+    assert_eq!(
+        repo.transfer(id1, 0).await.expect("revert"),
+        1,
+        "revert dueño"
+    );
     assert_eq!(repo.delete(id1).await.expect("clear 1"), 1, "limpieza 1");
     assert_eq!(repo.delete(id2).await.expect("clear 2"), 1, "limpieza 2");
 }

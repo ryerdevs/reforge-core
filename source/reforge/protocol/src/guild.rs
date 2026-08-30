@@ -60,7 +60,10 @@ impl TPacketCGGuild {
     pub const HEADER: u8 = crate::header::CG_GUILD;
 
     pub fn new(subheader: u8) -> Self {
-        Self { header: Self::HEADER, subheader }
+        Self {
+            header: Self::HEADER,
+            subheader,
+        }
     }
 
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
@@ -89,7 +92,12 @@ impl TPacketGCGuild {
     }
 
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
-        [self.header, (self.size & 0xff) as u8, (self.size >> 8) as u8, self.subheader]
+        [
+            self.header,
+            (self.size & 0xff) as u8,
+            (self.size >> 8) as u8,
+            self.subheader,
+        ]
     }
 }
 

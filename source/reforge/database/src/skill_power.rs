@@ -71,7 +71,9 @@ impl SkillPowerTable {
     pub fn skill_power(&self, job: u8, skill_group: i16, level: i32, b_mob: bool) -> i32 {
         // Sin tabla (fail-open) → 0 (el caller decidió la aproximación con
         // `loaded()` antes de llamar).
-        let Some(base) = self.rows.first() else { return 0 };
+        let Some(base) = self.rows.first() else {
+            return 0;
+        };
         let lv = level.clamp(0, SKILL_MAX_LEVEL as i32) as usize;
         if b_mob {
             return base[lv];
@@ -130,14 +132,17 @@ impl SkillPowerRepo {
     }
 
     async fn connect(&self) -> Result<Client, String> {
-        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
+        self.pool
+            .get()
+            .await
+            .map_err(|e| format!("PG pool get: {e}"))
     }
 
     /// Carga la tabla completa (parity config.cpp:532-613): la base
     /// `SKILL_POWER_BY_LEVEL` (obligatoria — el C++ sale del boot sin ella)
     /// + las `SKILL_POWER_BY_LEVEL_TYPE0..8` (fila ausente → la base como
-    /// fallback, config.cpp:579-583). Errores → `Err` (el canal hace
-    /// fail-open a la aproximación con log — no rompe el server).
+    ///   fallback, config.cpp:579-583). Errores → `Err` (el canal hace
+    ///   fail-open a la aproximación con log — no rompe el server).
     pub async fn load(&self) -> Result<SkillPowerTable, String> {
         let client = self.connect().await?;
         let base = self
@@ -164,7 +169,9 @@ impl SkillPowerRepo {
             .await
             .map_err(|e| pg_err("SKILL_POWER_LOAD", &e))?;
         let Some(row) = row else { return Ok(None) };
-        let value: String = row.try_get(0).map_err(|e| format!("SKILL_POWER col0 ({key}): {e}"))?;
+        let value: String = row
+            .try_get(0)
+            .map_err(|e| format!("SKILL_POWER col0 ({key}): {e}"))?;
         parse_power_row(&value).map(Some)
     }
 }
@@ -175,7 +182,10 @@ mod tests {
 
     /// Fixture: una fila válida de 41 valores (niveles 0..=40).
     fn fixture_row() -> String {
-        (0..=40).map(|i| i.to_string()).collect::<Vec<_>>().join(" ")
+        (0..=40)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     /// El parseo (parity `one_argument`): 41 valores espacio-separados →
@@ -190,7 +200,7 @@ mod tests {
         assert_eq!(row.len(), SKILL_MAX_LEVEL + 1);
         // Separadores mezclados (tabs/multi-espacio).
         let messy = "0 1\t2   3 4";
-        assert!(parse_power_row(&messy).is_err(), "solo 5 valores");
+        assert!(parse_power_row(messy).is_err(), "solo 5 valores");
         let mut v: Vec<String> = (0..=40).map(|i| i.to_string()).collect();
         v[3] = "3".to_string();
         let ok = parse_power_row(&v.join("  \t ")).expect("41 con separadores mixtos");
@@ -204,10 +214,16 @@ mod tests {
         let short = (0..40).map(|i| i.to_string()).collect::<Vec<_>>().join(" ");
         assert!(parse_power_row(&short).is_err(), "40 < 41");
         // 42 valores (sobran) → Err.
-        let long = (0..=41).map(|i| i.to_string()).collect::<Vec<_>>().join(" ");
+        let long = (0..=41)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(parse_power_row(&long).is_err(), "42 > 41");
         // Token no numérico → Err (desviación defensiva vs atoi=0).
-        assert!(parse_power_row(&format!("{} x", fixture_row())).is_err(), "token basura");
+        assert!(
+            parse_power_row(&format!("{} x", fixture_row())).is_err(),
+            "token basura"
+        );
         // Vacío → Err.
         assert!(parse_power_row("").is_err());
     }
@@ -220,7 +236,7 @@ mod tests {
         // Filas diferenciadas por idx: fila i → valor 1000+i en cada nivel.
         let mut rows = Vec::new();
         for i in 0..9 {
-            rows.push([1000 + i as i32; SKILL_MAX_LEVEL + 1]);
+            rows.push([1000 + i; SKILL_MAX_LEVEL + 1]);
         }
         let t = SkillPowerTable { rows };
         // Mob → la fila 0 (base).

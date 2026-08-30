@@ -22,12 +22,18 @@ pub const COMMENT_MAX: usize = 50; // GUILD_COMMENT_MAX_LEN, guild.h:13
 
 /// Miembro (clave natural `player.guild_member.player_id`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GuildMember { pub player_id: i64 }
+pub struct GuildMember {
+    pub player_id: i64,
+}
 
 /// Comentario del tablón (`guild_comment.id/name/content`; `notice`='!' inicial
 /// excluido del slice).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GuildComment { pub id: i64, pub author: String, pub text: String }
+pub struct GuildComment {
+    pub id: i64,
+    pub author: String,
+    pub text: String,
+}
 
 /// Guild en memoria (`player.guild.id` / `player.guild_member` / `guild_grade`).
 /// Las pendientes de invitación viven aquí (parity `m_GuildInviteEventMap` del
@@ -44,16 +50,53 @@ pub struct Guild {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GuildError { NameTooShort, NameTooLong, DuplicateName, DuplicateMember, DuplicateGrade, GradeFull, EmptyComment, CommentTooLong, DuplicateComment, SelfWar, AlreadyAtWar }
+pub enum GuildError {
+    NameTooShort,
+    NameTooLong,
+    DuplicateName,
+    DuplicateMember,
+    DuplicateGrade,
+    GradeFull,
+    EmptyComment,
+    CommentTooLong,
+    DuplicateComment,
+    SelfWar,
+    AlreadyAtWar,
+}
 
-pub const WAR_TYPE_FIELD: u8 = 0; pub const WAR_TYPE_BATTLE: u8 = 1; pub const WAR_TYPE_FLAG: u8 = 2; // length.h:634-636
+pub const WAR_TYPE_FIELD: u8 = 0;
+pub const WAR_TYPE_BATTLE: u8 = 1;
+pub const WAR_TYPE_FLAG: u8 = 2; // length.h:634-636
 /// `declare_war`: valida auto-guerra y duplicado (parity guild_war.cpp:292-325 + GuildManager::DeclareWar 543). Ordena ids para el UNIQUE del PG.
-pub fn declare_war(existing: &[GuildWar], a: i64, b: i64, war_type: u8) -> Result<GuildWar, GuildError> {
-    if a == b { return Err(GuildError::SelfWar); }
-    if war_type > WAR_TYPE_FLAG { return Err(GuildError::NameTooLong); }
+pub fn declare_war(
+    existing: &[GuildWar],
+    a: i64,
+    b: i64,
+    war_type: u8,
+) -> Result<GuildWar, GuildError> {
+    if a == b {
+        return Err(GuildError::SelfWar);
+    }
+    if war_type > WAR_TYPE_FLAG {
+        return Err(GuildError::NameTooLong);
+    }
     let (x, y) = if a < b { (a, b) } else { (b, a) };
-    if existing.iter().any(|w| { let (xa, ya) = if w.guild_a < w.guild_b { (w.guild_a, w.guild_b) } else { (w.guild_b, w.guild_a) }; xa == x && ya == y }) { return Err(GuildError::AlreadyAtWar); }
-    Ok(GuildWar { guild_a: x, guild_b: y, score_a: 0, score_b: 0 })
+    if existing.iter().any(|w| {
+        let (xa, ya) = if w.guild_a < w.guild_b {
+            (w.guild_a, w.guild_b)
+        } else {
+            (w.guild_b, w.guild_a)
+        };
+        xa == x && ya == y
+    }) {
+        return Err(GuildError::AlreadyAtWar);
+    }
+    Ok(GuildWar {
+        guild_a: x,
+        guild_b: y,
+        score_a: 0,
+        score_b: 0,
+    })
 }
 
 /// `create_guild`: valida nombre (2..=12 tras trim) y duplicado
@@ -62,12 +105,23 @@ pub fn create_guild(id: i64, name: &str, existing: &[&str]) -> Result<Guild, Gui
     let name = name.trim();
     let len = name.chars().count();
     if !(NAME_MIN..=NAME_MAX).contains(&len) {
-        return Err(if len < NAME_MIN { GuildError::NameTooShort } else { GuildError::NameTooLong });
+        return Err(if len < NAME_MIN {
+            GuildError::NameTooShort
+        } else {
+            GuildError::NameTooLong
+        });
     }
     if existing.iter().any(|n| n.eq_ignore_ascii_case(name)) {
         return Err(GuildError::DuplicateName);
     }
-    Ok(Guild { id, name: name.to_owned(), members: Vec::new(), grades: Vec::new(), comments: Vec::new(), invites: HashMap::new() })
+    Ok(Guild {
+        id,
+        name: name.to_owned(),
+        members: Vec::new(),
+        grades: Vec::new(),
+        comments: Vec::new(),
+        invites: HashMap::new(),
+    })
 }
 
 /// `add_member`: rechaza un `player_id` ya miembro (sin duplicados).
@@ -107,7 +161,9 @@ pub fn invite(guild: &mut Guild, guest_pid: i64, now: Instant) -> bool {
 /// invitee, 15)` — guild.cpp:1927; la caducidad la resuelve el evento
 /// GuildInviteEvent como deny, guild.cpp:1799-1818).
 pub fn accept_invite(guild: &mut Guild, guest_pid: i64, now: Instant) -> bool {
-    let Some(exp) = guild.invites.remove(&guest_pid) else { return false };
+    let Some(exp) = guild.invites.remove(&guest_pid) else {
+        return false;
+    };
     exp >= now && guild.members.len() < MAX_MEMBERS && add_member(guild, guest_pid).is_ok()
 }
 
@@ -121,7 +177,11 @@ pub fn deny_invite(guild: &mut Guild, guest_pid: i64) {
 /// REMOVE_MEMEBER=2, NOTICE=4, USE_SKILL=8 (typo `REMOVE_MEMEBER` legacy
 /// preservado). Parity struct: guild.h:73-77,106 + load guild.cpp:563-566.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GuildGrade { pub grade: u8, pub name: String, pub auth: u8 }
+pub struct GuildGrade {
+    pub grade: u8,
+    pub name: String,
+    pub auth: u8,
+}
 
 /// `add_grade`: asigna el primer slot libre 1..=15 (el C++ pre-inserta el
 /// grade 1 del líder en create, guild.cpp:104-111 — aquí el slot se asigna
@@ -131,15 +191,27 @@ pub fn add_grade(guild: &mut Guild, name: &str) -> Result<u8, GuildError> {
     let name = name.trim();
     let len = name.chars().count();
     if !(1..=GRADE_NAME_MAX).contains(&len) {
-        return Err(if len == 0 { GuildError::NameTooShort } else { GuildError::NameTooLong });
+        return Err(if len == 0 {
+            GuildError::NameTooShort
+        } else {
+            GuildError::NameTooLong
+        });
     }
-    if guild.grades.iter().any(|g| g.name.eq_ignore_ascii_case(name)) {
+    if guild
+        .grades
+        .iter()
+        .any(|g| g.name.eq_ignore_ascii_case(name))
+    {
         return Err(GuildError::DuplicateGrade);
     }
     let grade = (1..=GRADE_COUNT)
         .find(|n| guild.grades.iter().all(|g| g.grade != *n))
         .ok_or(GuildError::GradeFull)?;
-    guild.grades.push(GuildGrade { grade, name: name.to_owned(), auth: 0 });
+    guild.grades.push(GuildGrade {
+        grade,
+        name: name.to_owned(),
+        auth: 0,
+    });
     Ok(grade)
 }
 
@@ -147,7 +219,10 @@ pub fn add_grade(guild: &mut Guild, name: &str) -> Result<u8, GuildError> {
 /// guild.cpp:827-842). `false` si el slot no existe.
 pub fn set_grade_auth(guild: &mut Guild, grade: u8, auth: u8) -> bool {
     match guild.grades.iter_mut().find(|g| g.grade == grade) {
-        Some(g) => { g.auth = auth; true }
+        Some(g) => {
+            g.auth = auth;
+            true
+        }
         None => false,
     }
 }
@@ -160,13 +235,25 @@ pub fn add_comment(guild: &mut Guild, author: &str, text: &str) -> Result<i64, G
     let text = text.trim();
     let len = text.chars().count();
     if !(1..=COMMENT_MAX).contains(&len) {
-        return Err(if len == 0 { GuildError::EmptyComment } else { GuildError::CommentTooLong });
+        return Err(if len == 0 {
+            GuildError::EmptyComment
+        } else {
+            GuildError::CommentTooLong
+        });
     }
-    if guild.comments.iter().any(|c| c.author == author && c.text == text) {
+    if guild
+        .comments
+        .iter()
+        .any(|c| c.author == author && c.text == text)
+    {
         return Err(GuildError::DuplicateComment);
     }
     let id = guild.comments.iter().map(|c| c.id).max().unwrap_or(0) + 1;
-    guild.comments.push(GuildComment { id, author: author.to_owned(), text: text.to_owned() });
+    guild.comments.push(GuildComment {
+        id,
+        author: author.to_owned(),
+        text: text.to_owned(),
+    });
     Ok(id)
 }
 
@@ -182,12 +269,22 @@ pub fn remove_comment(guild: &mut Guild, id: i64) -> bool {
 /// score por par = `TEnemyGuild.score` vía SetWarScoreAgainstTo /
 /// GetWarScoreAgainstTo, guild_war.cpp:178-232.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GuildWar { pub guild_a: i64, pub guild_b: i64, pub score_a: u32, pub score_b: u32 }
+pub struct GuildWar {
+    pub guild_a: i64,
+    pub guild_b: i64,
+    pub score_a: u32,
+    pub score_b: u32,
+}
 
 /// `start_war`: abre la guerra con marcador 0-0 (stub: sin estados
 /// GUILD_WAR_WAIT/ON_WAR — guild_war.cpp:20-23 es slice futuro).
 pub fn start_war(guild_a: i64, guild_b: i64) -> GuildWar {
-    GuildWar { guild_a, guild_b, score_a: 0, score_b: 0 }
+    GuildWar {
+        guild_a,
+        guild_b,
+        score_a: 0,
+        score_b: 0,
+    }
 }
 
 /// `add_score`: guerra con `points` sumados al lado de `guild_id`
@@ -196,8 +293,11 @@ pub fn start_war(guild_a: i64, guild_b: i64) -> GuildWar {
 /// (GetWarScoreAgainstTo → 0, guild_war.cpp:222-232).
 pub fn add_score(war: GuildWar, guild_id: i64, points: u32) -> GuildWar {
     let mut w = war;
-    if guild_id == w.guild_a { w.score_a += points; }
-    else if guild_id == w.guild_b { w.score_b += points; }
+    if guild_id == w.guild_a {
+        w.score_a += points;
+    } else if guild_id == w.guild_b {
+        w.score_b += points;
+    }
     w
 }
 
@@ -205,7 +305,10 @@ pub fn add_score(war: GuildWar, guild_id: i64, points: u32) -> GuildWar {
 /// conceptual es el score de guild_war.cpp:178-232 (ver `add_score`); la
 /// persistencia y el ladder wire (CG_GUILD_*) son slice futuro.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GuildRanking { pub guild_id: i64, pub points: u32 }
+pub struct GuildRanking {
+    pub guild_id: i64,
+    pub points: u32,
+}
 
 /// `add_points`: suma `points` a la entrada de `guild_id` (la crea si no
 /// existe) y devuelve la entrada actualizada.
@@ -239,9 +342,18 @@ mod tests {
         assert_eq!(create_guild(1, "", &[]), Err(GuildError::NameTooShort));
         assert_eq!(create_guild(1, "  ", &[]), Err(GuildError::NameTooShort));
         assert_eq!(create_guild(1, "a", &[]), Err(GuildError::NameTooShort));
-        assert_eq!(create_guild(1, &"x".repeat(13), &[]), Err(GuildError::NameTooLong));
-        assert_eq!(create_guild(1, "LosGuerreros", &["losguerreros"]), Err(GuildError::DuplicateName));
-        assert_eq!(create_guild(1, "Valientes", &["OK"]).unwrap().name, "Valientes");
+        assert_eq!(
+            create_guild(1, &"x".repeat(13), &[]),
+            Err(GuildError::NameTooLong)
+        );
+        assert_eq!(
+            create_guild(1, "LosGuerreros", &["losguerreros"]),
+            Err(GuildError::DuplicateName)
+        );
+        assert_eq!(
+            create_guild(1, "Valientes", &["OK"]).unwrap().name,
+            "Valientes"
+        );
     }
 
     /// Verifier: FALLA si add_member admite duplicados o remove_member miente.
@@ -265,9 +377,15 @@ mod tests {
         assert!(invite(&mut g, 7, now));
         assert!(!invite(&mut g, 7, now), "doble invitación");
         assert!(!accept_invite(&mut g, 8, now), "sin pendiente");
-        assert!(!accept_invite(&mut g, 7, now + Duration::from_secs(11)), "caducada");
+        assert!(
+            !accept_invite(&mut g, 7, now + Duration::from_secs(11)),
+            "caducada"
+        );
         assert!(g.members.is_empty(), "la caducada no une");
-        assert!(invite(&mut g, 7, now), "re-invite (la caducada YA consumió)");
+        assert!(
+            invite(&mut g, 7, now),
+            "re-invite (la caducada YA consumió)"
+        );
         assert!(accept_invite(&mut g, 7, now), "acepta y une");
         assert_eq!(g.members, vec![GuildMember { player_id: 7 }]);
         assert!(!accept_invite(&mut g, 7, now), "pendiente ya consumida");
@@ -283,7 +401,10 @@ mod tests {
             assert!(accept_invite(&mut full, 1000 + i, now), "miembro {i}");
         }
         assert!(!invite(&mut full, 9998, now), "LLENO: invite rechazado");
-        assert!(!accept_invite(&mut full, 9999, now), "LLENO: aceptar no une");
+        assert!(
+            !accept_invite(&mut full, 9999, now),
+            "LLENO: aceptar no une"
+        );
         assert_eq!(full.members.len(), MAX_MEMBERS);
     }
 
@@ -293,9 +414,15 @@ mod tests {
     fn add_grade_rejects_duplicates() {
         let mut g = create_guild(1, "Valientes", &[]).unwrap();
         assert_eq!(add_grade(&mut g, "Maestro"), Ok(1));
-        assert_eq!(add_grade(&mut g, "MAESTRO"), Err(GuildError::DuplicateGrade));
+        assert_eq!(
+            add_grade(&mut g, "MAESTRO"),
+            Err(GuildError::DuplicateGrade)
+        );
         assert_eq!(add_grade(&mut g, "Miembro"), Ok(2));
-        assert_eq!(add_grade(&mut g, "miembro"), Err(GuildError::DuplicateGrade));
+        assert_eq!(
+            add_grade(&mut g, "miembro"),
+            Err(GuildError::DuplicateGrade)
+        );
         assert!(set_grade_auth(&mut g, 1, 1 | 4));
         assert_eq!(g.grades[0].auth, 5);
         assert!(!set_grade_auth(&mut g, 16, 0));
@@ -306,12 +433,24 @@ mod tests {
     #[test]
     fn add_comment_rejects_empty_duplicate() {
         let mut g = create_guild(1, "Valientes", &[]).unwrap();
-        assert_eq!(add_comment(&mut g, "Heroe", ""), Err(GuildError::EmptyComment));
-        assert_eq!(add_comment(&mut g, "Heroe", "   "), Err(GuildError::EmptyComment));
-        assert_eq!(add_comment(&mut g, "Heroe", &"x".repeat(51)), Err(GuildError::CommentTooLong));
+        assert_eq!(
+            add_comment(&mut g, "Heroe", ""),
+            Err(GuildError::EmptyComment)
+        );
+        assert_eq!(
+            add_comment(&mut g, "Heroe", "   "),
+            Err(GuildError::EmptyComment)
+        );
+        assert_eq!(
+            add_comment(&mut g, "Heroe", &"x".repeat(51)),
+            Err(GuildError::CommentTooLong)
+        );
         assert_eq!(add_comment(&mut g, "Heroe", &"x".repeat(50)), Ok(1));
         let id = add_comment(&mut g, "Heroe", "Bienvenidos!").unwrap();
-        assert_eq!(add_comment(&mut g, "Heroe", "Bienvenidos!"), Err(GuildError::DuplicateComment));
+        assert_eq!(
+            add_comment(&mut g, "Heroe", "Bienvenidos!"),
+            Err(GuildError::DuplicateComment)
+        );
         assert_eq!(add_comment(&mut g, "Otro", "Bienvenidos!"), Ok(id + 1));
         assert!(remove_comment(&mut g, id));
         assert!(!remove_comment(&mut g, id));
@@ -322,9 +461,25 @@ mod tests {
     /// acepta una guild ajena a la guerra.
     #[test]
     fn guild_war_score_verifier() {
-        assert_eq!(start_war(1, 2), GuildWar { guild_a: 1, guild_b: 2, score_a: 0, score_b: 0 });
+        assert_eq!(
+            start_war(1, 2),
+            GuildWar {
+                guild_a: 1,
+                guild_b: 2,
+                score_a: 0,
+                score_b: 0
+            }
+        );
         let w = add_score(start_war(1, 2), 1, 5);
-        assert_eq!(w, GuildWar { guild_a: 1, guild_b: 2, score_a: 5, score_b: 0 });
+        assert_eq!(
+            w,
+            GuildWar {
+                guild_a: 1,
+                guild_b: 2,
+                score_a: 5,
+                score_b: 0
+            }
+        );
         let w = add_score(add_score(w, 2, 3), 2, 2);
         assert_eq!(w.score_b, 5); // 3+2 acumulado en el lado B
         assert_eq!(add_score(w, 99, 1), w); // ajena → sin cambios
@@ -333,11 +488,21 @@ mod tests {
     /// Verifier war DECLARE: auto-guerra, tipo inválido, duplicado (orden invariante) y wire PG idempotente.
     #[test]
     fn guild_war_declare_verifier() {
-        assert_eq!(declare_war(&[], 1, 1, WAR_TYPE_FIELD), Err(GuildError::SelfWar));
+        assert_eq!(
+            declare_war(&[], 1, 1, WAR_TYPE_FIELD),
+            Err(GuildError::SelfWar)
+        );
         assert_eq!(declare_war(&[], 1, 2, 99), Err(GuildError::NameTooLong));
-        let w = declare_war(&[], 2, 1, WAR_TYPE_FIELD).unwrap(); assert_eq!((w.guild_a, w.guild_b), (1, 2));
-        assert_eq!(declare_war(&[w], 1, 2, WAR_TYPE_FIELD), Err(GuildError::AlreadyAtWar));
-        assert_eq!(declare_war(&[w], 2, 1, WAR_TYPE_BATTLE), Err(GuildError::AlreadyAtWar));
+        let w = declare_war(&[], 2, 1, WAR_TYPE_FIELD).unwrap();
+        assert_eq!((w.guild_a, w.guild_b), (1, 2));
+        assert_eq!(
+            declare_war(&[w], 1, 2, WAR_TYPE_FIELD),
+            Err(GuildError::AlreadyAtWar)
+        );
+        assert_eq!(
+            declare_war(&[w], 2, 1, WAR_TYPE_BATTLE),
+            Err(GuildError::AlreadyAtWar)
+        );
     }
 
     /// Verifier: FALLA si add_points no crea la entrada o no acumula (o
@@ -346,10 +511,22 @@ mod tests {
     fn guild_ranking_verifier() {
         let mut rs: Vec<GuildRanking> = Vec::new();
         assert_eq!(top_guilds(&rs), None);
-        assert_eq!(add_points(&mut rs, 1, 5), GuildRanking { guild_id: 1, points: 5 });
+        assert_eq!(
+            add_points(&mut rs, 1, 5),
+            GuildRanking {
+                guild_id: 1,
+                points: 5
+            }
+        );
         add_points(&mut rs, 2, 3);
         add_points(&mut rs, 1, 7);
-        assert_eq!(top_guilds(&rs), Some(GuildRanking { guild_id: 1, points: 12 })); // 5+7
+        assert_eq!(
+            top_guilds(&rs),
+            Some(GuildRanking {
+                guild_id: 1,
+                points: 12
+            })
+        ); // 5+7
         assert_eq!(rs.len(), 2); // sin entradas duplicadas
         assert_eq!(add_points(&mut rs, 99, 1).points, 1); // entrada nueva desde cero
     }

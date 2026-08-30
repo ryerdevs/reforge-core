@@ -180,8 +180,8 @@ pub enum GmCommand {
     /// `if (!*arg1) return;` y str_to_number→0) y vnum 0 → no-op (parity
     /// CanUseSkill char_skill.cpp:3572 `if (0 == dwSkillVnum) return false;`
     /// + el switch del do_skillup). REAL (channel/gm.rs).
-    /// GAP: sin skill_proto en reforge (CanUseSkill/level-limit/pre-skill/
-    /// learnability y los saltos master por RNG 17→20/30/40).
+    ///   GAP: sin skill_proto en reforge (CanUseSkill/level-limit/pre-skill/
+    ///   learnability y los saltos master por RNG 17→20/30/40).
     SkillUp {
         vnum: Option<u32>,
     },
@@ -279,17 +279,26 @@ pub enum GmCommand {
     Forgive,
     /// `/polymorph <vnum>` — transformación (parity do_polymorph
     /// cmd_gm.cpp:2736-2761 — LOW_WIZARD; vnum 0 quita el poly).
-    Polymorph { vnum: u32 },
+    Polymorph {
+        vnum: u32,
+    },
     /// `/setskill <vnum> <level>` — nivel de skill (parity do_setskill
     /// cmd_gm.cpp:2302-2336 — LOW_WIZARD; level cap 40).
-    SetSkill { vnum: u32, level: u8 },
+    SetSkill {
+        vnum: u32,
+        level: u8,
+    },
     /// `/transfer <nombre>` — trae al jugador a la posición del GM (parity
     /// do_transfer cmd_gm.cpp:94-142 — LOW_WIZARD; WarpSet / HEADER_GG_TRANSFER).
-    Transfer { name: String },
+    Transfer {
+        name: String,
+    },
     /// `/ipurge <window>` — purga items (parity do_item_purge cmd_gm.cpp:792+
     /// — HIGH_WIZARD; windows: all / inventory|inv / equipment|equip /
     /// dragonsoul|ds / belt).
-    Ipurge { window: String },
+    Ipurge {
+        window: String,
+    },
 }
 
 /// POINT_ST/POINT_DX/POINT_HT/POINT_IQ del do_stat (cmd_general.cpp:664-671
@@ -353,10 +362,7 @@ pub fn parse_command(cmd: &str) -> Option<GmCommand> {
         }
         "item" => {
             let vnum: u32 = it.next()?.parse().ok()?;
-            let count = it
-                .next()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(1);
+            let count = it.next().and_then(|s| s.parse().ok()).unwrap_or(1);
             let count = clamp_item_count(count);
             Some(GmCommand::GiveItem { vnum, count })
         }
@@ -498,7 +504,10 @@ pub fn parse_command(cmd: &str) -> Option<GmCommand> {
         "setskill" => {
             let vnum: u32 = it.next()?.parse().ok()?;
             let level: u8 = it.next()?.parse().ok()?;
-            Some(GmCommand::SetSkill { vnum, level: level.min(40) })
+            Some(GmCommand::SetSkill {
+                vnum,
+                level: level.min(40),
+            })
         }
         "transfer" => {
             let name = it.next()?.to_string();
@@ -517,7 +526,9 @@ pub fn parse_command(cmd: &str) -> Option<GmCommand> {
                 "belt" => "belt",
                 _ => return None,
             };
-            Some(GmCommand::Ipurge { window: norm.to_string() })
+            Some(GmCommand::Ipurge {
+                window: norm.to_string(),
+            })
         }
         _ => None,
     }
@@ -676,7 +687,10 @@ mod tests {
         );
         assert_eq!(
             parse_command("item 500 2000"),
-            Some(GmCommand::GiveItem { vnum: 500, count: 200 }),
+            Some(GmCommand::GiveItem {
+                vnum: 500,
+                count: 200
+            }),
             "2000 no puede cruzar el límite del stack wire-safe"
         );
         assert_eq!(parse_command("item"), None, "sin vnum");
@@ -734,11 +748,19 @@ mod tests {
         assert_eq!(parse_command("teleport 1 2"), None, "comando desconocido");
         assert_eq!(parse_command("mob"), None, "mob sin vnum");
         assert_eq!(parse_command("mob abc"), None, "mob vnum no numérico");
-        assert_eq!(parse_command("kill x"), Some(GmCommand::Kill), "kill ignora el arg");
+        assert_eq!(
+            parse_command("kill x"),
+            Some(GmCommand::Kill),
+            "kill ignora el arg"
+        );
         assert_eq!(parse_command("goto"), None, "goto sin nombre");
         assert_eq!(parse_command("stat"), None, "stat sin punto");
         assert_eq!(parse_command("stat foo"), None, "punto desconocido");
-        assert_eq!(parse_command("stat st -3"), None, "cantidad negativa → no-op");
+        assert_eq!(
+            parse_command("stat st -3"),
+            None,
+            "cantidad negativa → no-op"
+        );
     }
 
     /// Lote 3: parseo de los 5 comandos nuevos (parity de los nombres del
@@ -747,25 +769,40 @@ mod tests {
     fn parse_lote3_commands() {
         assert_eq!(
             parse_command("mob 101"),
-            Some(GmCommand::Mob { vnum: 101, count: 1 }),
+            Some(GmCommand::Mob {
+                vnum: 101,
+                count: 1
+            }),
             "sin count → 1 (parity do_mob)"
         );
         assert_eq!(
             parse_command("mob 101 5"),
-            Some(GmCommand::Mob { vnum: 101, count: 5 })
+            Some(GmCommand::Mob {
+                vnum: 101,
+                count: 5
+            })
         );
         assert_eq!(
             parse_command("mob 101 0"),
-            Some(GmCommand::Mob { vnum: 101, count: 1 }),
+            Some(GmCommand::Mob {
+                vnum: 101,
+                count: 1
+            }),
             "MINMAX(1, count, 20)"
         );
         assert_eq!(
             parse_command("mob 101 99"),
-            Some(GmCommand::Mob { vnum: 101, count: 20 }),
+            Some(GmCommand::Mob {
+                vnum: 101,
+                count: 20
+            }),
             "cap 20 (@fixme339)"
         );
         assert_eq!(parse_command("kill"), Some(GmCommand::Kill));
-        assert_eq!(parse_command("purge"), Some(GmCommand::Purge { all: false }));
+        assert_eq!(
+            parse_command("purge"),
+            Some(GmCommand::Purge { all: false })
+        );
         assert_eq!(
             parse_command("purge all"),
             Some(GmCommand::Purge { all: true })
@@ -777,11 +814,15 @@ mod tests {
         );
         assert_eq!(
             parse_command("goto Pepe"),
-            Some(GmCommand::Goto { name: "Pepe".into() })
+            Some(GmCommand::Goto {
+                name: "Pepe".into()
+            })
         );
         assert_eq!(
             parse_command("goto  pepe  extra"),
-            Some(GmCommand::Goto { name: "pepe".into() }),
+            Some(GmCommand::Goto {
+                name: "pepe".into()
+            }),
             "solo el primer token (one_argument)"
         );
         assert_eq!(parse_command("MOB 101"), None, "case-sensitive");
@@ -794,41 +835,103 @@ mod tests {
     fn parse_stat_point_and_amount() {
         assert_eq!(
             parse_command("stat st"),
-            Some(GmCommand::Stat { point: StatPoint::St, amount: 1 })
+            Some(GmCommand::Stat {
+                point: StatPoint::St,
+                amount: 1
+            })
         );
         assert_eq!(
             parse_command("stat dx 5"),
-            Some(GmCommand::Stat { point: StatPoint::Dx, amount: 5 })
+            Some(GmCommand::Stat {
+                point: StatPoint::Dx,
+                amount: 5
+            })
         );
         assert_eq!(
             parse_command("stat- ht 2"),
-            Some(GmCommand::StatMinus { point: StatPoint::Ht, amount: 2 })
+            Some(GmCommand::StatMinus {
+                point: StatPoint::Ht,
+                amount: 2
+            })
         );
         assert_eq!(
             parse_command("stat- iq"),
-            Some(GmCommand::StatMinus { point: StatPoint::Iq, amount: 1 })
+            Some(GmCommand::StatMinus {
+                point: StatPoint::Iq,
+                amount: 1
+            })
         );
-        assert_eq!(parse_command("stat ST"), None, "case-sensitive (parity strcmp)");
+        assert_eq!(
+            parse_command("stat ST"),
+            None,
+            "case-sensitive (parity strcmp)"
+        );
         assert_eq!(parse_command("stat-"), None, "sin punto → no-op");
         assert_eq!(parse_command("stat st 0"), None, "cantidad 0 → no-op");
-        assert_eq!(parse_command("stat- dx abc"), Some(GmCommand::StatMinus { point: StatPoint::Dx, amount: 1 }), "no numérico → default 1");
+        assert_eq!(
+            parse_command("stat- dx abc"),
+            Some(GmCommand::StatMinus {
+                point: StatPoint::Dx,
+                amount: 1
+            }),
+            "no numérico → default 1"
+        );
     }
 
     /// Lote 3: niveles GM de parity (cmd.cpp:292/296/310/314/324-325) y
     /// el gate para el GM mínimo.
     #[test]
     fn lote3_required_levels_parity() {
-        assert_eq!(required_level(&GmCommand::Mob { vnum: 1, count: 1 }), gm_level::HIGH_WIZARD);
+        assert_eq!(
+            required_level(&GmCommand::Mob { vnum: 1, count: 1 }),
+            gm_level::HIGH_WIZARD
+        );
         assert_eq!(required_level(&GmCommand::Kill), gm_level::HIGH_WIZARD);
-        assert_eq!(required_level(&GmCommand::Purge { all: false }), gm_level::WIZARD);
-        assert_eq!(required_level(&GmCommand::Goto { name: "x".into() }), gm_level::LOW_WIZARD);
-        assert_eq!(required_level(&GmCommand::Stat { point: StatPoint::St, amount: 1 }), gm_level::PLAYER);
-        assert_eq!(required_level(&GmCommand::StatMinus { point: StatPoint::St, amount: 1 }), gm_level::PLAYER);
+        assert_eq!(
+            required_level(&GmCommand::Purge { all: false }),
+            gm_level::WIZARD
+        );
+        assert_eq!(
+            required_level(&GmCommand::Goto { name: "x".into() }),
+            gm_level::LOW_WIZARD
+        );
+        assert_eq!(
+            required_level(&GmCommand::Stat {
+                point: StatPoint::St,
+                amount: 1
+            }),
+            gm_level::PLAYER
+        );
+        assert_eq!(
+            required_level(&GmCommand::StatMinus {
+                point: StatPoint::St,
+                amount: 1
+            }),
+            gm_level::PLAYER
+        );
         // Gate: LOW_WIZARD no puede purge (1 < 2); WIZARD sí (2 >= 2).
-        assert!(!is_allowed(gm_level::LOW_WIZARD, required_level(&GmCommand::Purge { all: false })));
-        assert!(is_allowed(gm_level::WIZARD, required_level(&GmCommand::Purge { all: false })));
-        assert!(is_allowed(gm_level::LOW_WIZARD, required_level(&GmCommand::Goto { name: "x".into() })));
-        assert!(is_allowed(gm_level::PLAYER, required_level(&GmCommand::Stat { point: StatPoint::St, amount: 1 })), "stat es GM_PLAYER — sin gmlist");
+        assert!(!is_allowed(
+            gm_level::LOW_WIZARD,
+            required_level(&GmCommand::Purge { all: false })
+        ));
+        assert!(is_allowed(
+            gm_level::WIZARD,
+            required_level(&GmCommand::Purge { all: false })
+        ));
+        assert!(is_allowed(
+            gm_level::LOW_WIZARD,
+            required_level(&GmCommand::Goto { name: "x".into() })
+        ));
+        assert!(
+            is_allowed(
+                gm_level::PLAYER,
+                required_level(&GmCommand::Stat {
+                    point: StatPoint::St,
+                    amount: 1
+                })
+            ),
+            "stat es GM_PLAYER — sin gmlist"
+        );
     }
 
     /// Fix bug 4 (2026-08-15): los comandos del diálogo de muerte y del menú
@@ -1164,25 +1267,74 @@ mod tests {
 
     #[test]
     fn verifier_polymorph_setskill() {
-        assert_eq!(parse_command("polymorph 101"), Some(GmCommand::Polymorph { vnum: 101 }));
+        assert_eq!(
+            parse_command("polymorph 101"),
+            Some(GmCommand::Polymorph { vnum: 101 })
+        );
         assert_eq!(parse_command("polymorph"), None);
-        assert_eq!(parse_command("setskill 42 20"), Some(GmCommand::SetSkill { vnum: 42, level: 20 }));
-        assert_eq!(parse_command("setskill 42 99"), Some(GmCommand::SetSkill { vnum: 42, level: 40 }));
+        assert_eq!(
+            parse_command("setskill 42 20"),
+            Some(GmCommand::SetSkill {
+                vnum: 42,
+                level: 20
+            })
+        );
+        assert_eq!(
+            parse_command("setskill 42 99"),
+            Some(GmCommand::SetSkill {
+                vnum: 42,
+                level: 40
+            })
+        );
         assert_eq!(parse_command("setskill"), None);
-        assert_eq!(required_level(&GmCommand::Polymorph { vnum: 1 }), gm_level::LOW_WIZARD);
-        assert_eq!(required_level(&GmCommand::SetSkill { vnum: 1, level: 1 }), gm_level::LOW_WIZARD);
+        assert_eq!(
+            required_level(&GmCommand::Polymorph { vnum: 1 }),
+            gm_level::LOW_WIZARD
+        );
+        assert_eq!(
+            required_level(&GmCommand::SetSkill { vnum: 1, level: 1 }),
+            gm_level::LOW_WIZARD
+        );
     }
 
     #[test]
     fn verifier_transfer_ipurge() {
-        assert_eq!(parse_command("transfer Pepe"), Some(GmCommand::Transfer { name: "Pepe".into() }));
+        assert_eq!(
+            parse_command("transfer Pepe"),
+            Some(GmCommand::Transfer {
+                name: "Pepe".into()
+            })
+        );
         assert_eq!(parse_command("transfer"), None);
-        assert_eq!(parse_command("ipurge all"), Some(GmCommand::Ipurge { window: "all".into() }));
-        assert_eq!(parse_command("ipurge inv"), Some(GmCommand::Ipurge { window: "inventory".into() }));
-        assert_eq!(parse_command("ipurge ds"), Some(GmCommand::Ipurge { window: "dragonsoul".into() }));
+        assert_eq!(
+            parse_command("ipurge all"),
+            Some(GmCommand::Ipurge {
+                window: "all".into()
+            })
+        );
+        assert_eq!(
+            parse_command("ipurge inv"),
+            Some(GmCommand::Ipurge {
+                window: "inventory".into()
+            })
+        );
+        assert_eq!(
+            parse_command("ipurge ds"),
+            Some(GmCommand::Ipurge {
+                window: "dragonsoul".into()
+            })
+        );
         assert_eq!(parse_command("ipurge"), None);
         assert_eq!(parse_command("ipurge foo"), None);
-        assert_eq!(required_level(&GmCommand::Transfer { name: "x".into() }), gm_level::LOW_WIZARD);
-        assert_eq!(required_level(&GmCommand::Ipurge { window: "all".into() }), gm_level::HIGH_WIZARD);
+        assert_eq!(
+            required_level(&GmCommand::Transfer { name: "x".into() }),
+            gm_level::LOW_WIZARD
+        );
+        assert_eq!(
+            required_level(&GmCommand::Ipurge {
+                window: "all".into()
+            }),
+            gm_level::HIGH_WIZARD
+        );
     }
 }

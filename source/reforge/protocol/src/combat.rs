@@ -33,7 +33,7 @@
 //! wire del Packet.h del cliente — ADR-0007: el server se adapta) para
 //! observadores futuros.
 
-use crate::{rd_u32, ProtocolError, Result};
+use crate::{ProtocolError, Result, rd_u32};
 
 /// `TPacketCGAttack` (8 B, header 2) — el ataque melee del cliente.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

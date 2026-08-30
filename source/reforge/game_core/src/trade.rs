@@ -279,8 +279,14 @@ mod tests {
         assert!(t.both_accepted());
         t.add_item(0, row(10, 101, 5, 3), 0).expect("add");
         assert!(!t.both_accepted(), "cualquier cambio desacepta (parity)");
-        assert!(t.add_item(0, row(11, 101, 1, 4), 0).is_err(), "display_pos duplicado");
-        assert!(t.add_item(0, row(10, 101, 1, 4), 1).is_err(), "item ya ofrecido");
+        assert!(
+            t.add_item(0, row(11, 101, 1, 4), 0).is_err(),
+            "display_pos duplicado"
+        );
+        assert!(
+            t.add_item(0, row(10, 101, 1, 4), 1).is_err(),
+            "item ya ofrecido"
+        );
         for i in 1..EXCHANGE_ITEM_MAX_NUM {
             t.add_item(0, row(100 + i as i64, 200 + i as i64, 1, i as i32), i as u8)
                 .expect("add");
@@ -301,7 +307,10 @@ mod tests {
         assert!(!t.remove_item(0, 2), "ya no está");
         assert!(t.add_gold(0, 1000).is_ok());
         assert_eq!(t.sides[0].gold, 1000);
-        assert!(t.add_gold(0, 500).is_err(), "una sola vez (parity m_lGold > 0)");
+        assert!(
+            t.add_gold(0, 500).is_err(),
+            "una sola vez (parity m_lGold > 0)"
+        );
         assert!(t.add_gold(1, 0).is_err(), "oro <= 0 rechazado");
     }
 
@@ -330,11 +339,8 @@ mod tests {
             offers_executor: vec![row(10, 101, 5, 3), row(11, 102, 1, 4)],
             offers_partner: vec![row(20, 201, 3, 7)],
         };
-        let mut next = (100_000_000i64..).into_iter();
-        let units = build_commit_units(&plan, 5_000, 3_000, &mut || {
-            let id = next.next().expect("ids");
-            id
-        });
+        let mut next = 100_000_000i64..;
+        let units = build_commit_units(&plan, 5_000, 3_000, &mut || next.next().expect("ids"));
         // 2 unidades de lado (materiales+oro) + 3 recibidos = 5.
         assert_eq!(units.len(), 5);
         // Unidad del ejecutor: consume sus 2 offers + oro 5000→4000.
@@ -348,13 +354,25 @@ mod tests {
         assert_eq!(units[1].gold, Some((3_000, 2_500)));
         // Recibidos: el partner recibe los 2 del ejecutor, el ejecutor 1 del
         // partner — ids nuevos 100000000+.
-        assert_eq!(units[2].result.as_ref().map(|(r, o)| (r.id, *o)), Some((100_000_000, 2)));
-        assert_eq!(units[3].result.as_ref().map(|(r, o)| (r.id, *o)), Some((100_000_001, 2)));
-        assert_eq!(units[4].result.as_ref().map(|(r, o)| (r.id, *o)), Some((100_000_002, 1)));
+        assert_eq!(
+            units[2].result.as_ref().map(|(r, o)| (r.id, *o)),
+            Some((100_000_000, 2))
+        );
+        assert_eq!(
+            units[3].result.as_ref().map(|(r, o)| (r.id, *o)),
+            Some((100_000_001, 2))
+        );
+        assert_eq!(
+            units[4].result.as_ref().map(|(r, o)| (r.id, *o)),
+            Some((100_000_002, 1))
+        );
         // El row recibido conserva vnum/count/sockets/attrs, pos = la del
         // oferente, window INVENTORY.
         let (r, _) = units[4].result.as_ref().expect("result");
-        assert_eq!((r.vnum, r.count, r.pos, r.window.as_str()), (201, 3, 7, "INVENTORY"));
+        assert_eq!(
+            (r.vnum, r.count, r.pos, r.window.as_str()),
+            (201, 3, 7, "INVENTORY")
+        );
     }
 
     /// Unidades vacías se omiten (trade sin oro ni items → sin unidades).

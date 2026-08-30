@@ -98,11 +98,7 @@ pub fn death_exp_loss(
         return 0;
     }
     let loss = (next_exp * exp_loss_pct(level) as u64 / 100).min(EXP_LOSS_CAP);
-    if teardrop_of_godness {
-        loss / 2
-    } else {
-        loss
-    }
+    if teardrop_of_godness { loss / 2 } else { loss }
 }
 
 /// Escalera `GetRealAlignment` (char_battle.cpp:951-970) → fila de
@@ -111,15 +107,60 @@ pub fn death_exp_loss(
 /// (:943) es del lane, como `GetMyShop`.
 pub fn drop_penalty(alignment: i32) -> DropPenalty {
     const TABLE: [DropPenalty; 9] = [
-        DropPenalty { inventory_pct: 0, inventory_qty: 0, equipment_pct: 0, equipment_qty: 0 },
-        DropPenalty { inventory_pct: 0, inventory_qty: 0, equipment_pct: 0, equipment_qty: 0 },
-        DropPenalty { inventory_pct: 0, inventory_qty: 0, equipment_pct: 0, equipment_qty: 0 },
-        DropPenalty { inventory_pct: 0, inventory_qty: 0, equipment_pct: 0, equipment_qty: 0 },
-        DropPenalty { inventory_pct: 0, inventory_qty: 0, equipment_pct: 0, equipment_qty: 0 },
-        DropPenalty { inventory_pct: 25, inventory_qty: 1, equipment_pct: 5, equipment_qty: 1 },
-        DropPenalty { inventory_pct: 50, inventory_qty: 2, equipment_pct: 10, equipment_qty: 1 },
-        DropPenalty { inventory_pct: 75, inventory_qty: 4, equipment_pct: 15, equipment_qty: 1 },
-        DropPenalty { inventory_pct: 100, inventory_qty: 8, equipment_pct: 20, equipment_qty: 1 },
+        DropPenalty {
+            inventory_pct: 0,
+            inventory_qty: 0,
+            equipment_pct: 0,
+            equipment_qty: 0,
+        },
+        DropPenalty {
+            inventory_pct: 0,
+            inventory_qty: 0,
+            equipment_pct: 0,
+            equipment_qty: 0,
+        },
+        DropPenalty {
+            inventory_pct: 0,
+            inventory_qty: 0,
+            equipment_pct: 0,
+            equipment_qty: 0,
+        },
+        DropPenalty {
+            inventory_pct: 0,
+            inventory_qty: 0,
+            equipment_pct: 0,
+            equipment_qty: 0,
+        },
+        DropPenalty {
+            inventory_pct: 0,
+            inventory_qty: 0,
+            equipment_pct: 0,
+            equipment_qty: 0,
+        },
+        DropPenalty {
+            inventory_pct: 25,
+            inventory_qty: 1,
+            equipment_pct: 5,
+            equipment_qty: 1,
+        },
+        DropPenalty {
+            inventory_pct: 50,
+            inventory_qty: 2,
+            equipment_pct: 10,
+            equipment_qty: 1,
+        },
+        DropPenalty {
+            inventory_pct: 75,
+            inventory_qty: 4,
+            equipment_pct: 15,
+            equipment_qty: 1,
+        },
+        DropPenalty {
+            inventory_pct: 100,
+            inventory_qty: 8,
+            equipment_pct: 20,
+            equipment_qty: 1,
+        },
     ];
     let idx = if alignment >= 120_000 {
         0
@@ -219,14 +260,34 @@ mod tests {
     #[test]
     fn pk_penalty_applies_and_rolls() {
         // Asesino limpio: 33 % de salvación (roll < 33); 40 → pena completa.
-        assert_eq!(pk_penalty_delta(0, 0, |_, _| 40), -20_000, "roll 40 ≥ 33 → pena");
-        assert_eq!(pk_penalty_delta(0, 0, |_, _| 32), 0, "roll 32 < 33 → salvado");
+        assert_eq!(
+            pk_penalty_delta(0, 0, |_, _| 40),
+            -20_000,
+            "roll 40 ≥ 33 → pena"
+        );
+        assert_eq!(
+            pk_penalty_delta(0, 0, |_, _| 32),
+            0,
+            "roll 32 < 33 → salvado"
+        );
         // Ya negativo: 20 % (roll < 20); 20 → pena.
-        assert_eq!(pk_penalty_delta(-5, 0, |_, _| 19), 0, "roll 19 < 20 → salvado");
-        assert_eq!(pk_penalty_delta(-5, 0, |_, _| 20), -20_000, "roll 20 ≥ 20 → pena");
+        assert_eq!(
+            pk_penalty_delta(-5, 0, |_, _| 19),
+            0,
+            "roll 19 < 20 → salvado"
+        );
+        assert_eq!(
+            pk_penalty_delta(-5, 0, |_, _| 20),
+            -20_000,
+            "roll 20 ≥ 20 → pena"
+        );
         // Party en rango (FPartyAlignmentCompute): reparto entero truncado.
         assert_eq!(pk_penalty_delta(0, 4, |_, _| 100), -5_000, "-20000/4");
-        assert_eq!(pk_penalty_delta(0, 3, |_, _| 100), -6_666, "-20000/3 (truncado)");
+        assert_eq!(
+            pk_penalty_delta(0, 3, |_, _| 100),
+            -6_666,
+            "-20000/3 (truncado)"
+        );
         // Con party pero 0 en rango → el asesino paga el total (:1302-1303).
         assert_eq!(pk_penalty_delta(0, 0, |_, _| 100), -20_000);
     }
@@ -255,10 +316,48 @@ mod tests {
     #[test]
     fn death_exp_loss_level_and_luck_gates() {
         let mut rolls = 0;
-        assert_eq!(death_exp_loss(9, 100_000, |_, _| { rolls += 1; 0 }, false, false), 0);
+        assert_eq!(
+            death_exp_loss(
+                9,
+                100_000,
+                |_, _| {
+                    rolls += 1;
+                    0
+                },
+                false,
+                false
+            ),
+            0
+        );
         assert_eq!(rolls, 0, "level < 10 sale antes del roll (:295)");
-        assert_eq!(death_exp_loss(10, 100_000, |_, _| { rolls += 1; 1 }, false, false), 0, "roll 1 → suerte");
-        assert_eq!(death_exp_loss(10, 100_000, |_, _| { rolls += 1; 2 }, false, false), 0, "roll 2 → suerte");
+        assert_eq!(
+            death_exp_loss(
+                10,
+                100_000,
+                |_, _| {
+                    rolls += 1;
+                    1
+                },
+                false,
+                false
+            ),
+            0,
+            "roll 1 → suerte"
+        );
+        assert_eq!(
+            death_exp_loss(
+                10,
+                100_000,
+                |_, _| {
+                    rolls += 1;
+                    2
+                },
+                false,
+                false
+            ),
+            0,
+            "roll 2 → suerte"
+        );
         assert_eq!(rolls, 2);
     }
 
@@ -269,11 +368,20 @@ mod tests {
     #[test]
     fn death_exp_loss_computes_caps_halves() {
         // level 30 → 3 %: 1_000_000 * 3 / 100 = 30_000.
-        assert_eq!(death_exp_loss(30, 1_000_000, |_, _| 0, false, false), 30_000);
+        assert_eq!(
+            death_exp_loss(30, 1_000_000, |_, _| 0, false, false),
+            30_000
+        );
         // Cap: level 63 → 1 %: 200_000_000 / 100 = 2_000_000 → 800_000.
-        assert_eq!(death_exp_loss(63, 200_000_000, |_, _| 0, false, false), 800_000);
+        assert_eq!(
+            death_exp_loss(63, 200_000_000, |_, _| 0, false, false),
+            800_000
+        );
         // Lágrima tras el cap: 800_000 / 2 = 400_000.
-        assert_eq!(death_exp_loss(63, 200_000_000, |_, _| 0, false, true), 400_000);
+        assert_eq!(
+            death_exp_loss(63, 200_000_000, |_, _| 0, false, true),
+            400_000
+        );
         // Lágrima sin cap: 30_000 / 2 = 15_000.
         assert_eq!(death_exp_loss(30, 1_000_000, |_, _| 0, false, true), 15_000);
         // Flag sin-pena (muerte por PC limpia el flag — :1261): 0.
@@ -285,7 +393,19 @@ mod tests {
     #[test]
     fn death_exp_loss_rolls_before_flag() {
         let mut rolls = 0;
-        assert_eq!(death_exp_loss(30, 1_000_000, |_, _| { rolls += 1; 0 }, true, false), 0);
+        assert_eq!(
+            death_exp_loss(
+                30,
+                1_000_000,
+                |_, _| {
+                    rolls += 1;
+                    0
+                },
+                true,
+                false
+            ),
+            0
+        );
         assert_eq!(rolls, 1, "roll consumido aunque el flag cancele la pena");
     }
 
@@ -294,11 +414,36 @@ mod tests {
     /// escalón o un valor de la tabla (mutation).
     #[test]
     fn drop_penalty_tiers_and_table() {
-        let none = DropPenalty { inventory_pct: 0, inventory_qty: 0, equipment_pct: 0, equipment_qty: 0 };
-        let t5 = DropPenalty { inventory_pct: 25, inventory_qty: 1, equipment_pct: 5, equipment_qty: 1 };
-        let t6 = DropPenalty { inventory_pct: 50, inventory_qty: 2, equipment_pct: 10, equipment_qty: 1 };
-        let t7 = DropPenalty { inventory_pct: 75, inventory_qty: 4, equipment_pct: 15, equipment_qty: 1 };
-        let t8 = DropPenalty { inventory_pct: 100, inventory_qty: 8, equipment_pct: 20, equipment_qty: 1 };
+        let none = DropPenalty {
+            inventory_pct: 0,
+            inventory_qty: 0,
+            equipment_pct: 0,
+            equipment_qty: 0,
+        };
+        let t5 = DropPenalty {
+            inventory_pct: 25,
+            inventory_qty: 1,
+            equipment_pct: 5,
+            equipment_qty: 1,
+        };
+        let t6 = DropPenalty {
+            inventory_pct: 50,
+            inventory_qty: 2,
+            equipment_pct: 10,
+            equipment_qty: 1,
+        };
+        let t7 = DropPenalty {
+            inventory_pct: 75,
+            inventory_qty: 4,
+            equipment_pct: 15,
+            equipment_qty: 1,
+        };
+        let t8 = DropPenalty {
+            inventory_pct: 100,
+            inventory_qty: 8,
+            equipment_pct: 20,
+            equipment_qty: 1,
+        };
         assert_eq!(drop_penalty(ALIGNMENT_MAX), none, "≥ 120000 → tier 0");
         assert_eq!(drop_penalty(119_999), none, "≥ 80000 → tier 1");
         assert_eq!(drop_penalty(79_999), none, "≥ 40000 → tier 2");
@@ -319,19 +464,57 @@ mod tests {
     /// comparación o se salta el roll (mutation).
     #[test]
     fn drop_allowed_rolls_and_skip_item() {
-        let t5 = DropPenalty { inventory_pct: 25, inventory_qty: 1, equipment_pct: 5, equipment_qty: 1 };
-        let none = DropPenalty { inventory_pct: 0, inventory_qty: 0, equipment_pct: 0, equipment_qty: 0 };
+        let t5 = DropPenalty {
+            inventory_pct: 25,
+            inventory_qty: 1,
+            equipment_pct: 5,
+            equipment_qty: 1,
+        };
+        let none = DropPenalty {
+            inventory_pct: 0,
+            inventory_qty: 0,
+            equipment_pct: 0,
+            equipment_qty: 0,
+        };
         let mut n = 0;
-        let mut roll = |_, _| { n += 1; if n == 1 { 25 } else { 5 } };
-        assert_eq!(drop_allowed(t5, &mut roll, false), (true, true), "roll == pct → drop (>=)");
+        let mut roll = |_, _| {
+            n += 1;
+            if n == 1 { 25 } else { 5 }
+        };
+        assert_eq!(
+            drop_allowed(t5, &mut roll, false),
+            (true, true),
+            "roll == pct → drop (>=)"
+        );
         assert_eq!(n, 2);
-        let mut roll = |_, _| { n += 1; if n == 3 { 26 } else { 6 } };
-        assert_eq!(drop_allowed(t5, &mut roll, false), (false, false), "roll > pct → no");
+        let mut roll = |_, _| {
+            n += 1;
+            if n == 3 { 26 } else { 6 }
+        };
+        assert_eq!(
+            drop_allowed(t5, &mut roll, false),
+            (false, false),
+            "roll > pct → no"
+        );
         assert_eq!(n, 4);
-        let mut roll = |_, _| { n += 1; 1 };
-        assert_eq!(drop_allowed(t5, &mut roll, true), (false, false), "skip item → sin drops");
-        assert_eq!(n, 6, "skip item consume los 2 rolls igual (parity :980-989)");
-        assert_eq!(drop_allowed(none, |_, _| 1, false), (false, false), "tier 0-4 (pct 0) nunca dropea");
+        let mut roll = |_, _| {
+            n += 1;
+            1
+        };
+        assert_eq!(
+            drop_allowed(t5, &mut roll, true),
+            (false, false),
+            "skip item → sin drops"
+        );
+        assert_eq!(
+            n, 6,
+            "skip item consume los 2 rolls igual (parity :980-989)"
+        );
+        assert_eq!(
+            drop_allowed(none, |_, _| 1, false),
+            (false, false),
+            "tier 0-4 (pct 0) nunca dropea"
+        );
     }
 
     /// VERIFIER war-PK (regla 20): si ambos en guerra → 0 sin roll; fuera de
@@ -339,17 +522,31 @@ mod tests {
     #[test]
     fn war_pk_no_penalty_verifier() {
         use crate::guild::GuildWar;
-        let wars = [GuildWar { guild_a: 1, guild_b: 2, score_a: 0, score_b: 0 }];
+        let wars = [GuildWar {
+            guild_a: 1,
+            guild_b: 2,
+            score_a: 0,
+            score_b: 0,
+        }];
         assert!(is_at_war(Some(1), Some(2), &wars));
         assert!(is_at_war(Some(2), Some(1), &wars), "orden invariante");
         assert!(!is_at_war(Some(1), Some(3), &wars));
         assert!(!is_at_war(None, Some(2), &wars));
         assert!(!is_at_war(Some(1), Some(1), &wars), "misma guild → no war");
         // En guerra: 0 incluso con roll que daría pena fuera de guerra.
-        assert_eq!(pk_penalty_delta_war(0, 0, Some(1), Some(2), &wars, |_, _| 100), 0);
+        assert_eq!(
+            pk_penalty_delta_war(0, 0, Some(1), Some(2), &wars, |_, _| 100),
+            0
+        );
         // Fuera de guerra: delega (roll 100 → -20000).
-        assert_eq!(pk_penalty_delta_war(0, 0, Some(1), Some(3), &wars, |_, _| 100), -20_000);
+        assert_eq!(
+            pk_penalty_delta_war(0, 0, Some(1), Some(3), &wars, |_, _| 100),
+            -20_000
+        );
         // Sin guilds: también pena.
-        assert_eq!(pk_penalty_delta_war(0, 0, None, None, &wars, |_, _| 100), -20_000);
+        assert_eq!(
+            pk_penalty_delta_war(0, 0, None, None, &wars, |_, _| 100),
+            -20_000
+        );
     }
 }

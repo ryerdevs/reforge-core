@@ -13,7 +13,9 @@ pub mod qc;
 use std::collections::BTreeMap;
 
 use crate::ast::*;
-use crate::family::{detect_similar_groups, expand_families, extract_family_params, quest_similarity};
+use crate::family::{
+    detect_similar_groups, expand_families, extract_family_params, quest_similarity,
+};
 use crate::parser::parse;
 use crate::render::render;
 use qc::parse_qc;
@@ -29,7 +31,10 @@ pub struct Unmapped {
 
 impl Unmapped {
     fn new(file: &str, item: impl Into<String>) -> Self {
-        Self { file: file.to_string(), item: item.into() }
+        Self {
+            file: file.to_string(),
+            item: item.into(),
+        }
     }
 }
 
@@ -69,7 +74,7 @@ pub fn convert_file(file: &str, text: &str) -> FileResult {
                 dsl: None,
                 unmapped: Vec::new(),
                 notes: Vec::new(),
-            }
+            };
         }
     };
     let mut unmapped = Vec::new();
@@ -123,18 +128,31 @@ pub fn convert_file(file: &str, text: &str) -> FileResult {
                 continue;
             }
             let body = map::map_stmts(&ev.body, file, &mut unmapped);
-            events.push(Event { triggers, condition, body });
+            events.push(Event {
+                triggers,
+                condition,
+                body,
+            });
         }
         for h in &st.helpers {
-            unmapped.push(Unmapped::new(file, format!("helper:function {} (Rust module)", h.name)));
+            unmapped.push(Unmapped::new(
+                file,
+                format!("helper:function {} (Rust module)", h.name),
+            ));
         }
-        states.push(State { name: st.name.clone(), events });
+        states.push(State {
+            name: st.name.clone(),
+            events,
+        });
     }
 
     let file_ast = QuestFile {
         imports: Vec::new(),
         blocks: Vec::new(),
-        quests: vec![Quest::Concrete(QuestDef { name: legacy.name.clone(), states })],
+        quests: vec![Quest::Concrete(QuestDef {
+            name: legacy.name.clone(),
+            states,
+        })],
     };
     let dsl = render(&file_ast);
     // Safety: the generated DSL must re-parse (the renderer is the contract).
@@ -182,17 +200,27 @@ pub fn detect_families(converted: &[String]) -> Vec<FamilyProposal> {
             .map(|(prefix, _)| (prefix.to_string(), "level".to_string()))
             .or_else(|| {
                 s.rsplit_once('_')
-                    .filter(|(_, suffix)| !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()))
+                    .filter(|(_, suffix)| {
+                        !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit())
+                    })
                     .map(|(prefix, _)| (prefix.to_string(), "index".to_string()))
             });
         if let Some((family, param)) = matched {
-            groups.entry(family).or_insert_with(|| (param, Vec::new())).1.push(name.clone());
+            groups
+                .entry(family)
+                .or_insert_with(|| (param, Vec::new()))
+                .1
+                .push(name.clone());
         }
     }
     groups
         .into_iter()
         .filter(|(_, (_, members))| members.len() >= 2)
-        .map(|(name, (param, members))| FamilyProposal { name, members, param })
+        .map(|(name, (param, members))| FamilyProposal {
+            name,
+            members,
+            param,
+        })
         .collect()
 }
 
@@ -220,10 +248,23 @@ pub fn convert_corpus(files: &[(String, String)]) -> (Vec<(String, String)>, Cor
     }
     let families = detect_families(&converted);
     let (family_outputs, family_failed, similarity) = build_family_outputs(&families, &outputs);
-    outputs.extend(family_outputs.iter().map(|f| (f.file.clone(), f.text.clone())));
+    outputs.extend(
+        family_outputs
+            .iter()
+            .map(|f| (f.file.clone(), f.text.clone())),
+    );
     (
         outputs,
-        CorpusReport { converted, failed, unmapped, notes, families, family_outputs, family_failed, similarity },
+        CorpusReport {
+            converted,
+            failed,
+            unmapped,
+            notes,
+            families,
+            family_outputs,
+            family_failed,
+            similarity,
+        },
     )
 }
 
@@ -277,7 +318,11 @@ const SIM_THRESHOLD: f64 = 0.5;
 fn build_family_outputs(
     families: &[FamilyProposal],
     outputs: &[(String, String)],
-) -> (Vec<FamilyOutput>, Vec<(String, String)>, Vec<SimilarityProposal>) {
+) -> (
+    Vec<FamilyOutput>,
+    Vec<(String, String)>,
+    Vec<SimilarityProposal>,
+) {
     let mut outs = Vec::new();
     let mut failed = Vec::new();
     let mut similarity = Vec::new();
@@ -289,7 +334,10 @@ fn build_family_outputs(
                     Some(Quest::Concrete(qd)) => members.push(qd),
                     _ => failed.push((prop.name.clone(), format!("miembro {m}: DSL no parseable"))),
                 },
-                None => failed.push((prop.name.clone(), format!("miembro {m}: sin salida convertida"))),
+                None => failed.push((
+                    prop.name.clone(),
+                    format!("miembro {m}: sin salida convertida"),
+                )),
             }
         }
         match extract_family_params(&prop.name, &prop.param, &members) {
@@ -297,7 +345,11 @@ fn build_family_outputs(
                 let excluded = ext.excluded.clone();
                 let mut quests = vec![ext.family.clone()];
                 quests.extend(ext.instances.clone().into_iter().map(Quest::Instance));
-                let text = render(&QuestFile { imports: Vec::new(), blocks: Vec::new(), quests });
+                let text = render(&QuestFile {
+                    imports: Vec::new(),
+                    blocks: Vec::new(),
+                    quests,
+                });
                 // Parity harness (spec §9.5): the family file must reparse and
                 // expand to the exact original member quests.
                 let parity_ok = parse(&text).is_ok_and(|f| {
@@ -307,10 +359,14 @@ fn build_family_outputs(
                             .filter(|m| !excluded.iter().any(|(n, _)| n == &m.name))
                             .cloned()
                             .collect();
-                        expanded.len() == usable.len() && expanded.iter().zip(&usable).all(|(a, b)| a == b)
+                        expanded.len() == usable.len()
+                            && expanded.iter().zip(&usable).all(|(a, b)| a == b)
                     })
                 });
-                let dir = prop.members[0].rsplit_once('/').map(|(d, _)| format!("{d}/")).unwrap_or_default();
+                let dir = prop.members[0]
+                    .rsplit_once('/')
+                    .map(|(d, _)| format!("{d}/"))
+                    .unwrap_or_default();
                 outs.push(FamilyOutput {
                     name: prop.name.clone(),
                     file: format!("{dir}{}.family.quest", prop.name),
@@ -454,7 +510,9 @@ end
         let dsl = r.dsl.clone().unwrap();
         // The output must re-parse as DSL.
         let file = parse(&dsl).unwrap_or_else(|e| panic!("{e}\n{dsl}"));
-        let Quest::Concrete(q) = &file.quests[0] else { panic!() };
+        let Quest::Concrete(q) = &file.quests[0] else {
+            panic!()
+        };
         assert_eq!(q.name, "collect_quest_lv30");
         assert_eq!(q.states.len(), 3);
         // start: on login, levelup with pc.level >= 30
@@ -463,27 +521,45 @@ end
         assert!(ev.condition.is_some());
         // information: target_vid idiom converted + send_letter
         let ev = &q.states[1].events[0];
-        let Stmt::Action { action, .. } = &ev.body[0] else { panic!() };
+        let Stmt::Action { action, .. } = &ev.body[0] else {
+            panic!()
+        };
         assert_eq!(action.name, ActionName::TargetVid);
-        assert_eq!(action.args, vec![
-            Value::Str("__TARGET__".into()),
-            Value::Num(20084),
-            Value::Str("gameforge.collect_herb_lv10._150_sayTitle".into()),
-        ]);
-        let Stmt::Action { action, .. } = &ev.body[1] else { panic!() };
+        assert_eq!(
+            action.args,
+            vec![
+                Value::Str("__TARGET__".into()),
+                Value::Num(20084),
+                Value::Str("gameforge.collect_herb_lv10._150_sayTitle".into()),
+            ]
+        );
+        let Stmt::Action { action, .. } = &ev.body[1] else {
+            panic!()
+        };
         assert_eq!(action.name, ActionName::SendLetter);
         // 601.kill: if number(1, 100) <= 5 → give_item2(30006, 1)
         let ev = &q.states[1].events[1];
-        let Stmt::Branch(b) = &ev.body[0] else { panic!("if") };
+        let Stmt::Branch(b) = &ev.body[0] else {
+            panic!("if")
+        };
         assert!(matches!(b.condition, Some(Expr::Compare(_, CmpOp::Le, _))));
         // chat with key + condition: key dropped (note), condition mapped
         let ev = &q.states[1].events[2];
         assert_eq!(ev.triggers.len(), 1);
-        assert!(matches!(ev.triggers[0].kind, TriggerKind::Chat { target: TriggerTarget::Num(20084) }));
+        assert!(matches!(
+            ev.triggers[0].kind,
+            TriggerKind::Chat {
+                target: TriggerTarget::Num(20084)
+            }
+        ));
         assert!(ev.condition.is_some());
         assert_eq!(ev.body.len(), 3); // remove_item, set_qf, set_state
         // Notes record the dropped npcChat key.
-        assert!(r.notes.iter().any(|n| n.contains("_140_npcChat")), "{:?}", r.notes);
+        assert!(
+            r.notes.iter().any(|n| n.contains("_140_npcChat")),
+            "{:?}",
+            r.notes
+        );
         // Nothing unmapped in this quest.
         assert!(r.unmapped.is_empty(), "{:?}", r.unmapped);
     }
@@ -509,17 +585,25 @@ end
         assert!(r.unmapped.is_empty(), "{:?}", r.unmapped);
         let dsl = r.dsl.unwrap();
         let file = parse(&dsl).unwrap();
-        let Quest::Concrete(q) = &file.quests[0] else { panic!() };
+        let Quest::Concrete(q) = &file.quests[0] else {
+            panic!()
+        };
         let body = &q.states[0].events[0].body;
-        let Stmt::Action { action, capture } = &body[0] else { panic!() };
+        let Stmt::Action { action, capture } = &body[0] else {
+            panic!()
+        };
         assert_eq!(action.name, ActionName::Select);
         assert_eq!(capture.as_deref(), Some("choice"));
         let Stmt::Branch(b) = &body[1] else { panic!() };
-        let Stmt::Action { action, .. } = &b.body[0] else { panic!() };
+        let Stmt::Action { action, .. } = &b.body[0] else {
+            panic!()
+        };
         assert_eq!(action.name, ActionName::Warp);
         let Stmt::Branch(el) = &body[2] else { panic!() };
         assert!(el.condition.is_none());
-        let Stmt::Action { action, .. } = &el.body[0] else { panic!() };
+        let Stmt::Action { action, .. } = &el.body[0] else {
+            panic!()
+        };
         assert_eq!(action.name, ActionName::Return);
     }
 
@@ -547,7 +631,10 @@ end
         assert!(r.ok, "{:?}", r.error);
         let items: Vec<&str> = r.unmapped.iter().map(|u| u.item.as_str()).collect();
         assert!(items.iter().any(|i| i.starts_with("for:")), "{items:?}");
-        assert!(items.iter().any(|i| i.starts_with("local:itemJob:")), "{items:?}");
+        assert!(
+            items.iter().any(|i| i.starts_with("local:itemJob:")),
+            "{items:?}"
+        );
         // The mapped statements survive.
         let dsl = r.dsl.unwrap();
         assert!(dsl.contains("get_qf(\"basic_weapon\") != 0"), "{dsl}");
@@ -571,9 +658,17 @@ end
 ";
         let r = convert_file("story/levelup.quest", src);
         assert!(r.ok, "{:?}", r.error);
-        assert!(r.unmapped.iter().any(|u| u.item.starts_with("trigger:kill")), "{:?}", r.unmapped);
+        assert!(
+            r.unmapped
+                .iter()
+                .any(|u| u.item.starts_with("trigger:kill")),
+            "{:?}",
+            r.unmapped
+        );
         let file = parse(&r.dsl.clone().unwrap()).unwrap();
-        let Quest::Concrete(q) = &file.quests[0] else { panic!() };
+        let Quest::Concrete(q) = &file.quests[0] else {
+            panic!()
+        };
         // The kill event was skipped; the button event survived.
         assert_eq!(q.states[0].events.len(), 1);
     }
@@ -653,35 +748,62 @@ end
 
     #[test]
     fn converts_set_qf_and_affect_with_expr_args() {
-        let r = convert_file("systems/timers.quest", &collect_quest(30, 601, 30006, 71035));
+        let r = convert_file(
+            "systems/timers.quest",
+            &collect_quest(30, 601, 30006, 71035),
+        );
         assert!(r.ok, "{:?}", r.error);
         assert!(r.unmapped.is_empty(), "{:?}", r.unmapped);
         let dsl = r.dsl.unwrap();
         let file = parse(&dsl).unwrap();
-        let Quest::Concrete(q) = &file.quests[0] else { panic!() };
+        let Quest::Concrete(q) = &file.quests[0] else {
+            panic!()
+        };
         // The chat event: remove_item, set_qf(expr), set_state.
         let body = &q.states[1].events[2].body;
-        let Stmt::Action { action, .. } = &body[1] else { panic!() };
+        let Stmt::Action { action, .. } = &body[1] else {
+            panic!()
+        };
         assert_eq!(action.name, ActionName::SetQf);
-        assert!(matches!(&action.args[1], Value::Expr(e) if matches!(e.as_ref(), Expr::Add(_, _))), "{:?}", action.args);
-        assert!(dsl.contains("set_qf(\"duration\", get_time + 60 * 60 * 22)"), "{dsl}");
+        assert!(
+            matches!(&action.args[1], Value::Expr(e) if matches!(e.as_ref(), Expr::Add(_, _))),
+            "{:?}",
+            action.args
+        );
+        assert!(
+            dsl.contains("set_qf(\"duration\", get_time + 60 * 60 * 22)"),
+            "{dsl}"
+        );
     }
 
     #[test]
     fn family_extraction_parity_through_converter() {
-        let r30 = convert_file("biology/collect_quest_lv30.quest", &collect_quest(30, 601, 30006, 71035));
-        let r40 = convert_file("biology/collect_quest_lv40.quest", &collect_quest(40, 602, 30007, 71036));
+        let r30 = convert_file(
+            "biology/collect_quest_lv30.quest",
+            &collect_quest(30, 601, 30006, 71035),
+        );
+        let r40 = convert_file(
+            "biology/collect_quest_lv40.quest",
+            &collect_quest(40, 602, 30007, 71036),
+        );
         assert!(r30.ok, "{:?}", r30.error);
         assert!(r40.ok, "{:?}", r40.error);
         assert!(r30.unmapped.is_empty() && r40.unmapped.is_empty());
         let file30 = parse(&r30.dsl.unwrap()).unwrap();
         let file40 = parse(&r40.dsl.unwrap()).unwrap();
-        let Quest::Concrete(d30) = &file30.quests[0] else { panic!() };
-        let Quest::Concrete(d40) = &file40.quests[0] else { panic!() };
+        let Quest::Concrete(d30) = &file30.quests[0] else {
+            panic!()
+        };
+        let Quest::Concrete(d40) = &file40.quests[0] else {
+            panic!()
+        };
 
-        let ext = extract_family_params("collect_quest", "level", &[d30.clone(), d40.clone()]).unwrap();
+        let ext =
+            extract_family_params("collect_quest", "level", &[d30.clone(), d40.clone()]).unwrap();
         assert!(ext.excluded.is_empty());
-        let Quest::Family { name, params, .. } = &ext.family else { panic!("family") };
+        let Quest::Family { name, params, .. } = &ext.family else {
+            panic!("family")
+        };
         assert_eq!(name, "collect_quest");
         let names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, vec!["level", "p1", "p2", "p3", "p4"], "{names:?}");
@@ -690,7 +812,11 @@ end
         // expand to EXACTLY the converted originals (parity harness).
         let mut quests = vec![ext.family.clone()];
         quests.extend(ext.instances.clone().into_iter().map(Quest::Instance));
-        let text = render(&QuestFile { imports: vec![], blocks: vec![], quests });
+        let text = render(&QuestFile {
+            imports: vec![],
+            blocks: vec![],
+            quests,
+        });
         let file = parse(&text).unwrap_or_else(|e| panic!("{e}\n{text}"));
         let expanded = expand_families(&file).unwrap();
         assert_eq!(expanded.len(), 2);
@@ -704,8 +830,14 @@ end
     #[test]
     fn convert_corpus_emits_family_files() {
         let files = vec![
-            ("biology/collect_quest_lv30.quest".to_string(), collect_quest(30, 601, 30006, 71035)),
-            ("biology/collect_quest_lv40.quest".to_string(), collect_quest(40, 602, 30007, 71036)),
+            (
+                "biology/collect_quest_lv30.quest".to_string(),
+                collect_quest(30, 601, 30006, 71035),
+            ),
+            (
+                "biology/collect_quest_lv40.quest".to_string(),
+                collect_quest(40, 602, 30007, 71036),
+            ),
         ];
         let (outputs, report) = convert_corpus(&files);
         assert_eq!(report.failed, vec![]);
@@ -718,11 +850,30 @@ end
         assert!(f.parity_ok, "expansión != originales");
         // The family file is part of the outputs (written by the CLI).
         assert!(outputs.iter().any(|(path, _)| path == &f.file));
-        assert!(outputs.iter().any(|(path, _)| path == "biology/collect_quest_lv30.quest"));
+        assert!(
+            outputs
+                .iter()
+                .any(|(path, _)| path == "biology/collect_quest_lv30.quest")
+        );
         // The family text contains the template + both instances.
-        assert!(f.text.contains("quest collect_quest family (level, p1, p2, p3, p4)"), "{}", f.text);
-        assert!(f.text.contains("quest collect_quest_lv30 = collect_quest(level: 30"), "{}", f.text);
-        assert!(f.text.contains("quest collect_quest_lv40 = collect_quest(level: 40"), "{}", f.text);
+        assert!(
+            f.text
+                .contains("quest collect_quest family (level, p1, p2, p3, p4)"),
+            "{}",
+            f.text
+        );
+        assert!(
+            f.text
+                .contains("quest collect_quest_lv30 = collect_quest(level: 30"),
+            "{}",
+            f.text
+        );
+        assert!(
+            f.text
+                .contains("quest collect_quest_lv40 = collect_quest(level: 40"),
+            "{}",
+            f.text
+        );
     }
 
     /// `collect_quest(..)` + an extra `state __giveup__` — the REAL-corpus
@@ -739,8 +890,14 @@ end
     #[test]
     fn similarity_proposals_when_extraction_rejects() {
         let files = vec![
-            ("biology/collect_quest_lv30.quest".to_string(), collect_quest(30, 601, 30006, 71035)),
-            ("biology/collect_quest_lv40.quest".to_string(), collect_quest_with_giveup(40, 602, 30007, 71036)),
+            (
+                "biology/collect_quest_lv30.quest".to_string(),
+                collect_quest(30, 601, 30006, 71035),
+            ),
+            (
+                "biology/collect_quest_lv40.quest".to_string(),
+                collect_quest_with_giveup(40, 602, 30007, 71036),
+            ),
         ];
         let (_, report) = convert_corpus(&files);
         assert_eq!(report.failed, vec![]);
@@ -785,7 +942,11 @@ end
             return;
         }
         let (_, report) = convert_corpus(&files);
-        assert!(report.failed.is_empty(), "conversión fallida: {:?}", report.failed);
+        assert!(
+            report.failed.is_empty(),
+            "conversión fallida: {:?}",
+            report.failed
+        );
         // Every rejected name group got a similarity proposal.
         let rejected: Vec<&str> = report.families.iter().map(|f| f.name.as_str()).collect();
         assert!(!rejected.is_empty());
@@ -796,7 +957,11 @@ end
             );
         }
         // The collect_quest proposal is the ground truth for the report.
-        let cq = report.similarity.iter().find(|p| p.name == "collect_quest").expect("propuesta collect_quest");
+        let cq = report
+            .similarity
+            .iter()
+            .find(|p| p.name == "collect_quest")
+            .expect("propuesta collect_quest");
         assert!(cq.members.len() >= 2);
         assert!((0.0..=1.0).contains(&cq.mean));
         eprintln!(
@@ -808,7 +973,14 @@ end
             cq.params.len()
         );
         for g in &report.similarity {
-            eprintln!("grupo {}: {} miembros, mean {:.3}, min {:.3}, {} params", g.name, g.members.len(), g.mean, g.min, g.params.len());
+            eprintln!(
+                "grupo {}: {} miembros, mean {:.3}, min {:.3}, {} params",
+                g.name,
+                g.members.len(),
+                g.mean,
+                g.min,
+                g.params.len()
+            );
         }
     }
 
@@ -837,17 +1009,27 @@ end
         });
         files.sort_by(|a, b| a.0.cmp(&b.0));
         if files.len() < 2 {
-            eprintln!("grupo collect_quest_lv* no encontrado en {} — omitido", dir.display());
+            eprintln!(
+                "grupo collect_quest_lv* no encontrado en {} — omitido",
+                dir.display()
+            );
             return;
         }
         let (outputs, report) = convert_corpus(&files);
-        assert_eq!(report.failed, vec![], "conversión del grupo real falló: {:?}", report.failed);
+        assert_eq!(
+            report.failed,
+            vec![],
+            "conversión del grupo real falló: {:?}",
+            report.failed
+        );
         let mut members: Vec<QuestDef> = Vec::new();
         for (f, dsl) in &outputs {
             if f.ends_with(".family.quest") {
                 continue;
             }
-            if let Some(Quest::Concrete(qd)) = parse(dsl).ok().and_then(|f| f.quests.into_iter().next()) {
+            if let Some(Quest::Concrete(qd)) =
+                parse(dsl).ok().and_then(|f| f.quests.into_iter().next())
+            {
                 members.push(qd);
             }
         }
@@ -855,11 +1037,23 @@ end
         match extract_family_params("collect_quest", "level", &members) {
             Ok(ext) => {
                 // A structurally-uniform subset EXISTS: verify full parity.
-                eprintln!("miembros usables: {} — excluidos: {:?}", ext.instances.len(), ext.excluded);
-                assert!(ext.instances.len() >= 2, "grupo real demasiado pequeño: {:?}", ext.excluded);
+                eprintln!(
+                    "miembros usables: {} — excluidos: {:?}",
+                    ext.instances.len(),
+                    ext.excluded
+                );
+                assert!(
+                    ext.instances.len() >= 2,
+                    "grupo real demasiado pequeño: {:?}",
+                    ext.excluded
+                );
                 let mut quests = vec![ext.family.clone()];
                 quests.extend(ext.instances.clone().into_iter().map(Quest::Instance));
-                let text = render(&QuestFile { imports: vec![], blocks: vec![], quests });
+                let text = render(&QuestFile {
+                    imports: vec![],
+                    blocks: vec![],
+                    quests,
+                });
                 let file = parse(&text).unwrap_or_else(|e| panic!("{e}\n{text}"));
                 let expanded = expand_families(&file).expect("expansión de la familia real");
                 let usable: Vec<&QuestDef> = members
@@ -873,15 +1067,24 @@ end
             }
             Err(e) => {
                 // Honest reality: the real family files are NOT template-identical.
-                assert!(e.contains("estructura"), "error de extracción inesperado: {e}");
+                assert!(
+                    e.contains("estructura"),
+                    "error de extracción inesperado: {e}"
+                );
                 let unique: usize = {
                     let mut seen = std::collections::BTreeSet::new();
                     for m in &members {
-                        seen.insert(crate::family::collect_slots_public(m).into_keys().collect::<Vec<_>>());
+                        seen.insert(
+                            crate::family::collect_slots_public(m)
+                                .into_keys()
+                                .collect::<Vec<_>>(),
+                        );
                     }
                     seen.len()
                 };
-                eprintln!("grupo real estructuralmente diverso — extracción correctamente rechazada: {e}");
+                eprintln!(
+                    "grupo real estructuralmente diverso — extracción correctamente rechazada: {e}"
+                );
                 eprintln!(
                     "miembros convertidos: {} — fingerprints de estructura únicos: {} (similitud = spec §9.3)",
                     members.len(),
@@ -904,14 +1107,24 @@ end
         candidates.into_iter().flatten().find(|p| p.is_dir())
     }
 
-    fn collect_quest_files(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<(String, String)>) {
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
+    fn collect_quest_files(
+        root: &std::path::Path,
+        dir: &std::path::Path,
+        out: &mut Vec<(String, String)>,
+    ) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
         for entry in entries.flatten() {
             let p = entry.path();
             if p.is_dir() {
                 collect_quest_files(root, &p, out);
             } else if p.extension().is_some_and(|e| e == "quest") {
-                let rel = p.strip_prefix(root).unwrap_or(&p).to_string_lossy().replace('\\', "/");
+                let rel = p
+                    .strip_prefix(root)
+                    .unwrap_or(&p)
+                    .to_string_lossy()
+                    .replace('\\', "/");
                 // Lossy: legacy files mix CP949 bytes (comments) — the CLI
                 // does the same (read + from_utf8_lossy).
                 if let Ok(bytes) = std::fs::read(&p) {
@@ -921,4 +1134,3 @@ end
         }
     }
 }
-

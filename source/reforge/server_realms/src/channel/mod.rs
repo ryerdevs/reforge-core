@@ -118,13 +118,16 @@ pub async fn run(config: Config) -> std::io::Result<()> {
     // reintenta; los logins degradan a NOTAVAIL mientras tanto.
     let wal_dir = game_core::world::wal_dir();
     if let Err(e) = game_core::world::replay_once(&pool, &wal_dir).await {
-        eprintln!("server_realms: channel: replay del WAL: {e} — sigue (fail-open); el WAL queda en disco");
+        eprintln!(
+            "server_realms: channel: replay del WAL: {e} — sigue (fail-open); el WAL queda en disco"
+        );
     }
     // Batcher ÚNICO del canal (WAL local durable-first + audit en la misma
     // tx, 100 ms / 64 mutations — semántica intacta de `database::wal`): los
     // jugadores COMPARTEN el worker de flush (antes había un Batcher por
     // WorldStore = por jugador).
-    let sink = database::wal::WalSink::new(database::wal::PgMutationSink::new(pool.clone()), wal_dir);
+    let sink =
+        database::wal::WalSink::new(database::wal::PgMutationSink::new(pool.clone()), wal_dir);
     let batcher = std::sync::Arc::new(database::wal::Batcher::spawn(
         Duration::from_millis(100),
         64,
@@ -140,7 +143,10 @@ pub async fn run(config: Config) -> std::io::Result<()> {
     // vez en el arranque (fail-open: sin tablas → los items nacen sin attrs
     // — parity degradada, misma semántica que los fallos del spawn_cache).
     let attr_tables = std::sync::Arc::new(
-        match database::item::ItemRepo::new(pool.clone()).load_attr_tables().await {
+        match database::item::ItemRepo::new(pool.clone())
+            .load_attr_tables()
+            .await
+        {
             Ok(t) => t,
             Err(e) => {
                 eprintln!("server_realms: channel: item_attr: {e} — items sin attrs (fail-open)");
@@ -154,7 +160,10 @@ pub async fn run(config: Config) -> std::io::Result<()> {
     // fail-open como AttrTables: si no carga, el `k` del poly de las skills
     // cae a la aproximación level×max/100 con log — NO rompe el server.
     let skill_power = std::sync::Arc::new(
-        match database::skill_power::SkillPowerRepo::new(pool.clone()).load().await {
+        match database::skill_power::SkillPowerRepo::new(pool.clone())
+            .load()
+            .await
+        {
             Ok(t) => t,
             Err(e) => {
                 eprintln!(
@@ -197,10 +206,8 @@ pub async fn run(config: Config) -> std::io::Result<()> {
     // última conexión termina (la tarea del mundo sigue viva para aceptar).
     let _keepalive = intent_tx.clone();
     // Routing de eventos por jugador: vid del player → su cola S→C.
-    let mut routes: std::collections::HashMap<
-        u32,
-        tokio::sync::mpsc::UnboundedSender<NpcEvent>,
-    > = std::collections::HashMap::new();
+    let mut routes: std::collections::HashMap<u32, tokio::sync::mpsc::UnboundedSender<NpcEvent>> =
+        std::collections::HashMap::new();
     // El CHAT (gap-lane-C) usa un registro EQUIVALENTE por su cuenta: el
     // broadcast GC_CHAT y el whisper entregan bytes a otras sesiones por el
     // outbox `chat_rx` de cada una (vid → peer en `chat.rs::peers()` — con
@@ -341,6 +348,8 @@ fn route_events(
 /// R-s1: la sesión (`session::Session`) se crea aquí con TODOS los campos
 /// (wire, guards RAII, canales S→C); R-s2/R-s3: las fases viven en
 /// `entry::run` y el loop de juego en `game::run`.
+// Mismos 9 parámetros que Session::new — el contexto de conexión aceptada.
+#[allow(clippy::too_many_arguments)]
 async fn handle_connection(
     stream: TcpStream,
     config: Config,
@@ -351,7 +360,16 @@ async fn handle_connection(
     batcher: std::sync::Arc<database::wal::Batcher>,
     attr_tables: std::sync::Arc<database::attr::AttrTables>,
 ) -> Result<(), String> {
-    let mut session = Session::new(stream, config, conn_id, intent_tx, map_store, pool, batcher, attr_tables);
+    let mut session = Session::new(
+        stream,
+        config,
+        conn_id,
+        intent_tx,
+        map_store,
+        pool,
+        batcher,
+        attr_tables,
+    );
     // Fases 1-7 (handshake → login → select → entry → world join): la sesión
     // queda LLENA (row/store/motion/leave) antes del loop de juego.
     entry::run(&mut session).await?;
@@ -384,7 +402,10 @@ async fn equipped_armor(
 ) -> Result<i32, String> {
     let mut armor = 0i32;
     for w in inventory.iter().filter(|i| i.window == "EQUIPMENT") {
-        if let Some(p) = ItemRepo::new(pool.clone()).load_proto_use_values(w.vnum).await? {
+        if let Some(p) = ItemRepo::new(pool.clone())
+            .load_proto_use_values(w.vnum)
+            .await?
+        {
             const ITEM_TYPE_ARMOR: i16 = 2; // ItemData.h:73
             if p.b_type == ITEM_TYPE_ARMOR && matches!(p.b_sub_type, 0 | 1 | 2 | 4) {
                 armor += p.values[1] + 2 * p.values[5];
@@ -428,7 +449,9 @@ async fn equipped_boots_proto(
 ) -> Result<Option<database::item::ProtoItem>, String> {
     for w in inventory.iter().filter(|i| i.window == "EQUIPMENT") {
         if w.pos as u16 == INVENTORY_MAX_NUM + WEAR_FOOTS {
-            return ItemRepo::new(pool.clone()).load_proto_use_values(w.vnum).await;
+            return ItemRepo::new(pool.clone())
+                .load_proto_use_values(w.vnum)
+                .await;
         }
     }
     Ok(None)
@@ -444,7 +467,9 @@ async fn equipped_weapon_proto(
 ) -> Result<Option<database::item::ProtoItem>, String> {
     for w in inventory.iter().filter(|i| i.window == "EQUIPMENT") {
         if w.pos as u16 == INVENTORY_MAX_NUM + WEAR_WEAPON {
-            return ItemRepo::new(pool.clone()).load_proto_use_values(w.vnum).await;
+            return ItemRepo::new(pool.clone())
+                .load_proto_use_values(w.vnum)
+                .await;
         }
     }
     Ok(None)
@@ -489,7 +514,9 @@ pub(crate) async fn consume_arrow(session: &mut Session) -> Result<(), String> {
         .await?;
     eprintln!(
         "server_realms: channel conn {}: {} gastó 1 flecha (quedan {})",
-        session.conn_id, session.row().name, session.inventory[idx].count
+        session.conn_id,
+        session.row().name,
+        session.inventory[idx].count
     );
     Ok(())
 }
@@ -511,7 +538,9 @@ fn default_quest_dir(map_path: &str) -> String {
         .unwrap_or(std::path::Path::new("."));
     for cand in [locale.join("quest"), locale.join("germany").join("quest")] {
         if cand.is_dir()
-            && std::fs::read_dir(&cand).map(|mut e| e.next().is_some()).unwrap_or(false)
+            && std::fs::read_dir(&cand)
+                .map(|mut e| e.next().is_some())
+                .unwrap_or(false)
         {
             return cand.display().to_string();
         }
@@ -582,7 +611,9 @@ fn load_quest_texts(dir: &str) -> std::collections::HashMap<String, String> {
 /// legacy mezclan bytes CP949 en comentarios; el CLI del conversor hace lo
 /// mismo).
 fn collect_quest_files(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let p = entry.path();
         if p.is_dir() {
@@ -671,7 +702,10 @@ mod tests {
         assert!(texts.is_empty(), "sin quest_text.txt: diccionario vacío");
         let engine = game_core::quest::QuestEngine::load(&text).expect("DSL parsea");
         let names: Vec<&str> = engine.quests().iter().map(|q| q.name.as_str()).collect();
-        assert!(names.contains(&"hello") && names.contains(&"npc1"), "{names:?}");
+        assert!(
+            names.contains(&"hello") && names.contains(&"npc1"),
+            "{names:?}"
+        );
         // La quest del NPC tiene el trigger chat 20084 (la asociación del click).
         let npc1 = engine.quest("npc1").expect("npc1");
         let has_chat = npc1.states[0].events.iter().any(|e| {
@@ -693,7 +727,11 @@ mod tests {
             parse_listen("172.25.104.175:30003").unwrap(),
             ("172.25.104.175".to_string(), 30003)
         );
-        assert_eq!(parse_listen("127.0.0.1:0").unwrap().1, 0, "puerto 0 (tests)");
+        assert_eq!(
+            parse_listen("127.0.0.1:0").unwrap().1,
+            0,
+            "puerto 0 (tests)"
+        );
         assert!(parse_listen("sinpuerto").is_err());
         assert!(parse_listen("a:b:c").is_err(), "puerto no numérico");
     }

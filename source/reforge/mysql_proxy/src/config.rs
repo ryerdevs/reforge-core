@@ -157,11 +157,20 @@ playerauth = "player,account"
         let cfg = Config::parse(SAMPLE).unwrap();
         assert_eq!(cfg.listen, "127.0.0.1:3307");
         assert_eq!(cfg.mysql_user, "mt2");
-        assert_eq!(cfg.pg_conn, "host=127.0.0.1 port=5432 user=mt2 password=mt2 dbname=metin2");
+        assert_eq!(
+            cfg.pg_conn,
+            "host=127.0.0.1 port=5432 user=mt2 password=mt2 dbname=metin2"
+        );
         assert_eq!(cfg.timezone, "Europe/Madrid");
         assert_eq!(cfg.slots.len(), 5);
-        assert_eq!(cfg.slots.get("account").map(String::as_str), Some("account,player"));
-        assert_eq!(cfg.slots.get("playerauth").map(String::as_str), Some("player,account"));
+        assert_eq!(
+            cfg.slots.get("account").map(String::as_str),
+            Some("account,player")
+        );
+        assert_eq!(
+            cfg.slots.get("playerauth").map(String::as_str),
+            Some("player,account")
+        );
     }
 
     #[test]
@@ -190,7 +199,10 @@ playerauth = "player,account"
         let mut cfg = Config::default();
         cfg.slots.insert("player".into(), "player,extra".into());
         assert_eq!(cfg.search_path("player").as_deref(), Some("player,extra"));
-        assert_eq!(cfg.search_path("account").as_deref(), Some("account,player"));
+        assert_eq!(
+            cfg.search_path("account").as_deref(),
+            Some("account,player")
+        );
         assert_eq!(cfg.search_path("log").as_deref(), Some("log"));
         assert_eq!(cfg.search_path("nodb"), None);
     }

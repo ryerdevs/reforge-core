@@ -152,7 +152,10 @@ impl PlayerRepo {
     }
 
     async fn connect(&self) -> Result<Client, String> {
-        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
+        self.pool
+            .get()
+            .await
+            .map_err(|e| format!("PG pool get: {e}"))
     }
 
     /// Load completo (Q2). `None` = no existe el personaje.
@@ -171,8 +174,10 @@ impl PlayerRepo {
     pub async fn save(&self, p: &PlayerRow) -> Result<u64, String> {
         let client = self.connect().await?;
         let owned = save_params(p);
-        let params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
-            owned.iter().map(|x| x as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+        let params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = owned
+            .iter()
+            .map(|x| x as &(dyn tokio_postgres::types::ToSql + Sync))
+            .collect();
         client
             .execute(PLAYER_SAVE_SQL, &params)
             .await
@@ -217,16 +222,39 @@ playtime, skill_level, quickslot) \
 VALUES (DEFAULT, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, \
 $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26) RETURNING id",
                 &[
-                    &c.account_id, &c.name, &c.level, &c.st, &c.ht, &c.dx, &c.iq, //
-                    &c.job, &c.voice, &c.dir, &c.x, &c.y, &c.z, &c.hp, &c.mp, //
-                    &c.random_hp, &c.random_sp, &c.stat_point, &c.stamina, &c.part_base, //
-                    &c.part_main, &c.part_hair, &c.gold, &c.playtime, &c.skill_level, //
+                    &c.account_id,
+                    &c.name,
+                    &c.level,
+                    &c.st,
+                    &c.ht,
+                    &c.dx,
+                    &c.iq, //
+                    &c.job,
+                    &c.voice,
+                    &c.dir,
+                    &c.x,
+                    &c.y,
+                    &c.z,
+                    &c.hp,
+                    &c.mp, //
+                    &c.random_hp,
+                    &c.random_sp,
+                    &c.stat_point,
+                    &c.stamina,
+                    &c.part_base, //
+                    &c.part_main,
+                    &c.part_hair,
+                    &c.gold,
+                    &c.playtime,
+                    &c.skill_level, //
                     &c.quickslot,
                 ],
             )
             .await
             .map_err(|e| pg_err("PLAYER_CREATE", &e))?;
-        let id: i64 = row.try_get(0).map_err(|e| format!("PLAYER_CREATE id: {e}"))?;
+        let id: i64 = row
+            .try_get(0)
+            .map_err(|e| format!("PLAYER_CREATE id: {e}"))?;
         // Divergencia documentada: el C++ no toca el map_index en el create
         // (lo resuelve CMapLocation); el rewrite fija el mapa 41 (el único
         // que sirve el canal) para que el load del select cargue el mapa
@@ -275,7 +303,8 @@ $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26) RETURNING id",
             )
             .await
             .map_err(|e| pg_err("PLAYER_NAME_EXISTS", &e))?;
-        row.try_get(0).map_err(|e| format!("PLAYER_NAME_EXISTS: {e}"))
+        row.try_get(0)
+            .map_err(|e| format!("PLAYER_NAME_EXISTS: {e}"))
     }
 
     /// Escribe el pid en el slot del índice (create — parity
@@ -292,7 +321,10 @@ $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26) RETURNING id",
             )
             .await
             .map_err(|e| pg_err("PLAYER_INDEX_CREATE", &e))?;
-        let sql = format!("UPDATE player.player_index SET {} = $2 WHERE id = $1", index_col(slot)?);
+        let sql = format!(
+            "UPDATE player.player_index SET {} = $2 WHERE id = $1",
+            index_col(slot)?
+        );
         client
             .execute(&sql, &[&account_id, &player_id])
             .await
@@ -357,31 +389,19 @@ $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26) RETURNING id",
             ));
         }
         client
-            .execute(
-                "DELETE FROM player.player WHERE id = $1",
-                &[&player_id],
-            )
+            .execute("DELETE FROM player.player WHERE id = $1", &[&player_id])
             .await
             .map_err(|e| pg_err("PLAYER_DELETE", &e))?;
         client
-            .execute(
-                "DELETE FROM player.item WHERE owner_id = $1",
-                &[&player_id],
-            )
+            .execute("DELETE FROM player.item WHERE owner_id = $1", &[&player_id])
             .await
             .map_err(|e| pg_err("PLAYER_DELETE items", &e))?;
         client
-            .execute(
-                "DELETE FROM player.quest WHERE dwPID = $1",
-                &[&player_id],
-            )
+            .execute("DELETE FROM player.quest WHERE dwPID = $1", &[&player_id])
             .await
             .map_err(|e| pg_err("PLAYER_DELETE quests", &e))?;
         client
-            .execute(
-                "DELETE FROM player.affect WHERE dwPID = $1",
-                &[&player_id],
-            )
+            .execute("DELETE FROM player.affect WHERE dwPID = $1", &[&player_id])
             .await
             .map_err(|e| pg_err("PLAYER_DELETE affects", &e))?;
         Ok(())
@@ -397,10 +417,7 @@ $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26) RETURNING id",
     pub async fn delete_row(&self, player_id: i64) -> Result<(), String> {
         let client = self.connect().await?;
         client
-            .execute(
-                "DELETE FROM player.player WHERE id = $1",
-                &[&player_id],
-            )
+            .execute("DELETE FROM player.player WHERE id = $1", &[&player_id])
             .await
             .map_err(|e| pg_err("PLAYER_DELETE", &e))?;
         Ok(())
@@ -427,7 +444,9 @@ fn index_col(slot: u8) -> Result<&'static str, String> {
 /// valor del caller — la columna viene de la constante cerrada).
 fn index_sql(slot: u8) -> Result<String, String> {
     let col = index_col(slot)?;
-    Ok(format!("SELECT {col} FROM player.player_index WHERE id = $1"))
+    Ok(format!(
+        "SELECT {col} FROM player.player_index WHERE id = $1"
+    ))
 }
 
 /// `ip` no esta en el load (42 columnas) — el save usa el default del C++.
@@ -463,14 +482,47 @@ fn save_params(p: &PlayerRow) -> Vec<Param> {
         None => Param::Null,
     };
     vec![
-        i16(p.job), i16(p.voice), i16(p.dir), i32(p.x), i32(p.y), i32(p.z), i32(p.map_index), //
-        i32(p.exit_x), i32(p.exit_y), i32(p.exit_map_index), i32(p.hp), i32(p.mp), i16(p.stamina), //
-        i16(p.random_hp), i16(p.random_sp), i32(p.playtime), i16(p.level), i16(p.level_step), //
-        i16(p.st), i16(p.ht), i16(p.dx), i16(p.iq), i32(p.gold), i32(p.exp), i16(p.stat_point), //
-        i16(p.skill_point), i16(p.sub_skill_point), i16(p.stat_reset_count), Param::Text(ip_default(p)), //
-        Param::Int(p.part_main), Param::Int(p.part_hair), i16(p.skill_group), i32(p.alignment), //
-        i16(p.horse_level), i16(p.horse_riding), i16(p.horse_hp), Param::Int(p.horse_hp_droptime), //
-        i16(p.horse_stamina), i16(p.horse_skill_point), blob(&p.skill_level), blob(&p.quickslot), //
+        i16(p.job),
+        i16(p.voice),
+        i16(p.dir),
+        i32(p.x),
+        i32(p.y),
+        i32(p.z),
+        i32(p.map_index), //
+        i32(p.exit_x),
+        i32(p.exit_y),
+        i32(p.exit_map_index),
+        i32(p.hp),
+        i32(p.mp),
+        i16(p.stamina), //
+        i16(p.random_hp),
+        i16(p.random_sp),
+        i32(p.playtime),
+        i16(p.level),
+        i16(p.level_step), //
+        i16(p.st),
+        i16(p.ht),
+        i16(p.dx),
+        i16(p.iq),
+        i32(p.gold),
+        i32(p.exp),
+        i16(p.stat_point), //
+        i16(p.skill_point),
+        i16(p.sub_skill_point),
+        i16(p.stat_reset_count),
+        Param::Text(ip_default(p)), //
+        Param::Int(p.part_main),
+        Param::Int(p.part_hair),
+        i16(p.skill_group),
+        i32(p.alignment), //
+        i16(p.horse_level),
+        i16(p.horse_riding),
+        i16(p.horse_hp),
+        Param::Int(p.horse_hp_droptime), //
+        i16(p.horse_stamina),
+        i16(p.horse_skill_point),
+        blob(&p.skill_level),
+        blob(&p.quickslot), //
         Param::Int(p.id),
     ]
 }
@@ -482,7 +534,8 @@ pub(crate) fn save_mutation(p: &PlayerRow) -> Mutation {
 
 /// Mapeo de las 42 columnas del load (orden Q2).
 fn player_row_from_row(row: &Row) -> Result<PlayerRow, String> {
-    let g = |i: usize| -> Result<i64, String> { row.try_get(i).map_err(|e| format!("col{i}: {e}")) };
+    let g =
+        |i: usize| -> Result<i64, String> { row.try_get(i).map_err(|e| format!("col{i}: {e}")) };
     Ok(PlayerRow {
         id: g(0)?,
         name: row.try_get(1).map_err(|e| format!("col1: {e}"))?,
@@ -534,7 +587,8 @@ fn player_row_from_row(row: &Row) -> Result<PlayerRow, String> {
 
 /// Mapeo de las 15 columnas de la lista (orden Q3).
 fn player_summary_from_row(row: &Row) -> Result<PlayerSummary, String> {
-    let g = |i: usize| -> Result<i64, String> { row.try_get(i).map_err(|e| format!("col{i}: {e}")) };
+    let g =
+        |i: usize| -> Result<i64, String> { row.try_get(i).map_err(|e| format!("col{i}: {e}")) };
     Ok(PlayerSummary {
         id: g(0)?,
         name: row.try_get(1).map_err(|e| format!("col1: {e}"))?,
@@ -584,7 +638,10 @@ mod tests {
             "traduccion PG del UNIX_TIMESTAMP diff (::float8 — EXTRACT da numeric)"
         );
         assert_eq!(cols[42], "horse_skill_point");
-        assert!(LOAD_SQL.contains("FROM player.player WHERE id = $1"), "calificado + bind");
+        assert!(
+            LOAD_SQL.contains("FROM player.player WHERE id = $1"),
+            "calificado + bind"
+        );
     }
 
     /// Save: shape Q5 — todas las columnas + last_play = NOW() + blobs bytea.
@@ -595,7 +652,10 @@ mod tests {
         let row = dummy_row();
         assert_eq!(row.name, "dummy");
         assert_eq!(row.logoff_interval, 0.0);
-        assert!(PLAYER_SAVE_SQL.contains("last_play = NOW()"), "Q5 escribe last_play");
+        assert!(
+            PLAYER_SAVE_SQL.contains("last_play = NOW()"),
+            "Q5 escribe last_play"
+        );
         assert!(PLAYER_SAVE_SQL.contains("WHERE id = $42"), "42 params");
         assert_eq!(save_params(&row).len(), 42, "42 params del save");
     }
@@ -609,12 +669,19 @@ mod tests {
         let m = save_mutation(&row);
         assert_eq!(m.sql, PLAYER_SAVE_SQL, "mismo SQL (una fuente de verdad)");
         assert_eq!(m.params.len(), 42);
-        assert_eq!(m.params[28], Param::Text("0.0.0.0".into()), "ip default del C++");
+        assert_eq!(
+            m.params[28],
+            Param::Text("0.0.0.0".into()),
+            "ip default del C++"
+        );
         assert_eq!(m.params[39], Param::Null, "skill_level None -> NULL");
         assert_eq!(m.params[40], Param::Null, "quickslot None -> NULL");
         assert_eq!(m.params[41], Param::Int(0), "id del row");
         assert_eq!(m.id[6] >> 4, 7, "version 7 del uuidv7");
-        assert!(m.payload_json().contains(&uuidv7_string(&m.id)), "audit payload con mutation_id");
+        assert!(
+            m.payload_json().contains(&uuidv7_string(&m.id)),
+            "audit payload con mutation_id"
+        );
     }
 
     /// La mutation con blobs presentes mapea a Bytes (bytea).
@@ -638,7 +705,12 @@ mod tests {
         #[derive(Clone, Default)]
         struct CountingSink(Arc<Mutex<Vec<Vec<Mutation>>>>);
         impl MutationSink for CountingSink {
-            fn apply(&mut self, batch: Vec<Mutation>) -> impl std::future::Future<Output = Result<(), String>> + Send {
+            // RPITIT + Send: firma del trait, igual que los sinks reales.
+            #[allow(clippy::manual_async_fn)]
+            fn apply(
+                &mut self,
+                batch: Vec<Mutation>,
+            ) -> impl std::future::Future<Output = Result<(), String>> + Send {
                 async move {
                     self.0.lock().unwrap().push(batch);
                     Ok(())
@@ -648,7 +720,10 @@ mod tests {
 
         let sink = CountingSink::default();
         let batcher = Batcher::spawn(std::time::Duration::from_millis(100), 64, sink.clone());
-        let repo = PlayerRepo::new(crate::pool::new_pool("host=127.0.0.1 port=1 user=x password=x dbname=x", 2).expect("pool"));
+        let repo = PlayerRepo::new(
+            crate::pool::new_pool("host=127.0.0.1 port=1 user=x password=x dbname=x", 2)
+                .expect("pool"),
+        );
         let mut a = dummy_row();
         a.id = 1;
         a.x = 969600;
@@ -664,7 +739,7 @@ mod tests {
         tokio::task::yield_now().await;
         tokio::time::advance(std::time::Duration::from_millis(120)).await;
         for _ in 0..200 {
-            if sink.0.lock().unwrap().len() >= 1 {
+            if !sink.0.lock().unwrap().is_empty() {
                 break;
             }
             tokio::task::yield_now().await;
@@ -709,11 +784,25 @@ mod tests {
             index_sql(0).unwrap(),
             "SELECT pid1 FROM player.player_index WHERE id = $1"
         );
-        assert_eq!(index_sql(1).unwrap(), "SELECT pid2 FROM player.player_index WHERE id = $1");
-        assert_eq!(index_sql(3).unwrap(), "SELECT pid4 FROM player.player_index WHERE id = $1");
-        assert_eq!(index_sql(4).unwrap(), "SELECT pid5 FROM player.player_index WHERE id = $1");
+        assert_eq!(
+            index_sql(1).unwrap(),
+            "SELECT pid2 FROM player.player_index WHERE id = $1"
+        );
+        assert_eq!(
+            index_sql(3).unwrap(),
+            "SELECT pid4 FROM player.player_index WHERE id = $1"
+        );
+        assert_eq!(
+            index_sql(4).unwrap(),
+            "SELECT pid5 FROM player.player_index WHERE id = $1"
+        );
         // El C++ usa account_index+1: slot 0 -> pid1 .. slot 4 -> pid5.
-        assert!(PID_COLUMNS.iter().enumerate().all(|(i, c)| c == &format!("pid{}", i + 1)));
+        assert!(
+            PID_COLUMNS
+                .iter()
+                .enumerate()
+                .all(|(i, c)| c == &format!("pid{}", i + 1))
+        );
         // Slots inválidos -> Err (parity input_login.cpp:260-264: el game
         // valida antes de preguntar al db).
         for slot in [5u8, 6, 200] {

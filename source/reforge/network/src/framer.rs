@@ -14,9 +14,8 @@ use std::io;
 
 use protocol::header;
 use protocol::{
-    TPacketCGChangeName, TPacketCGEmpire, TPacketCGHandshake, TPacketCGLogin,
-    TPacketCGLogin2, TPacketCGLogin3, TPacketCGPlayerCreate,
-    TPacketCGPlayerDelete, TPacketCGPlayerSelect,
+    TPacketCGChangeName, TPacketCGEmpire, TPacketCGHandshake, TPacketCGLogin, TPacketCGLogin2,
+    TPacketCGLogin3, TPacketCGPlayerCreate, TPacketCGPlayerDelete, TPacketCGPlayerSelect,
 };
 use tokio::io::{AsyncRead, AsyncReadExt};
 
@@ -87,7 +86,7 @@ pub fn packet_size(role: ConnectionRole, header: u8) -> Option<usize> {
         header::CG_CHARACTER_SELECT => TPacketCGPlayerSelect::SIZE, // 6, 2
         header::CG_CHARACTER_CREATE => TPacketCGPlayerCreate::SIZE, // 4, 34
         header::CG_CHARACTER_DELETE => TPacketCGPlayerDelete::SIZE, // 5, 10
-        header::CG_ENTERGAME => 1,   // 10, sizeof(TPacketCGEnterGame) = BYTE (packet.h:613-616)
+        header::CG_ENTERGAME => 1, // 10, sizeof(TPacketCGEnterGame) = BYTE (packet.h:613-616)
         header::CG_MARK_LOGIN => protocol::world::TPacketCGMarkLogin::SIZE, // 100, 9 (packet_info.cpp:141)
         header::CG_CLIENT_VERSION2 => 67, // 0xf1, TPacketCGClientVersion2 = 1 + 33 + 33 (Packet.h:974-979)
         header::CG_STATE_CHECKER => 1, // 206, sizeof(BYTE) — ping selector de canales (packet_info.cpp:232)
@@ -125,49 +124,49 @@ pub fn packet_size(role: ConnectionRole, header: u8) -> Option<usize> {
 /// header de juego es `UnknownHeader` (ver [`packet_size`]).
 fn game_phase_size(header: u8) -> Option<usize> {
     Some(match header {
-        header::CG_ATTACK => 8,             // 2, header+bType+vid+2 CRC (Packet.h:509-516)
-        header::CG_MOVE => 16,              // 7, header+func+arg+rot+lx+ly+time (Packet.h:677-686)
+        header::CG_ATTACK => 8,        // 2, header+bType+vid+2 CRC (Packet.h:509-516)
+        header::CG_MOVE => 16,         // 7, header+func+arg+rot+lx+ly+time (Packet.h:677-686)
         header::CG_ITEM_USE => 4, // 11, header + TItemPos (Packet.h:559-563 + packet.h:618-622) — el tamaño CORRECTO C→S (el 16 B era el GC_ITEM_USE S→C, bug latente corregido)
-        header::CG_ITEM_DROP => 8,          // 12, header+pos+elk (cheque OFF en el cliente) (Packet.h:556-564)
-        header::CG_ITEM_MOVE => 8,          // 13, header+pos+change_pos+num (Packet.h:577-583)
-        header::CG_ITEM_PICKUP => 5,        // 15, header+vid (Packet.h:585-589)
-        header::CG_QUICKSLOT_ADD => 4,      // 16, header+pos+slot (Packet.h:591-596)
-        header::CG_QUICKSLOT_DEL => 2,      // 17 (Packet.h:598-602)
-        header::CG_QUICKSLOT_SWAP => 3,     // 18 (Packet.h:604-609)
-        header::CG_ITEM_DROP2 => 9,         // 20, header+pos+gold+count (cheque OFF) (Packet.h:566-575)
-        header::CG_ON_CLICK => 5,           // 26, header+vid (Packet.h:611-615)
-        header::CG_EXCHANGE => 47,          // 27, header+sub+is_me+arg1+arg2+arg3+values+attrs (Packet.h:1812-1822)
+        header::CG_ITEM_DROP => 8, // 12, header+pos+elk (cheque OFF en el cliente) (Packet.h:556-564)
+        header::CG_ITEM_MOVE => 8, // 13, header+pos+change_pos+num (Packet.h:577-583)
+        header::CG_ITEM_PICKUP => 5, // 15, header+vid (Packet.h:585-589)
+        header::CG_QUICKSLOT_ADD => 4, // 16, header+pos+slot (Packet.h:591-596)
+        header::CG_QUICKSLOT_DEL => 2, // 17 (Packet.h:598-602)
+        header::CG_QUICKSLOT_SWAP => 3, // 18 (Packet.h:604-609)
+        header::CG_ITEM_DROP2 => 9, // 20, header+pos+gold+count (cheque OFF) (Packet.h:566-575)
+        header::CG_ON_CLICK => 5,  // 26, header+vid (Packet.h:611-615)
+        header::CG_EXCHANGE => 47, // 27, header+sub+is_me+arg1+arg2+arg3+values+attrs (Packet.h:1812-1822)
         header::CG_CHARACTER_POSITION => 2, // 28, header+position (Packet.h:653-657)
-        header::CG_SCRIPT_ANSWER => 2,      // 29 (Packet.h:659-663)
+        header::CG_SCRIPT_ANSWER => 2, // 29 (Packet.h:659-663)
         header::CG_QUEST_INPUT_STRING => 66, // 30, header+szString[65] (Packet.h:1002-1006)
-        header::CG_QUEST_CONFIRM => 6,      // 31, header+answer+requestPID (Packet.h:1008-1013)
-        header::CG_PVP => 10,               // 41, header+src+dst+mode (Packet.h:2014-2020)
-        header::CG_FLY_TARGETING => 17,     // 51, header+shooter+target+x+y (Packet.h:709-716)
-        header::CG_USE_SKILL => 9,          // 52, header+vnum+target (Packet.h:833-838)
+        header::CG_QUEST_CONFIRM => 6, // 31, header+answer+requestPID (Packet.h:1008-1013)
+        header::CG_PVP => 10,      // 41, header+src+dst+mode (Packet.h:2014-2020)
+        header::CG_FLY_TARGETING => 17, // 51, header+shooter+target+x+y (Packet.h:709-716)
+        header::CG_USE_SKILL => 9, // 52, header+vnum+target (Packet.h:833-838)
         header::CG_ADD_FLY_TARGETING => 13, // 53, header+dwTargetVID+x+y (Packet.h:717-723)
-        header::CG_SHOOT => 2,              // 54 (Packet.h:718-722)
-        header::CG_MYSHOP => 35,            // 55, header+szSign[33]+count (SHOP_SIGN_MAX_LEN=32) (Packet.h:953-958)
-        header::CG_LAND_BUY => 29,          // 56, aditivo reforge — header+5×i32+price i64 (protocol::header)
-        header::CG_LAND_TRANSFER => 9,      // 57, aditivo reforge — header+land_id+new_owner
-        header::CG_ITEM_USE_TO_ITEM => 7,   // 60, header+source+target (Packet.h:549-554)
-        header::CG_TARGET => 5,             // 61, header+vid (Packet.h:671-675)
-        header::CG_EVENT => 2,              // 62, aditivo reforge — header+byte (Packet.h:74 blank)
-        header::CG_HORSE => 2,              // 63, ADITIVO reforge — header+bRide montar/desmontar caballo (client Packet.h:75 blank)
-        header::CG_WARP => 15,              // 65, header+x+y+addr+port (Packet.h:2028-2035)
-        header::CG_SCRIPT_BUTTON => 5,      // 66, header+idx (Packet.h:665-669)
+        header::CG_SHOOT => 2,     // 54 (Packet.h:718-722)
+        header::CG_MYSHOP => 35, // 55, header+szSign[33]+count (SHOP_SIGN_MAX_LEN=32) (Packet.h:953-958)
+        header::CG_LAND_BUY => 29, // 56, aditivo reforge — header+5×i32+price i64 (protocol::header)
+        header::CG_LAND_TRANSFER => 9, // 57, aditivo reforge — header+land_id+new_owner
+        header::CG_ITEM_USE_TO_ITEM => 7, // 60, header+source+target (Packet.h:549-554)
+        header::CG_TARGET => 5,    // 61, header+vid (Packet.h:671-675)
+        header::CG_EVENT => 2,     // 62, aditivo reforge — header+byte (Packet.h:74 blank)
+        header::CG_HORSE => 2, // 63, ADITIVO reforge — header+bRide montar/desmontar caballo (client Packet.h:75 blank)
+        header::CG_WARP => 15, // 65, header+x+y+addr+port (Packet.h:2028-2035)
+        header::CG_SCRIPT_BUTTON => 5, // 66, header+idx (Packet.h:665-669)
         // 67 (CG_MESSENGER) es VARIABLE (subheader): resuelto en try_extract
         // (parity input_main.cpp:927-1037 — el C++ lee el payload del mismo
         // buffer; ver protocol::social).
-        header::CG_MALL_CHECKOUT => 5,      // 69, header+bMallPos+TItemPos (Packet.h:839-845)
-        header::CG_SAFEBOX_CHECKIN => 5,    // 70, header+bSafePos+TItemPos (Packet.h:832-838)
-        header::CG_SAFEBOX_CHECKOUT => 5,   // 71, header+bSafePos+TItemPos (Packet.h:825-831)
-        header::CG_PARTY_INVITE => 5,       // 72, header+vid (Packet.h:856-860)
+        header::CG_MALL_CHECKOUT => 5, // 69, header+bMallPos+TItemPos (Packet.h:839-845)
+        header::CG_SAFEBOX_CHECKIN => 5, // 70, header+bSafePos+TItemPos (Packet.h:832-838)
+        header::CG_SAFEBOX_CHECKOUT => 5, // 71, header+bSafePos+TItemPos (Packet.h:825-831)
+        header::CG_PARTY_INVITE => 5,  // 72, header+vid (Packet.h:856-860)
         header::CG_PARTY_INVITE_ANSWER => 6, // 73, header+leader_pid+accept (Packet.h:862-867)
-        header::CG_PARTY_REMOVE => 5,       // 74, header+pid (Packet.h:869-873)
-        header::CG_PARTY_SET_STATE => 7,    // 75, header+dwVID+byState+byFlag (Packet.h:875-881)
-        header::CG_PARTY_USE_SKILL => 6,    // 76, header+bySkillIndex+dwTargetVID (Packet.h:897-902)
-        header::CG_SAFEBOX_ITEM_MOVE => 8,  // 77, header+pos+change_pos+num — mismo shape que CG_ITEM_MOVE (Packet.h:593-599)
-        header::CG_PARTY_PARAMETER => 2,    // 78, header+bDistributeMode (Packet.h:1012-1016)
+        header::CG_PARTY_REMOVE => 5,  // 74, header+pid (Packet.h:869-873)
+        header::CG_PARTY_SET_STATE => 7, // 75, header+dwVID+byState+byFlag (Packet.h:875-881)
+        header::CG_PARTY_USE_SKILL => 6, // 76, header+bySkillIndex+dwTargetVID (Packet.h:897-902)
+        header::CG_SAFEBOX_ITEM_MOVE => 8, // 77, header+pos+change_pos+num — mismo shape que CG_ITEM_MOVE (Packet.h:593-599)
+        header::CG_PARTY_PARAMETER => 2,   // 78, header+bDistributeMode (Packet.h:1012-1016)
         // 79, TPacketCGSafeboxMoney (header+bState+lMoney, packet.h:1627-1632).
         // Aditivo del reforge: el C++ congelado NO lo registra en el
         // packet_info (un 79 ahí cerraría la conexión — input.cpp:77-84) y
@@ -180,15 +179,15 @@ fn game_phase_size(header: u8) -> Option<usize> {
         // (parity input_main.cpp:2425-2447 — GetSubPacketSize).
         header::CG_ANSWER_MAKE_GUILD => 14, // 81, header+guild_name[13] (GUILD_NAME_MAX_LEN=12) (Packet.h:929-933)
         header::CG_FISHING => 2,            // 82, header+dir (packet.h:1800-1804)
-        header::CG_ITEM_GIVE => 9,          // 83, header+dwTargetVID+TItemPos+byItemCount (Packet.h:935-941)
+        header::CG_ITEM_GIVE => 9, // 83, header+dwTargetVID+TItemPos+byItemCount (Packet.h:935-941)
         header::CG_EMPIRE => TPacketCGEmpire::SIZE, // 90, header+bEmpire (Packet.h:2100-2105, packet_info.cpp:208) — elegir imperio en la fase select (lane E)
-        header::CG_REFINE => 3,             // 96, header+pos+type (Packet.h:976-982)
-        header::CG_HACK => 257,             // 105, header+szBuf[256] (Packet.h:943-947)
+        header::CG_REFINE => 3,                     // 96, header+pos+type (Packet.h:976-982)
+        header::CG_HACK => 257,                     // 105, header+szBuf[256] (Packet.h:943-947)
         header::CG_CHANGE_NAME => TPacketCGChangeName::SIZE, // 106, header+index+name[25] (Packet.h:980-984, packet_info.cpp:223) — renombrar en la fase select (lane E)
-        header::CG_DUNGEON => 5,            // 110, aditivo reforge — header+map_index i32 (packet.h:86; el C++ no lo registra)
+        header::CG_DUNGEON => 5, // 110, aditivo reforge — header+map_index i32 (packet.h:86; el C++ no lo registra)
         header::CG_SCRIPT_SELECT_ITEM => 5, // 114, header+selection (Packet.h:1031-1035)
         header::CG_DRAGON_SOUL_REFINE => 47, // 205, header+bSubType+TItemPos[15] (DS_REFINE_WINDOW_MAX_NUM=15 — GameType.h:191) (Packet.h:2715-2722)
-        header::CG_ACCE => 23,              // 211, header+subheader+bWindow+dwPrice+bPos+tPos+dwItemVnum+dwMinAbs+dwMaxAbs (Packet.h:2765-2776)
+        header::CG_ACCE => 23, // 211, header+subheader+bWindow+dwPrice+bPos+tPos+dwItemVnum+dwMinAbs+dwMaxAbs (Packet.h:2765-2776)
         _ => return None,
     })
 }
@@ -211,11 +210,17 @@ impl core::fmt::Display for FramingError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             FramingError::UnknownHeader { header } => {
-                write!(f, "unknown packet header 0x{header:02x} (closing connection, parity input.cpp:77-84)")
+                write!(
+                    f,
+                    "unknown packet header 0x{header:02x} (closing connection, parity input.cpp:77-84)"
+                )
             }
             FramingError::Eof => write!(f, "connection closed cleanly"),
             FramingError::UnexpectedEof { buffered } => {
-                write!(f, "connection closed with {buffered} unparsed bytes buffered")
+                write!(
+                    f,
+                    "connection closed with {buffered} unparsed bytes buffered"
+                )
             }
             FramingError::Io(e) => write!(f, "socket io error: {e}"),
         }
@@ -257,7 +262,10 @@ pub struct Framer {
 impl Framer {
     /// Framer para el rol dado (auth o canal).
     pub fn new(role: ConnectionRole) -> Self {
-        Self { role, buf: Vec::with_capacity(256) }
+        Self {
+            role,
+            buf: Vec::with_capacity(256),
+        }
     }
 
     /// Bytes pendientes de formar un paquete completo.
@@ -300,7 +308,9 @@ impl Framer {
                 return if self.buf.is_empty() {
                     Err(FramingError::Eof)
                 } else {
-                    Err(FramingError::UnexpectedEof { buffered: self.buf.len() })
+                    Err(FramingError::UnexpectedEof {
+                        buffered: self.buf.len(),
+                    })
                 };
             }
             self.buf.extend_from_slice(&chunk[..n]);
@@ -412,20 +422,20 @@ impl Framer {
             }
             let total = match self.buf[1] {
                 protocol::guild::SUB_CG_CREATE => protocol::guild::CG_CREATE_TOTAL,
-                0 => 6,  // ADD_MEMBER +DWORD
-                2 => 12, // CHANGE_GRADE_NAME +10
-                3 => 4,  // CHANGE_GRADE_AUTHORITY +BYTE+BYTE
-                4 => 6,  // OFFER +DWORD
-                5 => 3,  // POST_COMMENT +1
-                6 => 6,  // DELETE_COMMENT +DWORD
-                7 => 2,  // REFRESH_COMMENT +0
-                8 => 7,  // CHANGE_MEMBER_GRADE +DWORD+BYTE
-                9 => 10, // USE_SKILL +TPacketCGGuildUseSkill
-                10 => 7, // CHANGE_MEMBER_GENERAL +DWORD+BYTE
-                11 => 7, // GUILD_INVITE_ANSWER +DWORD+BYTE
-                12 => 6, // CHARGE_GSP +int
-                13 => 6, // DEPOSIT_MONEY +int
-                14 => 6, // WITHDRAW_MONEY +int
+                0 => 6,                         // ADD_MEMBER +DWORD
+                2 => 12,                        // CHANGE_GRADE_NAME +10
+                3 => 4,                         // CHANGE_GRADE_AUTHORITY +BYTE+BYTE
+                4 => 6,                         // OFFER +DWORD
+                5 => 3,                         // POST_COMMENT +1
+                6 => 6,                         // DELETE_COMMENT +DWORD
+                7 => 2,                         // REFRESH_COMMENT +0
+                8 => 7,                         // CHANGE_MEMBER_GRADE +DWORD+BYTE
+                9 => 10,                        // USE_SKILL +TPacketCGGuildUseSkill
+                10 => 7,                        // CHANGE_MEMBER_GENERAL +DWORD+BYTE
+                11 => 7,                        // GUILD_INVITE_ANSWER +DWORD+BYTE
+                12 => 6,                        // CHARGE_GSP +int
+                13 => 6,                        // DEPOSIT_MONEY +int
+                14 => 6,                        // WITHDRAW_MONEY +int
                 _ => protocol::guild::CG_FIXED, // desconocido — el handler lo descarta
             };
             if self.buf.len() < total {
@@ -454,7 +464,10 @@ impl Framer {
 /// `protocol` (p.ej. `TPacketGCHandshake::SIZE`, `TPacketGCLoginSuccess::SIZE`).
 /// `n == 0` devuelve un `Vec` vacío sin tocar el stream; EOF a medio paquete →
 /// `io::ErrorKind::UnexpectedEof`.
-pub async fn read_exact_size<R: AsyncRead + Unpin>(reader: &mut R, n: usize) -> io::Result<Vec<u8>> {
+pub async fn read_exact_size<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    n: usize,
+) -> io::Result<Vec<u8>> {
     let mut buf = vec![0u8; n];
     reader.read_exact(&mut buf).await?;
     Ok(buf)
@@ -463,9 +476,9 @@ pub async fn read_exact_size<R: AsyncRead + Unpin>(reader: &mut R, n: usize) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use protocol::phase;
     use protocol::TPacketGCHandshake;
     use protocol::TPacketGCPhase;
+    use protocol::phase;
     use tokio::io::AsyncWriteExt;
 
     // ------------------------------------------------------------------
@@ -475,31 +488,91 @@ mod tests {
     #[test]
     fn size_table_covers_login_flow() {
         // espec §2 + packet_info.cpp:136-236 (sequence OFF)
-        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_HANDSHAKE), Some(13));
-        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_PONG), Some(1));
-        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_LOGIN), Some(49));
-        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_CHARACTER_CREATE), Some(34));
-        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_CHARACTER_DELETE), Some(10));
-        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_CHARACTER_SELECT), Some(2));
-        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_LOGIN2), Some(52));
-        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_TIME_SYNC), Some(13));
+        assert_eq!(
+            packet_size(ConnectionRole::Channel, header::CG_HANDSHAKE),
+            Some(13)
+        );
+        assert_eq!(
+            packet_size(ConnectionRole::Channel, header::CG_PONG),
+            Some(1)
+        );
+        assert_eq!(
+            packet_size(ConnectionRole::Channel, header::CG_LOGIN),
+            Some(49)
+        );
+        assert_eq!(
+            packet_size(ConnectionRole::Channel, header::CG_CHARACTER_CREATE),
+            Some(34)
+        );
+        assert_eq!(
+            packet_size(ConnectionRole::Channel, header::CG_CHARACTER_DELETE),
+            Some(10)
+        );
+        assert_eq!(
+            packet_size(ConnectionRole::Channel, header::CG_CHARACTER_SELECT),
+            Some(2)
+        );
+        assert_eq!(
+            packet_size(ConnectionRole::Channel, header::CG_LOGIN2),
+            Some(52)
+        );
+        assert_eq!(
+            packet_size(ConnectionRole::Channel, header::CG_TIME_SYNC),
+            Some(13)
+        );
         // 1 B: entrada al mundo (F4) y ping del selector de canales (F2)
-        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_ENTERGAME), Some(1));
-        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_STATE_CHECKER), Some(1));
+        assert_eq!(
+            packet_size(ConnectionRole::Channel, header::CG_ENTERGAME),
+            Some(1)
+        );
+        assert_eq!(
+            packet_size(ConnectionRole::Channel, header::CG_STATE_CHECKER),
+            Some(1)
+        );
         // 0xf1 (67 B): la versión del cliente al terminar la carga
         // (TPacketCGClientVersion2 = 1 + 33 + 33, Packet.h:974-979).
-        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_CLIENT_VERSION2), Some(67));
-        assert_eq!(packet_size(ConnectionRole::Auth, header::CG_CLIENT_VERSION2), Some(67), "el auth no lo recibe (flujo corto) — la tabla es común");
+        assert_eq!(
+            packet_size(ConnectionRole::Channel, header::CG_CLIENT_VERSION2),
+            Some(67)
+        );
+        assert_eq!(
+            packet_size(ConnectionRole::Auth, header::CG_CLIENT_VERSION2),
+            Some(67),
+            "el auth no lo recibe (flujo corto) — la tabla es común"
+        );
         // Fase de juego: los paquetes del spawn/idle con sus tamaños del
         // Packet.h del cliente (packed) — el MOVE del spawn (16 B) es el que
         // cerraba la entrada (slice 3.7).
-        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_MOVE), Some(16));
-        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_ATTACK), Some(8));
-        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_ITEM_USE), Some(4), "11, header + TItemPos (Packet.h:559-563) — el 16 B era el GC S→C, bug corregido");
-        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_QUICKSLOT_ADD), Some(4));
-        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_MYSHOP), Some(35));
-        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_WARP), Some(15));
-        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_ITEM_DROP), Some(8), "cheque OFF en el cliente");
+        assert_eq!(
+            packet_size(ConnectionRole::Channel, header::CG_MOVE),
+            Some(16)
+        );
+        assert_eq!(
+            packet_size(ConnectionRole::Channel, header::CG_ATTACK),
+            Some(8)
+        );
+        assert_eq!(
+            packet_size(ConnectionRole::Channel, header::CG_ITEM_USE),
+            Some(4),
+            "11, header + TItemPos (Packet.h:559-563) — el 16 B era el GC S→C, bug corregido"
+        );
+        assert_eq!(
+            packet_size(ConnectionRole::Channel, header::CG_QUICKSLOT_ADD),
+            Some(4)
+        );
+        assert_eq!(
+            packet_size(ConnectionRole::Channel, header::CG_MYSHOP),
+            Some(35)
+        );
+        assert_eq!(
+            packet_size(ConnectionRole::Channel, header::CG_WARP),
+            Some(15)
+        );
+        assert_eq!(
+            packet_size(ConnectionRole::Channel, header::CG_ITEM_DROP),
+            Some(8),
+            "cheque OFF en el cliente"
+        );
         // CG_SAFEBOX_MONEY (79, 6 B — TPacketCGSafeboxMoney: header+bState+
         // lMoney; packet.h:1627-1632): aditivo del reforge (el C++ no lo
         // registra; el handler del safebox es defensivo).
@@ -509,11 +582,17 @@ mod tests {
         );
         // CG_HORSE (63, 2 B — header+bRide): aditivo del reforge (fase 1
         // caballo jugable; el C++ monta por `/ride` chat, no por paquete).
-        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_HORSE), Some(2));
+        assert_eq!(
+            packet_size(ConnectionRole::Channel, header::CG_HORSE),
+            Some(2)
+        );
         // Los variables del C++ siguen fuera de la tabla fija (se resuelven
         // en try_extract — CG_CHAT/CG_WHISPER/CG_SHOP — o cierran).
         assert_eq!(packet_size(ConnectionRole::Channel, header::CG_CHAT), None);
-        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_WHISPER), None);
+        assert_eq!(
+            packet_size(ConnectionRole::Channel, header::CG_WHISPER),
+            None
+        );
         // LOGIN3: 65 canal / 68 auth (sufijo szLanguage[3])
         assert_eq!(
             packet_size(ConnectionRole::Channel, header::CG_LOGIN3),
@@ -525,8 +604,14 @@ mod tests {
         );
         // F1 (locale, aditivo): CG_LOCALE_REQUEST (132) = 4 B en ambos roles
         // (la tabla es común; el canal no lo recibe en el flujo real).
-        assert_eq!(packet_size(ConnectionRole::Auth, header::CG_LOCALE_REQUEST), Some(4));
-        assert_eq!(packet_size(ConnectionRole::Channel, header::CG_LOCALE_REQUEST), Some(4));
+        assert_eq!(
+            packet_size(ConnectionRole::Auth, header::CG_LOCALE_REQUEST),
+            Some(4)
+        );
+        assert_eq!(
+            packet_size(ConnectionRole::Channel, header::CG_LOCALE_REQUEST),
+            Some(4)
+        );
         // desconocidos → None → el caller cierra la conexión (input.cpp:77-84)
         assert_eq!(packet_size(ConnectionRole::Channel, 0), None);
         assert_eq!(packet_size(ConnectionRole::Auth, 0), None);
@@ -547,24 +632,24 @@ mod tests {
     /// (sizeof del struct del server) y Packet.h del cliente (packed, pack(1)).
     const GAP_LANE_A: &[(u8, usize)] = &[
         (header::CG_ADD_FLY_TARGETING, 13), // 53, TPacketCGFlyTargeting (Packet.h:717-723)
-        (header::CG_MALL_CHECKOUT, 5), // 69, TPacketCGMallCheckout (Packet.h:839-845)
-        (header::CG_SAFEBOX_CHECKIN, 5), // 70, TPacketCGSafeboxCheckin (Packet.h:832-838)
-        (header::CG_SAFEBOX_CHECKOUT, 5), // 71, TPacketCGSafeboxCheckout (Packet.h:825-831)
-        (header::CG_PARTY_INVITE, 5), // 72, TPacketCGPartyInvite (Packet.h:856-860)
+        (header::CG_MALL_CHECKOUT, 5),      // 69, TPacketCGMallCheckout (Packet.h:839-845)
+        (header::CG_SAFEBOX_CHECKIN, 5),    // 70, TPacketCGSafeboxCheckin (Packet.h:832-838)
+        (header::CG_SAFEBOX_CHECKOUT, 5),   // 71, TPacketCGSafeboxCheckout (Packet.h:825-831)
+        (header::CG_PARTY_INVITE, 5),       // 72, TPacketCGPartyInvite (Packet.h:856-860)
         (header::CG_PARTY_INVITE_ANSWER, 6), // 73, TPacketCGPartyInviteAnswer (Packet.h:862-867)
-        (header::CG_PARTY_REMOVE, 5), // 74, TPacketCGPartyRemove (Packet.h:869-873)
-        (header::CG_PARTY_SET_STATE, 7), // 75, TPacketCGPartySetState (Packet.h:875-881)
-        (header::CG_PARTY_USE_SKILL, 6), // 76, TPacketCGPartyUseSkill (Packet.h:897-902)
-        (header::CG_SAFEBOX_ITEM_MOVE, 8), // 77, TPacketCGItemMove (Packet.h:593-599)
-        (header::CG_PARTY_PARAMETER, 2), // 78, TPacketCGPartyParameter (Packet.h:1012-1016)
+        (header::CG_PARTY_REMOVE, 5),       // 74, TPacketCGPartyRemove (Packet.h:869-873)
+        (header::CG_PARTY_SET_STATE, 7),    // 75, TPacketCGPartySetState (Packet.h:875-881)
+        (header::CG_PARTY_USE_SKILL, 6),    // 76, TPacketCGPartyUseSkill (Packet.h:897-902)
+        (header::CG_SAFEBOX_ITEM_MOVE, 8),  // 77, TPacketCGItemMove (Packet.h:593-599)
+        (header::CG_PARTY_PARAMETER, 2),    // 78, TPacketCGPartyParameter (Packet.h:1012-1016)
         (header::CG_ANSWER_MAKE_GUILD, 14), // 81, TPacketCGAnswerMakeGuild (Packet.h:929-933)
-        (header::CG_FISHING, 2), // 82, TPacketCGFishing (packet.h:1800-1804)
-        (header::CG_ITEM_GIVE, 9), // 83, TPacketCGGiveItem (Packet.h:935-941)
-        (header::CG_REFINE, 3), // 96, TPacketCGRefine (Packet.h:976-982)
-        (header::CG_HACK, 257), // 105, TPacketCGHack (Packet.h:943-947)
+        (header::CG_FISHING, 2),            // 82, TPacketCGFishing (packet.h:1800-1804)
+        (header::CG_ITEM_GIVE, 9),          // 83, TPacketCGGiveItem (Packet.h:935-941)
+        (header::CG_REFINE, 3),             // 96, TPacketCGRefine (Packet.h:976-982)
+        (header::CG_HACK, 257),             // 105, TPacketCGHack (Packet.h:943-947)
         (header::CG_SCRIPT_SELECT_ITEM, 5), // 114, TPacketCGScriptSelectItem (Packet.h:1031-1035)
         (header::CG_DRAGON_SOUL_REFINE, 47), // 205, TPacketCGDragonSoulRefine (Packet.h:2715-2722)
-        (header::CG_ACCE, 23), // 211, SPacketAcce (Packet.h:2765-2776)
+        (header::CG_ACCE, 23),              // 211, SPacketAcce (Packet.h:2765-2776)
     ];
 
     #[test]
@@ -654,11 +739,9 @@ mod tests {
         }
         let out = Framer::new(ConnectionRole::Channel).push(&data).unwrap();
         assert_eq!(out.len(), GAP_LANE_A.len());
-        let mut off = 0;
-        for &(hdr, size) in GAP_LANE_A {
+        for (off, &(hdr, size)) in GAP_LANE_A.iter().enumerate() {
             assert_eq!(out[off][0], hdr, "orden del header 0x{hdr:02x}");
             assert_eq!(out[off].len(), size);
-            off += 1;
         }
     }
 
@@ -711,7 +794,9 @@ mod tests {
         assert_eq!(out, vec![empire.to_vec()]);
         assert!(matches!(
             Framer::new(ConnectionRole::Auth).push(&empire),
-            Err(FramingError::UnknownHeader { header: header::CG_EMPIRE })
+            Err(FramingError::UnknownHeader {
+                header: header::CG_EMPIRE
+            })
         ));
         // CG_CHANGE_NAME (106, 27 B): header + index + name[25] — el paquete
         // real del rename (introselect.py SendChangeNamePacket).
@@ -721,7 +806,9 @@ mod tests {
         assert_eq!(out, vec![change.clone()]);
         assert!(matches!(
             Framer::new(ConnectionRole::Auth).push(&change),
-            Err(FramingError::UnknownHeader { header: header::CG_CHANGE_NAME })
+            Err(FramingError::UnknownHeader {
+                header: header::CG_CHANGE_NAME
+            })
         ));
     }
 
@@ -771,12 +858,18 @@ mod tests {
         assert_eq!(f.buffered(), 0);
         // Fragmentado en dos pushes (40 + 48) → completo al segundo.
         let mut f = Framer::new(ConnectionRole::Auth);
-        assert!(f.push(&p88[..40]).unwrap().is_empty(), "< 68 B → incompleto");
+        assert!(
+            f.push(&p88[..40]).unwrap().is_empty(),
+            "< 68 B → incompleto"
+        );
         let out = f.push(&p88[40..]).unwrap();
         assert_eq!(out[0], p88);
         // El canal sigue fijo en 65 B.
         let p65 = TPacketCGLogin3::new_channel("test", "1234", [1, 2, 3, 4]).to_bytes_channel();
-        assert_eq!(packet_range(ConnectionRole::Channel, header::CG_LOGIN3), Some((65, 65)));
+        assert_eq!(
+            packet_range(ConnectionRole::Channel, header::CG_LOGIN3),
+            Some((65, 65))
+        );
         let out = Framer::new(ConnectionRole::Channel).push(&p65).unwrap();
         assert_eq!(out[0].len(), 65);
     }
@@ -788,7 +881,10 @@ mod tests {
         for (i, b) in pkt.iter().enumerate() {
             let out = f.push(&[*b]).unwrap();
             if i + 1 < pkt.len() {
-                assert!(out.is_empty(), "paquete emitido antes de tiempo en byte {i}");
+                assert!(
+                    out.is_empty(),
+                    "paquete emitido antes de tiempo en byte {i}"
+                );
             } else {
                 assert_eq!(out.len(), 1);
                 assert_eq!(out[0], pkt.to_vec());
@@ -828,7 +924,10 @@ mod tests {
         let mut f = Framer::new(ConnectionRole::Channel);
         let mut data = TPacketCGPlayerSelect::new(0).to_bytes().to_vec();
         data.extend_from_slice(&[0xAB, 0xCD]);
-        assert!(matches!(f.push(&data), Err(FramingError::UnknownHeader { header: 0xAB })));
+        assert!(matches!(
+            f.push(&data),
+            Err(FramingError::UnknownHeader { header: 0xAB })
+        ));
 
         // un cliente que envíe GC_PHASE (0xfd) es cerrado: la tabla C→S del
         // C++ tampoco lo registra (CPacketInfoCG, packet_info.cpp:136-236)
@@ -884,13 +983,20 @@ mod tests {
         bad.extend_from_slice(&2u16.to_le_bytes());
         bad.push(0);
         let mut f = Framer::new(ConnectionRole::Channel);
-        assert!(matches!(f.push(&bad), Err(FramingError::UnknownHeader { header: header::CG_CHAT })));
+        assert!(matches!(
+            f.push(&bad),
+            Err(FramingError::UnknownHeader {
+                header: header::CG_CHAT
+            })
+        ));
 
         // el rol Auth NO lo acepta (flujo corto — tabla común).
         let mut f = Framer::new(ConnectionRole::Auth);
         assert!(matches!(
             f.push(&pkt),
-            Err(FramingError::UnknownHeader { header: header::CG_CHAT })
+            Err(FramingError::UnknownHeader {
+                header: header::CG_CHAT
+            })
         ));
     }
 
@@ -944,14 +1050,18 @@ mod tests {
         let mut f = Framer::new(ConnectionRole::Channel);
         assert!(matches!(
             f.push(&bad),
-            Err(FramingError::UnknownHeader { header: header::CG_WHISPER })
+            Err(FramingError::UnknownHeader {
+                header: header::CG_WHISPER
+            })
         ));
 
         // el rol Auth NO lo acepta (flujo corto — tabla común).
         let mut f = Framer::new(ConnectionRole::Auth);
         assert!(matches!(
             f.push(&pkt),
-            Err(FramingError::UnknownHeader { header: header::CG_WHISPER })
+            Err(FramingError::UnknownHeader {
+                header: header::CG_WHISPER
+            })
         ));
     }
 
@@ -1010,7 +1120,9 @@ mod tests {
         let mut f = Framer::new(ConnectionRole::Auth);
         assert!(matches!(
             f.push(&buy),
-            Err(FramingError::UnknownHeader { header: header::CG_SHOP })
+            Err(FramingError::UnknownHeader {
+                header: header::CG_SHOP
+            })
         ));
     }
 
@@ -1037,7 +1149,9 @@ mod tests {
         // El rol Auth NO lo acepta (flujo corto — tabla común).
         assert!(matches!(
             Framer::new(ConnectionRole::Auth).push(&pkt),
-            Err(FramingError::UnknownHeader { header: header::CG_MESSENGER })
+            Err(FramingError::UnknownHeader {
+                header: header::CG_MESSENGER
+            })
         ));
     }
 
@@ -1047,7 +1161,10 @@ mod tests {
     /// input_main.cpp:971-986 y :1015-1030).
     #[test]
     fn cg_messenger_add_by_name_and_remove_total_26_bytes() {
-        for sub in [protocol::social::SUB_CG_ADD_BY_NAME, protocol::social::SUB_CG_REMOVE] {
+        for sub in [
+            protocol::social::SUB_CG_ADD_BY_NAME,
+            protocol::social::SUB_CG_REMOVE,
+        ] {
             let mut pkt = vec![header::CG_MESSENGER, sub];
             pkt.extend_from_slice(b"Companion\0");
             pkt.resize(protocol::social::CG_NAME_TOTAL, 0);
@@ -1066,14 +1183,29 @@ mod tests {
     fn cg_messenger_unknown_subheader_delivered_not_closed() {
         let bad = [header::CG_MESSENGER, 0xEE];
         let out = Framer::new(ConnectionRole::Channel).push(&bad).unwrap();
-        assert_eq!(out, vec![bad.to_vec()], "los 2 B se entregan (sin UnknownHeader)");
+        assert_eq!(
+            out,
+            vec![bad.to_vec()],
+            "los 2 B se entregan (sin UnknownHeader)"
+        );
         // La conexión sigue viva: un MESSENGER válido detrás se parsea bien.
-        let next = [header::CG_MESSENGER, protocol::social::SUB_CG_ADD_BY_VID, 1, 0, 0, 0];
+        let next = [
+            header::CG_MESSENGER,
+            protocol::social::SUB_CG_ADD_BY_VID,
+            1,
+            0,
+            0,
+            0,
+        ];
         let mut f = Framer::new(ConnectionRole::Channel);
         let out = f.push(&bad).unwrap();
         assert_eq!(out.len(), 1);
         let out = f.push(&next).unwrap();
-        assert_eq!(out, vec![next.to_vec()], "el stream sigue parseando tras el desconocido");
+        assert_eq!(
+            out,
+            vec![next.to_vec()],
+            "el stream sigue parseando tras el desconocido"
+        );
     }
 
     /// CG_GUILD (80) — CREATE (sub 1, slice 2026-08-27): total 15 B (base
@@ -1097,7 +1229,9 @@ mod tests {
         // El rol Auth NO lo acepta (tabla común).
         assert!(matches!(
             Framer::new(ConnectionRole::Auth).push(&pkt),
-            Err(FramingError::UnknownHeader { header: header::CG_GUILD })
+            Err(FramingError::UnknownHeader {
+                header: header::CG_GUILD
+            })
         ));
     }
 
@@ -1106,7 +1240,16 @@ mod tests {
     /// desconocido (base 2 B con log, patrón messenger).
     #[test]
     fn cg_guild_legacy_subheader_sizes() {
-        for (sub, total) in [(0u8, 6usize), (2, 12), (3, 4), (7, 2), (9, 10), (11, 7), (13, 6), (14, 6)] {
+        for (sub, total) in [
+            (0u8, 6usize),
+            (2, 12),
+            (3, 4),
+            (7, 2),
+            (9, 10),
+            (11, 7),
+            (13, 6),
+            (14, 6),
+        ] {
             let mut pkt = vec![header::CG_GUILD, sub];
             pkt.resize(total, 0);
             let out = Framer::new(ConnectionRole::Channel).push(&pkt).unwrap();
@@ -1114,7 +1257,11 @@ mod tests {
         }
         let bad = [header::CG_GUILD, 0xEE];
         let out = Framer::new(ConnectionRole::Channel).push(&bad).unwrap();
-        assert_eq!(out, vec![bad.to_vec()], "desconocido → base 2 B (sin cierre)");
+        assert_eq!(
+            out,
+            vec![bad.to_vec()],
+            "desconocido → base 2 B (sin cierre)"
+        );
     }
 
     /// Los headers de 1 byte se parsean como paquetes de 1 byte en el rol
@@ -1139,7 +1286,9 @@ mod tests {
 
         // ambos concatenados en un solo read → 2 paquetes de 1 B en orden
         let mut f = Framer::new(ConnectionRole::Channel);
-        let out = f.push(&[header::CG_ENTERGAME, header::CG_STATE_CHECKER]).unwrap();
+        let out = f
+            .push(&[header::CG_ENTERGAME, header::CG_STATE_CHECKER])
+            .unwrap();
         assert_eq!(
             out,
             vec![vec![header::CG_ENTERGAME], vec![header::CG_STATE_CHECKER]]
@@ -1149,7 +1298,8 @@ mod tests {
 
     #[test]
     fn login3_role_sizes() {
-        let auth_pkt = TPacketCGLogin3::new_auth("test", "1234", [1, 2, 3, 4], "es").to_bytes_auth();
+        let auth_pkt =
+            TPacketCGLogin3::new_auth("test", "1234", [1, 2, 3, 4], "es").to_bytes_auth();
         assert_eq!(auth_pkt.len(), 68);
 
         // Rol AUTH: 68 B → un solo paquete, incluso fragmentado en 65+3
@@ -1262,7 +1412,10 @@ mod tests {
         let p2 = f.next_packet(&mut reader).await.unwrap();
         assert_eq!(p2, login3.to_vec());
         // EOF limpio tras los dos paquetes
-        assert!(matches!(f.next_packet(&mut reader).await, Err(FramingError::Eof)));
+        assert!(matches!(
+            f.next_packet(&mut reader).await,
+            Err(FramingError::Eof)
+        ));
         writer_task.await.unwrap();
     }
 
@@ -1294,11 +1447,15 @@ mod tests {
         writer.write_all(&hs).await.unwrap();
         // tamaños desde el crate protocol, no de una tabla
         assert_eq!(
-            read_exact_size(&mut reader, TPacketGCPhase::SIZE).await.unwrap(),
+            read_exact_size(&mut reader, TPacketGCPhase::SIZE)
+                .await
+                .unwrap(),
             phase_pkt.to_vec()
         );
         assert_eq!(
-            read_exact_size(&mut reader, TPacketGCHandshake::SIZE).await.unwrap(),
+            read_exact_size(&mut reader, TPacketGCHandshake::SIZE)
+                .await
+                .unwrap(),
             hs.to_vec()
         );
         // EOF a medio paquete → error io

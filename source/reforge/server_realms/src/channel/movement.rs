@@ -28,8 +28,8 @@
 use game_core::ecs::{Intent, MoveIntent};
 use protocol::header;
 
-use crate::channel::session::{Outcome, Session};
 use crate::channel::now32;
+use crate::channel::session::{Outcome, Session};
 
 /// `POSITION_GENERAL = 0`, `POSITION_SITTING_CHAIR = 3`,
 /// `POSITION_SITTING_GROUND = 4` (length.h:288-296: GENERAL=0, BATTLE=1,
@@ -45,9 +45,7 @@ const POSITION_SITTING_GROUND: u8 = 4;
 fn posture(position: u8) -> Option<(bool, u8)> {
     match position {
         POSITION_GENERAL => Some((false, POSITION_GENERAL)),
-        POSITION_SITTING_CHAIR | POSITION_SITTING_GROUND => {
-            Some((true, POSITION_SITTING_GROUND))
-        }
+        POSITION_SITTING_CHAIR | POSITION_SITTING_GROUND => Some((true, POSITION_SITTING_GROUND)),
         _ => None,
     }
 }
@@ -77,7 +75,8 @@ pub async fn handle_position(session: &mut Session, pkt: &[u8]) -> Result<Outcom
         eprintln!(
             "server_realms: channel conn {}: {} — postura pedida con hp 0 \
              (muerto) — ignorada (parity POS_DEAD)",
-            session.conn_id, session.row().name
+            session.conn_id,
+            session.row().name
         );
         return Ok(Outcome::Continue);
     }
@@ -161,7 +160,11 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
         Ok(r) => {
             eprintln!(
                 "server_realms: channel conn {}: MOVE {} -> {},{} (func {})",
-                session.conn_id, session.row().name, r.x, r.y, mv.b_func
+                session.conn_id,
+                session.row().name,
+                r.x,
+                r.y,
+                mv.b_func
             );
             // El mundo COMPARTIDO persigue la posición NUEVA (intent — el AI
             // del tick y el spawn dinámico la leen).
@@ -191,20 +194,29 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
             eprintln!(
                 "server_realms: channel conn {}: MOVE func {} de {} — \
                  acción pendiente de integración (F5)",
-                session.conn_id, mv.b_func, session.row().name
+                session.conn_id,
+                mv.b_func,
+                session.row().name
             );
             Ok(Outcome::Continue)
         }
-        Err(e @ (game_core::movement::MoveError::SlowTimer
-        | game_core::movement::MoveError::FastTimer)) => {
+        Err(
+            e @ (game_core::movement::MoveError::SlowTimer
+            | game_core::movement::MoveError::FastTimer),
+        ) => {
             // Kick del C++ (DelayedDisconnect(3), input_main.cpp:1505-1515) —
             // el canal cierra la conexión (C6a: cierre protocolario).
             eprintln!(
                 "server_realms: channel conn {}: SPEEDHACK {} ({:?}) — \
                  cierre (parity DelayedDisconnect)",
-                session.conn_id, session.row().name, e
+                session.conn_id,
+                session.row().name,
+                e
             );
-            Ok(Outcome::Close(format!("speedhack de {}", session.row().name)))
+            Ok(Outcome::Close(format!(
+                "speedhack de {}",
+                session.row().name
+            )))
         }
         Err(game_core::movement::MoveError::TooFar) => {
             // Corrección del C++ (Show+Stop — el define TP_SPEED_CHECK está
@@ -243,7 +255,8 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
                             "server_realms: channel conn {}: \
                              walkability NO disponible (mapa {}): {e} — \
                              chequeo omitido (fail-open), envelope activo",
-                            session.conn_id, session.row().map_index
+                            session.conn_id,
+                            session.row().map_index
                         );
                         session.walkability_warned = true;
                     }
@@ -278,7 +291,8 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
         Err(game_core::movement::MoveError::InvalidFunc) => {
             eprintln!(
                 "server_realms: channel conn {}: MOVE func inválido de {}",
-                session.conn_id, session.row().name
+                session.conn_id,
+                session.row().name
             );
             Ok(Outcome::Continue)
         }
@@ -296,7 +310,11 @@ mod tests {
     #[test]
     fn posture_matches_cpp_position_switch() {
         assert_eq!(posture(0), Some((false, 0)), "GENERAL → Standup");
-        assert_eq!(posture(3), Some((true, 4)), "SITTING_CHAIR → Sitdown (wire GROUND)");
+        assert_eq!(
+            posture(3),
+            Some((true, 4)),
+            "SITTING_CHAIR → Sitdown (wire GROUND)"
+        );
         assert_eq!(posture(4), Some((true, 4)), "SITTING_GROUND → Sitdown");
         assert_eq!(posture(1), None, "BATTLE → rechazo (sin case en Position)");
         assert_eq!(posture(2), None, "DYING → rechazo (sin case en Position)");

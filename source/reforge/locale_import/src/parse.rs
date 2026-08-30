@@ -27,7 +27,7 @@
 //! - Los VALORES se decodifican por idioma → `decode_lang` (UTF-8 estricto
 //!   primero: un archivo ya UTF-8 pasa intacto).
 
-use encoding_rs::{Encoding, EUC_KR, WINDOWS_1251, WINDOWS_1252, WINDOWS_1256};
+use encoding_rs::{EUC_KR, Encoding, WINDOWS_1251, WINDOWS_1252, WINDOWS_1256};
 
 /// Codepage del idioma (parity del export del pack: windows-1252 salvo ae
 /// (árabe, 1256) y ru (cirílico, 1251) — bytes reales verificados 2026-08-12).
@@ -143,11 +143,7 @@ fn locale_convert(src: &[u8]) -> Option<Vec<u8>> {
         }
         i += 1;
     }
-    if out.is_empty() {
-        None
-    } else {
-        Some(out)
-    }
+    if out.is_empty() { None } else { Some(out) }
 }
 
 /// Parser de locale_string_XX.txt (parity `locale_init_file`, locale.cpp:
@@ -168,7 +164,9 @@ pub fn parse_locale_string(buf: &[u8]) -> Vec<(Vec<u8>, Vec<u8>)> {
         if buf[tmp] == b'"' {
             let mut strings: [Option<Vec<u8>>; 2] = [None, None];
             for (i, slot) in strings.iter_mut().enumerate() {
-                let Some(end) = quote_find_end(buf, tmp) else { break };
+                let Some(end) = quote_find_end(buf, tmp) else {
+                    break;
+                };
                 *slot = locale_convert(&buf[tmp..end]);
                 tmp = end + 1;
                 while tmp < n && matches!(buf[tmp], b'\n' | b'\r' | b' ') {
@@ -208,7 +206,10 @@ pub fn parse_names_dump(bytes: &[u8], lang: &str) -> Vec<(i64, String)> {
         let Some(tab1) = line.iter().position(|&c| c == b'\t') else {
             continue; // ColCount < 2
         };
-        let Ok(vnum) = std::str::from_utf8(&line[..tab1]).unwrap_or("").trim().parse::<i64>()
+        let Ok(vnum) = std::str::from_utf8(&line[..tab1])
+            .unwrap_or("")
+            .trim()
+            .parse::<i64>()
         else {
             continue;
         };
@@ -228,7 +229,11 @@ fn snap_string(s: &[u8]) -> Vec<u8> {
     if s.len() < 2 || s[0] != b'"' {
         return s.to_vec();
     }
-    let end = if s[s.len() - 1] == b'"' { s.len() - 1 } else { s.len() };
+    let end = if s[s.len() - 1] == b'"' {
+        s.len() - 1
+    } else {
+        s.len()
+    };
     s[1..end].to_vec()
 }
 
@@ -245,7 +250,11 @@ pub fn parse_itemdesc(bytes: &[u8], lang: &str) -> Vec<(i64, String)> {
             continue; // SplitLineByTab -> false
         }
         let cols: Vec<&[u8]> = line.split(|&c| c == b'\t').collect();
-        let Ok(vnum) = std::str::from_utf8(cols[0]).unwrap_or("").trim().parse::<i64>() else {
+        let Ok(vnum) = std::str::from_utf8(cols[0])
+            .unwrap_or("")
+            .trim()
+            .parse::<i64>()
+        else {
             continue;
         };
         let desc = snap_string(cols.get(1).copied().unwrap_or(b""));
@@ -271,7 +280,11 @@ pub fn parse_skilldesc(bytes: &[u8], lang: &str) -> Vec<(i32, String)> {
         if cols.len() < 3 {
             continue; // DESC_TOKEN_TYPE_NAME1 fuera de rango (defensivo)
         }
-        let Ok(id) = std::str::from_utf8(cols[0]).unwrap_or("").trim().parse::<i32>() else {
+        let Ok(id) = std::str::from_utf8(cols[0])
+            .unwrap_or("")
+            .trim()
+            .parse::<i32>()
+        else {
             continue;
         };
         if id == 0 {
@@ -352,7 +365,9 @@ pub fn parse_town_spawn(town_bytes: Option<&[u8]>, base: (i32, i32)) -> (i32, i3
     let Some(bytes) = town_bytes else { return base };
     let text = String::from_utf8_lossy(bytes);
     let mut it = text.split_whitespace();
-    let (Some(x), Some(y)) = (it.next(), it.next()) else { return base };
+    let (Some(x), Some(y)) = (it.next(), it.next()) else {
+        return base;
+    };
     match (x.parse::<i32>(), y.parse::<i32>()) {
         (Ok(x), Ok(y)) => (base.0 + x * 100, base.1 + y * 100),
         _ => base,
@@ -409,7 +424,10 @@ mod tests {
         // Clave sin comillas -> la línea se salta; el par siguiente queda
         // incompleto (clave sola) -> 0 pares.
         let text3 = b"k0\r\n\"v0\";\r\n";
-        assert!(parse_locale_string(text3).is_empty(), "clave sin comillas -> sin valor");
+        assert!(
+            parse_locale_string(text3).is_empty(),
+            "clave sin comillas -> sin valor"
+        );
     }
 
     /// LF-only también funciona (el runtime actual es CRLF; los dumps son
@@ -418,7 +436,13 @@ mod tests {
     fn locale_string_lf_only() {
         let text = b"\"a\";\n\"b\";\n\n\"c\";\n\"d\";\n";
         let pairs = parse_locale_string(text);
-        assert_eq!(pairs, vec![(b"a".to_vec(), b"b".to_vec()), (b"c".to_vec(), b"d".to_vec())]);
+        assert_eq!(
+            pairs,
+            vec![
+                (b"a".to_vec(), b"b".to_vec()),
+                (b"c".to_vec(), b"d".to_vec())
+            ]
+        );
     }
 
     // ---- locale_interface (parity uiscriptlocale.py) ----
@@ -463,7 +487,10 @@ mod tests {
         let rows = parse_skilldesc(text, "es");
         assert_eq!(
             rows,
-            vec![(1, "Corte de tres maneras".to_string()), (106, "Tiro relámpago".to_string())]
+            vec![
+                (1, "Corte de tres maneras".to_string()),
+                (106, "Tiro relámpago".to_string())
+            ]
         );
     }
 
@@ -521,7 +548,10 @@ mod tests {
     fn split_lines_crlf_and_lf() {
         let text = b"a\r\nb\nc\rd\re";
         let lines = split_lines(text);
-        assert_eq!(lines, vec![&b"a"[..], &b"b"[..], &b"c"[..], &b"d"[..], &b"e"[..]]);
+        assert_eq!(
+            lines,
+            vec![&b"a"[..], &b"b"[..], &b"c"[..], &b"d"[..], &b"e"[..]]
+        );
     }
 
     // ---- codificación ----
@@ -538,7 +568,10 @@ mod tests {
 
     #[test]
     fn decode_key_utf8_ascii_passthrough() {
-        assert_eq!(decode_key(b"The name has been changed."), "The name has been changed.");
+        assert_eq!(
+            decode_key(b"The name has been changed."),
+            "The name has been changed."
+        );
         assert_eq!(decode_key("Café ✓".as_bytes()), "Café ✓");
     }
 

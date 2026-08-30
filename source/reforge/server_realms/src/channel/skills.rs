@@ -14,10 +14,10 @@
 
 use database::item::ItemRepo;
 use game_core::ecs::{Intent, SkillIntent};
-use game_core::skill::{skill_flag, SkillRepo};
+use game_core::skill::{SkillRepo, skill_flag};
 
 use crate::channel::session::{Outcome, Session};
-use crate::channel::{equipped_arrow_index, INVENTORY_MAX_NUM};
+use crate::channel::{INVENTORY_MAX_NUM, equipped_arrow_index};
 
 /// CG_USE_SKILL (52): filtro temprano de nivel (parity UseSkill:
 /// `GetSkillLevel == 0` → rechazo sin respuesta — el mundo re-valida) +
@@ -46,16 +46,18 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
         eprintln!(
             "server_realms: channel conn {}: skill {skill_id} de {} \
              sin nivel — ignorado",
-            session.conn_id, session.row().name
+            session.conn_id,
+            session.row().name
         );
         return Ok(Outcome::Continue);
     }
     // F5.3 (items): el ARMA equipada — el `atk` del poly del skill usa el
     // melee del jugador (battle.cpp).
-    let weapon = if let Some(w) = session.inventory.iter().find(|i| {
-        i.window == "EQUIPMENT"
-            && i.pos as u16 == INVENTORY_MAX_NUM + 4
-    }) {
+    let weapon = if let Some(w) = session
+        .inventory
+        .iter()
+        .find(|i| i.window == "EQUIPMENT" && i.pos as u16 == INVENTORY_MAX_NUM + 4)
+    {
         ItemRepo::new(session.pool.clone())
             .load_proto_use_values(w.vnum)
             .await?
@@ -82,7 +84,8 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
                     "server_realms: channel conn {}: skill {skill_id} de {} \
                      sin flechas equipadas (WEAR_ARROW) — ignorado (parity \
                      GetArrowAndBow)",
-                    session.conn_id, session.row().name
+                    session.conn_id,
+                    session.row().name
                 );
                 return Ok(Outcome::Continue);
             }

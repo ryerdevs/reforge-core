@@ -23,7 +23,7 @@
 //! `Result<_, LocaleError>`.
 
 use crate::header;
-use crate::{from_cstr, ProtocolError, Result};
+use crate::{ProtocolError, Result, from_cstr};
 
 /// `CG_LOCALE_REQUEST` (client → auth): header + lang[3].
 pub const HEADER_CG_LOCALE_REQUEST: u8 = header::CG_LOCALE_REQUEST;

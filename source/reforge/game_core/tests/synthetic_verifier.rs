@@ -1,7 +1,7 @@
 //! Verificadores sintéticos (rule 20): PASAN con el fix actual, FALLAN si se
 //! revierte al valor bug. Determinísticos, sin RNG/I/O, sweeps de dominio (<1 ms).
 
-use database::attr::{roll_attrs, AttrRow, AttrTables};
+use database::attr::{AttrRow, AttrTables, roll_attrs};
 use game_core::ai::{mob_attack_cooldown_ms, mob_move_speed};
 
 /// synthetic verifier: fails if fix reverted — C29. Bug: el rewrite atacaba
@@ -77,12 +77,19 @@ fn roll_attrs_never_leaves_items_plain() {
         );
         norm_count += attrs[..5].iter().filter(|(t, _)| *t != 0).count();
     }
-    assert!(norm_count > 200, "media ≥ 1 attr normal por item (High + Low): {norm_count}");
+    assert!(
+        norm_count > 200,
+        "media ≥ 1 attr normal por item (High + Low): {norm_count}"
+    );
     // Fail-open parity: usable (sin set) → no-op aunque acierte el roll.
     let mut sockets = [0i64; 3];
     let mut attrs = [(0i16, 0i16); 7];
     roll_attrs(&mut rng, 100, 0, &tables, 3, 0, &mut sockets, &mut attrs);
-    assert_eq!(attrs, [(0, 0); 7], "usable: sin attrs (GetAttributeSetIndex None)");
+    assert_eq!(
+        attrs,
+        [(0, 0); 7],
+        "usable: sin attrs (GetAttributeSetIndex None)"
+    );
 }
 
 /// synthetic verifier: fails if fix reverted — C30. Bug: la columna `move_speed`

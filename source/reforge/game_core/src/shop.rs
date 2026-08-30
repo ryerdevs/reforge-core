@@ -21,8 +21,8 @@
 
 use std::collections::HashMap;
 
+pub use database::economy::{GOLD_MAX, checked_gold_delta, checked_gold_sub, is_valid_gold};
 use database::item::ItemRow;
-pub use database::economy::{checked_gold_delta, checked_gold_sub, is_valid_gold, GOLD_MAX};
 
 /// `SHOP_HOST_ITEM_MAX_NUM` (cliente `Packet.h:345`, server `shop.h`) —
 /// el tope de items por tienda en el wire y en la tabla.
@@ -91,7 +91,7 @@ impl ShopError {
             ShopError::NotEnoughMoney => 4, // SHOP_SUBHEADER_GC_NOT_ENOUGH_MONEY
             ShopError::InventoryFull => 7,  // SHOP_SUBHEADER_GC_INVENTORY_FULL
             ShopError::NoItem | ShopError::Equipped | ShopError::NotSellable => 1, // GC_END (rechazo silencioso)
-            ShopError::GoldOverflow => 4,   // NOT_ENOUGH_MONEY (overflow)
+            ShopError::GoldOverflow => 4, // NOT_ENOUGH_MONEY (overflow)
         }
     }
 }
@@ -100,10 +100,7 @@ impl ShopError {
 /// `shop.cpp:166-180`): `gold × count` (o `count/gold` con
 /// `ITEM_FLAG_COUNT_PER_1GOLD`).
 pub fn buy_price(item_gold: i64, count: i64, count_per_1gold: bool) -> i64 {
-    match checked_buy_price(item_gold, count, count_per_1gold) {
-        Some(price) => price,
-        None => i64::MAX,
-    }
+    checked_buy_price(item_gold, count, count_per_1gold).unwrap_or(i64::MAX)
 }
 
 /// Checked form of [`buy_price`]. Invalid or overflowing proto values are not
@@ -126,10 +123,7 @@ fn checked_buy_price(item_gold: i64, count: i64, count_per_1gold: bool) -> Optio
 /// Precio de VENTA a la tienda (parity `CShopManager::Sell` —
 /// `shop_manager.cpp:297-319`): `shop_buy_price × count / 5` − 3%.
 pub fn sell_price(shop_buy_price: i64, count: i64, count_per_1gold: bool) -> i64 {
-    match checked_sell_price(shop_buy_price, count, count_per_1gold) {
-        Some(price) => price,
-        None => i64::MAX,
-    }
+    checked_sell_price(shop_buy_price, count, count_per_1gold).unwrap_or(i64::MAX)
 }
 
 /// Checked form of [`sell_price`].
@@ -195,7 +189,11 @@ pub fn buy(
     {
         return Ok(BuyReceipt {
             price: shop_item.price,
-            stack: Some((existing.id, existing.count, existing.count + shop_item.count)),
+            stack: Some((
+                existing.id,
+                existing.count,
+                existing.count + shop_item.count,
+            )),
             new_pos: 0,
         });
     }
@@ -204,7 +202,11 @@ pub fn buy(
         inventory.iter().map(|i| i64::from(i.pos)).collect();
     for cell in 0..inventory_cells {
         if !occupied.contains(&i64::from(cell)) {
-            return Ok(BuyReceipt { price: shop_item.price, stack: None, new_pos: cell });
+            return Ok(BuyReceipt {
+                price: shop_item.price,
+                stack: None,
+                new_pos: cell,
+            });
         }
     }
     Err(ShopError::InventoryFull)
@@ -261,7 +263,11 @@ pub fn sell(
     if antiflag_sell {
         return Err(ShopError::NotSellable);
     }
-    let qty = if qty == 0 || qty > item.count { item.count } else { qty };
+    let qty = if qty == 0 || qty > item.count {
+        item.count
+    } else {
+        qty
+    };
     let Some(price) = checked_sell_price(proto.shop_buy_price, qty, proto.count_per_1gold) else {
         return Err(ShopError::GoldOverflow);
     };
@@ -269,7 +275,10 @@ pub fn sell(
         return Err(ShopError::GoldOverflow);
     }
     let post = item.count - qty;
-    Ok(SellReceipt { price, material: (item.id, item.count, post) })
+    Ok(SellReceipt {
+        price,
+        material: (item.id, item.count, post),
+    })
 }
 
 /// El query del load (const compartida — el test fija el contrato):
@@ -395,12 +404,22 @@ mod tests {
     #[test]
     fn buy_stacks_or_places() {
         let inv = vec![row(0, 101, 5), row(1, 103, 10)];
-        let item = ShopItem { vnum: 101, count: 3, price: 300, display_pos: 0 };
+        let item = ShopItem {
+            vnum: 101,
+            count: 3,
+            price: 300,
+            display_pos: 0,
+        };
         let r = buy(&inv, 1000, &item, 200, 180).expect("buy");
         assert_eq!(r.price, 300);
         assert_eq!(r.stack, Some((1000, 5, 8)), "stack sobre el 101");
         // Item sin stack existente → celda libre (la primera: 2).
-        let item2 = ShopItem { vnum: 999, count: 1, price: 50, display_pos: 1 };
+        let item2 = ShopItem {
+            vnum: 999,
+            count: 1,
+            price: 50,
+            display_pos: 1,
+        };
         let r = buy(&inv, 1000, &item2, 200, 180).expect("buy");
         assert_eq!(r.stack, None);
         assert_eq!(r.new_pos, 2, "primera celda libre");
@@ -409,17 +428,43 @@ mod tests {
     /// Compra: oro insuficiente → NotEnoughMoney; inventario lleno → Full.
     #[test]
     fn buy_rejects_no_gold_and_full_inventory() {
-        let item = ShopItem { vnum: 999, count: 1, price: 50, display_pos: 0 };
+        let item = ShopItem {
+            vnum: 999,
+            count: 1,
+            price: 50,
+            display_pos: 0,
+        };
         // Stack existente del mismo vnum con hueco → compra aunque esté lleno.
         let inv = vec![row(0, 999, 1)];
-        assert_eq!(buy(&inv, 49, &item, 200, 180), Err(ShopError::NotEnoughMoney));
+        assert_eq!(
+            buy(&inv, 49, &item, 200, 180),
+            Err(ShopError::NotEnoughMoney)
+        );
         let r = buy(&inv, 1000, &item, 200, 180).expect("buy");
-        assert_eq!(r.stack, Some((1000, 1, 2)), "stackea aunque el resto esté lleno");
+        assert_eq!(
+            r.stack,
+            Some((1000, 1, 2)),
+            "stackea aunque el resto esté lleno"
+        );
         // Sin stack posible + sin hueco → InventoryFull.
         let full: Vec<ItemRow> = (0..180).map(|i| row(i, i64::from(200u16 + i), 1)).collect();
-        assert_eq!(buy(&full, 1000, &item, 200, 180), Err(ShopError::InventoryFull));
         assert_eq!(
-            buy(&full, 1000, &ShopItem { vnum: 0, count: 1, price: 0, display_pos: 0 }, 200, 180),
+            buy(&full, 1000, &item, 200, 180),
+            Err(ShopError::InventoryFull)
+        );
+        assert_eq!(
+            buy(
+                &full,
+                1000,
+                &ShopItem {
+                    vnum: 0,
+                    count: 1,
+                    price: 0,
+                    display_pos: 0
+                },
+                200,
+                180
+            ),
             Err(ShopError::SoldOut)
         );
         assert_eq!(
@@ -434,7 +479,10 @@ mod tests {
     fn sell_consumes_and_prices() {
         let inv = vec![row(3, 101, 5)];
         // 101: shop_buy 90000 × 5 / 5 = 90000 − 3% = 87300.
-        let proto = SellProto { shop_buy_price: 90_000, count_per_1gold: false };
+        let proto = SellProto {
+            shop_buy_price: 90_000,
+            count_per_1gold: false,
+        };
         let r = sell(&inv, 100, 3, 0, false, proto).expect("sell");
         assert_eq!(r.price, 87_300);
         assert_eq!(r.material, (1003, 5, 0), "stack vacío → DELETE");
@@ -447,12 +495,21 @@ mod tests {
     /// Venta: celda vacía/equipada/no vendible/overflow.
     #[test]
     fn sell_rejects_invalid() {
-        let proto = SellProto { shop_buy_price: 90_000, count_per_1gold: false };
+        let proto = SellProto {
+            shop_buy_price: 90_000,
+            count_per_1gold: false,
+        };
         let mut equipped = row(3, 101, 5);
         equipped.window = "EQUIPMENT".into();
-        assert_eq!(sell(&[equipped], 100, 3, 1, false, proto), Err(ShopError::Equipped));
+        assert_eq!(
+            sell(&[equipped], 100, 3, 1, false, proto),
+            Err(ShopError::Equipped)
+        );
         assert_eq!(sell(&[], 100, 3, 1, false, proto), Err(ShopError::NoItem));
-        assert_eq!(sell(&[row(3, 101, 5)], 100, 3, 1, true, proto), Err(ShopError::NotSellable));
+        assert_eq!(
+            sell(&[row(3, 101, 5)], 100, 3, 1, true, proto),
+            Err(ShopError::NotSellable)
+        );
         // Overflow: gold 2_000_000_000 − 1 + precio 87300 > GOLD_MAX.
         assert_eq!(
             sell(&[row(3, 101, 5)], GOLD_MAX - 1, 3, 1, false, proto),
@@ -465,7 +522,10 @@ mod tests {
                 3,
                 1,
                 false,
-                SellProto { shop_buy_price: -1, count_per_1gold: false },
+                SellProto {
+                    shop_buy_price: -1,
+                    count_per_1gold: false
+                },
             ),
             Err(ShopError::GoldOverflow),
             "un precio negativo no puede acreditar oro"
@@ -477,7 +537,10 @@ mod tests {
                 3,
                 0,
                 false,
-                SellProto { shop_buy_price: 2, count_per_1gold: false },
+                SellProto {
+                    shop_buy_price: 2,
+                    count_per_1gold: false
+                },
             ),
             Err(ShopError::GoldOverflow),
             "el cálculo de precio no puede envolver"
@@ -498,7 +561,10 @@ mod tests {
         assert!(LOAD_SQL.contains("FROM player.shop s"), "tabla shop");
         assert!(LOAD_SQL.contains("LEFT JOIN player.shop_item si ON si.shop_vnum = s.vnum"));
         assert!(LOAD_SQL.contains("LEFT JOIN player.item_proto ip ON ip.vnum = si.item_vnum"));
-        assert!(LOAD_SQL.contains("ORDER BY s.vnum, si.item_vnum"), "orden del C++");
+        assert!(
+            LOAD_SQL.contains("ORDER BY s.vnum, si.item_vnum"),
+            "orden del C++"
+        );
         let cols: Vec<&str> = LOAD_SQL
             .split_once(" FROM ")
             .expect("FROM")
@@ -509,7 +575,14 @@ mod tests {
             .collect();
         assert_eq!(
             cols,
-            ["s.vnum", "s.npc_vnum", "si.item_vnum", "si.count", "ip.flag", "ip.gold"],
+            [
+                "s.vnum",
+                "s.npc_vnum",
+                "si.item_vnum",
+                "si.count",
+                "ip.flag",
+                "ip.gold"
+            ],
             "6 columnas: shop + shop_item + proto (flag/gold para el precio)"
         );
     }

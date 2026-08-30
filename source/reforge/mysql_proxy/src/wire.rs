@@ -5,7 +5,7 @@
 //! / `Protocol::HandshakeResponse41`). Superficie mínima porque el único cliente
 //! es el baseline C++ (`libsql`, `AsyncSQL.cpp`): handshake + `mysql_native_password`
 //! + COM_QUERY/COM_QUIT/COM_PING. Sin prepared statements (`CStmt` 0 call sites —
-//! `legacy-sql-compatibility.md` §2.1).
+//!   `legacy-sql-compatibility.md` §2.1).
 //!
 //! Vectores de test: (a) golden del ejemplo documentado de HandshakeResponse41
 //! (MySQL 5.5.8, usuario `pam`, db `test`); (b) token `mysql_native_password`
@@ -232,7 +232,11 @@ pub fn decode_handshake_v10(payload: &[u8]) -> Result<HandshakeV10, WireError> {
     if payload.len() < 32 || payload[0] != 0x0a {
         return Err(err("protocol version != 10"));
     }
-    let version_end = payload[1..].iter().position(|&b| b == 0).map(|p| p + 1).ok_or_else(|| err("server version sin NUL"))?;
+    let version_end = payload[1..]
+        .iter()
+        .position(|&b| b == 0)
+        .map(|p| p + 1)
+        .ok_or_else(|| err("server version sin NUL"))?;
     let server_version = std::str::from_utf8(&payload[1..version_end])
         .map_err(|_| err("server version no UTF-8"))?
         .to_string();
@@ -253,12 +257,20 @@ pub fn decode_handshake_v10(payload: &[u8]) -> Result<HandshakeV10, WireError> {
     let auth_len = payload[version_end + 21] as usize;
     let part2_start = version_end + 22 + 10;
     let part2_len = auth_len.saturating_sub(8).max(13);
-    let part2 = payload.get(part2_start..part2_start + part2_len).unwrap_or(&[]);
+    let part2 = payload
+        .get(part2_start..part2_start + part2_len)
+        .unwrap_or(&[]);
     let mut scramble = [0u8; 20];
     scramble[..8].copy_from_slice(part1);
     let tail = part2.len().min(12);
     scramble[8..8 + tail].copy_from_slice(&part2[..tail]);
-    Ok(HandshakeV10 { server_version, conn_id, scramble, capabilities, charset })
+    Ok(HandshakeV10 {
+        server_version,
+        conn_id,
+        scramble,
+        capabilities,
+        charset,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -292,7 +304,10 @@ pub fn decode_handshake_response(payload: &[u8]) -> Result<HandshakeResponse, Wi
     let max_packet = u32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]);
     let charset = payload[8];
     let mut pos = 9 + 23; // filler
-    let username_end = payload[pos..].iter().position(|&b| b == 0).ok_or_else(|| err("username sin NUL"))?;
+    let username_end = payload[pos..]
+        .iter()
+        .position(|&b| b == 0)
+        .ok_or_else(|| err("username sin NUL"))?;
     let username = std::str::from_utf8(&payload[pos..pos + username_end])
         .map_err(|_| err("username no UTF-8"))?
         .to_string();
@@ -301,32 +316,58 @@ pub fn decode_handshake_response(payload: &[u8]) -> Result<HandshakeResponse, Wi
         let (len, n) = read_lenenc(&payload[pos..]).ok_or_else(|| err("auth lenenc"))?;
         let len = len as usize;
         pos += n;
-        let bytes = payload.get(pos..pos + len).ok_or_else(|| err("auth response corta"))?.to_vec();
+        let bytes = payload
+            .get(pos..pos + len)
+            .ok_or_else(|| err("auth response corta"))?
+            .to_vec();
         pos += len;
         bytes
     } else {
         let len = *payload.get(pos).ok_or_else(|| err("auth len"))? as usize;
         pos += 1;
-        let bytes = payload.get(pos..pos + len).ok_or_else(|| err("auth response corta"))?.to_vec();
+        let bytes = payload
+            .get(pos..pos + len)
+            .ok_or_else(|| err("auth response corta"))?
+            .to_vec();
         pos += len;
         bytes
     };
     let mut database = None;
     if capabilities & CAP_CONNECT_WITH_DB != 0 {
-        let end = payload[pos..].iter().position(|&b| b == 0).ok_or_else(|| err("db sin NUL"))?;
-        database = Some(std::str::from_utf8(&payload[pos..pos + end]).map_err(|_| err("db no UTF-8"))?.to_string());
+        let end = payload[pos..]
+            .iter()
+            .position(|&b| b == 0)
+            .ok_or_else(|| err("db sin NUL"))?;
+        database = Some(
+            std::str::from_utf8(&payload[pos..pos + end])
+                .map_err(|_| err("db no UTF-8"))?
+                .to_string(),
+        );
         pos += end + 1;
     }
     let mut plugin = None;
-    if capabilities & CAP_PLUGIN_AUTH != 0 {
-        if pos < payload.len() {
-            let end = payload[pos..].iter().position(|&b| b == 0).ok_or_else(|| err("plugin sin NUL"))?;
-            plugin = Some(std::str::from_utf8(&payload[pos..pos + end]).map_err(|_| err("plugin no UTF-8"))?.to_string());
-            // CLIENT_CONNECT_ATTRS: bloque lenenc opcional — se ignora (nada del
-            // C++ depende de los atributos; el ejemplo documentado los omite).
-        }
+    if capabilities & CAP_PLUGIN_AUTH != 0 && pos < payload.len() {
+        let end = payload[pos..]
+            .iter()
+            .position(|&b| b == 0)
+            .ok_or_else(|| err("plugin sin NUL"))?;
+        plugin = Some(
+            std::str::from_utf8(&payload[pos..pos + end])
+                .map_err(|_| err("plugin no UTF-8"))?
+                .to_string(),
+        );
+        // CLIENT_CONNECT_ATTRS: bloque lenenc opcional — se ignora (nada del
+        // C++ depende de los atributos; el ejemplo documentado los omite).
     }
-    Ok(HandshakeResponse { capabilities, max_packet, charset, username, auth_response, database, plugin })
+    Ok(HandshakeResponse {
+        capabilities,
+        max_packet,
+        charset,
+        username,
+        auth_response,
+        database,
+        plugin,
+    })
 }
 
 /// Lee un integer length-encoded al inicio de `b` → (valor, bytes consumidos).
@@ -455,7 +496,11 @@ pub fn encode_result_set(
         out.push(write_packet(seq, &p));
         seq = seq.wrapping_add(1);
     }
-    let final_status = if more { STATUS_AUTOCOMMIT | STATUS_MORE_RESULTS } else { STATUS_AUTOCOMMIT };
+    let final_status = if more {
+        STATUS_AUTOCOMMIT | STATUS_MORE_RESULTS
+    } else {
+        STATUS_AUTOCOMMIT
+    };
     out.push(encode_eof(seq, final_status));
     out
 }
@@ -533,20 +578,25 @@ pub fn validate_native_auth(password: &[u8], scramble: &[u8], token: &[u8]) -> b
 pub fn mysql_column_parts(type_oid: u32) -> (u8, u8, u32, u16) {
     // (type_code, charset, column_length, flags)
     match type_oid {
-        17 => (MYSQL_TYPE_BLOB, CHARSET_BINARY, 65_535, BLOB_FLAG | BINARY_FLAG), // bytea
-        21 => (MYSQL_TYPE_SHORT, CHARSET_BINARY, 6, NUM_FLAG),                    // int2
-        23 => (MYSQL_TYPE_LONG, CHARSET_BINARY, 11, NUM_FLAG),                    // int4
-        20 => (MYSQL_TYPE_LONGLONG, CHARSET_BINARY, 20, NUM_FLAG),                // int8
-        700 => (MYSQL_TYPE_FLOAT, CHARSET_BINARY, 12, NUM_FLAG),                  // float4
-        701 => (MYSQL_TYPE_DOUBLE, CHARSET_BINARY, 22, NUM_FLAG),                 // float8
-        1700 => (MYSQL_TYPE_NEWDECIMAL, CHARSET_BINARY, 20, NUM_FLAG),            // numeric
-        16 => (MYSQL_TYPE_TINY, CHARSET_BINARY, 1, NUM_FLAG),                     // bool (no usado en fase 1)
+        17 => (
+            MYSQL_TYPE_BLOB,
+            CHARSET_BINARY,
+            65_535,
+            BLOB_FLAG | BINARY_FLAG,
+        ), // bytea
+        21 => (MYSQL_TYPE_SHORT, CHARSET_BINARY, 6, NUM_FLAG), // int2
+        23 => (MYSQL_TYPE_LONG, CHARSET_BINARY, 11, NUM_FLAG), // int4
+        20 => (MYSQL_TYPE_LONGLONG, CHARSET_BINARY, 20, NUM_FLAG), // int8
+        700 => (MYSQL_TYPE_FLOAT, CHARSET_BINARY, 12, NUM_FLAG), // float4
+        701 => (MYSQL_TYPE_DOUBLE, CHARSET_BINARY, 22, NUM_FLAG), // float8
+        1700 => (MYSQL_TYPE_NEWDECIMAL, CHARSET_BINARY, 20, NUM_FLAG), // numeric
+        16 => (MYSQL_TYPE_TINY, CHARSET_BINARY, 1, NUM_FLAG),  // bool (no usado en fase 1)
         25 | 1042 | 1043 => (MYSQL_TYPE_VAR_STRING, CHARSET_UTF8MB4_GENERAL_CI, 255, 0), // text/varchar/bpchar
-        1082 => (MYSQL_TYPE_DATE, CHARSET_UTF8MB4_GENERAL_CI, 10, 0),             // date
-        1083 => (MYSQL_TYPE_TIME, CHARSET_UTF8MB4_GENERAL_CI, 10, 0),             // time
-        1114 | 1184 => (MYSQL_TYPE_DATETIME, CHARSET_UTF8MB4_GENERAL_CI, 19, 0),  // timestamp
-        1186 => (MYSQL_TYPE_STRING, CHARSET_UTF8MB4_GENERAL_CI, 24, 0),           // interval (loginlog2.playtime)
-        869 => (MYSQL_TYPE_STRING, CHARSET_UTF8MB4_GENERAL_CI, 45, 0),            // inet
+        1082 => (MYSQL_TYPE_DATE, CHARSET_UTF8MB4_GENERAL_CI, 10, 0),                    // date
+        1083 => (MYSQL_TYPE_TIME, CHARSET_UTF8MB4_GENERAL_CI, 10, 0),                    // time
+        1114 | 1184 => (MYSQL_TYPE_DATETIME, CHARSET_UTF8MB4_GENERAL_CI, 19, 0), // timestamp
+        1186 => (MYSQL_TYPE_STRING, CHARSET_UTF8MB4_GENERAL_CI, 24, 0), // interval (loginlog2.playtime)
+        869 => (MYSQL_TYPE_STRING, CHARSET_UTF8MB4_GENERAL_CI, 45, 0),  // inet
         _ => (MYSQL_TYPE_VAR_STRING, CHARSET_UTF8MB4_GENERAL_CI, 255, 0),
     }
 }
@@ -580,15 +630,15 @@ pub fn decode_bytea_text(text: &[u8]) -> Vec<u8> {
 /// los retries de `AsyncSQL.cpp:548-571` comparan errno de conexión, no de query).
 pub fn map_pg_sqlstate(state: &str) -> u16 {
     match state {
-        "42P01" => ER_NO_SUCH_TABLE,  // undefined_table
-        "42703" => ER_BAD_FIELD,      // undefined_column
-        "42601" => ER_PARSE_ERROR,    // syntax_error
-        "23505" => ER_DUP_ENTRY,      // unique_violation
-        "23502" => ER_BAD_NULL,       // not_null_violation
-        "23503" => 1452,              // foreign_key_violation
-        "3D000" => ER_NO_DB,          // invalid_catalog_name
+        "42P01" => ER_NO_SUCH_TABLE,                   // undefined_table
+        "42703" => ER_BAD_FIELD,                       // undefined_column
+        "42601" => ER_PARSE_ERROR,                     // syntax_error
+        "23505" => ER_DUP_ENTRY,                       // unique_violation
+        "23502" => ER_BAD_NULL,                        // not_null_violation
+        "23503" => 1452,                               // foreign_key_violation
+        "3D000" => ER_NO_DB,                           // invalid_catalog_name
         "22007" | "22008" | "22021" => ER_WRONG_VALUE, // datetime/encoding
-        "28P01" => ER_ACCESS_DENIED,  // invalid_password
+        "28P01" => ER_ACCESS_DENIED,                   // invalid_password
         _ => ER_UNKNOWN,
     }
 }
@@ -662,8 +712,17 @@ mod tests {
         for (i, b) in scramble.iter_mut().enumerate() {
             *b = i as u8;
         }
-        let packet = encode_handshake("5.7.44-m2-proxy", 42, &scramble, CAP_SERVER_CAPS, CHARSET_UTF8MB4_GENERAL_CI);
-        let (seq, payload) = parse_packets(&packet).into_iter().next().expect("un paquete");
+        let packet = encode_handshake(
+            "5.7.44-m2-proxy",
+            42,
+            &scramble,
+            CAP_SERVER_CAPS,
+            CHARSET_UTF8MB4_GENERAL_CI,
+        );
+        let (seq, payload) = parse_packets(&packet)
+            .into_iter()
+            .next()
+            .expect("un paquete");
         assert_eq!(seq, 0);
         assert_eq!(payload[0], 0x0a, "protocol version 10");
         let hs = decode_handshake_v10(&payload).unwrap();
@@ -685,7 +744,12 @@ mod tests {
         assert_eq!(payload[0], 0x0a);
         assert_eq!(&payload[1..version_end + 1], b"v\0");
         assert_eq!(
-            u32::from_le_bytes([payload[version_end + 1], payload[version_end + 2], payload[version_end + 3], payload[version_end + 4]]),
+            u32::from_le_bytes([
+                payload[version_end + 1],
+                payload[version_end + 2],
+                payload[version_end + 3],
+                payload[version_end + 4]
+            ]),
             7
         );
         let caps = CAP_SERVER_CAPS;
@@ -710,7 +774,7 @@ mod tests {
         assert_eq!(lenenc_int(0x10000), vec![0xfd, 0x00, 0x00, 0x01]);
         assert_eq!(lenenc_int(0xff_ffff), vec![0xfd, 0xff, 0xff, 0xff]);
         assert_eq!(
-            lenenc_int(0x1_0000_00),
+            lenenc_int(0x0100_0000),
             vec![0xfe, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00]
         );
         assert_eq!(lenenc_bytes(b"ab"), vec![0x02, b'a', b'b']);
@@ -732,7 +796,10 @@ mod tests {
         let err = encode_err(1, ER_NO_SUCH_TABLE, "42P01", "no such table: x");
         let (_, payload) = parse_packets(&err).into_iter().next().unwrap();
         assert_eq!(payload[0], 0xff);
-        assert_eq!(u16::from_le_bytes([payload[1], payload[2]]), ER_NO_SUCH_TABLE);
+        assert_eq!(
+            u16::from_le_bytes([payload[1], payload[2]]),
+            ER_NO_SUCH_TABLE
+        );
         assert_eq!(&payload[3..9], b"#42P01");
         assert_eq!(&payload[9..], b"no such table: x");
 
@@ -760,7 +827,7 @@ mod tests {
         };
         let rows = vec![
             vec![Some(vec![0x62, 0x65, 0x00, 0xff])], // bytes crudos con NUL
-            vec![None],                                // NULL = 0xfb
+            vec![None],                               // NULL = 0xfb
         ];
         let packets = encode_result_set(1, &[col], &rows, false);
         // 1 (count) + 1 (def) + 1 (EOF defs) + 2 (rows) + 1 (EOF rows) = 6
@@ -794,10 +861,7 @@ mod tests {
         // EOF final sin MORE_RESULTS
         let (_, p5) = parse_packets(&packets[5]).into_iter().next().unwrap();
         assert_eq!(p5[0], 0xfe);
-        assert_eq!(
-            u16::from_le_bytes([p5[3], p5[4]]),
-            STATUS_AUTOCOMMIT
-        );
+        assert_eq!(u16::from_le_bytes([p5[3], p5[4]]), STATUS_AUTOCOMMIT);
     }
 
     /// Regresión del gate: 2 columnas (varchar + bytea) — el cliente leía el
@@ -805,8 +869,26 @@ mod tests {
     #[test]
     fn result_set_two_columns_roundtrip() {
         let cols = vec![
-            ColumnDef { name: "mValue".into(), schema: String::new(), table: String::new(), charset: CHARSET_UTF8MB4_GENERAL_CI, column_length: 255, type_code: MYSQL_TYPE_VAR_STRING, flags: 0, decimals: 0 },
-            ColumnDef { name: "mKey".into(), schema: String::new(), table: String::new(), charset: CHARSET_BINARY, column_length: 65_535, type_code: MYSQL_TYPE_BLOB, flags: BLOB_FLAG | BINARY_FLAG, decimals: 0 },
+            ColumnDef {
+                name: "mValue".into(),
+                schema: String::new(),
+                table: String::new(),
+                charset: CHARSET_UTF8MB4_GENERAL_CI,
+                column_length: 255,
+                type_code: MYSQL_TYPE_VAR_STRING,
+                flags: 0,
+                decimals: 0,
+            },
+            ColumnDef {
+                name: "mKey".into(),
+                schema: String::new(),
+                table: String::new(),
+                charset: CHARSET_BINARY,
+                column_length: 65_535,
+                type_code: MYSQL_TYPE_BLOB,
+                flags: BLOB_FLAG | BINARY_FLAG,
+                decimals: 0,
+            },
         ];
         let rows = vec![vec![Some(b"ab".to_vec()), Some(vec![0xde, 0xad])]];
         let packets = encode_result_set(1, &cols, &rows, false);
@@ -820,7 +902,16 @@ mod tests {
     /// leer length=0x04 y el texto completo, nunca el byte 0x04 como valor.
     #[test]
     fn result_set_numeric_value_roundtrip() {
-        let cols = vec![ColumnDef { name: "count".into(), schema: String::new(), table: String::new(), charset: CHARSET_UTF8MB4_GENERAL_CI, column_length: 255, type_code: MYSQL_TYPE_VAR_STRING, flags: 0, decimals: 0 }];
+        let cols = vec![ColumnDef {
+            name: "count".into(),
+            schema: String::new(),
+            table: String::new(),
+            charset: CHARSET_UTF8MB4_GENERAL_CI,
+            column_length: 255,
+            type_code: MYSQL_TYPE_VAR_STRING,
+            flags: 0,
+            decimals: 0,
+        }];
         let rows = vec![vec![Some(b"2864".to_vec())]];
         let packets = encode_result_set(1, &cols, &rows, false);
         let (_, row) = parse_packets(&packets[3]).into_iter().next().unwrap();
@@ -831,33 +922,49 @@ mod tests {
     /// está cubierto por `lenenc_boundaries` (>= 0x1000000).
     #[test]
     fn result_set_large_cells_lenenc() {
-        let cols = vec![ColumnDef { name: "v".into(), schema: String::new(), table: String::new(), charset: CHARSET_UTF8MB4_GENERAL_CI, column_length: 255, type_code: MYSQL_TYPE_VAR_STRING, flags: 0, decimals: 0 }];
+        let cols = vec![ColumnDef {
+            name: "v".into(),
+            schema: String::new(),
+            table: String::new(),
+            charset: CHARSET_UTF8MB4_GENERAL_CI,
+            column_length: 255,
+            type_code: MYSQL_TYPE_VAR_STRING,
+            flags: 0,
+            decimals: 0,
+        }];
         let big300 = vec![0x41u8; 300];
         let big65536 = vec![0x42u8; 65_536];
-        let rows = vec![
-            vec![Some(big300.clone())],
-            vec![Some(big65536.clone())],
-        ];
+        let rows = vec![vec![Some(big300.clone())], vec![Some(big65536.clone())]];
         let packets = encode_result_set(1, &cols, &rows, false);
         let (_, row1) = parse_packets(&packets[3]).into_iter().next().unwrap();
         assert_eq!(&row1[..3], &[0xfc, 0x2c, 0x01], "lenenc 300 = fc 2c 01");
         assert_eq!(&row1[3..], &big300);
         let (_, row2) = parse_packets(&packets[4]).into_iter().next().unwrap();
-        assert_eq!(&row2[..4], &[0xfd, 0x00, 0x00, 0x01], "lenenc 65536 = fd 00 00 01");
+        assert_eq!(
+            &row2[..4],
+            &[0xfd, 0x00, 0x00, 0x01],
+            "lenenc 65536 = fd 00 00 01"
+        );
         assert_eq!(row2.len(), 4 + 65_536);
     }
 
     #[test]
     fn result_set_marks_more_results() {
         let packets = encode_result_set(1, &[], &[], true);
-        let (_, last) = parse_packets(packets.last().unwrap()).into_iter().next().unwrap();
+        let (_, last) = parse_packets(packets.last().unwrap())
+            .into_iter()
+            .next()
+            .unwrap();
         assert_eq!(
             u16::from_le_bytes([last[3], last[4]]),
             STATUS_AUTOCOMMIT | STATUS_MORE_RESULTS
         );
         let ok = encode_ok(1, 1, 0, STATUS_AUTOCOMMIT | STATUS_MORE_RESULTS);
         let (_, p) = parse_packets(&ok).into_iter().next().unwrap();
-        assert_eq!(u16::from_le_bytes([p[3], p[4]]), STATUS_AUTOCOMMIT | STATUS_MORE_RESULTS);
+        assert_eq!(
+            u16::from_le_bytes([p[3], p[4]]),
+            STATUS_AUTOCOMMIT | STATUS_MORE_RESULTS
+        );
     }
 
     #[test]
@@ -895,7 +1002,10 @@ mod tests {
         assert_eq!(decode_command(&[0x16]), Ok(ClientCommand::Unknown(0x16)));
         assert_eq!(decode_command(&[]), Err(WireError::EmptyPacket));
         // COM_QUERY con bytes no-UTF8 → error explícito (nunca corrupción).
-        assert_eq!(decode_command(&[COM_QUERY, 0xff, 0xfe]), Err(WireError::NonUtf8Query));
+        assert_eq!(
+            decode_command(&[COM_QUERY, 0xff, 0xfe]),
+            Err(WireError::NonUtf8Query)
+        );
     }
 
     #[test]
@@ -918,7 +1028,10 @@ mod tests {
     #[test]
     fn bytea_hex_decode_roundtrip() {
         let raw = [0x62, 0x65, 0x00, 0xff, 0x80];
-        let text = format!("\\x{}", raw.iter().map(|b| format!("{b:02x}")).collect::<String>());
+        let text = format!(
+            "\\x{}",
+            raw.iter().map(|b| format!("{b:02x}")).collect::<String>()
+        );
         assert_eq!(decode_bytea_text(text.as_bytes()), raw);
         // Sin prefijo \x → passthrough.
         assert_eq!(decode_bytea_text(b"plain"), b"plain");
@@ -936,7 +1049,11 @@ mod tests {
         let text = format!("\\x{hex}");
         assert_eq!(text.len(), 386, "\\x + 384 hex chars");
         assert_eq!(decode_bytea_text(text.as_bytes()), raw);
-        assert_ne!(decode_bytea_text(text.as_bytes()), text.as_bytes(), "nunca el texto hex como valor");
+        assert_ne!(
+            decode_bytea_text(text.as_bytes()),
+            text.as_bytes(),
+            "nunca el texto hex como valor"
+        );
     }
 
     #[test]

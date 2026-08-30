@@ -157,7 +157,10 @@ impl MobRepo {
     }
 
     async fn connect(&self) -> Result<Client, String> {
-        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
+        self.pool
+            .get()
+            .await
+            .map_err(|e| format!("PG pool get: {e}"))
     }
 
     /// Load del subset de spawn por vnum. `None` = el vnum no existe en
@@ -176,7 +179,10 @@ impl MobRepo {
     /// una sola llamada, en vez de una conexión PG por vnum. Devuelve
     /// `HashMap<vnum, MobRow>` — los vnums sin fila en `mob_proto` NO
     /// aparecen (el C++ tampoco los spawnea: `SpawnMob` -> nullptr).
-    pub async fn load_by_vnums(&self, vnums: &[i64]) -> Result<std::collections::HashMap<i64, MobRow>, String> {
+    pub async fn load_by_vnums(
+        &self,
+        vnums: &[i64],
+    ) -> Result<std::collections::HashMap<i64, MobRow>, String> {
         if vnums.is_empty() {
             return Ok(std::collections::HashMap::new());
         }
@@ -197,30 +203,62 @@ fn mob_row_from_row(r: &Row) -> Result<MobRow, String> {
     Ok(MobRow {
         vnum: r.try_get(0).map_err(|e| format!("mob_proto.vnum: {e}"))?,
         name: r.try_get(1).map_err(|e| format!("mob_proto.name: {e}"))?,
-        locale_name: r.try_get(2).map_err(|e| format!("mob_proto.locale_name: {e}"))?,
+        locale_name: r
+            .try_get(2)
+            .map_err(|e| format!("mob_proto.locale_name: {e}"))?,
         b_type: r.try_get(3).map_err(|e| format!("mob_proto.type: {e}"))?,
-        battle_type: r.try_get(4).map_err(|e| format!("mob_proto.battle_type: {e}"))?,
+        battle_type: r
+            .try_get(4)
+            .map_err(|e| format!("mob_proto.battle_type: {e}"))?,
         level: r.try_get(5).map_err(|e| format!("mob_proto.level: {e}"))?,
         size: r.try_get(6).map_err(|e| format!("mob_proto.size: {e}"))?,
-        ai_flag: r.try_get(7).map_err(|e| format!("mob_proto.ai_flag: {e}"))?,
+        ai_flag: r
+            .try_get(7)
+            .map_err(|e| format!("mob_proto.ai_flag: {e}"))?,
         folder: r.try_get(8).map_err(|e| format!("mob_proto.folder: {e}"))?,
         ht: r.try_get(9).map_err(|e| format!("mob_proto.ht: {e}"))?,
         def: r.try_get(10).map_err(|e| format!("mob_proto.def: {e}"))?,
-        max_hp: r.try_get(11).map_err(|e| format!("mob_proto.max_hp: {e}"))?,
-        attack_range: r.try_get(12).map_err(|e| format!("mob_proto.attack_range: {e}"))?,
+        max_hp: r
+            .try_get(11)
+            .map_err(|e| format!("mob_proto.max_hp: {e}"))?,
+        attack_range: r
+            .try_get(12)
+            .map_err(|e| format!("mob_proto.attack_range: {e}"))?,
         exp: r.try_get(13).map_err(|e| format!("mob_proto.exp: {e}"))?,
-        gold_min: r.try_get(14).map_err(|e| format!("mob_proto.gold_min: {e}"))?,
-        gold_max: r.try_get(15).map_err(|e| format!("mob_proto.gold_max: {e}"))?,
-        drop_item: r.try_get(16).map_err(|e| format!("mob_proto.drop_item: {e}"))?,
-        move_speed: r.try_get(17).map_err(|e| format!("mob_proto.move_speed: {e}"))?,
-        attack_speed: r.try_get(18).map_err(|e| format!("mob_proto.attack_speed: {e}"))?,
-        damage_min: r.try_get(19).map_err(|e| format!("mob_proto.damage_min: {e}"))?,
-        damage_max: r.try_get(20).map_err(|e| format!("mob_proto.damage_max: {e}"))?,
-        aggressive_sight: r.try_get(21).map_err(|e| format!("mob_proto.aggressive_sight: {e}"))?,
+        gold_min: r
+            .try_get(14)
+            .map_err(|e| format!("mob_proto.gold_min: {e}"))?,
+        gold_max: r
+            .try_get(15)
+            .map_err(|e| format!("mob_proto.gold_max: {e}"))?,
+        drop_item: r
+            .try_get(16)
+            .map_err(|e| format!("mob_proto.drop_item: {e}"))?,
+        move_speed: r
+            .try_get(17)
+            .map_err(|e| format!("mob_proto.move_speed: {e}"))?,
+        attack_speed: r
+            .try_get(18)
+            .map_err(|e| format!("mob_proto.attack_speed: {e}"))?,
+        damage_min: r
+            .try_get(19)
+            .map_err(|e| format!("mob_proto.damage_min: {e}"))?,
+        damage_max: r
+            .try_get(20)
+            .map_err(|e| format!("mob_proto.damage_max: {e}"))?,
+        aggressive_sight: r
+            .try_get(21)
+            .map_err(|e| format!("mob_proto.aggressive_sight: {e}"))?,
         rank: r.try_get(22).map_err(|e| format!("mob_proto.rank: {e}"))?,
-        sp_berserk: r.try_get(23).map_err(|e| format!("mob_proto.sp_berserk: {e}"))?,
-        sp_stoneskin: r.try_get(24).map_err(|e| format!("mob_proto.sp_stoneskin: {e}"))?,
-        sp_godspeed: r.try_get(25).map_err(|e| format!("mob_proto.sp_godspeed: {e}"))?,
+        sp_berserk: r
+            .try_get(23)
+            .map_err(|e| format!("mob_proto.sp_berserk: {e}"))?,
+        sp_stoneskin: r
+            .try_get(24)
+            .map_err(|e| format!("mob_proto.sp_stoneskin: {e}"))?,
+        sp_godspeed: r
+            .try_get(25)
+            .map_err(|e| format!("mob_proto.sp_godspeed: {e}"))?,
     })
 }
 

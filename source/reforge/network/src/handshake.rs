@@ -98,9 +98,9 @@ use protocol::phase;
 use protocol::{TPacketCGHandshake, TPacketGCHandshake, TPacketGCPhase};
 use tokio::io::{AsyncRead, AsyncWrite};
 
+use crate::FramingError;
 use crate::connection::Connection;
 use crate::framer::Framer;
-use crate::FramingError;
 
 /// Límite de reintentos del handshake (parity `desc.h:17`, `HANDSHAKE_RETRY_LIMIT` = 32).
 pub const HANDSHAKE_RETRY_LIMIT: u32 = 32;
@@ -269,7 +269,7 @@ pub async fn perform_with<S: AsyncRead + AsyncWrite + Unpin>(
         //    Pending (ver doc del módulo).
         let echo =
             match tokio::time::timeout(cfg.attempt_timeout, wait_for_echo(conn, framer)).await {
-                Err(_) => None,      // eco no llegó a tiempo → retry
+                Err(_) => None,              // eco no llegó a tiempo → retry
                 Ok(Err(e)) => return Err(e), // terminal: io / framing
                 Ok(Ok(echo)) => Some(echo),
             };
@@ -399,7 +399,7 @@ fn generate_nonce() -> u32 {
 mod tests {
     use super::*;
     use protocol::{TPacketCGLogin, TPacketCGLogin3};
-    use tokio::io::{duplex, AsyncReadExt, AsyncWriteExt, DuplexStream};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream, duplex};
 
     use crate::ConnectionRole;
 
@@ -491,7 +491,10 @@ mod tests {
         }
 
         let err = server.await.unwrap().unwrap_err();
-        assert!(matches!(err, HandshakeError::RetriesExhausted { attempts: 2 }));
+        assert!(matches!(
+            err,
+            HandshakeError::RetriesExhausted { attempts: 2 }
+        ));
     }
 
     /// (c) Cliente silencioso (timeout por intento) → error tras el límite.
@@ -506,7 +509,10 @@ mod tests {
         }
 
         let err = server.await.unwrap().unwrap_err();
-        assert!(matches!(err, HandshakeError::RetriesExhausted { attempts: 2 }));
+        assert!(matches!(
+            err,
+            HandshakeError::RetriesExhausted { attempts: 2 }
+        ));
     }
 
     /// (d) Keepalives (0xfc time sync, 0xfe pong) intercalados antes del eco →
@@ -553,7 +559,10 @@ mod tests {
         }
 
         let err = server.await.unwrap().unwrap_err();
-        assert!(matches!(err, HandshakeError::RetriesExhausted { attempts: 2 }));
+        assert!(matches!(
+            err,
+            HandshakeError::RetriesExhausted { attempts: 2 }
+        ));
     }
 
     /// (g) La conexión del guild mark responde con CG_MARK_LOGIN (0x64) en vez

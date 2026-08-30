@@ -94,7 +94,10 @@ impl AccountRepo {
 
     /// Conexion nueva por llamada (parity `auth.rs:293-298`).
     async fn connect(&self) -> Result<Client, String> {
-        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
+        self.pool
+            .get()
+            .await
+            .map_err(|e| format!("PG pool get: {e}"))
     }
 
     /// Semantica de QUERY_LOGIN: `Some(AccountLogin)` solo si login + password
@@ -162,7 +165,9 @@ fn account_from_row(row: &Row) -> Result<Option<AccountLogin>, String> {
     let empire: Option<i16> = row.try_get(5).map_err(|e| format!("col5 empire: {e}"))?;
     let mut player_ids = [None; 5];
     for (i, slot) in player_ids.iter_mut().enumerate() {
-        *slot = row.try_get(6 + i).map_err(|e| format!("col{} pid: {e}", 6 + i))?;
+        *slot = row
+            .try_get(6 + i)
+            .map_err(|e| format!("col{} pid: {e}", 6 + i))?;
     }
     let status: String = row.try_get(11).map_err(|e| format!("col11 status: {e}"))?;
     let lang: Option<String> = row.try_get(12).map_err(|e| format!("col12 lang: {e}"))?;
@@ -221,18 +226,31 @@ mod tests {
             .trim_start_matches("SELECT")
             .trim();
         let cols: Vec<&str> = select.split(',').map(|c| c.trim()).collect();
-        assert_eq!(cols.len(), 13, "13 columnas (hash+id+login+password+social_id+empire+pid1..5+status+lang)");
+        assert_eq!(
+            cols.len(),
+            13,
+            "13 columnas (hash+id+login+password+social_id+empire+pid1..5+status+lang)"
+        );
         assert_eq!(cols[0], "$2", "col0 = hash calculado (parity input_pwd)");
         assert_eq!(cols[1], "a.id");
         assert_eq!(cols[2], "a.login");
         assert_eq!(cols[3], "a.password");
         assert_eq!(cols[4], "a.social_id");
         assert_eq!(cols[5], "pi.empire");
-        assert_eq!(cols[6..11], ["pi.pid1", "pi.pid2", "pi.pid3", "pi.pid4", "pi.pid5"]);
+        assert_eq!(
+            cols[6..11],
+            ["pi.pid1", "pi.pid2", "pi.pid3", "pi.pid4", "pi.pid5"]
+        );
         assert_eq!(cols[11], "a.status");
         assert_eq!(cols[12], "a.lang");
-        assert!(LOGIN_SQL.contains("LEFT JOIN player.player_index"), "join calificado");
-        assert!(LOGIN_SQL.contains("WHERE a.login = $1 AND a.password = $2"), "filtro por hash");
+        assert!(
+            LOGIN_SQL.contains("LEFT JOIN player.player_index"),
+            "join calificado"
+        );
+        assert!(
+            LOGIN_SQL.contains("WHERE a.login = $1 AND a.password = $2"),
+            "filtro por hash"
+        );
     }
 
     /// `player_id(slot)` — 0 para ranuras vacias (parity del C++).

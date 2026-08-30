@@ -6,7 +6,7 @@
 //! `log.mutation_audit` lo aplica el harness de otro lane) y lo limpia
 //! SIEMPRE (patron trap del E2E).
 
-use database::wal::{audit_ddl, Batcher, Mutation, Param, PgMutationSink};
+use database::wal::{Batcher, Mutation, Param, PgMutationSink, audit_ddl};
 use std::time::Duration;
 
 const DEFAULT_PG: &str = "host=127.0.0.1 port=5432 user=mt2 password=mt2 dbname=metin2";
@@ -53,7 +53,8 @@ async fn wal_replay_idempotent_and_audit_same_tx() {
     let (conn, client, replay, audit) = setup("replay").await;
 
     let result = async {
-        let sink = PgMutationSink::new(database::pool::new_pool(&conn, 4).expect("pool")).with_audit_table(audit.clone());
+        let sink = PgMutationSink::new(database::pool::new_pool(&conn, 4).expect("pool"))
+            .with_audit_table(audit.clone());
         let batcher = Batcher::spawn(Duration::from_millis(50), 16, sink);
 
         let sql = format!("INSERT INTO {replay} (id, val) VALUES ($1, $2) ON CONFLICT DO NOTHING");
@@ -76,14 +77,25 @@ async fn wal_replay_idempotent_and_audit_same_tx() {
             if n >= 3 {
                 break;
             }
-            assert!(std::time::Instant::now() < deadline, "timeout esperando el flush (audit={n})");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timeout esperando el flush (audit={n})"
+            );
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
 
         // La tabla de negocio: 3 filas (no 4) — el replay no duplica.
-        assert_eq!(count(&client, &format!("SELECT COUNT(*) FROM {replay}")).await, 3, "3 mutations distintas");
+        assert_eq!(
+            count(&client, &format!("SELECT COUNT(*) FROM {replay}")).await,
+            3,
+            "3 mutations distintas"
+        );
         // El audit: 3 filas — el mutation_id repetido se ignora (pk).
-        assert_eq!(count(&client, &format!("SELECT COUNT(*) FROM {audit}")).await, 3, "audit 3 (pk mutation_id)");
+        assert_eq!(
+            count(&client, &format!("SELECT COUNT(*) FROM {audit}")).await,
+            3,
+            "audit 3 (pk mutation_id)"
+        );
         // Payload presente y con el sql (payload TEXT con json valido).
         let row = client
             .query_one(
@@ -98,15 +110,29 @@ async fn wal_replay_idempotent_and_audit_same_tx() {
             "payload del audit: {payload}"
         );
         // Los valores quedaron aplicados.
-        assert_eq!(count(&client, "SELECT COUNT(*) FROM e2e_wal_replay.replay_test WHERE id = 1").await, 1);
-        assert_eq!(count(&client, "SELECT COUNT(*) FROM e2e_wal_replay.replay_test WHERE id = 3").await, 1);
+        assert_eq!(
+            count(
+                &client,
+                "SELECT COUNT(*) FROM e2e_wal_replay.replay_test WHERE id = 1"
+            )
+            .await,
+            1
+        );
+        assert_eq!(
+            count(
+                &client,
+                "SELECT COUNT(*) FROM e2e_wal_replay.replay_test WHERE id = 3"
+            )
+            .await,
+            1
+        );
         Ok::<(), String>(())
     }
     .await;
 
     // Cleanup SIEMPRE.
     client
-        .batch_execute(&format!("DROP SCHEMA IF EXISTS e2e_wal_replay CASCADE"))
+        .batch_execute("DROP SCHEMA IF EXISTS e2e_wal_replay CASCADE")
         .await
         .expect("cleanup e2e_wal_replay");
     result.expect("wal replay contra PG real");
@@ -119,7 +145,8 @@ async fn wal_batch_rolls_back_entirely_on_error() {
     let (conn, client, replay, audit) = setup("rollback").await;
 
     let result = async {
-        let sink = PgMutationSink::new(database::pool::new_pool(&conn, 4).expect("pool")).with_audit_table(audit.clone());
+        let sink = PgMutationSink::new(database::pool::new_pool(&conn, 4).expect("pool"))
+            .with_audit_table(audit.clone());
         let batcher = Batcher::spawn(Duration::from_millis(50), 16, sink);
 
         // Mutation valida seguida de una INVALIDA (tabla no existe).
@@ -135,8 +162,16 @@ async fn wal_batch_rolls_back_entirely_on_error() {
         tokio::time::sleep(Duration::from_millis(300)).await;
 
         // Rollback total: la mutation valida NO se aplico.
-        assert_eq!(count(&client, &format!("SELECT COUNT(*) FROM {replay}")).await, 0, "rollback de todo el batch");
-        assert_eq!(count(&client, &format!("SELECT COUNT(*) FROM {audit}")).await, 0, "audit vacio (misma tx)");
+        assert_eq!(
+            count(&client, &format!("SELECT COUNT(*) FROM {replay}")).await,
+            0,
+            "rollback de todo el batch"
+        );
+        assert_eq!(
+            count(&client, &format!("SELECT COUNT(*) FROM {audit}")).await,
+            0,
+            "audit vacio (misma tx)"
+        );
         Ok::<(), String>(())
     }
     .await;

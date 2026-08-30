@@ -60,10 +60,10 @@ use database::npc::MobRepo;
 use game_core::ecs::{CombatIntent, Intent};
 use game_core::gm::{self, GmCommand, StatPoint};
 use game_core::packets;
-use protocol::world::{TPacketGCItemSet, TPacketGCSkillLevel, TItemPos, TPlayerSkill};
+use protocol::world::{TItemPos, TPacketGCItemSet, TPacketGCSkillLevel, TPlayerSkill};
 
 use crate::channel::session::{Outcome, Session};
-use crate::channel::{parse_listen, INVENTORY_MAX_NUM};
+use crate::channel::{INVENTORY_MAX_NUM, parse_listen};
 
 /// CHAT_TYPE_INFO = 1, CHAT_TYPE_NOTICE = 2 (length.h:514-525).
 const CHAT_TYPE_INFO: u8 = 1;
@@ -129,7 +129,9 @@ pub async fn handle(session: &mut Session, cmd: &str) -> Result<Outcome, String>
         eprintln!(
             "server_realms: channel conn {}: '/{}' de {} — no está en \
              common.gmlist (rechazado)",
-            session.conn_id, cmd.trim(), session.row().name
+            session.conn_id,
+            cmd.trim(),
+            session.row().name
         );
         gm_info(session, "No such command").await?;
         return Ok(Outcome::Continue);
@@ -151,7 +153,10 @@ pub async fn handle(session: &mut Session, cmd: &str) -> Result<Outcome, String>
     }
     eprintln!(
         "server_realms: channel conn {}: GM {} ({} — nivel {level}): /{}",
-        session.conn_id, session.row().name, session.account_login, cmd.trim()
+        session.conn_id,
+        session.row().name,
+        session.account_login,
+        cmd.trim()
     );
     match command {
         GmCommand::Warp { x, y } => warp(session, x, y).await?,
@@ -208,29 +213,40 @@ async fn handle_player_command(
                 eprintln!(
                     "server_realms: channel conn {}: {} mandó /restart VIVO — \
                      ignorado (parity CloseRestartWindow)",
-                    session.conn_id, session.row().name
+                    session.conn_id,
+                    session.row().name
                 );
                 return Ok(Outcome::Continue);
             }
             // Syntetiza el CG_SCRIPT_ANSWER (answer 1 = ciudad, 0 = mismo
             // punto) — el path de revive ya existe y reenvía ADDITIONAL_INFO +
             // GC_CHARACTER_DEL + GC_WARP + persistencia.
-            let answer = if matches!(command, GmCommand::RestartTown) { 1 } else { 0 };
+            let answer = if matches!(command, GmCommand::RestartTown) {
+                1
+            } else {
+                0
+            };
             crate::channel::script::revive(session, answer).await?;
             Ok(Outcome::Continue)
         }
         GmCommand::Logout | GmCommand::Quit => {
             eprintln!(
                 "server_realms: channel conn {}: {} — cierre por /{:?}",
-                session.conn_id, session.row().name, command
+                session.conn_id,
+                session.row().name,
+                command
             );
-            Ok(Outcome::Close(format!("comando /{:?} — cierre de conexión", command)))
+            Ok(Outcome::Close(format!(
+                "comando /{:?} — cierre de conexión",
+                command
+            )))
         }
         GmCommand::PhaseSelect => {
             eprintln!(
                 "server_realms: channel conn {}: {} — vuelta al selector \
                  (/phase_select)",
-                session.conn_id, session.row().name
+                session.conn_id,
+                session.row().name
             );
             // GC_PHASE(SELECT) → el cliente cambia al selector de personajes
             // (parity `d->SetPhase(PHASE_SELECT)` desc.cpp:585-597) y luego
@@ -239,7 +255,9 @@ async fn handle_player_command(
                 .send(&protocol::TPacketGCPhase::new(protocol::phase::SELECT).to_bytes())
                 .await
                 .map_err(|e| format!("enviando GC_PHASE(SELECT): {e}"))?;
-            Ok(Outcome::Close("comando /phase_select — reconexión al selector".into()))
+            Ok(Outcome::Close(
+                "comando /phase_select — reconexión al selector".into(),
+            ))
         }
         // Lote 2 — REALES (regla 2 del lane B: sistema subyacente + persistencia).
         GmCommand::SafeboxPassword { password } => {
@@ -325,7 +343,8 @@ async fn handle_player_command(
             eprintln!(
                 "server_realms: channel conn {}: /transfer de {} en path \
                  jugador — inalcanzable (TODO)",
-                session.conn_id, session.row().name
+                session.conn_id,
+                session.row().name
             );
             Ok(Outcome::Continue)
         }
@@ -333,7 +352,8 @@ async fn handle_player_command(
             eprintln!(
                 "server_realms: channel conn {}: /ipurge de {} en path \
                  jugador — inalcanzable (TODO)",
-                session.conn_id, session.row().name
+                session.conn_id,
+                session.row().name
             );
             Ok(Outcome::Continue)
         }
@@ -362,7 +382,9 @@ async fn not_implemented(session: &mut Session, command: &GmCommand) -> Result<(
     eprintln!(
         "server_realms: channel conn {}: /{:?} de {} — sin sistema en \
          reforge (GAP) → INFO 'not implemented'",
-        session.conn_id, command, session.row().name
+        session.conn_id,
+        command,
+        session.row().name
     );
     gm_info(session, "not implemented").await
 }
@@ -534,7 +556,9 @@ async fn warp_units(session: &mut Session, x: i32, y: i32, why: &str) -> Result<
     eprintln!(
         "server_realms: channel conn {}: GM {} {why} → {x},{y} \
          ({}:{port} — reconexión)",
-        session.conn_id, session.row().name, ip
+        session.conn_id,
+        session.row().name,
+        ip
     );
     Ok(())
 }
@@ -542,7 +566,7 @@ async fn warp_units(session: &mut Session, x: i32, y: i32, why: &str) -> Result<
 /// `item <vnum> [count]` → item nuevo en el primer slot libre del
 /// inventario (parity do_item cmd_gm.cpp:398-448: CreateItem + GetEmptyInventory
 /// + AutoStackItemEx; el subset crea el slot — el stacking del pickup ya
-/// existe). count clamp 1..200 en el parseo.
+///   existe). count clamp 1..200 en el parseo.
 async fn give_item(session: &mut Session, vnum: u32, count: u32) -> Result<(), String> {
     let count = gm::clamp_item_count(count);
     let wire_count = u8::try_from(count)
@@ -555,7 +579,8 @@ async fn give_item(session: &mut Session, vnum: u32, count: u32) -> Result<(), S
         eprintln!(
             "server_realms: channel conn {}: GM {} — item vnum {vnum} \
              inexistente (item_proto)",
-            session.conn_id, session.row().name
+            session.conn_id,
+            session.row().name
         );
         gm_info(session, "No such item by that vnum").await?;
         return Ok(());
@@ -603,7 +628,10 @@ async fn give_item(session: &mut Session, vnum: u32, count: u32) -> Result<(), S
     };
     let set = TPacketGCItemSet {
         header: TPacketGCItemSet::HEADER,
-        cell: TItemPos { window: TItemPos::WINDOW_INVENTORY, cell: slot },
+        cell: TItemPos {
+            window: TItemPos::WINDOW_INVENTORY,
+            cell: slot,
+        },
         vnum,
         count: wire_count,
         flags: 0,
@@ -623,7 +651,8 @@ async fn give_item(session: &mut Session, vnum: u32, count: u32) -> Result<(), S
     eprintln!(
         "server_realms: channel conn {}: GM {} dió item vnum {vnum} \
          x{count} → slot {slot}",
-        session.conn_id, session.row().name
+        session.conn_id,
+        session.row().name
     );
     Ok(())
 }
@@ -649,7 +678,8 @@ async fn self_notice(session: &mut Session, text: &str) -> Result<(), String> {
     eprintln!(
         "server_realms: channel conn {}: GM {} NOTICE: {text} \
          (broadcast a todos: GAP — task del canal)",
-        session.conn_id, session.row().name
+        session.conn_id,
+        session.row().name
     );
     Ok(())
 }
@@ -676,7 +706,8 @@ async fn set_level(session: &mut Session, level: i32) -> Result<(), String> {
     session.save();
     eprintln!(
         "server_realms: channel conn {}: GM {} puso nivel {level}",
-        session.conn_id, session.row().name
+        session.conn_id,
+        session.row().name
     );
     Ok(())
 }
@@ -698,7 +729,8 @@ async fn gm_mob(session: &mut Session, vnum: u32, count: u32) -> Result<(), Stri
         eprintln!(
             "server_realms: channel conn {}: GM {} — mob vnum {vnum} \
              inexistente (mob_proto)",
-            session.conn_id, session.row().name
+            session.conn_id,
+            session.row().name
         );
         gm_info(session, &format!("No such mob by that vnum: {vnum}")).await?;
         return Ok(());
@@ -717,7 +749,8 @@ async fn gm_mob(session: &mut Session, vnum: u32, count: u32) -> Result<(), Stri
     eprintln!(
         "server_realms: channel conn {}: GM {} spawneó mob {vnum} x{count} \
          en {x},{y} (mapa {map_index})",
-        session.conn_id, session.row().name
+        session.conn_id,
+        session.row().name
     );
     Ok(())
 }
@@ -740,7 +773,8 @@ async fn gm_kill(session: &mut Session) -> Result<(), String> {
     }))?;
     eprintln!(
         "server_realms: channel conn {}: GM {} — /kill del target {target_vid}",
-        session.conn_id, session.row().name
+        session.conn_id,
+        session.row().name
     );
     Ok(())
 }
@@ -835,7 +869,12 @@ fn job_initial_stat(row: &database::player::PlayerRow, point: StatPoint) -> i16 
 /// Sync post-stat: mundo (el AI usa st/dx/iq/ht) + GC_POINTS + save
 /// (parity PointChange → SendPointsPacket del C++).
 async fn sync_stats(session: &mut Session) -> Result<(), String> {
-    let (st, dx, iq, ht) = (session.row().st, session.row().dx, session.row().iq, session.row().ht);
+    let (st, dx, iq, ht) = (
+        session.row().st,
+        session.row().dx,
+        session.row().iq,
+        session.row().ht,
+    );
     session.intent(Intent::Combat(CombatIntent::SetStats {
         player_vid: session.player_vid(),
         st: i32::from(st),
@@ -904,7 +943,8 @@ async fn gm_stat_minus(session: &mut Session, point: StatPoint, amount: i32) -> 
         eprintln!(
             "server_realms: channel conn {}: /stat- {} — ya en el floor \
              inicial del job ({floor}) — no-op (parity)",
-            session.conn_id, point.name()
+            session.conn_id,
+            point.name()
         );
         return Ok(());
     }
@@ -924,11 +964,17 @@ async fn gm_stat_minus(session: &mut Session, point: StatPoint, amount: i32) -> 
 
 async fn gm_polymorph(session: &mut Session, vnum: u32) -> Result<(), String> {
     gm_info(session, &format!("polymorphed to {vnum}")).await?;
-    eprintln!("server_realms: channel conn {}: GM {} polymorph {vnum}", session.conn_id, session.row().name);
+    eprintln!(
+        "server_realms: channel conn {}: GM {} polymorph {vnum}",
+        session.conn_id,
+        session.row().name
+    );
     Ok(())
 }
 async fn gm_setskill(session: &mut Session, vnum: u32, level: u8) -> Result<(), String> {
-    if vnum as usize >= TPacketGCSkillLevel::SKILL_MAX_NUM { return Ok(()); }
+    if vnum as usize >= TPacketGCSkillLevel::SKILL_MAX_NUM {
+        return Ok(());
+    }
     let mut blob = match session.row().skill_level.clone() {
         Some(b) if b.len() == TPacketGCSkillLevel::SKILL_MAX_NUM * TPlayerSkill::SIZE => b,
         _ => vec![0; TPacketGCSkillLevel::SKILL_MAX_NUM * TPlayerSkill::SIZE],
@@ -937,9 +983,16 @@ async fn gm_setskill(session: &mut Session, vnum: u32, level: u8) -> Result<(), 
     blob[off + 1] = level.min(SKILL_LEVEL_MAX);
     blob[off] = master_type_for_level(level.min(SKILL_LEVEL_MAX));
     session.row_mut().skill_level = Some(blob);
-    session.send(&packets::skill_level_packet(session.row().skill_level.as_ref()).to_bytes()).await.map_err(|e| format!("enviando GC_SKILL_LEVEL (GM setskill): {e}"))?;
+    session
+        .send(&packets::skill_level_packet(session.row().skill_level.as_ref()).to_bytes())
+        .await
+        .map_err(|e| format!("enviando GC_SKILL_LEVEL (GM setskill): {e}"))?;
     session.save();
-    eprintln!("server_realms: channel conn {}: GM {} setskill {vnum} -> {level}", session.conn_id, session.row().name);
+    eprintln!(
+        "server_realms: channel conn {}: GM {} setskill {vnum} -> {level}",
+        session.conn_id,
+        session.row().name
+    );
     Ok(())
 }
 
@@ -951,7 +1004,10 @@ mod tests {
     /// `interpret_command(ch, buf + 1, ...)`).
     #[test]
     fn handle_receives_text_after_slash() {
-        assert_eq!(gm::parse_command("warp 1 2"), Some(GmCommand::Warp { x: 1, y: 2 }));
+        assert_eq!(
+            gm::parse_command("warp 1 2"),
+            Some(GmCommand::Warp { x: 1, y: 2 })
+        );
         assert_eq!(gm::parse_command("/warp 1 2"), None, "la '/' no llega aquí");
     }
 
@@ -963,12 +1019,16 @@ mod tests {
     #[test]
     fn skillup_vnum_zero_is_noop() {
         let mut blob = vec![0u8; 255 * TPlayerSkill::SIZE];
-        blob[1 * TPlayerSkill::SIZE] = 1; // skill 1: MASTER
-        blob[1 * TPlayerSkill::SIZE + 1] = 20;
+        blob[TPlayerSkill::SIZE] = 1; // skill 1: MASTER
+        blob[TPlayerSkill::SIZE + 1] = 20;
         let original = blob.clone();
         assert_eq!(skillup_apply(&mut blob, 0), None, "vnum 0 → no-op");
         assert_eq!(blob, original, "el blob NO se muta");
-        assert_eq!(skillup_apply(&mut blob, 1), Some(21), "los demás vnums sí suben");
+        assert_eq!(
+            skillup_apply(&mut blob, 1),
+            Some(21),
+            "los demás vnums sí suben"
+        );
     }
 
     /// Defecto 2 (verifier 2026-08-15): bMasterType se escribe en CADA
@@ -982,29 +1042,33 @@ mod tests {
     fn skillup_writes_master_type_on_threshold_cross() {
         let mut blob = vec![0u8; 255 * TPlayerSkill::SIZE];
         // 19 → 20: cruza a MASTER(1)
-        blob[1 * TPlayerSkill::SIZE + 1] = 19;
+        blob[TPlayerSkill::SIZE + 1] = 19;
         assert_eq!(skillup_apply(&mut blob, 1), Some(20));
-        assert_eq!(blob[1 * TPlayerSkill::SIZE + 1], 20);
-        assert_eq!(blob[1 * TPlayerSkill::SIZE], 1, "20..29 → SKILL_MASTER(1)");
+        assert_eq!(blob[TPlayerSkill::SIZE + 1], 20);
+        assert_eq!(blob[TPlayerSkill::SIZE], 1, "20..29 → SKILL_MASTER(1)");
         // 29 → 30: GRAND_MASTER(2)
-        blob[1 * TPlayerSkill::SIZE + 1] = 29;
-        blob[1 * TPlayerSkill::SIZE] = 1;
+        blob[TPlayerSkill::SIZE + 1] = 29;
+        blob[TPlayerSkill::SIZE] = 1;
         assert_eq!(skillup_apply(&mut blob, 1), Some(30));
-        assert_eq!(blob[1 * TPlayerSkill::SIZE], 2, "30..39 → SKILL_GRAND_MASTER(2)");
+        assert_eq!(
+            blob[TPlayerSkill::SIZE],
+            2,
+            "30..39 → SKILL_GRAND_MASTER(2)"
+        );
         // 39 → 40: PERFECT_MASTER(3)
-        blob[1 * TPlayerSkill::SIZE + 1] = 39;
-        blob[1 * TPlayerSkill::SIZE] = 2;
+        blob[TPlayerSkill::SIZE + 1] = 39;
+        blob[TPlayerSkill::SIZE] = 2;
         assert_eq!(skillup_apply(&mut blob, 1), Some(40));
-        assert_eq!(blob[1 * TPlayerSkill::SIZE], 3, "40+ → SKILL_PERFECT_MASTER(3)");
+        assert_eq!(blob[TPlayerSkill::SIZE], 3, "40+ → SKILL_PERFECT_MASTER(3)");
         // Cap MIN(40, bLev): ya PERFECT no sube más (C++ bLev 41 → PERFECT).
         assert_eq!(skillup_apply(&mut blob, 1), Some(40));
-        assert_eq!(blob[1 * TPlayerSkill::SIZE + 1], 40, "cap 40");
-        assert_eq!(blob[1 * TPlayerSkill::SIZE], 3);
+        assert_eq!(blob[TPlayerSkill::SIZE + 1], 40, "cap 40");
+        assert_eq!(blob[TPlayerSkill::SIZE], 3);
         // 5 → 6: NORMAL(0) se mantiene.
-        blob[1 * TPlayerSkill::SIZE + 1] = 5;
-        blob[1 * TPlayerSkill::SIZE] = 0;
+        blob[TPlayerSkill::SIZE + 1] = 5;
+        blob[TPlayerSkill::SIZE] = 0;
         assert_eq!(skillup_apply(&mut blob, 1), Some(6));
-        assert_eq!(blob[1 * TPlayerSkill::SIZE], 0, "0..19 → SKILL_NORMAL(0)");
+        assert_eq!(blob[TPlayerSkill::SIZE], 0, "0..19 → SKILL_NORMAL(0)");
     }
 
     /// Lote 3 (GM `/stat-`): el floor del job (parity JobInitialPoints
@@ -1084,8 +1148,14 @@ mod tests {
 
     #[test]
     fn verifier_gm_parse_setskill_polymorph() {
-        assert_eq!(gm::parse_command("polymorph 0"), Some(GmCommand::Polymorph { vnum: 0 }));
-        assert_eq!(gm::parse_command("setskill 1 40"), Some(GmCommand::SetSkill { vnum: 1, level: 40 }));
+        assert_eq!(
+            gm::parse_command("polymorph 0"),
+            Some(GmCommand::Polymorph { vnum: 0 })
+        );
+        assert_eq!(
+            gm::parse_command("setskill 1 40"),
+            Some(GmCommand::SetSkill { vnum: 1, level: 40 })
+        );
         assert_eq!(gm::parse_command("polymorph"), None);
         assert_eq!(gm::parse_command("setskill 1"), None);
     }

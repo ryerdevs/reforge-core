@@ -21,7 +21,7 @@
 //!    producto, `:542-544`); + `arma.Value(5)*2` = 0 sin arma (`:546-553`);
 //!    + party bonus = 0 (`:555`); × `(100 + ATT_BONUS + MELEE_MAGIC_ATT_BONUS_PER)
 //!    /100` = ×1 (`:556`); `CalcAttBonus` = identidad en el subset base
-//!    (`:305-440` — todos los términos base valen 0).
+//!      (`:305-440` — todos los términos base valen 0).
 //! 6. `iDef = DEF_GRADE * (100 + DEF_BONUS)/100` = DEF_GRADE (`:564`,
 //!    DEF_BONUS = 0).
 //! 7. `iDam = MAX(0, iAtk - iDef)` (`:573`); `CalcBattleDamage` (`:199-206`):
@@ -58,7 +58,7 @@
 //! a atacante y víctima-PC); el GC_ATTACK se incluye por contrato wire
 //! (observadores futuros — el cliente v24 lo ignora, ver `protocol::combat`).
 
-use protocol::combat::{damage_flag, CgAttack, GcDamageInfo};
+use protocol::combat::{CgAttack, GcDamageInfo, damage_flag};
 
 // ---------------------------------------------------------------------------
 // Estados (dominio — los construye el canal)
@@ -79,7 +79,16 @@ pub struct CombatState {
 impl CombatState {
     /// Estado inicial (el C++ zero-inicializa el `m_kAttackLog`).
     pub fn new() -> Self {
-        Self { last_attack_time: 0, last_attack_vid: 0 }
+        Self {
+            last_attack_time: 0,
+            last_attack_vid: 0,
+        }
+    }
+}
+
+impl Default for CombatState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -167,7 +176,10 @@ pub struct CombatResult {
 
 impl CombatResult {
     fn empty() -> Self {
-        Self { packets: Vec::new(), damage: 0 }
+        Self {
+            packets: Vec::new(),
+            damage: 0,
+        }
     }
 }
 
@@ -246,9 +258,9 @@ pub fn attack_speed_for_weapon_bonus(
     if let Some(w) = weapon
         && w.b_type == 1 /* ITEM_WEAPON (ItemData.h:72) */
             && (w.b_sub_type == weapon_subtype::DAGGER || w.b_sub_type == weapon_subtype::CLAW)
-        {
-            real /= 2;
-        }
+    {
+        real /= 2;
+    }
     real
 }
 
@@ -297,7 +309,7 @@ pub const PK_PROTECT_LEVEL: i32 = 15;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PkMode {
     #[default]
-    Peace,   // PK_MODE_PEACE (char.h:359)
+    Peace, // PK_MODE_PEACE (char.h:359)
     Revenge, // PK_MODE_REVENGE (:360)
     Free,    // PK_MODE_FREE (:361)
     Protect, // PK_MODE_PROTECT (:362)
@@ -416,7 +428,12 @@ pub fn can_attack(attacker: &PvpContext, victim: &PvpContext) -> bool {
 
 /// `CalcAttackRating` (`battle.cpp:227-251`) en f32. OJO: `(iERSrc*2 + 5) /
 /// (iERSrc + 95)` es división ENTERA en el C++ (los dos operandos son int).
-pub fn calc_attack_rating(attacker_dx: i32, attacker_lv: i32, victim_dx: i32, victim_lv: i32) -> f32 {
+pub fn calc_attack_rating(
+    attacker_dx: i32,
+    attacker_lv: i32,
+    victim_dx: i32,
+    victim_lv: i32,
+) -> f32 {
     let ar_src = (attacker_dx * 4 + attacker_lv * 2) / 6;
     let ar_src = ar_src.min(90);
     let er_src = (victim_dx * 4 + victim_lv * 2) / 6;
@@ -432,8 +449,8 @@ pub fn distance_approx(dx: i32, dy: i32) -> i32 {
     let dx = dx.abs();
     let dy = dy.abs();
     let (min, max) = if dx < dy { (dx, dy) } else { (dy, dx) };
-    ((max << 8) + (max << 3) - (max << 4) - (max << 1)
-        + (min << 7) - (min << 5) + (min << 3) - (min << 1))
+    ((max << 8) + (max << 3) - (max << 4) - (max << 1) + (min << 7) - (min << 5) + (min << 3)
+        - (min << 1))
         >> 8
 }
 
@@ -491,8 +508,13 @@ pub fn attack_power(
 
     // iAtk = (ATT_GRADE + iDam - lv*2) * fAR + lv*2 (battle.cpp:542-544) —
     // el ATT_GRADE total incluye el bonus de los buffs.
-    let att_grade = attack_grade(attacker.level, attacker.job, attacker.st, attacker.dx, attacker.iq)
-        + attacker.att_grade_bonus;
+    let att_grade = attack_grade(
+        attacker.level,
+        attacker.job,
+        attacker.st,
+        attacker.dx,
+        attacker.iq,
+    ) + attacker.att_grade_bonus;
     let mut i_atk = ((att_grade + i_dam - attacker.level * 2) as f32 * f_ar) as i32;
     i_atk += attacker.level * 2;
     // Con arma: + arma.Value(5)*2 (battle.cpp:546-553).
@@ -651,7 +673,9 @@ pub fn handle_attack(
             damage_flag::NORMAL
         };
         packets.push(
-            GcDamageInfo::new(target.vid, flag, damage).to_bytes().to_vec(),
+            GcDamageInfo::new(target.vid, flag, damage)
+                .to_bytes()
+                .to_vec(),
         );
     }
     CombatResult { packets, damage }
@@ -685,9 +709,16 @@ pub fn kill_reward(
     let exp_gain = mob_exp.saturating_mul(i64::from(exp_rate)) / 100;
     let span = gold_max.saturating_sub(gold_min).max(0);
     // number(gold_min, gold_max) inclusive; min==max → el propio min.
-    let gold_roll = if span > 0 { gold_min + roll(0, span) } else { gold_min };
+    let gold_roll = if span > 0 {
+        gold_min + roll(0, span)
+    } else {
+        gold_min
+    };
     let gold_gain = i64::from(gold_roll).saturating_mul(i64::from(gold_rate)) / 100;
-    KillReward { exp_gain, gold_gain }
+    KillReward {
+        exp_gain,
+        gold_gain,
+    }
 }
 
 /// `aiPercentByDeltaLev_euckr` (constants.cpp:235-266) — el factor de exp
@@ -697,8 +728,8 @@ pub fn kill_reward(
 /// débiles da 1% (en vez de exp llena — C33); el mismo nivel da 100%;
 /// mobs 15+ niveles superiores dan 170%.
 const AI_PERCENT_BY_DELTA_LEV: [i32; 31] = [
-    1, 5, 10, 20, 30, 50, 70, 80, 85, 90, 92, 94, 96, 98, 100, 100, 105,
-    110, 115, 120, 125, 130, 135, 140, 145, 150, 155, 160, 165, 170, 170,
+    1, 5, 10, 20, 30, 50, 70, 80, 85, 90, 92, 94, 96, 98, 100, 100, 105, 110, 115, 120, 125, 130,
+    135, 140, 145, 150, 155, 160, 165, 170, 170,
 ];
 
 /// El factor de exp por level-delta (`NEW_GET_LVDELTA`, char_battle.cpp:2210).
@@ -736,15 +767,31 @@ mod tests {
         // Índice = (mob + 15) − player; mob 15 niveles ARRIBA del player →
         // (mob+15)−player = 15 → 100% (el mismo nivel).
         assert_eq!(exp_level_delta_factor(40, 40), 100, "mismo nivel");
-        assert_eq!(exp_level_delta_factor(30, 45), 170, "mob 15+ niveles arriba → 170 (índice 30)");
+        assert_eq!(
+            exp_level_delta_factor(30, 45),
+            170,
+            "mob 15+ niveles arriba → 170 (índice 30)"
+        );
         assert_eq!(exp_level_delta_factor(50, 50), 100, "mismo nivel alto");
         // Player 8 niveles por encima del mob → (mob+15)−player = 7 → 80.
-        assert_eq!(exp_level_delta_factor(40, 32), 80, "índice 7 = 80 (constants.cpp:242)");
+        assert_eq!(
+            exp_level_delta_factor(40, 32),
+            80,
+            "índice 7 = 80 (constants.cpp:242)"
+        );
         // Player 15+ niveles por encima → (mob+15)−player ≤ 0 → 1%.
-        assert_eq!(exp_level_delta_factor(40, 25), 1, "índice 0 = 1% — el mob es basura");
+        assert_eq!(
+            exp_level_delta_factor(40, 25),
+            1,
+            "índice 0 = 1% — el mob es basura"
+        );
         assert_eq!(exp_level_delta_factor(40, 20), 1, "clamp inferior");
         // Mob muy superior (índice > 30) → clamp a 170.
-        assert_eq!(exp_level_delta_factor(20, 50), 170, "clamp superior (índice 30)");
+        assert_eq!(
+            exp_level_delta_factor(20, 50),
+            170,
+            "clamp superior (índice 30)"
+        );
     }
 
     /// Verifier (regla 20): `apply_exp_delta` es el camino EXACTO que usa
@@ -754,7 +801,10 @@ mod tests {
     fn exp_delta_low_mob_never_full() {
         // player 50 vs mob 30 → (30+15)−50 = −5 → clamp índice 0 → 1%.
         assert_eq!(apply_exp_delta(1000, 50, 30), 10, "1000 exp × 1%");
-        assert!(apply_exp_delta(1000, 50, 30) < 1000, "delta grande → < 100%");
+        assert!(
+            apply_exp_delta(1000, 50, 30) < 1000,
+            "delta grande → < 100%"
+        );
         // Contraste: mismo nivel → 100% sin castigo; mob superior → bono.
         assert_eq!(apply_exp_delta(1000, 50, 50), 1000);
         assert_eq!(apply_exp_delta(1000, 50, 65), 1700, "índice 30 = 170%");
@@ -783,7 +833,13 @@ mod tests {
     fn reward_zero_mob() {
         let mut roll = |_lo: i32, _hi: i32| 999;
         let r = kill_reward(0, 0, 0, 100, 100, &mut roll);
-        assert_eq!(r, KillReward { exp_gain: 0, gold_gain: 0 });
+        assert_eq!(
+            r,
+            KillReward {
+                exp_gain: 0,
+                gold_gain: 0
+            }
+        );
     }
 
     /// La fórmula EXACTA del wire (channel.rs usa este módulo — el test
@@ -819,25 +875,52 @@ mod tests {
     #[test]
     fn battle_is_attackable_gate_pvp() {
         let live = |mode: PkMode, party: Option<u32>| ctx(mode, party, 100);
-        let dead = PvpContext { hp: 0, ..ctx(PkMode::Free, None, 100) };
+        let dead = PvpContext {
+            hp: 0,
+            ..ctx(PkMode::Free, None, 100)
+        };
         // Muerto: ni el atacante ataca ni la víctima es atacable (battle.cpp:116).
         assert!(!battle_is_attackable(&dead, &live(PkMode::Free, None)));
         assert!(!battle_is_attackable(&live(PkMode::Free, None), &dead));
         // Misma party → no (pvp.cpp:446-450 — "any pvp model").
-        assert!(!battle_is_attackable(&live(PkMode::Free, Some(7)), &live(PkMode::Peace, Some(7))));
-        assert!(battle_is_attackable(&live(PkMode::Free, Some(7)), &live(PkMode::Peace, Some(8))));
+        assert!(!battle_is_attackable(
+            &live(PkMode::Free, Some(7)),
+            &live(PkMode::Peace, Some(7))
+        ));
+        assert!(battle_is_attackable(
+            &live(PkMode::Free, Some(7)),
+            &live(PkMode::Peace, Some(8))
+        ));
         // Víctima no-PEACE → atacable por cualquiera (proxy del killer-
         // STATE — pvp.cpp:453; el killer-flag del C++ se aproxima con el
         // modo no-Peace de la víctima).
-        assert!(battle_is_attackable(&live(PkMode::Peace, None), &live(PkMode::Free, None)));
+        assert!(battle_is_attackable(
+            &live(PkMode::Peace, None),
+            &live(PkMode::Free, None)
+        ));
         // PEACE → false (el duelo de :509-518 no existe en el subset).
-        assert!(!battle_is_attackable(&live(PkMode::Peace, None), &live(PkMode::Peace, None)));
+        assert!(!battle_is_attackable(
+            &live(PkMode::Peace, None),
+            &live(PkMode::Peace, None)
+        ));
         // FREE → true (pvp.cpp:500-505).
-        assert!(battle_is_attackable(&live(PkMode::Free, None), &live(PkMode::Peace, None)));
-        assert!(battle_is_attackable(&live(PkMode::Guild, None), &live(PkMode::Peace, None)));
+        assert!(battle_is_attackable(
+            &live(PkMode::Free, None),
+            &live(PkMode::Peace, None)
+        ));
+        assert!(battle_is_attackable(
+            &live(PkMode::Guild, None),
+            &live(PkMode::Peace, None)
+        ));
         // PROTECT → false (pvp.cpp:424-428 — conservador: sin imperios).
-        assert!(!battle_is_attackable(&live(PkMode::Protect, None), &live(PkMode::Peace, None)));
-        assert!(!battle_is_attackable(&live(PkMode::Peace, None), &live(PkMode::Protect, None)));
+        assert!(!battle_is_attackable(
+            &live(PkMode::Protect, None),
+            &live(PkMode::Peace, None)
+        ));
+        assert!(!battle_is_attackable(
+            &live(PkMode::Peace, None),
+            &live(PkMode::Protect, None)
+        ));
     }
 
     /// Contexto PvP del test (nivel protegido, sin guild, sin zona segura).
@@ -859,12 +942,30 @@ mod tests {
     /// vuelve al check ciego de guild de `can_attack` (mutation).
     #[test]
     fn can_attack_free_hits_same_guild_guild_mode_rejects() {
-        let free = PvpContext { guild_id: Some(9), ..ctx(PkMode::Free, None, 100) };
-        let mate = PvpContext { guild_id: Some(9), ..ctx(PkMode::Peace, None, 100) };
-        let other = PvpContext { guild_id: Some(10), ..ctx(PkMode::Peace, None, 100) };
-        assert!(can_attack(&free, &mate), "FREE ataca la guild propia (pvp.cpp:500)");
-        let guild = PvpContext { guild_id: Some(9), ..ctx(PkMode::Guild, None, 100) };
-        assert!(!can_attack(&guild, &mate), "GUILD rechaza la guild propia (:489)");
+        let free = PvpContext {
+            guild_id: Some(9),
+            ..ctx(PkMode::Free, None, 100)
+        };
+        let mate = PvpContext {
+            guild_id: Some(9),
+            ..ctx(PkMode::Peace, None, 100)
+        };
+        let other = PvpContext {
+            guild_id: Some(10),
+            ..ctx(PkMode::Peace, None, 100)
+        };
+        assert!(
+            can_attack(&free, &mate),
+            "FREE ataca la guild propia (pvp.cpp:500)"
+        );
+        let guild = PvpContext {
+            guild_id: Some(9),
+            ..ctx(PkMode::Guild, None, 100)
+        };
+        assert!(
+            !can_attack(&guild, &mate),
+            "GUILD rechaza la guild propia (:489)"
+        );
         assert!(can_attack(&guild, &other), "GUILD ataca a otra guild");
         // Sin guild: GUILD ataca a cualquiera (pvp.cpp:489 — !GetGuild()).
         let groupless = ctx(PkMode::Guild, None, 100);
@@ -875,11 +976,26 @@ mod tests {
     /// ambos ≥ 0 o ambos < 0 → false (cae al duelo → false).
     #[test]
     fn revenge_requires_opposite_alignment() {
-        let revenge = |al: i32| PvpContext { alignment: al, ..ctx(PkMode::Revenge, None, 100) };
-        let clean = |al: i32| PvpContext { alignment: al, ..ctx(PkMode::Peace, None, 100) };
-        assert!(can_attack(&revenge(-1), &clean(0)), "asesino negativo vs inocente");
-        assert!(can_attack(&revenge(0), &clean(-1)), "inocente vs asesino negativo");
-        assert!(!can_attack(&revenge(-1), &clean(-1)), "ambos negativos (:482-483)");
+        let revenge = |al: i32| PvpContext {
+            alignment: al,
+            ..ctx(PkMode::Revenge, None, 100)
+        };
+        let clean = |al: i32| PvpContext {
+            alignment: al,
+            ..ctx(PkMode::Peace, None, 100)
+        };
+        assert!(
+            can_attack(&revenge(-1), &clean(0)),
+            "asesino negativo vs inocente"
+        );
+        assert!(
+            can_attack(&revenge(0), &clean(-1)),
+            "inocente vs asesino negativo"
+        );
+        assert!(
+            !can_attack(&revenge(-1), &clean(-1)),
+            "ambos negativos (:482-483)"
+        );
         assert!(!can_attack(&revenge(1), &clean(1)), "ambos positivos");
     }
 
@@ -892,9 +1008,15 @@ mod tests {
     fn can_attack_rejects_same_party_even_with_pk() {
         let attacker = ctx(PkMode::Free, Some(7), 100);
         let mate = ctx(PkMode::Peace, Some(7), 100);
-        assert!(!can_attack(&attacker, &mate), "PK ON + misma party → rechazado");
+        assert!(
+            !can_attack(&attacker, &mate),
+            "PK ON + misma party → rechazado"
+        );
         let stranger = ctx(PkMode::Peace, Some(8), 100);
-        assert!(can_attack(&attacker, &stranger), "party distinta → atacable");
+        assert!(
+            can_attack(&attacker, &stranger),
+            "party distinta → atacable"
+        );
     }
 
     /// Nivel: por debajo de PK_PROTECT_LEVEL (15 — locale spain,
@@ -902,10 +1024,22 @@ mod tests {
     /// PROTECT auto, char.cpp:1674/1785 + pvp.cpp:421-429).
     #[test]
     fn can_attack_rejects_below_protect_level() {
-        let pk = |level: i32| PvpContext { level, ..ctx(PkMode::Free, None, 100) };
-        let peace = |level: i32| PvpContext { level, ..ctx(PkMode::Peace, None, 100) };
-        assert!(!can_attack(&pk(PK_PROTECT_LEVEL - 1), &peace(PK_PROTECT_LEVEL)));
-        assert!(!can_attack(&pk(PK_PROTECT_LEVEL), &peace(PK_PROTECT_LEVEL - 1)));
+        let pk = |level: i32| PvpContext {
+            level,
+            ..ctx(PkMode::Free, None, 100)
+        };
+        let peace = |level: i32| PvpContext {
+            level,
+            ..ctx(PkMode::Peace, None, 100)
+        };
+        assert!(!can_attack(
+            &pk(PK_PROTECT_LEVEL - 1),
+            &peace(PK_PROTECT_LEVEL)
+        ));
+        assert!(!can_attack(
+            &pk(PK_PROTECT_LEVEL),
+            &peace(PK_PROTECT_LEVEL - 1)
+        ));
         assert!(can_attack(&pk(PK_PROTECT_LEVEL), &peace(PK_PROTECT_LEVEL)));
     }
 
@@ -913,7 +1047,10 @@ mod tests {
     /// zona segura → nunca atacable, ni con PK ON.
     #[test]
     fn can_attack_rejects_safe_zone() {
-        let in_zone = PvpContext { safe_zone: true, ..ctx(PkMode::Free, None, 100) };
+        let in_zone = PvpContext {
+            safe_zone: true,
+            ..ctx(PkMode::Free, None, 100)
+        };
         let outside = ctx(PkMode::Peace, None, 100);
         assert!(!can_attack(&in_zone, &outside), "atacante en zona segura");
         assert!(!can_attack(&outside, &in_zone), "víctima en zona segura");
@@ -967,7 +1104,11 @@ mod tests {
     fn formula_matches_cpp_vector() {
         let a = ninja();
         let m = mob101();
-        assert_eq!(attack_grade(a.level, a.job, a.st, a.dx, a.iq), 70, "5*2 + (120+60)/3");
+        assert_eq!(
+            attack_grade(a.level, a.job, a.st, a.dx, a.iq),
+            70,
+            "5*2 + (120+60)/3"
+        );
         assert_eq!(def_grade_npc(m.level, m.ht, m.wdef), 10, "1+5+4");
         assert_eq!(job_stat_attack(job::ASSASSIN, 30, 30, 30), 60);
         // roll(0,1) = 0 → iDam = 0 → iAtk = (70+0-10)*0.77+10 = 56 → dam 46.
@@ -984,7 +1125,11 @@ mod tests {
     fn job_stat_attack_int_division() {
         assert_eq!(job_stat_attack(job::WARRIOR, 10, 0, 0), 20);
         assert_eq!(job_stat_attack(job::SURA, 10, 0, 0), 20);
-        assert_eq!(job_stat_attack(job::ASSASSIN, 1, 2, 0), 2, "(4+4)/3 truncado");
+        assert_eq!(
+            job_stat_attack(job::ASSASSIN, 1, 2, 0),
+            2,
+            "(4+4)/3 truncado"
+        );
         assert_eq!(job_stat_attack(job::ASSASSIN, 30, 30, 0), 60);
         assert_eq!(job_stat_attack(job::SHAMAN, 1, 0, 2), 2, "(4+4)/3 truncado");
         assert_eq!(job_stat_attack(job::SHAMAN, 30, 0, 30), 60);
@@ -1012,7 +1157,11 @@ mod tests {
         };
         let m = mob101();
         let mut roll = roll_fixed(3);
-        assert_eq!(melee_damage(&a, &m, None, &mut roll).0, 3, "0 < 3 → number(1,5) = 3");
+        assert_eq!(
+            melee_damage(&a, &m, None, &mut roll).0,
+            3,
+            "0 < 3 → number(1,5) = 3"
+        );
         // El cálculo previo al floor: 7 - 10 = max(0, -3) = 0.
         let f_ar = calc_attack_rating(a.dx, a.level, m.dx, m.level);
         let att = attack_grade(a.level, a.job, a.st, a.dx, a.iq);
@@ -1030,7 +1179,16 @@ mod tests {
         a.critical_pct = 100; // el roll number(1,100) ≤ 100 siempre
         let m = mob101();
         let mut roll = roll_fixed(5);
-        let normal = melee_damage(&PlayerState { critical_pct: 0, ..a }, &m, None, &mut roll).0;
+        let normal = melee_damage(
+            &PlayerState {
+                critical_pct: 0,
+                ..a
+            },
+            &m,
+            None,
+            &mut roll,
+        )
+        .0;
         let mut roll = roll_fixed(5);
         let crit = melee_damage(&a, &m, None, &mut roll).0;
         assert_eq!(crit, normal * 2, "crítico ×2: {normal} → {crit}");
@@ -1078,26 +1236,66 @@ mod tests {
 
         // t=1000: primer ataque → golpe (timer anclado).
         let mut roll = roll_fixed(0);
-        let r = handle_attack(&mut combat, &atk(m.vid), &a, Some(&m), None, 1000, &mut roll);
+        let r = handle_attack(
+            &mut combat,
+            &atk(m.vid),
+            &a,
+            Some(&m),
+            None,
+            1000,
+            &mut roll,
+        );
         assert_eq!(r.damage, 46);
         assert_eq!(combat.last_attack_time, 1000);
         assert_eq!(combat.last_attack_vid, m.vid);
 
         // t=2000: mismo objetivo, delta 1000 < 1250 → rechazo (vacío), pero el
         // timer se actualiza a 2000 (parity battle.cpp:833).
-        let r = handle_attack(&mut combat, &atk(m.vid), &a, Some(&m), None, 2000, &mut roll);
+        let r = handle_attack(
+            &mut combat,
+            &atk(m.vid),
+            &a,
+            Some(&m),
+            None,
+            2000,
+            &mut roll,
+        );
         assert_eq!(r, CombatResult::empty());
         assert_eq!(combat.last_attack_time, 2000);
 
         // t=3250: delta 1250 ≥ 1250 → golpe de nuevo.
-        let r = handle_attack(&mut combat, &atk(m.vid), &a, Some(&m), None, 3250, &mut roll);
+        let r = handle_attack(
+            &mut combat,
+            &atk(m.vid),
+            &a,
+            Some(&m),
+            None,
+            3250,
+            &mut roll,
+        );
         assert_eq!(r.damage, 46);
 
         // Objetivo distinto dentro del intervalo → SIN cooldown (parity).
         let m2 = NpcState { vid: 102, ..m };
         let mut combat2 = CombatState::new();
-        handle_attack(&mut combat2, &atk(m.vid), &a, Some(&m), None, 1000, &mut roll);
-        let r = handle_attack(&mut combat2, &atk(m2.vid), &a, Some(&m2), None, 2000, &mut roll);
+        handle_attack(
+            &mut combat2,
+            &atk(m.vid),
+            &a,
+            Some(&m),
+            None,
+            1000,
+            &mut roll,
+        );
+        let r = handle_attack(
+            &mut combat2,
+            &atk(m2.vid),
+            &a,
+            Some(&m2),
+            None,
+            2000,
+            &mut roll,
+        );
         assert_eq!(r.damage, 46, "target distinto: sin rechazo");
     }
 
@@ -1110,7 +1308,7 @@ mod tests {
         use database::item::ProtoItem;
         assert_eq!(attack_speed_for_weapon(None), 1250, "manos desnudas");
         let sword = ProtoItem {
-            b_type: 1, // ITEM_WEAPON
+            b_type: 1,     // ITEM_WEAPON
             b_sub_type: 0, // WEAPON_SWORD
             applies: [(0, 0); 3],
             values: [0; 6],
@@ -1119,10 +1317,24 @@ mod tests {
             magic_pct: 0,
             socket_pct: 0,
         };
-        assert_eq!(attack_speed_for_weapon(Some(&sword)), 1250, "espada: ANI default 1000");
-        let dagger = ProtoItem { b_sub_type: weapon_subtype::DAGGER, ..sword };
-        assert_eq!(attack_speed_for_weapon(Some(&dagger)), 625, "daga: /2 (battle.cpp:774-779)");
-        let claw = ProtoItem { b_sub_type: weapon_subtype::CLAW, ..sword };
+        assert_eq!(
+            attack_speed_for_weapon(Some(&sword)),
+            1250,
+            "espada: ANI default 1000"
+        );
+        let dagger = ProtoItem {
+            b_sub_type: weapon_subtype::DAGGER,
+            ..sword
+        };
+        assert_eq!(
+            attack_speed_for_weapon(Some(&dagger)),
+            625,
+            "daga: /2 (battle.cpp:774-779)"
+        );
+        let claw = ProtoItem {
+            b_sub_type: weapon_subtype::CLAW,
+            ..sword
+        };
         assert_eq!(attack_speed_for_weapon(Some(&claw)), 625, "garra: /2");
         // Un item NO-weapon (p.ej. ARMOR) equipado en el slot del arma no
         // aplica el /2 (el C++ comprueba GetSubType del arma real).
@@ -1136,7 +1348,11 @@ mod tests {
             magic_pct: 0,
             socket_pct: 0,
         };
-        assert_eq!(attack_speed_for_weapon(Some(&armor)), 1250, "no-weapon: sin /2");
+        assert_eq!(
+            attack_speed_for_weapon(Some(&armor)),
+            1250,
+            "no-weapon: sin /2"
+        );
     }
 
     /// El buff ATT_SPEED (POINT_ATT_SPEED) SUMA al denominador de
@@ -1144,9 +1360,21 @@ mod tests {
     /// (1000×100)/(80+20) = 1000 ms (era 1250).
     #[test]
     fn attack_speed_bonus_accelerates() {
-        assert_eq!(attack_speed_for_weapon_bonus(None, 0), 1250, "sin buff: (1000×100)/80");
-        assert_eq!(attack_speed_for_weapon_bonus(None, 20), 1000, "bonus 20: (1000×100)/(80+20)");
-        assert_eq!(attack_speed_for_weapon_bonus(None, 170), 400, "bonus 170: (1000×100)/250");
+        assert_eq!(
+            attack_speed_for_weapon_bonus(None, 0),
+            1250,
+            "sin buff: (1000×100)/80"
+        );
+        assert_eq!(
+            attack_speed_for_weapon_bonus(None, 20),
+            1000,
+            "bonus 20: (1000×100)/(80+20)"
+        );
+        assert_eq!(
+            attack_speed_for_weapon_bonus(None, 170),
+            400,
+            "bonus 170: (1000×100)/250"
+        );
         // DAGGER con bonus: el /2 se aplica DESPUÉS del denominador.
         use database::item::ProtoItem;
         let dagger = ProtoItem {
@@ -1159,7 +1387,11 @@ mod tests {
             magic_pct: 0,
             socket_pct: 0,
         };
-        assert_eq!(attack_speed_for_weapon_bonus(Some(&dagger), 20), 500, "daga: 1000/2");
+        assert_eq!(
+            attack_speed_for_weapon_bonus(Some(&dagger), 20),
+            500,
+            "daga: 1000/2"
+        );
     }
 
     /// Rango (battle.cpp:144-167): `distance_approx > 300` → sin golpe;
@@ -1174,23 +1406,77 @@ mod tests {
         let mut combat = CombatState::new();
 
         // 400 UNITS (dist 384) > 300 → sin golpe. (vid 101 — timer anclado.)
-        let far = NpcState { vid: 101, x: a.x + 400, y: a.y, ..m };
-        let r = handle_attack(&mut combat, &atk(far.vid), &a, Some(&far), None, 1000, &mut roll);
+        let far = NpcState {
+            vid: 101,
+            x: a.x + 400,
+            y: a.y,
+            ..m
+        };
+        let r = handle_attack(
+            &mut combat,
+            &atk(far.vid),
+            &a,
+            Some(&far),
+            None,
+            1000,
+            &mut roll,
+        );
         assert_eq!(r, CombatResult::empty());
 
         // 200,200 (dist 271) ≤ 300 → golpe. (vid distinto — el cooldown solo
         // aplica contra el MISMO objetivo, battle.cpp:812.)
-        let near = NpcState { vid: 102, x: a.x + 200, y: a.y + 200, ..m };
-        let r = handle_attack(&mut combat, &atk(near.vid), &a, Some(&near), None, 2000, &mut roll);
+        let near = NpcState {
+            vid: 102,
+            x: a.x + 200,
+            y: a.y + 200,
+            ..m
+        };
+        let r = handle_attack(
+            &mut combat,
+            &atk(near.vid),
+            &a,
+            Some(&near),
+            None,
+            2000,
+            &mut roll,
+        );
         assert_eq!(r.damage, 46);
 
         // Mob MELEE grande (rango 1000 → max = MAX(300, 1150)): 500 OK, 1200 no.
-        let big = NpcState { vid: 103, x: a.x + 500, y: a.y, battle_type: BATTLE_TYPE_MELEE, attack_range: 1000, ..m };
+        let big = NpcState {
+            vid: 103,
+            x: a.x + 500,
+            y: a.y,
+            battle_type: BATTLE_TYPE_MELEE,
+            attack_range: 1000,
+            ..m
+        };
         assert_eq!(melee_max_range(&big), 1150, "(int)(1000*1.15f)");
-        let r = handle_attack(&mut combat, &atk(big.vid), &a, Some(&big), None, 3000, &mut roll);
+        let r = handle_attack(
+            &mut combat,
+            &atk(big.vid),
+            &a,
+            Some(&big),
+            None,
+            3000,
+            &mut roll,
+        );
         assert_eq!(r.damage, 46, "500 ≤ 1150");
-        let far_big = NpcState { vid: 104, x: a.x + 1200, y: a.y, ..big };
-        let r = handle_attack(&mut combat, &atk(far_big.vid), &a, Some(&far_big), None, 4000, &mut roll);
+        let far_big = NpcState {
+            vid: 104,
+            x: a.x + 1200,
+            y: a.y,
+            ..big
+        };
+        let r = handle_attack(
+            &mut combat,
+            &atk(far_big.vid),
+            &a,
+            Some(&far_big),
+            None,
+            4000,
+            &mut roll,
+        );
         assert_eq!(r, CombatResult::empty(), "1200 > 1150");
     }
 
@@ -1203,16 +1489,52 @@ mod tests {
         let a = ninja();
         let m = mob101();
         // MELEE con range 175 → (int)(175×1.15) = 201 — NO 300.
-        let mob = NpcState { vid: 101, x: a.x + 200, y: a.y, battle_type: BATTLE_TYPE_MELEE, attack_range: 175, ..m };
-        assert_eq!(mob_attack_max_range(&mob), 201, "(int)(175×1.15) — sin floor");
+        let mob = NpcState {
+            vid: 101,
+            x: a.x + 200,
+            y: a.y,
+            battle_type: BATTLE_TYPE_MELEE,
+            attack_range: 175,
+            ..m
+        };
+        assert_eq!(
+            mob_attack_max_range(&mob),
+            201,
+            "(int)(175×1.15) — sin floor"
+        );
         // MELEE con range 1000 → 1150 (igual que el PC→mob, aquí sin MAX).
-        let big = NpcState { vid: 102, x: a.x, y: a.y, battle_type: BATTLE_TYPE_MELEE, attack_range: 1000, ..m };
+        let big = NpcState {
+            vid: 102,
+            x: a.x,
+            y: a.y,
+            battle_type: BATTLE_TYPE_MELEE,
+            attack_range: 1000,
+            ..m
+        };
         assert_eq!(mob_attack_max_range(&big), 1150, "(int)(1000×1.15)");
         // RANGE (1) con range 175 → (175 + 300 BOW) × 1.15 = 546.
-        let bow = NpcState { vid: 103, x: a.x, y: a.y, battle_type: BATTLE_TYPE_RANGE, attack_range: 175, ..m };
-        assert_eq!(mob_attack_max_range(&bow), 546, "(175+300)×1.15 — POINT_BOW_DISTANCE");
+        let bow = NpcState {
+            vid: 103,
+            x: a.x,
+            y: a.y,
+            battle_type: BATTLE_TYPE_RANGE,
+            attack_range: 175,
+            ..m
+        };
+        assert_eq!(
+            mob_attack_max_range(&bow),
+            546,
+            "(175+300)×1.15 — POINT_BOW_DISTANCE"
+        );
         // MAGIC (2) — mismo bonus.
-        let mage = NpcState { vid: 104, x: a.x, y: a.y, battle_type: BATTLE_TYPE_MAGIC, attack_range: 175, ..m };
+        let mage = NpcState {
+            vid: 104,
+            x: a.x,
+            y: a.y,
+            battle_type: BATTLE_TYPE_MAGIC,
+            attack_range: 175,
+            ..m
+        };
         assert_eq!(mob_attack_max_range(&mage), 546, "MAGIC igual que RANGE");
     }
 
@@ -1223,12 +1545,18 @@ mod tests {
         let a = ninja();
         let mut combat = CombatState::new();
         let mut roll = roll_fixed(0);
-        assert_eq!(handle_attack(&mut combat, &atk(101), &a, None, None, 1000, &mut roll), CombatResult::empty());
+        assert_eq!(
+            handle_attack(&mut combat, &atk(101), &a, None, None, 1000, &mut roll),
+            CombatResult::empty()
+        );
         assert_eq!(combat.last_attack_time, 0, "sin objetivo: ni timer");
         let m = mob101();
         let mut atk_skill = atk(m.vid);
         atk_skill.b_type = 42;
-        assert_eq!(handle_attack(&mut combat, &atk_skill, &a, Some(&m), None, 1000, &mut roll), CombatResult::empty());
+        assert_eq!(
+            handle_attack(&mut combat, &atk_skill, &a, Some(&m), None, 1000, &mut roll),
+            CombatResult::empty()
+        );
     }
 
     /// Los paquetes del resultado: `[GcDamageInfo(135)]` SOLO (fix
@@ -1241,9 +1569,21 @@ mod tests {
         let m = mob101();
         let mut combat = CombatState::new();
         let mut roll = roll_fixed(0);
-        let r = handle_attack(&mut combat, &atk(m.vid), &a, Some(&m), None, 1000, &mut roll);
+        let r = handle_attack(
+            &mut combat,
+            &atk(m.vid),
+            &a,
+            Some(&m),
+            None,
+            1000,
+            &mut roll,
+        );
         assert_eq!(r.damage, 46);
-        assert_eq!(r.packets.len(), 1, "solo GcDamageInfo (fix 2026-08-14 — GcAttack 12 cerraba el cliente)");
+        assert_eq!(
+            r.packets.len(),
+            1,
+            "solo GcDamageInfo (fix 2026-08-14 — GcAttack 12 cerraba el cliente)"
+        );
         // GC_DAMAGE_INFO: header 135, dwVID=101, flag=NORMAL(1), damage=46.
         assert_eq!(r.packets[0], [135, 101, 0, 0, 0, 1, 46, 0, 0, 0]);
     }

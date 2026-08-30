@@ -52,7 +52,10 @@ impl QuestRepo {
     }
 
     async fn connect(&self) -> Result<Client, String> {
-        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
+        self.pool
+            .get()
+            .await
+            .map_err(|e| format!("PG pool get: {e}"))
     }
 
     /// Load del QID_QUEST (world entry). Sin filtro `lValue<>0` — parity del
@@ -90,7 +93,10 @@ impl QuestRepo {
                     .map_err(|e| pg_err("QUEST_SAVE delete", &e))?;
             } else {
                 affected += client
-                    .execute(UPSERT_SQL, &[&r.dw_pid, &r.sz_name, &r.sz_state, &r.l_value])
+                    .execute(
+                        UPSERT_SQL,
+                        &[&r.dw_pid, &r.sz_name, &r.sz_state, &r.l_value],
+                    )
                     .await
                     .map_err(|e| pg_err("QUEST_SAVE upsert", &e))?;
             }
@@ -130,11 +136,21 @@ mod tests {
         assert!(UPSERT_SQL.contains("DO UPDATE SET lValue = EXCLUDED.lValue"));
         assert!(DELETE_SQL.contains("WHERE dwPID = $1 AND szName = $2 AND szState = $3"));
         // lValue==0 -> delete: la decision vive en save() (parity C++).
-        let zero = QuestRow { dw_pid: 1, sz_name: "quest".into(), sz_state: "st".into(), l_value: 0 };
-        let non_zero = QuestRow { dw_pid: 1, sz_name: "quest".into(), sz_state: "st".into(), l_value: 5 };
+        let zero = QuestRow {
+            dw_pid: 1,
+            sz_name: "quest".into(),
+            sz_state: "st".into(),
+            l_value: 0,
+        };
+        let non_zero = QuestRow {
+            dw_pid: 1,
+            sz_name: "quest".into(),
+            sz_state: "st".into(),
+            l_value: 5,
+        };
         // El test de shape no toca PG: solo comprueba que la logica de
         // seleccion es la del C++ (via la fn de decision compartida).
-        assert_eq!(zero.l_value == 0, true);
-        assert_eq!(non_zero.l_value == 0, false);
+        assert_eq!(zero.l_value, 0);
+        assert_ne!(non_zero.l_value, 0);
     }
 }

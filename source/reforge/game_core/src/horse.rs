@@ -14,15 +14,15 @@ pub struct Horse {
 /// Salud mÃ¡xima por nivel â€” columna `iMaxHealth` de `c_aHorseStat`
 /// (parity horse_rider.cpp:18-48), niveles 0..=30.
 const MAX_HEALTH: [u16; 31] = [
-    1, 3, 4, 5, 7, 8, 9, 11, 12, 13, 15, 18, 19, 21, 22, 24, 25, 27, 28, 30, 32, 35, 36, 37,
-    38, 40, 42, 44, 46, 48, 50,
+    1, 3, 4, 5, 7, 8, 9, 11, 12, 13, 15, 18, 19, 21, 22, 24, 25, 27, 28, 30, 32, 35, 36, 37, 38,
+    40, 42, 44, 46, 48, 50,
 ];
 
 /// Stamina mÃ¡xima por nivel â€” columna `iMaxStamina` de `c_aHorseStat`
 /// (parity horse_rider.cpp:18-48), niveles 0..=30.
 const MAX_STAMINA: [u16; 31] = [
-    1, 4, 4, 5, 5, 6, 6, 7, 7, 8, 10, 30, 35, 40, 50, 55, 60, 65, 70, 80, 100, 120, 125, 130,
-    135, 140, 145, 150, 160, 170, 200,
+    1, 4, 4, 5, 5, 6, 6, 7, 7, 8, 10, 30, 35, 40, 50, 55, 60, 65, 70, 80, 100, 120, 125, 130, 135,
+    140, 145, 150, 160, 170, 200,
 ];
 
 /// Salud mÃ¡xima del nivel (parity `GetHorseMaxHealth`, horse_rider.cpp:113-117).
@@ -68,7 +68,10 @@ pub fn toggle_ride(level: u8, hp: u16, stamina: u16, riding: bool, ride: bool) -
 /// horse_rider.cpp:104).
 pub fn create_horse(level: u8) -> Horse {
     let level = level.min(HORSE_MAX_LEVEL);
-    Horse { level, health: MAX_HEALTH[level as usize] }
+    Horse {
+        level,
+        health: MAX_HEALTH[level as usize],
+    }
 }
 
 /// Alimenta el caballo: +1 salud clampeada al mÃ¡ximo del nivel; sin
@@ -78,7 +81,10 @@ pub fn feed_horse(horse: Horse) -> Horse {
     let level = horse.level.min(HORSE_MAX_LEVEL);
     let max = MAX_HEALTH[level as usize];
     if level > 0 && horse.health > 0 {
-        Horse { level, health: (horse.health + 1).min(max) }
+        Horse {
+            level,
+            health: (horse.health + 1).min(max),
+        }
     } else {
         horse
     }
@@ -93,7 +99,10 @@ mod tests {
     #[test]
     fn feed_raises_health_up_to_level_max() {
         let horse = create_horse(1);
-        assert_eq!(horse.health, 3, "nivel 1 â†’ iMaxHealth 3 (horse_rider.cpp:19)");
+        assert_eq!(
+            horse.health, 3,
+            "nivel 1 â†’ iMaxHealth 3 (horse_rider.cpp:19)"
+        );
         let half = Horse { health: 1, ..horse };
         assert_eq!(feed_horse(half).health, 2, "comer sube la salud +1");
         assert_eq!(feed_horse(horse).health, 3, "a tope â†’ clamp al mÃ¡ximo");
@@ -103,17 +112,32 @@ mod tests {
     #[test]
     fn create_clamps_level_and_uses_golden_max() {
         assert_eq!(create_horse(99).level, HORSE_MAX_LEVEL);
-        assert_eq!(create_horse(10).health, 15, "nivel 10 â†’ 15 (horse_rider.cpp:28)");
-        assert_eq!(create_horse(30).health, 50, "nivel 30 â†’ 50 (horse_rider.cpp:48)");
+        assert_eq!(
+            create_horse(10).health,
+            15,
+            "nivel 10 â†’ 15 (horse_rider.cpp:28)"
+        );
+        assert_eq!(
+            create_horse(30).health,
+            50,
+            "nivel 30 â†’ 50 (horse_rider.cpp:48)"
+        );
     }
 
     /// VERIFIER: caballo muerto o nivel 0 â†' el feed no hace nada.
     #[test]
     fn dead_or_level_zero_horse_is_not_fed() {
-        let dead = Horse { level: 1, health: 0 };
+        let dead = Horse {
+            level: 1,
+            health: 0,
+        };
         assert_eq!(feed_horse(dead), dead, "caballo muerto â†' no revive");
         let none = create_horse(0);
-        assert_eq!(feed_horse(none), none, "nivel 0 â†' sin efecto (parity FeedHorse)");
+        assert_eq!(
+            feed_horse(none),
+            none,
+            "nivel 0 â†' sin efecto (parity FeedHorse)"
+        );
     }
 
     /// VERIFIER (FASE 1 caballo jugable): gates de montar/desmontar (parity
@@ -144,7 +168,11 @@ mod tests {
         assert_eq!(max_stamina(0), 1);
         assert_eq!(max_stamina(1), 4, "nivel 1 â†' 4 (horse_rider.cpp:19)");
         assert_eq!(max_stamina(10), 10, "nivel 10 â†' 10 (horse_rider.cpp:28)");
-        assert_eq!(max_stamina(30), 200, "nivel 30 â†' 200 (horse_rider.cpp:48)");
+        assert_eq!(
+            max_stamina(30),
+            200,
+            "nivel 30 â†' 200 (horse_rider.cpp:48)"
+        );
         assert_eq!(max_health(30), 50);
     }
 }

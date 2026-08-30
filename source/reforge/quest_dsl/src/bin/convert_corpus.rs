@@ -31,7 +31,11 @@ fn main() {
     let files: Vec<(String, String)> = paths
         .iter()
         .map(|p| {
-            let rel = p.strip_prefix(&quest_dir).unwrap_or(p).to_string_lossy().replace('\\', "/");
+            let rel = p
+                .strip_prefix(&quest_dir)
+                .unwrap_or(p)
+                .to_string_lossy()
+                .replace('\\', "/");
             let text = match std::fs::read(p) {
                 Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
                 Err(e) => {
@@ -80,7 +84,12 @@ fn main() {
     if !report.families.is_empty() {
         rep.push_str("\n== FAMILIAS PROPUESTAS (requieren confirmación humana) ==\n");
         for f in &report.families {
-            rep.push_str(&format!("{} (param {}) — {} miembros\n", f.name, f.param, f.members.join(", ")));
+            rep.push_str(&format!(
+                "{} (param {}) — {} miembros\n",
+                f.name,
+                f.param,
+                f.members.join(", ")
+            ));
         }
     }
     if !report.family_outputs.is_empty() {
@@ -138,7 +147,10 @@ fn write_family_proposals(out_dir: &std::path::Path, report: &convert::CorpusRep
     }
     let mut txt = String::from("== FAMILY PROPOSALS (spec §9.3) ==\n");
     for p in &report.similarity {
-        txt.push_str(&format!("\n## {} (suffix param: {})\n", p.name, p.suffix_param));
+        txt.push_str(&format!(
+            "\n## {} (suffix param: {})\n",
+            p.name, p.suffix_param
+        ));
         txt.push_str(&format!(
             "members ({}): {}\n",
             p.members.len(),
@@ -146,9 +158,7 @@ fn write_family_proposals(out_dir: &std::path::Path, report: &convert::CorpusRep
         ));
         txt.push_str(&format!(
             "score: mean {:.3}, min {:.3} — common slots: {}\n",
-            p.mean,
-            p.min,
-            p.common
+            p.mean, p.min, p.common
         ));
         if !p.params.is_empty() {
             txt.push_str("params (slots that vary across members):\n");
@@ -168,7 +178,9 @@ fn write_family_proposals(out_dir: &std::path::Path, report: &convert::CorpusRep
 }
 
 fn collect_quests(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let p = entry.path();
         if p.is_dir() {

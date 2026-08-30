@@ -55,11 +55,18 @@ async fn player_load_contract_against_real_pg() {
     assert_eq!(p.job, 1, "job=1 (E2E Q2)");
     // diff de tiempo: structure-only (parity E2E — last_play puede estar en
     // el futuro si se jugo con el reloj adelantado -> diff negativo).
-    assert!(p.logoff_interval.is_finite(), "diff es f64 finito (structure-only)");
+    assert!(
+        p.logoff_interval.is_finite(),
+        "diff es f64 finito (structure-only)"
+    );
     assert!(p.skill_level.is_some(), "skill_level bytea presente");
     assert!(p.quickslot.is_some(), "quickslot bytea presente");
     // No existe -> None.
-    assert_eq!(repo.load(999_999_999).await.expect("DB up"), None, "id inexistente -> None");
+    assert_eq!(
+        repo.load(999_999_999).await.expect("DB up"),
+        None,
+        "id inexistente -> None"
+    );
 }
 
 /// list_for_account(1) -> >=3 filas y contiene los personajes del E2E Q3.
@@ -71,7 +78,10 @@ async fn player_list_for_account_contract() {
     assert!(list.len() >= 3, ">=3 (E2E Q3): got {}", list.len());
     let names: Vec<&str> = list.iter().map(|s| s.name.as_str()).collect();
     for expected in ["lkjsnlfknlsk", "ninja", "Chaman"] {
-        assert!(names.contains(&expected), "lista contiene {expected}: {names:?}");
+        assert!(
+            names.contains(&expected),
+            "lista contiene {expected}: {names:?}"
+        );
     }
     // Cada fila tiene 15 campos coherentes.
     for s in &list {
@@ -122,15 +132,26 @@ async fn player_create_save_roundtrip_throwaway() {
             skill_level: blobs.clone(),
             quickslot: blobs.clone(),
         };
-        let id = repo.create(&c).await.expect("create (id DEFAULT -> identity)");
+        let id = repo
+            .create(&c)
+            .await
+            .expect("create (id DEFAULT -> identity)");
         assert!(id > 0, "id generado: {id}");
 
         // load del recien creado: blobs byte-identicos.
         let loaded = repo.load(id).await.expect("load").expect("existe");
         assert_eq!(loaded.name, name, "name round-trip");
         assert_eq!(loaded.level, 1);
-        assert_eq!(loaded.skill_level.as_deref(), Some(blobs.as_slice()), "skill_level bytea identico");
-        assert_eq!(loaded.quickslot.as_deref(), Some(blobs.as_slice()), "quickslot bytea identico");
+        assert_eq!(
+            loaded.skill_level.as_deref(),
+            Some(blobs.as_slice()),
+            "skill_level bytea identico"
+        );
+        assert_eq!(
+            loaded.quickslot.as_deref(),
+            Some(blobs.as_slice()),
+            "quickslot bytea identico"
+        );
         assert_eq!(loaded.x, 0);
 
         // save (Q5 shape): cambia x/y + blobs distintos -> load verifica.
@@ -145,7 +166,10 @@ async fn player_create_save_roundtrip_throwaway() {
         let reloaded = repo.load(id).await.expect("load").expect("existe");
         assert_eq!(reloaded.x, 969600, "x guardado (E2E Q5: 969600)");
         assert_eq!(reloaded.y, 278400, "y guardado (E2E Q5: 278400)");
-        assert_eq!(reloaded.skill_level, saved.skill_level, "skill_level round-trip");
+        assert_eq!(
+            reloaded.skill_level, saved.skill_level,
+            "skill_level round-trip"
+        );
         assert_eq!(reloaded.quickslot, saved.quickslot, "quickslot round-trip");
         Ok::<(), String>(())
     }
@@ -186,6 +210,9 @@ async fn player_index_pid_live_account_slots() {
     );
     // Slot inválido -> Err (el game valida antes, input_login.cpp:260-264).
     for slot in [5u8, 200] {
-        assert!(repo.player_index_pid(1, slot).await.is_err(), "slot {slot} -> Err");
+        assert!(
+            repo.player_index_pid(1, slot).await.is_err(),
+            "slot {slot} -> Err"
+        );
     }
 }

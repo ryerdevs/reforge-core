@@ -42,7 +42,10 @@ pub(crate) fn patrol_system(
 ) {
     let mut by_map: HashMap<u32, Vec<(u32, i32, i32)>> = HashMap::new();
     for (p, map, pos) in &players {
-        by_map.entry(map.map_index).or_default().push((p.vid, pos.x, pos.y));
+        by_map
+            .entry(map.map_index)
+            .or_default()
+            .push((p.vid, pos.x, pos.y));
     }
     // C28: snapshot de las posiciones de los mobs AGRUPADO POR MAPA (la
     // separación consulta a los OTROS mobs del MISMO mapa — el ParamSet
@@ -50,7 +53,10 @@ pub(crate) fn patrol_system(
     // coincidentes NO deben bloquear el paso de patrulla).
     let mut others_by_map: HashMap<u32, Vec<(u32, i32, i32)>> = HashMap::new();
     for (v, p, m) in &mobs.p0() {
-        others_by_map.entry(m.map_index).or_default().push((v.vid, p.x, p.y));
+        others_by_map
+            .entry(m.map_index)
+            .or_default()
+            .push((v.vid, p.x, p.y));
     }
     let mut sent = 0usize;
     for (vid, mob, aggro, map, mut pos) in &mut mobs.p1() {
@@ -81,7 +87,14 @@ pub(crate) fn patrol_system(
         ) else {
             continue;
         };
-        let (sx, sy) = step_toward(pos.x, pos.y, tx, ty, mob_move_speed(mob.move_speed) as i32, tick.dt_ms);
+        let (sx, sy) = step_toward(
+            pos.x,
+            pos.y,
+            tx,
+            ty,
+            mob_move_speed(mob.move_speed) as i32,
+            tick.dt_ms,
+        );
         if (sx, sy) == (pos.x, pos.y) {
             continue;
         }
@@ -89,7 +102,10 @@ pub(crate) fn patrol_system(
         // libre de otros mobs del MISMO mapa — si está ocupado, probar
         // flancos o no moverse (F1: los mobs de otros mapas no bloquean).
         let Some((nx, ny)) = separate_landing(
-            others_by_map.get(&map.map_index).map(Vec::as_slice).unwrap_or(&[]),
+            others_by_map
+                .get(&map.map_index)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]),
             vid.vid,
             (pos.x, pos.y),
             sx,
@@ -100,18 +116,25 @@ pub(crate) fn patrol_system(
         let rot = rotation_5deg(pos.x, pos.y, nx, ny);
         // La duración REAL del paso (parity CalculateMoveDuration,
         // char.cpp:2765-2768) — el cliente interpola con ESTA duración.
-        let duration_ms = move_duration_ms(nx - pos.x, ny - pos.y, mob_move_speed(mob.move_speed) as i32);
+        let duration_ms = move_duration_ms(
+            nx - pos.x,
+            ny - pos.y,
+            mob_move_speed(mob.move_speed) as i32,
+        );
         pos.x = nx;
         pos.y = ny;
         for pv in &visible {
-            outbox.0.push(MoveEvent::Moved {
-                player_vid: *pv,
-                vid: vid.vid,
-                x: nx,
-                y: ny,
-                rot,
-                duration_ms,
-            }.into());
+            outbox.0.push(
+                MoveEvent::Moved {
+                    player_vid: *pv,
+                    vid: vid.vid,
+                    x: nx,
+                    y: ny,
+                    rot,
+                    duration_ms,
+                }
+                .into(),
+            );
         }
         sent += visible.len();
     }
@@ -121,7 +144,9 @@ impl WorldSim {
     /// Sincroniza la posición del jugador (CG_MOVE aceptado — el AI persigue
     /// la posición NUEVA y el spawn dinámico se evalúa desde ella).
     pub(crate) fn set_player_position(&mut self, player_vid: u32, x: i32, y: i32) {
-        let Some(e) = self.players.get(&player_vid).copied() else { return };
+        let Some(e) = self.players.get(&player_vid).copied() else {
+            return;
+        };
         if let Ok(mut ent) = self.world.get_entity_mut(e)
             && let Some(mut pos) = ent.get_mut::<Position>()
         {
@@ -148,7 +173,9 @@ mod tests {
         for _ in 0..20 {
             let events = w.update(500);
             assert!(
-                !events.iter().any(|e| matches!(e, NpcEvent::Move(MoveEvent::Moved { .. }))),
+                !events
+                    .iter()
+                    .any(|e| matches!(e, NpcEvent::Move(MoveEvent::Moved { .. }))),
                 "NOMOVE no patrulla: {events:?}"
             );
         }
@@ -178,22 +205,53 @@ mod tests {
     fn player_sync_intents_update_world() {
         let mut w = world_with(42);
         join(&mut w);
-        w.process_intent(CombatIntent::SetHp { player_vid: 2, hp: 60 }.into(), 1_000);
+        w.process_intent(
+            CombatIntent::SetHp {
+                player_vid: 2,
+                hp: 60,
+            }
+            .into(),
+            1_000,
+        );
         assert_eq!(w.player_hp(2), 60);
-        w.process_intent(CombatIntent::SetArmor { player_vid: 2, armor: 12 }.into(), 2_000);
-        w.process_intent(CombatIntent::SetLevel { player_vid: 2, level: 6 }.into(), 3_000);
+        w.process_intent(
+            CombatIntent::SetArmor {
+                player_vid: 2,
+                armor: 12,
+            }
+            .into(),
+            2_000,
+        );
+        w.process_intent(
+            CombatIntent::SetLevel {
+                player_vid: 2,
+                level: 6,
+            }
+            .into(),
+            3_000,
+        );
         // La posición nueva: un mob aggro en (0,0) persigue (400,400) — dist
         // approx 543 > rango melee 300 → Moved, no MobAttack.
         let mut row = mob_row(101);
         row.ai_flag = Some("AGGR".into());
         row.aggressive_sight = 2_000;
         load(&mut w, vec![(entry(101, 0, 0, 1), row)]);
-        w.process_intent(MoveIntent::Move { player_vid: 2, x: 400, y: 400 }.into(), 4_000);
+        w.process_intent(
+            MoveIntent::Move {
+                player_vid: 2,
+                x: 400,
+                y: 400,
+            }
+            .into(),
+            4_000,
+        );
         // Primer tick: spawn (543 ≤ SPAWN_VIEW) + detect → AggroOn. El chase
         // (Moved) llega en el tick SIGUIENTE (parity del orden del canal).
         let events = w.update(500);
         assert!(
-            events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::AggroOn { .. }))),
+            events
+                .iter()
+                .any(|e| matches!(e, NpcEvent::Combat(CombatEvent::AggroOn { .. }))),
             "el aggro del mob se detecta: {events:?}"
         );
         let events = w.update(500);

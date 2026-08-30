@@ -11,18 +11,16 @@
 
 use database::affect::AffectRow;
 use database::item::ItemRepo;
-use protocol::world::{
-    TPacketAffectElement, TPacketGCAffectAdd, TPacketGCItemGroundAdd, TPacketGCItemGroundDel,
-    TPacketGCItemOwnership, TPacketGCItemSet, TItemPos,
-};
-use game_core::ecs::{
-    CombatEvent, Intent, ItemEvent, ItemIntent, MoveEvent, NpcEvent, SkillEvent,
-};
+use game_core::ecs::{CombatEvent, Intent, ItemEvent, ItemIntent, MoveEvent, NpcEvent, SkillEvent};
 use game_core::packets;
+use protocol::world::{
+    TItemPos, TPacketAffectElement, TPacketGCAffectAdd, TPacketGCItemGroundAdd,
+    TPacketGCItemGroundDel, TPacketGCItemOwnership, TPacketGCItemSet,
+};
 
-use crate::channel::session::{Outcome, Session};
-use crate::channel::{is_gold_item, now32, INVENTORY_MAX_NUM, ITEM_COUNT_LIMIT};
 use crate::channel::gm::gm_info;
+use crate::channel::session::{Outcome, Session};
+use crate::channel::{INVENTORY_MAX_NUM, ITEM_COUNT_LIMIT, is_gold_item, now32};
 
 /// Rechazo de pickup por peso — GC_CHAT INFO (mismo patrón que gm.rs;
 /// sin locale system → EN, divergencia documentada; parity del ChatPacket).
@@ -71,7 +69,14 @@ async fn apply_affect(session: &mut Session, elem: TPacketAffectElement) -> Resu
 /// inventario lleno) son `Ok(())` con log — el loop sigue.
 pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
     match ev {
-        NpcEvent::Move(MoveEvent::Moved { vid, x, y, rot, duration_ms, .. }) => {
+        NpcEvent::Move(MoveEvent::Moved {
+            vid,
+            x,
+            y,
+            rot,
+            duration_ms,
+            ..
+        }) => {
             // GC_MOVE(FUNC_MOVE): el cliente interpola el paso (parity del
             // tick previo del canal).
             let mv = protocol::movement::TPacketGCMove {
@@ -90,7 +95,14 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                 .await
                 .map_err(|e| format!("enviando GC_MOVE: {e}"))?;
         }
-        NpcEvent::Combat(CombatEvent::MobAttack { vid, vnum, x, y, damage, .. }) => {
+        NpcEvent::Combat(CombatEvent::MobAttack {
+            vid,
+            vnum,
+            x,
+            y,
+            damage,
+            ..
+        }) => {
             // GC_MOVE(FUNC_ATTACK): x/y = posición actual del mob,
             // dwDuration 0 (parity char_state.cpp:386).
             let mv = protocol::movement::TPacketGCMove {
@@ -111,12 +123,14 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
             // GC_DAMAGE_INFO (135) al jugador — el número de daño (parity
             // `SendDamagePacket`).
             session
-                .send(&protocol::combat::GcDamageInfo::new(
-                    session.player_vid(),
-                    protocol::combat::damage_flag::NORMAL,
-                    damage,
+                .send(
+                    &protocol::combat::GcDamageInfo::new(
+                        session.player_vid(),
+                        protocol::combat::damage_flag::NORMAL,
+                        damage,
+                    )
+                    .to_bytes(),
                 )
-                .to_bytes())
                 .await
                 .map_err(|e| format!("enviando GC_DAMAGE_INFO: {e}"))?;
             // Daño al jugador + GC_POINTS (la barra) + save.
@@ -134,17 +148,23 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                 eprintln!(
                     "server_realms: channel conn {}: {} MURIÓ (mob vnum {vnum} \
                      vid {vid}) — esperando revive (CG_SCRIPT_ANSWER)",
-                    session.conn_id, session.row().name
+                    session.conn_id,
+                    session.row().name
                 );
             } else {
                 eprintln!(
                     "server_realms: channel conn {}: mob vnum {vnum} (vid {vid}) \
                      atacó a {} por {damage} (hp {})",
-                    session.conn_id, session.row().name, hp
+                    session.conn_id,
+                    session.row().name,
+                    hp
                 );
             }
             session
-                .send(&packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
+                .send(
+                    &packets::points_packet(session.row(), session.next_exp, &session.battle)
+                        .to_bytes(),
+                )
                 .await
                 .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
             session.save();
@@ -241,7 +261,11 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                         .map_err(|e| format!("enviando GC_TARGET: {e}"))?;
                     eprintln!(
                         "server_realms: channel conn {}: {} golpeó mob vnum {} ({}/{})",
-                        session.conn_id, session.row().name, v.vnum, v.hp, v.max_hp
+                        session.conn_id,
+                        session.row().name,
+                        v.vnum,
+                        v.hp,
+                        v.max_hp
                     );
                 }
             }
@@ -307,27 +331,38 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                     "server_realms: channel conn {}: {} MURIÓ en PvP (atacante \
                      vid {attacker_vid}, {damage} de daño) — esperando revive \
                      (CG_SCRIPT_ANSWER)",
-                    session.conn_id, session.row().name
+                    session.conn_id,
+                    session.row().name
                 );
             } else {
                 eprintln!(
                     "server_realms: channel conn {}: el jugador vid \
                      {attacker_vid} atacó a {} por {damage} (hp {hp})",
-                    session.conn_id, session.row().name
+                    session.conn_id,
+                    session.row().name
                 );
             }
             session
-                .send(&packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
+                .send(
+                    &packets::points_packet(session.row(), session.next_exp, &session.battle)
+                        .to_bytes(),
+                )
                 .await
                 .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
             session.save();
         }
-        NpcEvent::Combat(CombatEvent::TargetResult { vid, hp, max_hp, .. }) => {
+        NpcEvent::Combat(CombatEvent::TargetResult {
+            vid, hp, max_hp, ..
+        }) => {
             // GC_TARGET (63) — la barra de vida del objetivo al apuntarlo
             // (parity `SetTarget`, char.cpp:5048-5094: bHPPercent =
             // hp*100/max; 0 para PCs/mobs sin max — el subset solo apunta
             // mobs materializados).
-            let pct = if max_hp > 0 { (hp.saturating_mul(100) / max_hp).clamp(0, 100) as u8 } else { 0 };
+            let pct = if max_hp > 0 {
+                (hp.saturating_mul(100) / max_hp).clamp(0, 100) as u8
+            } else {
+                0
+            };
             session
                 .send(&protocol::world::TPacketGCTarget::new(vid, pct).to_bytes())
                 .await
@@ -369,7 +404,10 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                 let row = session.row_mut();
                 row.gold = row.gold.saturating_add(gi.count as i32);
                 session
-                    .send(&packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
+                    .send(
+                        &packets::points_packet(session.row(), session.next_exp, &session.battle)
+                            .to_bytes(),
+                    )
                     .await
                     .map_err(|e| format!("enviando GC_POINTS (oro): {e}"))?;
                 session.save();
@@ -417,15 +455,12 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
             // vez de crear un slot nuevo. El flag `ITEM_FLAG_STACKABLE` del
             // item_proto no se consulta (subset documentado).
             let mut remaining = gi.count as i64;
-            loop {
-                let Some(idx) = session.inventory.iter().position(|i| {
-                    i.window == "INVENTORY"
-                        && i.vnum == gi.vnum as i64
-                        && i.sockets == [0; 3]
-                        && i.count < ITEM_COUNT_LIMIT
-                }) else {
-                    break; // sin stack con espacio → slot nuevo
-                };
+            while let Some(idx) = session.inventory.iter().position(|i| {
+                i.window == "INVENTORY"
+                    && i.vnum == gi.vnum as i64
+                    && i.sockets == [0; 3]
+                    && i.count < ITEM_COUNT_LIMIT
+            }) {
                 let add = (ITEM_COUNT_LIMIT - session.inventory[idx].count).min(remaining);
                 session.inventory[idx].count += add;
                 remaining -= add;
@@ -507,7 +542,10 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
             // GC_ITEM_SET (51 B — el slot pintado del cliente).
             let set = TPacketGCItemSet {
                 header: TPacketGCItemSet::HEADER,
-                cell: TItemPos { window: TItemPos::WINDOW_INVENTORY, cell: slot },
+                cell: TItemPos {
+                    window: TItemPos::WINDOW_INVENTORY,
+                    cell: slot,
+                },
                 vnum: gi.vnum,
                 count: remaining as u8,
                 flags: 0,
@@ -533,10 +571,23 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
             eprintln!(
                 "server_realms: channel conn {}: {} recogió item vnum {} (vid {}) \
                  → slot {slot} del inventario (id {id})",
-                session.conn_id, session.row().name, gi.vnum, item_vid
+                session.conn_id,
+                session.row().name,
+                gi.vnum,
+                item_vid
             );
         }
-        NpcEvent::Item(ItemEvent::DropResult { item_vid, vnum, count, x, y, z, sockets, attrs, .. }) => {
+        NpcEvent::Item(ItemEvent::DropResult {
+            item_vid,
+            vnum,
+            count,
+            x,
+            y,
+            z,
+            sockets,
+            attrs,
+            ..
+        }) => {
             // El drop se creó en el mundo (vid asignado por el mundo —
             // VidAlloc global): el ADD + ownership salen con el vid correcto.
             // Los attrs/sockets del drop viajan al wire (58 B — el cliente
@@ -551,17 +602,17 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
             // Ownership (parity item.cpp:145-162 — el nombre del dueño sobre
             // el item).
             session
-                .send(&TPacketGCItemOwnership::new(
-                    item_vid,
-                    session.row().name.as_bytes(),
+                .send(
+                    &TPacketGCItemOwnership::new(item_vid, session.row().name.as_bytes())
+                        .to_bytes(),
                 )
-                .to_bytes())
                 .await
                 .map_err(|e| format!("enviando GC_ITEM_OWNERSHIP: {e}"))?;
             eprintln!(
                 "server_realms: channel conn {}: {} — drop item vnum {vnum} \
                  (vid {item_vid}) en el suelo",
-                session.conn_id, session.row().name
+                session.conn_id,
+                session.row().name
             );
         }
         NpcEvent::Skill(SkillEvent::SkillResult {
@@ -604,7 +655,10 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                     row.hp = row.hp.saturating_sub(hp_cost);
                 }
                 session
-                    .send(&packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
+                    .send(
+                        &packets::points_packet(session.row(), session.next_exp, &session.battle)
+                            .to_bytes(),
+                    )
                     .await
                     .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
                 session.save();
@@ -629,18 +683,27 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                     eprintln!(
                         "server_realms: channel conn {}: {} golpeó con el skill \
                          {skill_id} a vnum {} ({}/{})",
-                        session.conn_id, session.row().name, v.vnum, v.hp, v.max_hp
+                        session.conn_id,
+                        session.row().name,
+                        v.vnum,
+                        v.hp,
+                        v.max_hp
                     );
                 }
             } else if sp_cost > 0 || hp_cost > 0 {
                 eprintln!(
                     "server_realms: channel conn {}: {} usó el skill {skill_id} \
                      (SP -{sp_cost}, HP -{hp_cost})",
-                    session.conn_id, session.row().name
+                    session.conn_id,
+                    session.row().name
                 );
             }
         }
-        NpcEvent::Skill(SkillEvent::PartyBuff { player_vid, skill_id, buff }) => {
+        NpcEvent::Skill(SkillEvent::PartyBuff {
+            player_vid,
+            skill_id,
+            buff,
+        }) => {
             // Família PARTY (`SKILL_FLAG_PARTY` — parity `ComputeSkillParty`,
             // char_skill.cpp:1906-1915): el buff del skill de party llegó a
             // ESTE miembro (routing por player_vid — el caster ve el suyo en
@@ -686,7 +749,10 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                     row.hp = row.hp.saturating_sub(hp_cost);
                 }
                 session
-                    .send(&packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
+                    .send(
+                        &packets::points_packet(session.row(), session.next_exp, &session.battle)
+                            .to_bytes(),
+                    )
                     .await
                     .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
                 session.save();
@@ -701,7 +767,10 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                     eprintln!(
                         "server_realms: channel conn {}: {} golpeó con el skill \
                          {skill_id} (área) a vid {} por {}",
-                        session.conn_id, session.row().name, v.victim_vid, v.damage
+                        session.conn_id,
+                        session.row().name,
+                        v.victim_vid,
+                        v.damage
                     );
                 }
             }
@@ -735,22 +804,29 @@ pub async fn handle(session: &mut Session, ev: NpcEvent) -> Result<(), String> {
                     "server_realms: channel conn {}: {} MURIÓ por el skill splash \
                      de vid {attacker_vid} ({damage} de daño) — esperando revive \
                      (CG_SCRIPT_ANSWER)",
-                    session.conn_id, session.row().name
+                    session.conn_id,
+                    session.row().name
                 );
             } else {
                 eprintln!(
                     "server_realms: channel conn {}: el skill splash de vid \
                      {attacker_vid} golpeó a {} por {damage} (hp {hp})",
-                    session.conn_id, session.row().name
+                    session.conn_id,
+                    session.row().name
                 );
             }
             session
-                .send(&packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
+                .send(
+                    &packets::points_packet(session.row(), session.next_exp, &session.battle)
+                        .to_bytes(),
+                )
                 .await
                 .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
             session.save();
         }
-        NpcEvent::Skill(SkillEvent::AffectRemoved { skill_id, point, .. }) => {
+        NpcEvent::Skill(SkillEvent::AffectRemoved {
+            skill_id, point, ..
+        }) => {
             // GC_AFFECT_REMOVE (127, 6 B: header + dwType + bApplyOn —
             // Packet.h:2536-2543). Se emite crudo (el protocol crate no
             // define el struct — mismo patrón que el GC_CHAT del canal).
@@ -819,7 +895,9 @@ mod tests {
     use crate::channel::is_gold_item;
 
     /// C22 (test de PROTECCIÓN — hallazgo del verifier): el vnum 1 es el
-    /// ORO del suelo (no un item normal); el resto NO. La mutación de\n    /// \"vnum == 999999\" hace fallar este test.\n    #[test]
+    /// ORO del suelo (no un item normal); el resto NO. La mutación de
+    /// "vnum == 999999" hace fallar este test.
+    #[test]
     fn gold_item_is_vnum_1_only() {
         assert!(is_gold_item(1), "vnum 1 = oro (ITEM_ELK)");
         assert!(!is_gold_item(2), "vnum 2 no es oro");

@@ -7,11 +7,13 @@ use std::collections::HashMap;
 
 use bevy_ecs::prelude::*;
 
-use crate::ai::{attack_damage, change_attack_dest, mob_move_speed, move_duration_ms, rotation_5deg, step_toward};
+use crate::ai::{
+    attack_damage, change_attack_dest, mob_move_speed, move_duration_ms, rotation_5deg, step_toward,
+};
 use crate::combat::{
-    attack_speed_for_weapon_bonus, can_attack, distance_approx, handle_attack,
-    mob_attack_max_range, mob_attack_range_base, player_def_grade, BATTLE_TYPE_MELEE,
-    CombatState, NpcState, PkMode, PlayerState, PvpContext,
+    BATTLE_TYPE_MELEE, NpcState, PkMode, PlayerState, PvpContext, attack_speed_for_weapon_bonus,
+    can_attack, distance_approx, handle_attack, mob_attack_max_range, mob_attack_range_base,
+    player_def_grade,
 };
 use crate::ecs::components::{
     Affect, Affects, Aggro, AttackPos, Combat, Hp, LastAttack, Map, Mob, Mp, Player, Position, Pvp,
@@ -117,7 +119,19 @@ pub(crate) fn chase_attack_system(
     mut mobs: ParamSet<(
         // Posiciones de TODOS los mobs (C28 — separación; read-only).
         Query<(&Vid, &Position, &Map), Without<Player>>,
-        Query<(&Vid, &Mob, &Map, &mut Aggro, &mut Position, &mut LastAttack, &mut AttackPos, &Hp), Without<Player>>,
+        Query<
+            (
+                &Vid,
+                &Mob,
+                &Map,
+                &mut Aggro,
+                &mut Position,
+                &mut LastAttack,
+                &mut AttackPos,
+                &Hp,
+            ),
+            Without<Player>,
+        >,
     )>,
     mut players: Query<(Entity, &Player, &Position, &mut Hp, &Affects), Without<Mob>>,
     tick: Res<Tick>,
@@ -132,9 +146,14 @@ pub(crate) fn chase_attack_system(
     // coincidentes (≤ 60 u del aterrizaje) bloqueaba falsamente el paso.
     let mut others_by_map: HashMap<u32, Vec<(u32, i32, i32)>> = HashMap::new();
     for (v, p, m) in &mobs.p0() {
-        others_by_map.entry(m.map_index).or_default().push((v.vid, p.x, p.y));
+        others_by_map
+            .entry(m.map_index)
+            .or_default()
+            .push((v.vid, p.x, p.y));
     }
-    for (vid, mob, map, mut aggro, mut pos, mut last_attack, mut attack_pos, mob_hp) in &mut mobs.p1() {
+    for (vid, mob, map, mut aggro, mut pos, mut last_attack, mut attack_pos, mob_hp) in
+        &mut mobs.p1()
+    {
         let Some(target) = aggro.target else {
             continue;
         };
@@ -148,7 +167,14 @@ pub(crate) fn chase_attack_system(
         let de_aggro = mob.aggressive_sight.max(DE_AGGRO_FLOOR);
         if dist > de_aggro {
             aggro.target = None;
-            outbox.0.push(CombatEvent::AggroOff { player_vid: p.vid, vid: vid.vid, vnum: mob.vnum }.into());
+            outbox.0.push(
+                CombatEvent::AggroOff {
+                    player_vid: p.vid,
+                    vid: vid.vid,
+                    vnum: mob.vnum,
+                }
+                .into(),
+            );
             continue;
         }
         let state = npc_state(vid.vid, &pos, mob);
@@ -156,13 +182,34 @@ pub(crate) fn chase_attack_system(
         // 20% huye al lado opuesto del jugador (CowardEscape:269-307).
         if mob.coward {
             if mob_hp.hp > 0 && mob_hp.hp * 100 / mob_hp.max_hp.max(1) < 20 {
-                let (fx, fy) = step_toward(pos.x, pos.y, pos.x * 2 - ppos.x, pos.y * 2 - ppos.y, mob_move_speed(mob.move_speed) as i32, tick.dt_ms);
+                let (fx, fy) = step_toward(
+                    pos.x,
+                    pos.y,
+                    pos.x * 2 - ppos.x,
+                    pos.y * 2 - ppos.y,
+                    mob_move_speed(mob.move_speed) as i32,
+                    tick.dt_ms,
+                );
                 if fx != pos.x || fy != pos.y {
                     let rot = rotation_5deg(pos.x, pos.y, fx, fy);
-                    let duration_ms = move_duration_ms(fx - pos.x, fy - pos.y, mob_move_speed(mob.move_speed) as i32);
+                    let duration_ms = move_duration_ms(
+                        fx - pos.x,
+                        fy - pos.y,
+                        mob_move_speed(mob.move_speed) as i32,
+                    );
                     pos.x = fx;
                     pos.y = fy;
-                    outbox.0.push(MoveEvent::Moved { player_vid: p.vid, vid: vid.vid, x: fx, y: fy, rot, duration_ms }.into());
+                    outbox.0.push(
+                        MoveEvent::Moved {
+                            player_vid: p.vid,
+                            vid: vid.vid,
+                            x: fx,
+                            y: fy,
+                            rot,
+                            duration_ms,
+                        }
+                        .into(),
+                    );
                 }
             }
             aggro.target = None;
@@ -207,7 +254,8 @@ pub(crate) fn chase_attack_system(
                 player_def_grade(p.level, p.ht, p.armor) + paff.def_grade_bonus(),
                 &mut |lo, hi| rng.roll(lo, hi),
             );
-            if mob.berserk && mob.sp_berserk > 0
+            if mob.berserk
+                && mob.sp_berserk > 0
                 && mob_hp.hp > 0
                 && mob_hp.hp * 100 / mob_hp.max_hp.max(1) < mob.sp_berserk
             {
@@ -215,14 +263,17 @@ pub(crate) fn chase_attack_system(
             }
             last_attack.at_ms = now.0;
             php.hp = (php.hp - damage).max(0);
-            outbox.0.push(CombatEvent::MobAttack {
-                player_vid: p.vid,
-                vid: vid.vid,
-                vnum: mob.vnum,
-                x: pos.x,
-                y: pos.y,
-                damage,
-            }.into());
+            outbox.0.push(
+                CombatEvent::MobAttack {
+                    player_vid: p.vid,
+                    vid: vid.vid,
+                    vnum: mob.vnum,
+                    x: pos.x,
+                    y: pos.y,
+                    damage,
+                }
+                .into(),
+            );
             continue;
         }
         // Persecución: C32 (change-attack-position) — el mob NO persigue
@@ -239,26 +290,45 @@ pub(crate) fn chase_attack_system(
         // GetMobAttackRange()`); para RANGE/MAGIC suma POINT_BOW_DISTANCE
         // (char.cpp:2010-2020) — un arco a 300 u está NEAR (10 s), no FAR.
         let is_far = dist > 100 + mob_attack_range_base(&state);
-        let change_time = if is_far { CHANGE_ATTACK_POS_TIME_FAR } else { CHANGE_ATTACK_POS_TIME_NEAR };
+        let change_time = if is_far {
+            CHANGE_ATTACK_POS_TIME_FAR
+        } else {
+            CHANGE_ATTACK_POS_TIME_NEAR
+        };
         let mut dest = attack_pos.dest;
-        if mob.rank < MOB_RANK_BOSS && now.0.saturating_sub(attack_pos.last_change_ms) >= change_time {
+        if mob.rank < MOB_RANK_BOSS
+            && now.0.saturating_sub(attack_pos.last_change_ms) >= change_time
+        {
             // Timer expirado: nuevo destino lateral (parity Follow — el C++
             // resetea el timer al reponer el destino, char.cpp:5440).
             dest = Some(change_attack_dest(
-                pos.x, pos.y, ppos.x, ppos.y, mob.battle_type, mob.attack_range,
+                pos.x,
+                pos.y,
+                ppos.x,
+                ppos.y,
+                mob.battle_type,
+                mob.attack_range,
                 &mut |lo, hi| rng.roll(lo, hi),
             ));
             attack_pos.last_change_ms = now.0;
         }
         // ¿Llegó al destino lateral? → volver a perseguir a la víctima.
         if let Some((dx, dy)) = dest
-            && distance_approx(pos.x - dx, pos.y - dy) <= MOB_REACH_EPSILON {
-                attack_pos.dest = None;
-                dest = None;
-            }
+            && distance_approx(pos.x - dx, pos.y - dy) <= MOB_REACH_EPSILON
+        {
+            attack_pos.dest = None;
+            dest = None;
+        }
         let target = dest.unwrap_or((ppos.x, ppos.y));
         // Paso hacia el destino (víctima o punto lateral) a `move_speed`.
-        let (sx, sy) = step_toward(pos.x, pos.y, target.0, target.1, mob_move_speed(mob.move_speed) as i32, tick.dt_ms);
+        let (sx, sy) = step_toward(
+            pos.x,
+            pos.y,
+            target.0,
+            target.1,
+            mob_move_speed(mob.move_speed) as i32,
+            tick.dt_ms,
+        );
         if (sx, sy) == (pos.x, pos.y) {
             continue; // ya en el destino (o speed 0)
         }
@@ -267,7 +337,10 @@ pub(crate) fn chase_attack_system(
         // mobs del MISMO mapa — si está ocupado, probar flancos o no
         // moverse este tick (F1: los mobs de otros mapas no bloquean).
         let Some((nx, ny)) = separate_landing(
-            others_by_map.get(&map.map_index).map(Vec::as_slice).unwrap_or(&[]),
+            others_by_map
+                .get(&map.map_index)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]),
             vid.vid,
             (pos.x, pos.y),
             sx,
@@ -279,17 +352,24 @@ pub(crate) fn chase_attack_system(
         // La duración REAL del paso (parity CalculateMoveDuration,
         // char.cpp:2765-2768) — el cliente interpola con ESTA duración; el
         // dt del tick fijo animaba los pasos largos a velocidad altísima.
-        let duration_ms = move_duration_ms(nx - pos.x, ny - pos.y, mob_move_speed(mob.move_speed) as i32);
+        let duration_ms = move_duration_ms(
+            nx - pos.x,
+            ny - pos.y,
+            mob_move_speed(mob.move_speed) as i32,
+        );
         pos.x = nx;
         pos.y = ny;
-        outbox.0.push(MoveEvent::Moved {
-            player_vid: p.vid,
-            vid: vid.vid,
-            x: nx,
-            y: ny,
-            rot,
-            duration_ms,
-        }.into());
+        outbox.0.push(
+            MoveEvent::Moved {
+                player_vid: p.vid,
+                vid: vid.vid,
+                x: nx,
+                y: ny,
+                rot,
+                duration_ms,
+            }
+            .into(),
+        );
     }
 }
 
@@ -323,7 +403,14 @@ pub(crate) fn aggro_detect_system(
         }
         if let Some((pe, pv, _)) = best {
             aggro.target = Some(pe);
-            outbox.0.push(CombatEvent::AggroOn { player_vid: pv, vid: vid.vid, vnum: mob.vnum }.into());
+            outbox.0.push(
+                CombatEvent::AggroOn {
+                    player_vid: pv,
+                    vid: vid.vid,
+                    vnum: mob.vnum,
+                }
+                .into(),
+            );
         }
     }
 }
@@ -352,7 +439,8 @@ pub(crate) struct NpcDamage {
 
 impl WorldSim {
     /// Estado completo del mob `vid` (None si no existe).
-    pub(crate) fn npc_view(&self, vid: u32) -> Option<NpcView> {        let e = *self.world.resource::<NpcIndex>().0.get(&vid)?;
+    pub(crate) fn npc_view(&self, vid: u32) -> Option<NpcView> {
+        let e = *self.world.resource::<NpcIndex>().0.get(&vid)?;
         let ent = self.world.get_entity(e).ok()?;
         let pos = ent.get::<Position>()?;
         let hp = ent.get::<Hp>()?;
@@ -431,7 +519,12 @@ impl WorldSim {
     /// Aplica `damage` al HP del mob (clamp a 0) y le marca AGGRO contra el
     /// jugador que golpeó (parity: el C++ marca el aggro en `OnDamage`).
     /// Devuelve el HP tras el golpe + si murió; None si el mob no existe.
-    pub(crate) fn damage_npc(&mut self, vid: u32, damage: i32, aggro_to: Option<Entity>) -> Option<NpcDamage> {
+    pub(crate) fn damage_npc(
+        &mut self,
+        vid: u32,
+        damage: i32,
+        aggro_to: Option<Entity>,
+    ) -> Option<NpcDamage> {
         let e = *self.world.resource::<NpcIndex>().0.get(&vid)?;
         let hp_after = {
             let mut ent = self.world.get_entity_mut(e).ok()?;
@@ -450,7 +543,10 @@ impl WorldSim {
         // El aggro se marca en un borrow aparte (borrows secuenciales).
         let mut ent = self.world.get_entity_mut(e).ok()?;
         ent.get_mut::<Aggro>()?.target = aggro_to;
-        Some(NpcDamage { hp: hp_after, dead: hp_after <= 0 })
+        Some(NpcDamage {
+            hp: hp_after,
+            dead: hp_after <= 0,
+        })
     }
 
     /// Quita el mob del mundo (muerte o despawn). Idempotente. C23: si el
@@ -534,11 +630,32 @@ impl WorldSim {
             return Vec::new();
         };
         let (px, py, level, ht, job, st, dx, iq, _armor, att_bonus, crit_pct, att_spd_bonus) = {
-            let Ok(ent) = self.world.get_entity(pe) else { return Vec::new() };
-            let Some(pos) = ent.get::<Position>() else { return Vec::new() };
-            let Some(p) = ent.get::<Player>() else { return Vec::new() };
-            let Some(aff) = ent.get::<Affects>() else { return Vec::new() };
-            (pos.x, pos.y, p.level, p.ht, p.job, p.st, p.dx, p.iq, p.armor, aff.att_grade_bonus(), aff.critical_pct(), aff.att_speed_bonus())
+            let Ok(ent) = self.world.get_entity(pe) else {
+                return Vec::new();
+            };
+            let Some(pos) = ent.get::<Position>() else {
+                return Vec::new();
+            };
+            let Some(p) = ent.get::<Player>() else {
+                return Vec::new();
+            };
+            let Some(aff) = ent.get::<Affects>() else {
+                return Vec::new();
+            };
+            (
+                pos.x,
+                pos.y,
+                p.level,
+                p.ht,
+                p.job,
+                p.st,
+                p.dx,
+                p.iq,
+                p.armor,
+                aff.att_grade_bonus(),
+                aff.critical_pct(),
+                aff.att_speed_bonus(),
+            )
         };
         let player_state = PlayerState {
             vid: player_vid,
@@ -585,9 +702,11 @@ impl WorldSim {
         // El cooldown del jugador: componente Combat de su entidad (se
         // extrae y se devuelve — borrows secuenciales del mundo).
         let mut combat = {
-            let Ok(mut ent) = self.world.get_entity_mut(pe) else { return Vec::new() };
+            let Ok(mut ent) = self.world.get_entity_mut(pe) else {
+                return Vec::new();
+            };
             match ent.get_mut::<Combat>() {
-                Some(mut c) => std::mem::replace(&mut c.0, CombatState::new()),
+                Some(mut c) => std::mem::take(&mut c.0),
                 None => return Vec::new(),
             }
         };
@@ -638,14 +757,16 @@ impl WorldSim {
                     damage,
                     dead,
                     victim_hp: hp_after,
-                }.into(),
+                }
+                .into(),
                 CombatEvent::PvPVictimHit {
                     player_vid: victim_vid,
                     attacker_vid: player_vid,
                     packets: result.packets,
                     damage,
                     dead,
-                }.into(),
+                }
+                .into(),
             ];
         }
         let Some(view) = self.npc_view(victim_vid) else {
@@ -660,7 +781,7 @@ impl WorldSim {
                 hp_after = dmg.hp;
                 if dead {
                     self.remove_npc(victim_vid); // el mundo quita el mob; la
-                                                 // conexión hace la recompensa
+                    // conexión hace la recompensa
                 }
             } else {
                 damage = 0; // defensivo: el objetivo desapareció
@@ -678,14 +799,17 @@ impl WorldSim {
             drop_item: view.drop_item,
             mob_level: view.state.level,
         });
-        vec![CombatEvent::AttackResult {
-            player_vid,
-            victim_vid,
-            packets: result.packets,
-            damage,
-            dead,
-            victim,
-        }.into()]
+        vec![
+            CombatEvent::AttackResult {
+                player_vid,
+                victim_vid,
+                packets: result.packets,
+                damage,
+                dead,
+                victim,
+            }
+            .into(),
+        ]
     }
 
     /// CG_TARGET del jugador (fix bug 5, 2026-08-15): responde con el HP%
@@ -697,12 +821,15 @@ impl WorldSim {
         let Some(view) = self.npc_view(target_vid) else {
             return Vec::new();
         };
-        vec![CombatEvent::TargetResult {
-            player_vid,
-            vid: target_vid,
-            hp: view.hp,
-            max_hp: view.max_hp,
-        }.into()]
+        vec![
+            CombatEvent::TargetResult {
+                player_vid,
+                vid: target_vid,
+                hp: view.hp,
+                max_hp: view.max_hp,
+            }
+            .into(),
+        ]
     }
 
     /// `/kill` de GM (parity do_kill cmd_gm.cpp:1505+ → `SetDead` directo:
@@ -718,7 +845,14 @@ impl WorldSim {
         let Some((vnum, mut events)) = self.gm_remove_mob(target_vid) else {
             return Vec::new();
         };
-        let mut out = vec![CombatEvent::GmKilled { player_vid, vid: target_vid, vnum }.into()];
+        let mut out = vec![
+            CombatEvent::GmKilled {
+                player_vid,
+                vid: target_vid,
+                vnum,
+            }
+            .into(),
+        ];
         out.append(&mut events);
         out
     }
@@ -776,7 +910,13 @@ impl WorldSim {
         self.remove_npc(target_vid);
         let mut events = Vec::new();
         for (pv, _, _) in self.map_players(map_index) {
-            events.push(CombatEvent::Despawned { player_vid: pv, vid: target_vid }.into());
+            events.push(
+                CombatEvent::Despawned {
+                    player_vid: pv,
+                    vid: target_vid,
+                }
+                .into(),
+            );
         }
         Some((vnum, events))
     }
@@ -831,7 +971,9 @@ impl WorldSim {
     /// Sincroniza el HP del jugador (pociones/revive — la sesión ya aplicó el
     /// cambio a row.hp; el mundo lo refleja para el daño del AI).
     pub(crate) fn set_player_hp(&mut self, player_vid: u32, hp: i32) {
-        let Some(e) = self.players.get(&player_vid).copied() else { return };
+        let Some(e) = self.players.get(&player_vid).copied() else {
+            return;
+        };
         if let Ok(mut ent) = self.world.get_entity_mut(e)
             && let Some(mut h) = ent.get_mut::<Hp>()
         {
@@ -842,7 +984,9 @@ impl WorldSim {
     /// Sincroniza el SP del jugador (pociones/revive — el coste de las
     /// skills lo paga el mundo desde su componente Mp).
     pub(crate) fn set_player_mp(&mut self, player_vid: u32, mp: i32) {
-        let Some(e) = self.players.get(&player_vid).copied() else { return };
+        let Some(e) = self.players.get(&player_vid).copied() else {
+            return;
+        };
         if let Ok(mut ent) = self.world.get_entity_mut(e)
             && let Some(mut m) = ent.get_mut::<Mp>()
         {
@@ -853,7 +997,9 @@ impl WorldSim {
     /// Sincroniza el iArmor del jugador (equipar/desequipar — `equipped_armor`
     /// del canal; el AI lo usa en `player_def_grade`).
     pub(crate) fn set_player_armor(&mut self, player_vid: u32, armor: i32) {
-        let Some(e) = self.players.get(&player_vid).copied() else { return };
+        let Some(e) = self.players.get(&player_vid).copied() else {
+            return;
+        };
         if let Ok(mut ent) = self.world.get_entity_mut(e)
             && let Some(mut p) = ent.get_mut::<Player>()
         {
@@ -863,7 +1009,9 @@ impl WorldSim {
 
     /// Sincroniza el nivel del jugador (level-up del kill — la DEF del AI).
     pub(crate) fn set_player_level(&mut self, player_vid: u32, level: i32) {
-        let Some(e) = self.players.get(&player_vid).copied() else { return };
+        let Some(e) = self.players.get(&player_vid).copied() else {
+            return;
+        };
         if let Ok(mut ent) = self.world.get_entity_mut(e)
             && let Some(mut p) = ent.get_mut::<Player>()
         {
@@ -888,12 +1036,15 @@ impl WorldSim {
         flag: u32,
         duration_secs: i32,
     ) {
-        let Some(e) = self.players.get(&player_vid).copied() else { return };
+        let Some(e) = self.players.get(&player_vid).copied() else {
+            return;
+        };
         if let Ok(mut ent) = self.world.get_entity_mut(e)
             && let Some(mut aff) = ent.get_mut::<Affects>()
         {
             // Override del mismo (dwType, bApplyOn) — parity bOverride.
-            aff.0.retain(|a| !(a.skill_id == dw_type && a.point == point));
+            aff.0
+                .retain(|a| !(a.skill_id == dw_type && a.point == point));
             aff.0.push(Affect {
                 skill_id: dw_type,
                 point,
@@ -909,7 +1060,9 @@ impl WorldSim {
     /// lo manda al setear el flag de sesión; el gate `battle_is_attackable`
     /// del PvP lo consume).
     pub(crate) fn set_player_pvp_mode(&mut self, player_vid: u32, mode: PkMode) {
-        let Some(e) = self.players.get(&player_vid).copied() else { return };
+        let Some(e) = self.players.get(&player_vid).copied() else {
+            return;
+        };
         if let Ok(mut ent) = self.world.get_entity_mut(e)
             && let Some(mut p) = ent.get_mut::<Pvp>()
         {
@@ -920,7 +1073,9 @@ impl WorldSim {
     /// Sincroniza la party del jugador (Joined/LeftParty del canal —
     /// "cannot attack same party", pvp.cpp:439-441).
     pub(crate) fn set_player_party(&mut self, player_vid: u32, party_id: Option<u32>) {
-        let Some(e) = self.players.get(&player_vid).copied() else { return };
+        let Some(e) = self.players.get(&player_vid).copied() else {
+            return;
+        };
         if let Ok(mut ent) = self.world.get_entity_mut(e)
             && let Some(mut p) = ent.get_mut::<Pvp>()
         {
@@ -932,7 +1087,9 @@ impl WorldSim {
 #[cfg(test)]
 mod tests {
     use crate::combat::PkMode;
-    use crate::ecs::events::{CombatEvent, CombatIntent, MoveEvent, MoveIntent, NpcEvent, PlayerJoin};
+    use crate::ecs::events::{
+        CombatEvent, CombatIntent, MoveEvent, MoveIntent, NpcEvent, PlayerJoin,
+    };
     use crate::ecs::test_util::*;
 
     /// El CG_ATTACK se resuelve EN EL MUNDO: AttackResult con los paquetes
@@ -945,20 +1102,38 @@ mod tests {
         load(&mut w, vec![(entry(101, 0, 0, 1), mob_row(101))]);
         join(&mut w);
         let events = w.process_intent(
-            CombatIntent::Attack { player_vid: 2, victim_vid: 10_000, b_type: 0, weapon: None }.into(),
+            CombatIntent::Attack {
+                player_vid: 2,
+                victim_vid: 10_000,
+                b_type: 0,
+                weapon: None,
+            }
+            .into(),
             1_000,
         );
         let attack = events.iter().find_map(|e| match e {
-            NpcEvent::Combat(CombatEvent::AttackResult { victim_vid, packets, damage, dead, victim, .. }) => {
-                Some((*victim_vid, packets.clone(), *damage, *dead, *victim))
-            }
+            NpcEvent::Combat(CombatEvent::AttackResult {
+                victim_vid,
+                packets,
+                damage,
+                dead,
+                victim,
+                ..
+            }) => Some((*victim_vid, packets.clone(), *damage, *dead, *victim)),
             _ => None,
         });
         let (victim_vid, packets, damage, dead, victim) = attack.expect("AttackResult");
         assert_eq!(victim_vid, 10_000);
-        assert_eq!(packets.len(), 1, "solo GcDamageInfo (fix 2026-08-14 — GcAttack 12 cerraba el cliente)");
+        assert_eq!(
+            packets.len(),
+            1,
+            "solo GcDamageInfo (fix 2026-08-14 — GcAttack 12 cerraba el cliente)"
+        );
         assert_eq!(packets[0][0], 135, "header GC_DAMAGE_INFO");
-        assert!((46..=47).contains(&damage), "daño del ninja vs mob 101: {damage}");
+        assert!(
+            (46..=47).contains(&damage),
+            "daño del ninja vs mob 101: {damage}"
+        );
         assert!(!dead);
         let v = victim.expect("víctima");
         assert_eq!(v.vnum, 101);
@@ -966,7 +1141,13 @@ mod tests {
         assert_eq!((v.x, v.y), (0, 0));
         // Sin respuesta para ataques rechazados (cooldown — parity).
         let events = w.process_intent(
-            CombatIntent::Attack { player_vid: 2, victim_vid: 10_000, b_type: 0, weapon: None }.into(),
+            CombatIntent::Attack {
+                player_vid: 2,
+                victim_vid: 10_000,
+                b_type: 0,
+                weapon: None,
+            }
+            .into(),
             1_100,
         );
         assert!(events.is_empty(), "cooldown 1250 ms: rechazo sin evento");
@@ -982,20 +1163,32 @@ mod tests {
         load(&mut w, vec![(entry(101, 0, 0, 1), row)]);
         join(&mut w);
         let events = w.process_intent(
-            CombatIntent::Attack { player_vid: 2, victim_vid: 10_000, b_type: 0, weapon: None }.into(),
+            CombatIntent::Attack {
+                player_vid: 2,
+                victim_vid: 10_000,
+                b_type: 0,
+                weapon: None,
+            }
+            .into(),
             1_000,
         );
         let result = events.iter().find_map(|e| match e {
-            NpcEvent::Combat(CombatEvent::AttackResult { dead, damage, victim, .. }) => {
-                Some((*dead, *damage, *victim))
-            }
+            NpcEvent::Combat(CombatEvent::AttackResult {
+                dead,
+                damage,
+                victim,
+                ..
+            }) => Some((*dead, *damage, *victim)),
             _ => None,
         });
         let (dead, damage, victim) = result.expect("AttackResult");
         assert!(dead, "10 hp < 46 de daño");
         assert!(damage >= 46);
         let v = victim.expect("víctima");
-        assert_eq!((v.exp, v.gold_min, v.gold_max, v.drop_item), (22, 15, 45, 101));
+        assert_eq!(
+            (v.exp, v.gold_min, v.gold_max, v.drop_item),
+            (22, 15, 45, 101)
+        );
         assert_eq!(w.npc_count(), 0, "el mundo despawnó al mob muerto");
     }
 
@@ -1009,20 +1202,31 @@ mod tests {
         row.ai_flag = Some("AGGR".into()); // proactivo (sight 400)
         load(&mut w, vec![(entry(101, 0, 0, 1), row)]);
         let events = join(&mut w); // el primer tick: spawn + detect → AggroOn
-        assert!(events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::AggroOn { .. }))), "{events:?}");
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, NpcEvent::Combat(CombatEvent::AggroOn { .. }))),
+            "{events:?}"
+        );
         // C29: el cooldown del golpe es 2000 ms (attack_speed 100) — un tick
         // de 2000 ms lo satisface (el mob está EN RANGO, no se mueve).
         let events = w.update(2_000);
         let attack = events.iter().find_map(|e| match e {
-            NpcEvent::Combat(CombatEvent::MobAttack { vid, damage, player_vid, .. }) => {
-                Some((*vid, *damage, *player_vid))
-            }
+            NpcEvent::Combat(CombatEvent::MobAttack {
+                vid,
+                damage,
+                player_vid,
+                ..
+            }) => Some((*vid, *damage, *player_vid)),
             _ => None,
         });
         let (vid, damage, player_vid) = attack.expect("MobAttack");
         assert_eq!(vid, 10_000);
         assert_eq!(player_vid, 2);
-        assert!((1..=5).contains(&damage), "floor de CalcBattleDamage: {damage}");
+        assert!(
+            (1..=5).contains(&damage),
+            "floor de CalcBattleDamage: {damage}"
+        );
         assert_eq!(w.player_hp(2), 100 - damage, "el mundo aplicó el daño");
     }
 
@@ -1049,7 +1253,13 @@ mod tests {
         join(&mut w);
         // El jugador ataca al mob (daño 46 → hp 14).
         w.process_intent(
-            CombatIntent::Attack { player_vid: 2, victim_vid: 10_000, b_type: 0, weapon: None }.into(),
+            CombatIntent::Attack {
+                player_vid: 2,
+                victim_vid: 10_000,
+                b_type: 0,
+                weapon: None,
+            }
+            .into(),
             1_000,
         );
         // C29 cooldown: 2000 ms (att_speed 100 — sin godspeed).
@@ -1072,14 +1282,22 @@ mod tests {
         load(&mut w3, vec![(entry(101, 0, 0, 1), row3)]);
         join(&mut w3);
         w3.process_intent(
-            CombatIntent::Attack { player_vid: 2, victim_vid: 10_000, b_type: 0, weapon: None }.into(),
+            CombatIntent::Attack {
+                player_vid: 2,
+                victim_vid: 10_000,
+                b_type: 0,
+                weapon: None,
+            }
+            .into(),
             1_000,
         );
         // Un tick de 1000 ms dispara el golpe SOLO con godspeed (sin él
         // harían falta 2000).
         let events = w3.update(1_000);
         assert!(
-            events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::MobAttack { .. }))),
+            events
+                .iter()
+                .any(|e| matches!(e, NpcEvent::Combat(CombatEvent::MobAttack { .. }))),
             "godspeed: cooldown 1000 ms con att_speed 250 — el tick de 1000 dispara"
         );
     }
@@ -1099,13 +1317,17 @@ mod tests {
         // Tick de 1000 ms: MENOR que el cooldown (2000) → SIN golpe.
         let events = w.update(1_000);
         assert!(
-            !events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::MobAttack { .. }))),
+            !events
+                .iter()
+                .any(|e| matches!(e, NpcEvent::Combat(CombatEvent::MobAttack { .. }))),
             "cooldown 2000 ms: el tick de 1000 NO dispara el golpe — {events:?}"
         );
         // Tick adicional de 1000 ms: ahora 2000 ≥ cooldown → SÍ golpea.
         let events = w.update(1_000);
         assert!(
-            events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::MobAttack { .. }))),
+            events
+                .iter()
+                .any(|e| matches!(e, NpcEvent::Combat(CombatEvent::MobAttack { .. }))),
             "tras 2000 ms acumulados el mob golpea"
         );
     }
@@ -1122,20 +1344,35 @@ mod tests {
         join(&mut w);
         // Primer golpe: 80 → 34 (100% > 50% — el skin NO aplica).
         w.process_intent(
-            CombatIntent::Attack { player_vid: 2, victim_vid: 10_000, b_type: 0, weapon: None }.into(),
+            CombatIntent::Attack {
+                player_vid: 2,
+                victim_vid: 10_000,
+                b_type: 0,
+                weapon: None,
+            }
+            .into(),
             1_000,
         );
         let hp1 = w.npc_view(10_000).expect("mob").hp;
-        assert!(hp1 > 30 && hp1 < 36, "primer golpe sin skin (100% > 50%): hp {hp1}");
+        assert!(
+            hp1 > 30 && hp1 < 36,
+            "primer golpe sin skin (100% > 50%): hp {hp1}"
+        );
         // Segundo golpe (esperando el cooldown del jugador 1250 ms): hp
         // ~34/80 = 42% < 50% → el daño se divide (46/2 = 23 → ~11).
         w.process_intent(
-            CombatIntent::Attack { player_vid: 2, victim_vid: 10_000, b_type: 0, weapon: None }.into(),
+            CombatIntent::Attack {
+                player_vid: 2,
+                victim_vid: 10_000,
+                b_type: 0,
+                weapon: None,
+            }
+            .into(),
             3_000,
         );
         let hp2 = w.npc_view(10_000).expect("mob").hp;
         assert!(
-            hp2 >= 8 && hp2 <= 14,
+            (8..=14).contains(&hp2),
             "segundo golpe CON skin (42% < 50%): 34 − ~23 = ~11, hp {hp2}"
         );
     }
@@ -1154,9 +1391,14 @@ mod tests {
         join(&mut w); // spawn + AggroOn (dist 384 ≤ sight 400)
         let events = w.update(500);
         let moved = events.iter().find_map(|e| match e {
-            NpcEvent::Move(MoveEvent::Moved { vid, x, y, rot, duration_ms, .. }) => {
-                Some((*vid, *x, *y, *rot, *duration_ms))
-            }
+            NpcEvent::Move(MoveEvent::Moved {
+                vid,
+                x,
+                y,
+                rot,
+                duration_ms,
+                ..
+            }) => Some((*vid, *x, *y, *rot, *duration_ms)),
             _ => None,
         });
         let (vid, x, y, rot, dur) = moved.expect("paso hacia el jugador");
@@ -1164,8 +1406,16 @@ mod tests {
         // 300 u/s (el rewrite usaba la columna como u/s → 3× más lento).
         assert_eq!((vid, x, y), (10_000, 250, 0), "400 − 300 units/s × 0.5 s");
         assert_eq!(rot, 36, "oeste (180°/5) — el mob avanza hacia el origen");
-        assert_eq!(dur, 500, "dw_duration = dist/move_speed = 150 u / 300 u/s = 500 ms (parity CalculateMoveDuration)");
-        assert!(!events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::MobAttack { .. }))), "400 > rango melee");
+        assert_eq!(
+            dur, 500,
+            "dw_duration = dist/move_speed = 150 u / 300 u/s = 500 ms (parity CalculateMoveDuration)"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, NpcEvent::Combat(CombatEvent::MobAttack { .. }))),
+            "400 > rango melee"
+        );
     }
 
     /// De-aggro por distancia: el mob golpeado persigue hasta
@@ -1178,13 +1428,36 @@ mod tests {
         load(&mut w, vec![(entry(101, 0, 0, 1), row)]);
         join(&mut w);
         w.process_intent(
-            CombatIntent::Attack { player_vid: 2, victim_vid: 10_000, b_type: 0, weapon: None }.into(),
+            CombatIntent::Attack {
+                player_vid: 2,
+                victim_vid: 10_000,
+                b_type: 0,
+                weapon: None,
+            }
+            .into(),
             1_000,
         ); // daño → aggro
-        w.process_intent(MoveIntent::Move { player_vid: 2, x: 2_500, y: 0 }.into(), 2_000);
+        w.process_intent(
+            MoveIntent::Move {
+                player_vid: 2,
+                x: 2_500,
+                y: 0,
+            }
+            .into(),
+            2_000,
+        );
         let events = w.update(500);
-        assert!(events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::AggroOff { .. }))), "{events:?}");
-        assert!(!events.iter().any(|e| matches!(e, NpcEvent::Move(MoveEvent::Moved { .. }))));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, NpcEvent::Combat(CombatEvent::AggroOff { .. }))),
+            "{events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, NpcEvent::Move(MoveEvent::Moved { .. })))
+        );
     }
 
     /// Las stats de combate del jugador (level/ht/armor del PlayerJoin)
@@ -1222,7 +1495,11 @@ mod tests {
             NpcEvent::Combat(CombatEvent::MobAttack { damage, .. }) => Some(*damage),
             _ => None,
         });
-        assert_eq!(attack, Some(58), "100 − (6 + 24 + 12) — parity player_def_grade");
+        assert_eq!(
+            attack,
+            Some(58),
+            "100 − (6 + 24 + 12) — parity player_def_grade"
+        );
         assert_eq!(w.player_hp(2), 100 - 58, "el mundo aplicó el daño");
     }
 
@@ -1237,7 +1514,10 @@ mod tests {
         // El join de p2 corre el primer tick: spawn + detect → AggroOn{p2}.
         let join2 = join_at(&mut w, 2, 0, 0);
         assert!(
-            join2.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::AggroOn { player_vid: 2, .. }))),
+            join2.iter().any(|e| matches!(
+                e,
+                NpcEvent::Combat(CombatEvent::AggroOn { player_vid: 2, .. })
+            )),
             "el jugador 2 es el más cercano: {join2:?}"
         );
         join_at(&mut w, 3, 5_000, 0); // lejos del mob (4800 > sight 400)
@@ -1261,19 +1541,27 @@ mod tests {
         join(&mut w);
         // El mob tiene 100 max — el target reporta hp/max sin dañar.
         let events = w.process_intent(
-            CombatIntent::Target { player_vid: 2, target_vid: 10_000 }.into(),
+            CombatIntent::Target {
+                player_vid: 2,
+                target_vid: 10_000,
+            }
+            .into(),
             1_000,
         );
         let result = events.iter().find_map(|e| match e {
-            NpcEvent::Combat(CombatEvent::TargetResult { vid, hp, max_hp, .. }) => {
-                Some((*vid, *hp, *max_hp))
-            }
+            NpcEvent::Combat(CombatEvent::TargetResult {
+                vid, hp, max_hp, ..
+            }) => Some((*vid, *hp, *max_hp)),
             _ => None,
         });
         assert_eq!(result, Some((10_000, 100, 100)), "hp/max del mob apuntado");
         // Vid sin entidad -> sin evento (el cliente mantiene la barra).
         let events = w.process_intent(
-            CombatIntent::Target { player_vid: 2, target_vid: 99_999 }.into(),
+            CombatIntent::Target {
+                player_vid: 2,
+                target_vid: 99_999,
+            }
+            .into(),
             1_000,
         );
         assert!(events.is_empty(), "vid inexistente -> sin respuesta");
@@ -1342,7 +1630,11 @@ mod tests {
         // Jugador 2 en el mapa 41: materializa el mob 101 (aggro → chase).
         let events = join_at(&mut w, 2, 0, 0);
         assert_eq!(w.npc_count(), 1, "solo el mob del mapa 41");
-        assert!(events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::AggroOn { .. }))));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, NpcEvent::Combat(CombatEvent::AggroOn { .. })))
+        );
         // Jugador 3 en el mapa 42 (mismas coords del mundo): materializa el
         // mob 2101 — el primer tick del join también mueve al mob 101
         // (paso 600 → 450 con la velocidad real 300 u/s; el chase corre
@@ -1366,7 +1658,11 @@ mod tests {
             dx: 30,
             iq: 30,
         });
-        assert_eq!(w.npc_count(), 2, "el mob del mapa 42 también se materializó");
+        assert_eq!(
+            w.npc_count(),
+            2,
+            "el mob del mapa 42 también se materializó"
+        );
         // Tick siguiente: el mob 101 (en 450, fuera de rango 300) avanza
         // RECTO y pisa las coordenadas EXACTAS del mob del mapa 42
         // (450 → 300, paso de 150 u con la velocidad real 300 u/s) — sin el
@@ -1377,9 +1673,20 @@ mod tests {
             NpcEvent::Move(MoveEvent::Moved { vid, x, y, .. }) => Some((*vid, *x, *y)),
             _ => None,
         });
-        assert_eq!(moved, Some((10_000, 300, 0)), "paso recto: el mob del mapa 42 no bloquea");
-        assert_eq!(w.npc_view(10_000).map(|v| (v.state.x, v.state.y)), Some((300, 0)));
-        assert_eq!(w.npc_view(10_001).map(|v| (v.state.x, v.state.y)), Some((300, 0)), "el mob del mapa 42 sigue en su sitio");
+        assert_eq!(
+            moved,
+            Some((10_000, 300, 0)),
+            "paso recto: el mob del mapa 42 no bloquea"
+        );
+        assert_eq!(
+            w.npc_view(10_000).map(|v| (v.state.x, v.state.y)),
+            Some((300, 0))
+        );
+        assert_eq!(
+            w.npc_view(10_001).map(|v| (v.state.x, v.state.y)),
+            Some((300, 0)),
+            "el mob del mapa 42 sigue en su sitio"
+        );
     }
 
     /// C28 (amontonamiento): 2 mobs del MISMO entry persiguiendo al mismo
@@ -1405,7 +1712,11 @@ mod tests {
         // dentro del sight de aggro (400) y persiguen de verdad (un rect de
         // ±500 dejaría una copia a 455 > sight → patrulla sin target y el
         // test no prueba la separación en persecución).
-        let e = SpawnEntry { w_x: 2, w_y: 2, ..entry(101, 0, 0, 2) };
+        let e = SpawnEntry {
+            w_x: 2,
+            w_y: 2,
+            ..entry(101, 0, 0, 2)
+        };
         load(&mut w, vec![(e, row)]);
         join(&mut w); // spawn con jitter + AggroOn de ambos
         assert_eq!(w.npc_count(), 2);
@@ -1461,7 +1772,10 @@ mod tests {
         // el mob está cerca del jugador — la clave: NO en el eje x directo
         // (|y| > 0 significa el desvío lateral del change-attack-position).
         // El rng determinista con seed 42 da un ángulo no-trivial.
-        assert!(y.abs() > 20, "el mob se desvió del eje directo (C32): ({x},{y})");
+        assert!(
+            y.abs() > 20,
+            "el mob se desvió del eje directo (C32): ({x},{y})"
+        );
         // Y está a ≤ rango de ataque del jugador (o muy cerca — persiguiendo
         // el punto lateral que queda a fMinDistance ≈ 158 de la víctima).
         let d = crate::combat::distance_approx(x, y);
@@ -1480,28 +1794,66 @@ mod tests {
         let mut w = world_with(42);
         let mut row = mob_row(101);
         row.max_hp = 10; // un golpe (46+) mata
-        let e = SpawnEntry { time: 2, ..entry(101, 0, 0, 1) }; // intervalo 2 s
+        let e = SpawnEntry {
+            time: 2,
+            ..entry(101, 0, 0, 1)
+        }; // intervalo 2 s
         load(&mut w, vec![(e, row)]);
         join(&mut w);
         assert_eq!(w.npc_count(), 1);
         // Muerte (el reloj del mundo va en 500 ms — el del join).
         w.process_intent(
-            CombatIntent::Attack { player_vid: 2, victim_vid: 10_000, b_type: 0, weapon: None }.into(),
+            CombatIntent::Attack {
+                player_vid: 2,
+                victim_vid: 10_000,
+                b_type: 0,
+                weapon: None,
+            }
+            .into(),
             1_000,
         );
         assert_eq!(w.npc_count(), 0, "muerto: despawn inmediato");
         // t+1.0 s y t+1.5 s: aún dentro del intervalo de 2 s -> sin spawn.
-        assert_eq!(w.update(500).iter().filter(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))).count(), 0, "t+0.5 s");
-        assert_eq!(w.update(500).iter().filter(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))).count(), 0, "t+1.0 s");
-        assert_eq!(w.update(500).iter().filter(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))).count(), 0, "t+1.5 s");
+        assert_eq!(
+            w.update(500)
+                .iter()
+                .filter(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. })))
+                .count(),
+            0,
+            "t+0.5 s"
+        );
+        assert_eq!(
+            w.update(500)
+                .iter()
+                .filter(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. })))
+                .count(),
+            0,
+            "t+1.0 s"
+        );
+        assert_eq!(
+            w.update(500)
+                .iter()
+                .filter(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. })))
+                .count(),
+            0,
+            "t+1.5 s"
+        );
         assert_eq!(w.npc_count(), 0, "aún pendiente");
         // t+2.0 s: vence el deadline -> la entrada re-materializa (el
         // jugador sigue en la vista) con un vid FRESCO (el allocador no
         // reusa — parity del flujo dinámico).
         let events = w.update(500);
-        assert!(events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))), "respawn: {events:?}");
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))),
+            "respawn: {events:?}"
+        );
         assert_eq!(w.npc_count(), 1, "reapareció tras el intervalo");
-        assert!(w.npc_view(10_001).is_some(), "vid fresco 10_001 (el 10_000 murió)");
+        assert!(
+            w.npc_view(10_001).is_some(),
+            "vid fresco 10_001 (el 10_000 murió)"
+        );
     }
 
     /// C23/F2 (time=0 → SIN respawn): las entradas con `time == 0` del
@@ -1516,12 +1868,27 @@ mod tests {
         let mut w = world_with(42);
         let mut row = mob_row(101);
         row.max_hp = 10; // un golpe (46+) mata
-        load(&mut w, vec![(SpawnEntry { time: 0, ..entry(101, 0, 0, 1) }, row)]);
+        load(
+            &mut w,
+            vec![(
+                SpawnEntry {
+                    time: 0,
+                    ..entry(101, 0, 0, 1)
+                },
+                row,
+            )],
+        );
         join(&mut w);
         assert_eq!(w.npc_count(), 1);
         // Muerte (el reloj del mundo va en 500 ms — el del join).
         w.process_intent(
-            CombatIntent::Attack { player_vid: 2, victim_vid: 10_000, b_type: 0, weapon: None }.into(),
+            CombatIntent::Attack {
+                player_vid: 2,
+                victim_vid: 10_000,
+                b_type: 0,
+                weapon: None,
+            }
+            .into(),
             1_000,
         );
         assert_eq!(w.npc_count(), 0, "muerto: despawn inmediato");
@@ -1530,7 +1897,9 @@ mod tests {
         for _ in 0..3 {
             let events = w.update(20_000);
             assert!(
-                !events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))),
+                !events
+                    .iter()
+                    .any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))),
                 "time=0 no respawnea: {events:?}"
             );
             assert_eq!(w.npc_count(), 0);
@@ -1538,12 +1907,30 @@ mod tests {
         // Ni al salir y re-acercarse: el sentinel del RespawnQueue bloquea
         // la re-materialización del spawn dinámico (parity: el mob del C++
         // no reaparece aunque los players entren/salgan del área).
-        w.process_intent(MoveIntent::Move { player_vid: 2, x: 10_800, y: 0 }.into(), 61_000);
+        w.process_intent(
+            MoveIntent::Move {
+                player_vid: 2,
+                x: 10_800,
+                y: 0,
+            }
+            .into(),
+            61_000,
+        );
         w.update(500);
-        w.process_intent(MoveIntent::Move { player_vid: 2, x: 0, y: 0 }.into(), 62_000);
+        w.process_intent(
+            MoveIntent::Move {
+                player_vid: 2,
+                x: 0,
+                y: 0,
+            }
+            .into(),
+            62_000,
+        );
         let events = w.update(500);
         assert!(
-            !events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))),
+            !events
+                .iter()
+                .any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))),
             "no reaparece al volver el jugador: {events:?}"
         );
         assert_eq!(w.npc_count(), 0);
@@ -1565,34 +1952,75 @@ mod tests {
         // PK OFF en ambos → el gate rechaza (PK_MODE_PEACE — el resto del
         // switch del C++ cae al duelo → false).
         let events = w.process_intent(
-            CombatIntent::Attack { player_vid: 2, victim_vid: 3, b_type: 0, weapon: None }.into(),
+            CombatIntent::Attack {
+                player_vid: 2,
+                victim_vid: 3,
+                b_type: 0,
+                weapon: None,
+            }
+            .into(),
             1_000,
         );
-        assert!(events.is_empty(), "PK OFF → battle_is_attackable false: {events:?}");
+        assert!(
+            events.is_empty(),
+            "PK OFF → battle_is_attackable false: {events:?}"
+        );
         // Atacante PK ON → atacable: el golpe hace daño al Hp del jugador 3.
-        w.process_intent(CombatIntent::SetPvpMode { player_vid: 2, mode: PkMode::Free }.into(), 1_000);
-        let events = w.process_intent(
-            CombatIntent::Attack { player_vid: 2, victim_vid: 3, b_type: 0, weapon: None }.into(),
+        w.process_intent(
+            CombatIntent::SetPvpMode {
+                player_vid: 2,
+                mode: PkMode::Free,
+            }
+            .into(),
             1_000,
         );
-        let atk = events.iter().find_map(|e| match e {
-            NpcEvent::Combat(CombatEvent::PvPAttackResult { victim_vid, packets, damage, dead, victim_hp, .. }) => {
-                Some((*victim_vid, packets.clone(), *damage, *dead, *victim_hp))
+        let events = w.process_intent(
+            CombatIntent::Attack {
+                player_vid: 2,
+                victim_vid: 3,
+                b_type: 0,
+                weapon: None,
             }
-            _ => None,
-        }).expect("PvPAttackResult");
-        let hit = events.iter().find_map(|e| match e {
-            NpcEvent::Combat(CombatEvent::PvPVictimHit { player_vid, attacker_vid, packets, damage, dead, .. }) => {
-                Some((*player_vid, *attacker_vid, packets.clone(), *damage, *dead))
-            }
-            _ => None,
-        }).expect("PvPVictimHit");
+            .into(),
+            1_000,
+        );
+        let atk = events
+            .iter()
+            .find_map(|e| match e {
+                NpcEvent::Combat(CombatEvent::PvPAttackResult {
+                    victim_vid,
+                    packets,
+                    damage,
+                    dead,
+                    victim_hp,
+                    ..
+                }) => Some((*victim_vid, packets.clone(), *damage, *dead, *victim_hp)),
+                _ => None,
+            })
+            .expect("PvPAttackResult");
+        let hit = events
+            .iter()
+            .find_map(|e| match e {
+                NpcEvent::Combat(CombatEvent::PvPVictimHit {
+                    player_vid,
+                    attacker_vid,
+                    packets,
+                    damage,
+                    dead,
+                    ..
+                }) => Some((*player_vid, *attacker_vid, packets.clone(), *damage, *dead)),
+                _ => None,
+            })
+            .expect("PvPVictimHit");
         let (victim_vid, atk_packets, damage, dead, victim_hp) = atk;
         let (hit_vid, attacker_vid, hit_packets, hit_damage, hit_dead) = hit;
         assert_eq!(victim_vid, 3);
         assert_eq!(hit_vid, 3, "el evento de la víctima va a SU cola (routing)");
         assert_eq!(attacker_vid, 2);
-        assert_eq!(atk_packets, hit_packets, "el mismo GC_DAMAGE_INFO a ambos descs");
+        assert_eq!(
+            atk_packets, hit_packets,
+            "el mismo GC_DAMAGE_INFO a ambos descs"
+        );
         assert_eq!(atk_packets.len(), 1);
         assert_eq!(atk_packets[0][0], 135, "header GC_DAMAGE_INFO");
         assert!(!dead && !hit_dead);
@@ -1600,22 +2028,51 @@ mod tests {
         // 2112-2114 — level + ht/1.25 + armor) → 87-44 = 43 / 88-44 = 44
         // (ATT_GRADE 100 lvl 20, fAR 0.7866 — la MISMA fórmula del mob,
         // con la def del PC como víctima).
-        assert!((43..=44).contains(&damage), "daño del ninja vs PC lvl 20: {damage}");
+        assert!(
+            (43..=44).contains(&damage),
+            "daño del ninja vs PC lvl 20: {damage}"
+        );
         assert_eq!(hit_damage, damage);
         assert_eq!(victim_hp, 100 - damage, "hp del PC tras el golpe");
-        assert_eq!(w.player_hp(3), 100 - damage, "el mundo aplicó el daño al Hp del PC");
+        assert_eq!(
+            w.player_hp(3),
+            100 - damage,
+            "el mundo aplicó el daño al Hp del PC"
+        );
         // La VÍCTIMA con PK ON también es atacable con el atacante OFF
         // (proxy del killer-STATE — pvp.cpp:453; el killer-flag del C++
         // se aproxima con el modo no-Peace de la víctima). Esperando el
         // cooldown del jugador (1250 ms → 2_500).
-        w.process_intent(CombatIntent::SetPvpMode { player_vid: 2, mode: PkMode::Peace }.into(), 2_000);
-        w.process_intent(CombatIntent::SetPvpMode { player_vid: 3, mode: PkMode::Free }.into(), 2_000);
+        w.process_intent(
+            CombatIntent::SetPvpMode {
+                player_vid: 2,
+                mode: PkMode::Peace,
+            }
+            .into(),
+            2_000,
+        );
+        w.process_intent(
+            CombatIntent::SetPvpMode {
+                player_vid: 3,
+                mode: PkMode::Free,
+            }
+            .into(),
+            2_000,
+        );
         let events = w.process_intent(
-            CombatIntent::Attack { player_vid: 2, victim_vid: 3, b_type: 0, weapon: None }.into(),
+            CombatIntent::Attack {
+                player_vid: 2,
+                victim_vid: 3,
+                b_type: 0,
+                weapon: None,
+            }
+            .into(),
             2_500,
         );
         assert!(
-            events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::PvPAttackResult { .. }))),
+            events
+                .iter()
+                .any(|e| matches!(e, NpcEvent::Combat(CombatEvent::PvPAttackResult { .. }))),
             "PK ON de la víctima → atacable: {events:?}"
         );
     }
@@ -1628,23 +2085,65 @@ mod tests {
         let mut w = world_with(42);
         join_pvp(&mut w, 2, 0, 0);
         join_pvp(&mut w, 3, 0, 0);
-        w.process_intent(CombatIntent::SetPvpMode { player_vid: 2, mode: PkMode::Free }.into(), 1_000);
-        w.process_intent(CombatIntent::SetParty { player_vid: 2, party_id: Some(7) }.into(), 1_000);
-        w.process_intent(CombatIntent::SetParty { player_vid: 3, party_id: Some(7) }.into(), 1_000);
+        w.process_intent(
+            CombatIntent::SetPvpMode {
+                player_vid: 2,
+                mode: PkMode::Free,
+            }
+            .into(),
+            1_000,
+        );
+        w.process_intent(
+            CombatIntent::SetParty {
+                player_vid: 2,
+                party_id: Some(7),
+            }
+            .into(),
+            1_000,
+        );
+        w.process_intent(
+            CombatIntent::SetParty {
+                player_vid: 3,
+                party_id: Some(7),
+            }
+            .into(),
+            1_000,
+        );
         let events = w.process_intent(
-            CombatIntent::Attack { player_vid: 2, victim_vid: 3, b_type: 0, weapon: None }.into(),
+            CombatIntent::Attack {
+                player_vid: 2,
+                victim_vid: 3,
+                b_type: 0,
+                weapon: None,
+            }
+            .into(),
             1_000,
         );
         assert!(events.is_empty(), "misma party → no atacable: {events:?}");
         // El jugador 3 sale de la party → el ataque YA pasa (cooldown intacto
         // — el gate corre ANTES, parity char_battle.cpp:205-210).
-        w.process_intent(CombatIntent::SetParty { player_vid: 3, party_id: None }.into(), 1_000);
+        w.process_intent(
+            CombatIntent::SetParty {
+                player_vid: 3,
+                party_id: None,
+            }
+            .into(),
+            1_000,
+        );
         let events = w.process_intent(
-            CombatIntent::Attack { player_vid: 2, victim_vid: 3, b_type: 0, weapon: None }.into(),
+            CombatIntent::Attack {
+                player_vid: 2,
+                victim_vid: 3,
+                b_type: 0,
+                weapon: None,
+            }
+            .into(),
             1_000,
         );
         assert!(
-            events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::PvPAttackResult { .. }))),
+            events
+                .iter()
+                .any(|e| matches!(e, NpcEvent::Combat(CombatEvent::PvPAttackResult { .. }))),
             "parties distintas → atacable: {events:?}"
         );
     }
@@ -1658,32 +2157,67 @@ mod tests {
         let mut w = world_with(42);
         join_pvp(&mut w, 2, 0, 0);
         join_pvp(&mut w, 3, 0, 0);
-        w.process_intent(CombatIntent::SetPvpMode { player_vid: 2, mode: PkMode::Free }.into(), 1_000);
-        // La víctima a 10 hp: un golpe (27-28) la mata.
-        w.process_intent(CombatIntent::SetHp { player_vid: 3, hp: 10 }.into(), 1_000);
-        let events = w.process_intent(
-            CombatIntent::Attack { player_vid: 2, victim_vid: 3, b_type: 0, weapon: None }.into(),
+        w.process_intent(
+            CombatIntent::SetPvpMode {
+                player_vid: 2,
+                mode: PkMode::Free,
+            }
+            .into(),
             1_000,
         );
-        let (dead, hp) = events.iter().find_map(|e| match e {
-            NpcEvent::Combat(CombatEvent::PvPAttackResult { dead, victim_hp, .. }) => {
-                Some((*dead, *victim_hp))
+        // La víctima a 10 hp: un golpe (27-28) la mata.
+        w.process_intent(
+            CombatIntent::SetHp {
+                player_vid: 3,
+                hp: 10,
             }
-            _ => None,
-        }).expect("PvPAttackResult");
+            .into(),
+            1_000,
+        );
+        let events = w.process_intent(
+            CombatIntent::Attack {
+                player_vid: 2,
+                victim_vid: 3,
+                b_type: 0,
+                weapon: None,
+            }
+            .into(),
+            1_000,
+        );
+        let (dead, hp) = events
+            .iter()
+            .find_map(|e| match e {
+                NpcEvent::Combat(CombatEvent::PvPAttackResult {
+                    dead, victim_hp, ..
+                }) => Some((*dead, *victim_hp)),
+                _ => None,
+            })
+            .expect("PvPAttackResult");
         assert!(dead, "10 hp < 27 de daño → muere");
         assert_eq!(hp, 0);
         assert!(
-            events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::PvPVictimHit { dead: true, .. }))),
+            events.iter().any(|e| matches!(
+                e,
+                NpcEvent::Combat(CombatEvent::PvPVictimHit { dead: true, .. })
+            )),
             "el evento de la víctima marca la muerte"
         );
         assert_eq!(w.player_hp(3), 0, "el mundo dejó el Hp del PC a 0");
         // El muerto YA no es atacable (IsDead → false, battle.cpp:116).
         let events = w.process_intent(
-            CombatIntent::Attack { player_vid: 2, victim_vid: 3, b_type: 0, weapon: None }.into(),
+            CombatIntent::Attack {
+                player_vid: 2,
+                victim_vid: 3,
+                b_type: 0,
+                weapon: None,
+            }
+            .into(),
             2_500,
         );
-        assert!(events.is_empty(), "víctima muerta → no atacable: {events:?}");
+        assert!(
+            events.is_empty(),
+            "víctima muerta → no atacable: {events:?}"
+        );
     }
 
     /// Lote 3 (GM `/kill` — parity do_kill → SetDead directo): el mob del
@@ -1698,31 +2232,49 @@ mod tests {
         let mut w = world_with(42);
         let mut row = mob_row(101);
         row.ai_flag = Some("NOMOVE".into());
-        let e = SpawnEntry { time: 2, ..entry(101, 0, 0, 1) }; // regen 2 s
+        let e = SpawnEntry {
+            time: 2,
+            ..entry(101, 0, 0, 1)
+        }; // regen 2 s
         load(&mut w, vec![(e, row)]);
         join(&mut w); // jugador 2 + mob 10_000
         let events = w.process_intent(
-            CombatIntent::GmKill { player_vid: 2, target_vid: 10_000 }.into(),
+            CombatIntent::GmKill {
+                player_vid: 2,
+                target_vid: 10_000,
+            }
+            .into(),
             1_000,
         );
         assert!(
             events.iter().any(|ev| matches!(
                 ev,
-                NpcEvent::Combat(CombatEvent::GmKilled { player_vid: 2, vid: 10_000, vnum: 101 })
+                NpcEvent::Combat(CombatEvent::GmKilled {
+                    player_vid: 2,
+                    vid: 10_000,
+                    vnum: 101
+                })
             )),
             "GmKilled al GM: {events:?}"
         );
         assert!(
             events.iter().any(|ev| matches!(
                 ev,
-                NpcEvent::Combat(CombatEvent::Despawned { player_vid: 2, vid: 10_000 })
+                NpcEvent::Combat(CombatEvent::Despawned {
+                    player_vid: 2,
+                    vid: 10_000
+                })
             )),
             "el GM ve el GC_CHARACTER_DEL: {events:?}"
         );
         assert_eq!(w.npc_count(), 0, "el mob se quita del mundo");
         // PC (el propio jugador) → no-op (parity: solo mobs).
         let events = w.process_intent(
-            CombatIntent::GmKill { player_vid: 2, target_vid: 2 }.into(),
+            CombatIntent::GmKill {
+                player_vid: 2,
+                target_vid: 2,
+            }
+            .into(),
             1_000,
         );
         assert!(events.is_empty(), "un PC no se mata: {events:?}");
@@ -1730,7 +2282,9 @@ mod tests {
         // el deadline (2 s) la entrada re-materializa con vid fresco.
         let events = w.update(2_500);
         assert!(
-            events.iter().any(|ev| matches!(ev, NpcEvent::Combat(CombatEvent::Spawned { .. }))),
+            events
+                .iter()
+                .any(|ev| matches!(ev, NpcEvent::Combat(CombatEvent::Spawned { .. }))),
             "respawn de la entrada con regen: {events:?}"
         );
         assert_eq!(w.npc_count(), 1, "el regen reaparece");
@@ -1745,14 +2299,24 @@ mod tests {
         let mut w = world_with(42);
         let mut far = mob_row(2101);
         far.ai_flag = Some("NOMOVE".into());
-        load(&mut w, vec![
-            (entry(101, 0, 0, 1), mob_row(101)),
-            (entry(2101, 2_000, 0, 1), far), // fuera del radio 1000 del GM
-        ]);
+        load(
+            &mut w,
+            vec![
+                (entry(101, 0, 0, 1), mob_row(101)),
+                (entry(2101, 2_000, 0, 1), far), // fuera del radio 1000 del GM
+            ],
+        );
         join(&mut w); // jugador 2 en (0,0) — ambos dentro de SPAWN_VIEW
         // purge sin all: solo el mob cercano.
         let events = w.process_intent(
-            CombatIntent::GmPurge { player_vid: 2, map_index: 41, x: 0, y: 0, all: false }.into(),
+            CombatIntent::GmPurge {
+                player_vid: 2,
+                map_index: 41,
+                x: 0,
+                y: 0,
+                all: false,
+            }
+            .into(),
             1_000,
         );
         let dels: Vec<u32> = events
@@ -1764,20 +2328,32 @@ mod tests {
             .collect();
         assert_eq!(dels, vec![10_000], "solo el cercano: {events:?}");
         assert!(
-            !events.iter().any(|ev| matches!(ev, NpcEvent::Combat(CombatEvent::GmKilled { .. }))),
+            !events
+                .iter()
+                .any(|ev| matches!(ev, NpcEvent::Combat(CombatEvent::GmKilled { .. }))),
             "purge = destroy directo, sin animación (parity M2_DESTROY_CHARACTER)"
         );
         assert_eq!(w.npc_count(), 1);
         assert!(w.npc_view(10_001).is_some(), "el lejano sobrevive");
         // purge all: mata el resto del mapa.
         let events = w.process_intent(
-            CombatIntent::GmPurge { player_vid: 2, map_index: 41, x: 0, y: 0, all: true }.into(),
+            CombatIntent::GmPurge {
+                player_vid: 2,
+                map_index: 41,
+                x: 0,
+                y: 0,
+                all: true,
+            }
+            .into(),
             1_000,
         );
         assert!(
             events.iter().any(|ev| matches!(
                 ev,
-                NpcEvent::Combat(CombatEvent::Despawned { player_vid: 2, vid: 10_001 })
+                NpcEvent::Combat(CombatEvent::Despawned {
+                    player_vid: 2,
+                    vid: 10_001
+                })
             )),
             "all mata el lejano: {events:?}"
         );
@@ -1792,7 +2368,14 @@ mod tests {
         let mut w = world_with(42);
         join(&mut w);
         w.process_intent(
-            CombatIntent::SetStats { player_vid: 2, st: 50, dx: 60, iq: 70, ht: 80 }.into(),
+            CombatIntent::SetStats {
+                player_vid: 2,
+                st: 50,
+                dx: 60,
+                iq: 70,
+                ht: 80,
+            }
+            .into(),
             1_000,
         );
         let e = w.players.get(&2).copied().expect("jugador 2");
@@ -1807,7 +2390,8 @@ mod tests {
     /// HP < 20% huye al lado opuesto.
     #[test]
     fn berserk_requires_flag_and_coward_flees() {
-        for (flags, expected) in [("AGGR", 171), ("AGGR,BERSERK", 342)] { // HP 23% < sp_berserk 30
+        for (flags, expected) in [("AGGR", 171), ("AGGR,BERSERK", 342)] {
+            // HP 23% < sp_berserk 30
             let mut w = world_with(42);
             let mut row = mob_row(101);
             row.ai_flag = Some(flags.into());
@@ -1817,12 +2401,25 @@ mod tests {
             row.max_hp = 60;
             load(&mut w, vec![(entry(101, 0, 0, 1), row)]);
             join(&mut w);
-            w.process_intent(CombatIntent::Attack { player_vid: 2, victim_vid: 10_000, b_type: 0, weapon: None }.into(), 1_000);
+            w.process_intent(
+                CombatIntent::Attack {
+                    player_vid: 2,
+                    victim_vid: 10_000,
+                    b_type: 0,
+                    weapon: None,
+                }
+                .into(),
+                1_000,
+            );
             let damage = w.update(2_000).iter().find_map(|e| match e {
                 NpcEvent::Combat(CombatEvent::MobAttack { damage, .. }) => Some(*damage),
                 _ => None,
             });
-            assert_eq!(damage, Some(expected), "flags {flags}: 200−29=171 → {expected}");
+            assert_eq!(
+                damage,
+                Some(expected),
+                "flags {flags}: 200−29=171 → {expected}"
+            );
         }
         // COWARD (AGGR, en rango): no ataca; HP 8% → el mob (100,0) huye al
         // lado opuesto del jugador (0,0) → (200,0).
@@ -1832,13 +2429,39 @@ mod tests {
         row.max_hp = 100;
         load(&mut w, vec![(entry(101, 100, 0, 1), row)]);
         join(&mut w);
-        w.process_intent(CombatIntent::Attack { player_vid: 2, victim_vid: 10_000, b_type: 0, weapon: None }.into(), 1_000);
-        w.process_intent(CombatIntent::Attack { player_vid: 2, victim_vid: 10_000, b_type: 0, weapon: None }.into(), 3_000); // hp 8 (8%)
+        w.process_intent(
+            CombatIntent::Attack {
+                player_vid: 2,
+                victim_vid: 10_000,
+                b_type: 0,
+                weapon: None,
+            }
+            .into(),
+            1_000,
+        );
+        w.process_intent(
+            CombatIntent::Attack {
+                player_vid: 2,
+                victim_vid: 10_000,
+                b_type: 0,
+                weapon: None,
+            }
+            .into(),
+            3_000,
+        ); // hp 8 (8%)
         let run = w.update(2_000);
         assert_eq!(
-            run.iter().find_map(|e| match e { NpcEvent::Move(MoveEvent::Moved { x, .. }) => Some(*x), _ => None }), Some(200),
+            run.iter().find_map(|e| match e {
+                NpcEvent::Move(MoveEvent::Moved { x, .. }) => Some(*x),
+                _ => None,
+            }),
+            Some(200),
             "huye al lado opuesto: {run:?}"
         );
-        assert!(!run.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::MobAttack { .. }))), "no ataca huyendo");
+        assert!(
+            !run.iter()
+                .any(|e| matches!(e, NpcEvent::Combat(CombatEvent::MobAttack { .. }))),
+            "no ataca huyendo"
+        );
     }
 }

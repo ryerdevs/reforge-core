@@ -82,7 +82,12 @@ impl TPacketGCMessenger {
     }
 
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
-        [self.header, (self.size & 0xff) as u8, (self.size >> 8) as u8, self.subheader]
+        [
+            self.header,
+            (self.size & 0xff) as u8,
+            (self.size >> 8) as u8,
+            self.subheader,
+        ]
     }
 }
 
@@ -175,16 +180,33 @@ mod tests {
     #[test]
     fn gc_list_golden_bytes() {
         let entries = [
-            ListEntry { connected: false, name: "Ann".into() },
-            ListEntry { connected: true, name: "Bob".into() },
+            ListEntry {
+                connected: false,
+                name: "Ann".into(),
+            },
+            ListEntry {
+                connected: true,
+                name: "Bob".into(),
+            },
         ];
         // 4 + (2+3) + (2+3) = 14.
         assert_eq!(
             list(&entries),
             vec![
-                0x4a, 14, 0, SUB_GC_LIST, //
-                0, 3, b'A', b'n', b'n', //
-                1, 3, b'B', b'o', b'b',
+                0x4a,
+                14,
+                0,
+                SUB_GC_LIST, //
+                0,
+                3,
+                b'A',
+                b'n',
+                b'n', //
+                1,
+                3,
+                b'B',
+                b'o',
+                b'b',
             ]
         );
     }

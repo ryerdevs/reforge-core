@@ -13,8 +13,8 @@ use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-use network::{read_exact_size, Connection};
-use protocol::{phase, TPacketCGLogin3, TPacketGCPhase};
+use network::{Connection, read_exact_size};
+use protocol::{TPacketCGLogin3, TPacketGCPhase, phase};
 use tokio::net::TcpStream;
 
 /// Config temporal POR TEST (patrón auth_smoke — los tests del bin corren en
@@ -49,7 +49,10 @@ fn spawn_channel(config_path: &std::path::Path) -> (Child, String) {
             if reader.read_line(&mut line).unwrap_or(0) == 0 {
                 break;
             }
-            if let Some(addr) = line.trim().strip_prefix("server_realms: channel escuchando en ") {
+            if let Some(addr) = line
+                .trim()
+                .strip_prefix("server_realms: channel escuchando en ")
+            {
                 let _ = tx.send(addr.to_string());
                 break;
             }
@@ -67,7 +70,9 @@ fn spawn_channel(config_path: &std::path::Path) -> (Child, String) {
 /// handshake (GC_PHASE(HANDSHAKE) + eco CG_HANDSHAKE); ya no existe en el
 /// canal (el AUTH lo mantiene).
 async fn read_login_phase(conn: &mut Connection<TcpStream>) {
-    let phase_pkt = read_exact_size(conn, TPacketGCPhase::SIZE).await.expect("GC_PHASE");
+    let phase_pkt = read_exact_size(conn, TPacketGCPhase::SIZE)
+        .await
+        .expect("GC_PHASE");
     let gc_phase = TPacketGCPhase::from_bytes(&phase_pkt).expect("parse GC_PHASE");
     assert_eq!(gc_phase.phase, phase::LOGIN, "GC_PHASE(LOGIN) directo");
 }
@@ -78,23 +83,35 @@ async fn channel_handles_login3_with_db_down() {
     let (mut child, addr) = spawn_channel(&config_path);
 
     let result = async {
-        let stream = TcpStream::connect(&addr).await.map_err(|e| format!("connect {addr}: {e}"))?;
+        let stream = TcpStream::connect(&addr)
+            .await
+            .map_err(|e| format!("connect {addr}: {e}"))?;
         let mut conn = Connection::new(stream);
         read_login_phase(&mut conn).await;
 
         // LOGIN3 al canal = 65 B (sin lang; framer rol Channel).
         let login3 = TPacketCGLogin3::new_channel("test", "1234", [0; 4]).to_bytes_channel();
         assert_eq!(login3.len(), 65, "LOGIN3 del canal");
-        conn.send(&login3).await.map_err(|e| format!("LOGIN3: {e}"))?;
+        conn.send(&login3)
+            .await
+            .map_err(|e| format!("LOGIN3: {e}"))?;
 
         // Respuesta: GC_LOGIN_FAILURE (10 B) con la DB caída — NOTAVAIL
         // (divergencia documentada del canal Rust).
-        let hdr = read_exact_size(&mut conn, 1).await.map_err(|e| format!("header: {e}"))?;
+        let hdr = read_exact_size(&mut conn, 1)
+            .await
+            .map_err(|e| format!("header: {e}"))?;
         assert_eq!(hdr[0], 0x07, "GC_LOGIN_FAILURE (0x07)");
-        let rest = read_exact_size(&mut conn, 9).await.map_err(|e| format!("resto: {e}"))?;
+        let rest = read_exact_size(&mut conn, 9)
+            .await
+            .map_err(|e| format!("resto: {e}"))?;
         let mut pkt = hdr;
         pkt.extend_from_slice(&rest);
-        let status = pkt[1..].iter().take_while(|&&b| b != 0).copied().collect::<Vec<u8>>();
+        let status = pkt[1..]
+            .iter()
+            .take_while(|&&b| b != 0)
+            .copied()
+            .collect::<Vec<u8>>();
         assert_eq!(status, b"NOTAVAIL", "DB caída -> NOTAVAIL (determinista)");
         Ok::<(), String>(())
     }
@@ -118,7 +135,9 @@ async fn channel_login3_immediate_is_processed_not_dropped() {
     let (mut child, addr) = spawn_channel(&config_path);
 
     let result = async {
-        let stream = TcpStream::connect(&addr).await.map_err(|e| format!("connect {addr}: {e}"))?;
+        let stream = TcpStream::connect(&addr)
+            .await
+            .map_err(|e| format!("connect {addr}: {e}"))?;
         let mut conn = Connection::new(stream);
 
         // LOGIN3 del canal (65 B) INMEDIATO — sin leer el GC_PHASE(LOGIN)
@@ -126,22 +145,36 @@ async fn channel_login3_immediate_is_processed_not_dropped() {
         // antes de mandar su login — caso del cliente real intermitente).
         let login3 = TPacketCGLogin3::new_channel("test", "1234", [0; 4]).to_bytes_channel();
         assert_eq!(login3.len(), 65, "LOGIN3 del canal");
-        conn.send(&login3).await.map_err(|e| format!("LOGIN3: {e}"))?;
+        conn.send(&login3)
+            .await
+            .map_err(|e| format!("LOGIN3: {e}"))?;
 
         // El canal procesa el login directo → PG caída → NOTAVAIL. El server
         // manda GC_PHASE(LOGIN) AL ACEPTAR (antes de leer el LOGIN3): el
         // cliente lo consume y la respuesta real es GC_LOGIN_FAILURE (0x07).
-        let phase_pkt =
-            read_exact_size(&mut conn, TPacketGCPhase::SIZE).await.map_err(|e| format!("GC_PHASE: {e}"))?;
+        let phase_pkt = read_exact_size(&mut conn, TPacketGCPhase::SIZE)
+            .await
+            .map_err(|e| format!("GC_PHASE: {e}"))?;
         let gc_phase = TPacketGCPhase::from_bytes(&phase_pkt).map_err(|e| format!("parse: {e}"))?;
         assert_eq!(gc_phase.phase, phase::LOGIN, "GC_PHASE(LOGIN) del accept");
-        let hdr = read_exact_size(&mut conn, 1).await.map_err(|e| format!("header: {e}"))?;
+        let hdr = read_exact_size(&mut conn, 1)
+            .await
+            .map_err(|e| format!("header: {e}"))?;
         assert_eq!(hdr[0], 0x07, "GC_LOGIN_FAILURE (0x07)");
-        let rest = read_exact_size(&mut conn, 9).await.map_err(|e| format!("resto: {e}"))?;
+        let rest = read_exact_size(&mut conn, 9)
+            .await
+            .map_err(|e| format!("resto: {e}"))?;
         let mut pkt = hdr;
         pkt.extend_from_slice(&rest);
-        let status = pkt[1..].iter().take_while(|&&b| b != 0).copied().collect::<Vec<u8>>();
-        assert_eq!(status, b"NOTAVAIL", "DB caída -> NOTAVAIL (login inmediato)");
+        let status = pkt[1..]
+            .iter()
+            .take_while(|&&b| b != 0)
+            .copied()
+            .collect::<Vec<u8>>();
+        assert_eq!(
+            status, b"NOTAVAIL",
+            "DB caída -> NOTAVAIL (login inmediato)"
+        );
         Ok::<(), String>(())
     }
     .await;
@@ -162,12 +195,15 @@ async fn channel_slow_client_late_login3_is_processed() {
     let (mut child, addr) = spawn_channel(&config_path);
 
     let result = async {
-        let stream = TcpStream::connect(&addr).await.map_err(|e| format!("connect {addr}: {e}"))?;
+        let stream = TcpStream::connect(&addr)
+            .await
+            .map_err(|e| format!("connect {addr}: {e}"))?;
         let mut conn = Connection::new(stream);
 
         // GC_PHASE(LOGIN) directo (sin handshake previo).
-        let phase_pkt =
-            read_exact_size(&mut conn, TPacketGCPhase::SIZE).await.map_err(|e| format!("GC_PHASE: {e}"))?;
+        let phase_pkt = read_exact_size(&mut conn, TPacketGCPhase::SIZE)
+            .await
+            .map_err(|e| format!("GC_PHASE: {e}"))?;
         let gc_phase = TPacketGCPhase::from_bytes(&phase_pkt).map_err(|e| format!("parse: {e}"))?;
         assert_eq!(gc_phase.phase, phase::LOGIN, "phase LOGIN directo");
 
@@ -175,15 +211,25 @@ async fn channel_slow_client_late_login3_is_processed() {
         tokio::time::sleep(Duration::from_secs(2)).await;
 
         let login3 = TPacketCGLogin3::new_channel("test", "1234", [0; 4]).to_bytes_channel();
-        conn.send(&login3).await.map_err(|e| format!("LOGIN3: {e}"))?;
+        conn.send(&login3)
+            .await
+            .map_err(|e| format!("LOGIN3: {e}"))?;
 
         // El flujo de login normal -> PG caída -> NOTAVAIL.
-        let hdr = read_exact_size(&mut conn, 1).await.map_err(|e| format!("header: {e}"))?;
+        let hdr = read_exact_size(&mut conn, 1)
+            .await
+            .map_err(|e| format!("header: {e}"))?;
         assert_eq!(hdr[0], 0x07, "GC_LOGIN_FAILURE (0x07)");
-        let rest = read_exact_size(&mut conn, 9).await.map_err(|e| format!("resto: {e}"))?;
+        let rest = read_exact_size(&mut conn, 9)
+            .await
+            .map_err(|e| format!("resto: {e}"))?;
         let mut pkt = hdr;
         pkt.extend_from_slice(&rest);
-        let status = pkt[1..].iter().take_while(|&&b| b != 0).copied().collect::<Vec<u8>>();
+        let status = pkt[1..]
+            .iter()
+            .take_while(|&&b| b != 0)
+            .copied()
+            .collect::<Vec<u8>>();
         assert_eq!(status, b"NOTAVAIL", "DB caída -> NOTAVAIL (cliente lento)");
         Ok::<(), String>(())
     }
@@ -207,7 +253,9 @@ async fn channel_guild_mark_connection_closed_clean() {
     let (mut child, addr) = spawn_channel(&config_path);
 
     let result = async {
-        let stream = TcpStream::connect(&addr).await.map_err(|e| format!("connect {addr}: {e}"))?;
+        let stream = TcpStream::connect(&addr)
+            .await
+            .map_err(|e| format!("connect {addr}: {e}"))?;
         let mut conn = Connection::new(stream);
 
         // El GC_PHASE(LOGIN) del accept (2 B) llega SIEMPRE primero — se
@@ -222,13 +270,21 @@ async fn channel_guild_mark_connection_closed_clean() {
             handle: 0xDEAD_BEEF,
             random_key: 0xCAFE_BABE,
         };
-        conn.send(&mark.to_bytes()).await.map_err(|e| format!("CG_MARK_LOGIN: {e}"))?;
+        conn.send(&mark.to_bytes())
+            .await
+            .map_err(|e| format!("CG_MARK_LOGIN: {e}"))?;
 
         // El canal cierra SIN responder: el read devuelve EOF (0 bytes) o
         // error de conexión cerrada — NUNCA un paquete de respuesta.
         let mut buf = [0u8; 2];
-        let n = conn.recv(&mut buf).await.map_err(|e| format!("recv: {e}"))?;
-        assert_eq!(n, 0, "cierre limpio sin respuesta (parity input.cpp:560-572)");
+        let n = conn
+            .recv(&mut buf)
+            .await
+            .map_err(|e| format!("recv: {e}"))?;
+        assert_eq!(
+            n, 0,
+            "cierre limpio sin respuesta (parity input.cpp:560-572)"
+        );
         Ok::<(), String>(())
     }
     .await;
@@ -251,27 +307,49 @@ async fn channel_state_checker_responds() {
     let (mut child, addr) = spawn_channel(&config_path);
 
     let result = async {
-        let stream = TcpStream::connect(&addr).await.map_err(|e| format!("connect {addr}: {e}"))?;
+        let stream = TcpStream::connect(&addr)
+            .await
+            .map_err(|e| format!("connect {addr}: {e}"))?;
         let mut conn = Connection::new(stream);
         read_login_phase(&mut conn).await;
 
         // CG_STATE_CHECKER (0xce, 1 B — solo header).
-        conn.send(&[0xce]).await.map_err(|e| format!("CG_STATE_CHECKER: {e}"))?;
+        conn.send(&[0xce])
+            .await
+            .map_err(|e| format!("CG_STATE_CHECKER: {e}"))?;
 
         // Respuesta de 9 B: header + nSize + port + status + bSuccess.
-        let resp = read_exact_size(&mut conn, 9).await.map_err(|e| format!("respuesta: {e}"))?;
+        let resp = read_exact_size(&mut conn, 9)
+            .await
+            .map_err(|e| format!("respuesta: {e}"))?;
         assert_eq!(resp[0], 0xd2, "GC_RESPOND_CHANNELSTATUS");
-        assert_eq!(i32::from_le_bytes([resp[1], resp[2], resp[3], resp[4]]), 1, "nSize 1");
+        assert_eq!(
+            i32::from_le_bytes([resp[1], resp[2], resp[3], resp[4]]),
+            1,
+            "nSize 1"
+        );
         assert_eq!(resp[7], 1, "status recomendado (STATE_DICT[1])");
         assert_eq!(resp[8], 1, "bSuccess");
 
         // El puerto del estado = el puerto real del channel (listen efímero).
-        let port = addr.rsplit(':').next().unwrap().parse::<u16>().expect("puerto del addr");
-        assert_eq!(u16::from_le_bytes([resp[5], resp[6]]), port, "puerto del canal");
+        let port = addr
+            .rsplit(':')
+            .next()
+            .unwrap()
+            .parse::<u16>()
+            .expect("puerto del addr");
+        assert_eq!(
+            u16::from_le_bytes([resp[5], resp[6]]),
+            port,
+            "puerto del canal"
+        );
 
         // El canal cierra tras responder (el cliente desconecta al recibirla).
         let mut buf = [0u8; 1];
-        let n = conn.recv(&mut buf).await.map_err(|e| format!("recv: {e}"))?;
+        let n = conn
+            .recv(&mut buf)
+            .await
+            .map_err(|e| format!("recv: {e}"))?;
         assert_eq!(n, 0, "cierre tras la respuesta");
         Ok::<(), String>(())
     }

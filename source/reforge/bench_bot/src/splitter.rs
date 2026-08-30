@@ -31,7 +31,7 @@ use protocol::world::{
     TPacketGCPoints, TPacketGCQuickSlotAdd, TPacketGCSkillLevel, TPacketGCTime, TPacketGCWarp,
 };
 use protocol::{
-    TPacketGCAuthSuccess, TPacketGCEmpire, TPacketGCCharacterAdd, TPacketGCCharacterAdditionalInfo,
+    TPacketGCAuthSuccess, TPacketGCCharacterAdd, TPacketGCCharacterAdditionalInfo, TPacketGCEmpire,
     TPacketGCHandshake, TPacketGCLoginFailure, TPacketGCLoginKey, TPacketGCLoginSuccess,
     TPacketGCPhase,
 };
@@ -62,10 +62,16 @@ impl core::fmt::Display for SplitError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             SplitError::UnknownHeader { header } => {
-                write!(f, "server sent unknown packet header 0x{header:02x} (protocol drift — desync)")
+                write!(
+                    f,
+                    "server sent unknown packet header 0x{header:02x} (protocol drift — desync)"
+                )
             }
             SplitError::BadEmbeddedLength { header, size } => {
-                write!(f, "header 0x{header:02x} embedded length {size} out of range")
+                write!(
+                    f,
+                    "header 0x{header:02x} embedded length {size} out of range"
+                )
             }
             SplitError::Eof => write!(f, "server closed the connection"),
             SplitError::UnexpectedEof { buffered } => {
@@ -90,37 +96,37 @@ impl std::error::Error for SplitError {
 /// [`embedded_size`]).
 fn fixed_size(hdr: u8) -> Option<usize> {
     Some(match hdr {
-        header::GC_PHASE => TPacketGCPhase::SIZE, // 0xfd, 2
+        header::GC_PHASE => TPacketGCPhase::SIZE,         // 0xfd, 2
         header::GC_HANDSHAKE => TPacketGCHandshake::SIZE, // 0xff, 13
         header::GC_AUTH_SUCCESS => TPacketGCAuthSuccess::SIZE, // 150, 6
         header::GC_LOGIN_FAILURE => TPacketGCLoginFailure::SIZE, // 7, 10
-        header::GC_LOGIN_KEY => TPacketGCLoginKey::SIZE, // 118, 5
-        header::GC_EMPIRE => TPacketGCEmpire::SIZE, // 90, 2
+        header::GC_LOGIN_KEY => TPacketGCLoginKey::SIZE,  // 118, 5
+        header::GC_EMPIRE => TPacketGCEmpire::SIZE,       // 90, 2
         header::GC_LOGIN_SUCCESS_NEWSLOT => TPacketGCLoginSuccess::SIZE, // 32, 449
         header::GC_CHARACTER_ADD => TPacketGCCharacterAdd::SIZE, // 1, 37
         header::GC_CHAR_ADDITIONAL_INFO => TPacketGCCharacterAdditionalInfo::SIZE, // 136, 70
-        header::GC_PING => 1, // 44, sizeof(BYTE)
+        header::GC_PING => 1,                             // 44, sizeof(BYTE)
         TPacketGCMainCharacter::HEADER => TPacketGCMainCharacter::SIZE, // 15, 47
         TPacketGCPoints::HEADER => TPacketGCPoints::SIZE, // 16, 1021
         TPacketGCSkillLevel::HEADER => TPacketGCSkillLevel::SIZE, // 76, 1531
         TPacketGCQuickSlotAdd::HEADER => TPacketGCQuickSlotAdd::SIZE, // 28, 4
         TPacketGCItemSet::HEADER => TPacketGCItemSet::SIZE, // 21, 51
         TPacketGCAffectAdd::HEADER => TPacketGCAffectAdd::SIZE, // 126, 22
-        TPacketGCTime::HEADER => TPacketGCTime::SIZE, // 106, 5
+        TPacketGCTime::HEADER => TPacketGCTime::SIZE,     // 106, 5
         TPacketGCChannel::HEADER => TPacketGCChannel::SIZE, // 121, 2
-        TPacketGCMove::HEADER => TPacketGCMove::SIZE, // 3, 24
+        TPacketGCMove::HEADER => TPacketGCMove::SIZE,     // 3, 24
         TPacketGCItemGroundAdd::HEADER => TPacketGCItemGroundAdd::SIZE, // 26, 58
         TPacketGCItemGroundDel::HEADER => TPacketGCItemGroundDel::SIZE, // 27, 5
         TPacketGCItemOwnership::HEADER => TPacketGCItemOwnership::SIZE, // 31, 30
         TPacketGCItemUpdate::HEADER => TPacketGCItemUpdate::SIZE, // 25, 38
         TPacketGCItemDelDeprecated::HEADER => TPacketGCItemDelDeprecated::SIZE, // 20, 42
-        TPacketGCDead::HEADER => TPacketGCDead::SIZE, // 14, 5
+        TPacketGCDead::HEADER => TPacketGCDead::SIZE,     // 14, 5
         TPacketGCCharacterDelete::HEADER => TPacketGCCharacterDelete::SIZE, // 2, 5
-        TPacketGCWarp::HEADER => TPacketGCWarp::SIZE, // 65, 15
-        GcAttack::HEADER => GcAttack::SIZE, // 12, 10
-        GcDamageInfo::HEADER => GcDamageInfo::SIZE, // 135, 10
-        GC_PANAMA_PACK => 289, // 151 legacy (1 + 256 + 32)
-        GC_CHANNEL_LIST => GC_CHANNEL_LIST_SIZE, // 164, 152 (auth F5)
+        TPacketGCWarp::HEADER => TPacketGCWarp::SIZE,     // 65, 15
+        GcAttack::HEADER => GcAttack::SIZE,               // 12, 10
+        GcDamageInfo::HEADER => GcDamageInfo::SIZE,       // 135, 10
+        GC_PANAMA_PACK => 289,                            // 151 legacy (1 + 256 + 32)
+        GC_CHANNEL_LIST => GC_CHANNEL_LIST_SIZE,          // 164, 152 (auth F5)
         _ => return None,
     })
 }
@@ -128,10 +134,10 @@ fn fixed_size(hdr: u8) -> Option<usize> {
 /// Headers de tamaño VARIABLE: el u16 LE en `[1..3]` es el tamaño TOTAL.
 /// (header, mínimo válido del campo).
 const EMBEDDED_SIZE: &[(u8, usize)] = &[
-    (header::GC_CHAT, 9), // header+size+type+dwVID+bEmpire (Packet.h:1336-1343)
-    (130, 3), // GC_LAND_LIST: 3 + N×24 (world::land_list_bytes)
+    (header::GC_CHAT, 9),     // header+size+type+dwVID+bEmpire (Packet.h:1336-1343)
+    (130, 3),                 // GC_LAND_LIST: 3 + N×24 (world::land_list_bytes)
     (GC_HYBRIDCRYPT_KEYS, 7), // 152: 7 + stream (legacy.rs)
-    (GC_HYBRIDCRYPT_SDB, 7), // 153: 7 + stream (legacy.rs)
+    (GC_HYBRIDCRYPT_SDB, 7),  // 153: 7 + stream (legacy.rs)
 ];
 
 /// Headers donde el u16 LE en `[1..3]` es la longitud del PAYLOAD (no del
@@ -152,7 +158,9 @@ pub struct Splitter {
 
 impl Splitter {
     pub fn new() -> Self {
-        Self { buf: Vec::with_capacity(512) }
+        Self {
+            buf: Vec::with_capacity(512),
+        }
     }
 
     /// Bytes pendientes de formar un paquete completo.
@@ -177,7 +185,10 @@ impl Splitter {
     /// Extrae UN paquete completo del stream, leyendo del socket todo lo que
     /// falte (flujo pull). EOF limpio → [`SplitError::Eof`]; EOF con bytes a
     /// medio paquete → [`SplitError::UnexpectedEof`].
-    pub async fn next<R: AsyncRead + Unpin>(&mut self, reader: &mut R) -> Result<Vec<u8>, SplitError> {
+    pub async fn next<R: AsyncRead + Unpin>(
+        &mut self,
+        reader: &mut R,
+    ) -> Result<Vec<u8>, SplitError> {
         let mut chunk = [0u8; 4096];
         loop {
             if let Some(pkt) = self.try_extract()? {
@@ -188,7 +199,9 @@ impl Splitter {
                 return if self.buf.is_empty() {
                     Err(SplitError::Eof)
                 } else {
-                    Err(SplitError::UnexpectedEof { buffered: self.buf.len() })
+                    Err(SplitError::UnexpectedEof {
+                        buffered: self.buf.len(),
+                    })
                 };
             }
             self.buf.extend_from_slice(&chunk[..n]);
@@ -206,7 +219,10 @@ impl Splitter {
             }
             let payload = u16::from_le_bytes([self.buf[1], self.buf[2]]) as usize;
             if payload < *min {
-                return Err(SplitError::BadEmbeddedLength { header: hdr, size: payload });
+                return Err(SplitError::BadEmbeddedLength {
+                    header: hdr,
+                    size: payload,
+                });
             }
             let total = payload + 3; // header + campo de longitud
             if self.buf.len() < total {
@@ -220,7 +236,10 @@ impl Splitter {
             }
             let total = u16::from_le_bytes([self.buf[1], self.buf[2]]) as usize;
             if total < *min {
-                return Err(SplitError::BadEmbeddedLength { header: hdr, size: total });
+                return Err(SplitError::BadEmbeddedLength {
+                    header: hdr,
+                    size: total,
+                });
             }
             if self.buf.len() < total {
                 return Ok(None);
@@ -282,7 +301,11 @@ mod tests {
         assert_eq!(fixed_size(106), Some(5), "GC_TIME");
         assert_eq!(fixed_size(121), Some(2), "GC_CHANNEL");
         assert_eq!(fixed_size(3), Some(24), "GC_MOVE");
-        assert_eq!(fixed_size(header::GC_ITEM_GROUND_ADD), Some(58), "GC_ITEM_GROUND_ADD");
+        assert_eq!(
+            fixed_size(header::GC_ITEM_GROUND_ADD),
+            Some(58),
+            "GC_ITEM_GROUND_ADD"
+        );
         assert_eq!(fixed_size(27), Some(5), "GC_ITEM_GROUND_DEL");
         assert_eq!(fixed_size(31), Some(30), "GC_ITEM_OWNERSHIP");
         assert_eq!(fixed_size(25), Some(38), "GC_ITEM_UPDATE");
@@ -356,7 +379,10 @@ mod tests {
         let mut sp = Splitter::new();
         assert!(matches!(
             sp.push(&bad),
-            Err(SplitError::BadEmbeddedLength { header: header::GC_LOCALE, size: 0 })
+            Err(SplitError::BadEmbeddedLength {
+                header: header::GC_LOCALE,
+                size: 0
+            })
         ));
     }
 
@@ -390,8 +416,14 @@ mod tests {
     fn embedded_size_partial_then_complete() {
         let lands = land_list(2);
         let mut sp = Splitter::new();
-        assert!(sp.push(&lands[..3]).unwrap().is_empty(), "solo el header + size");
-        assert!(sp.push(&lands[3..10]).unwrap().is_empty(), "elementos a medio");
+        assert!(
+            sp.push(&lands[..3]).unwrap().is_empty(),
+            "solo el header + size"
+        );
+        assert!(
+            sp.push(&lands[3..10]).unwrap().is_empty(),
+            "elementos a medio"
+        );
         let out = sp.push(&lands[10..]).unwrap();
         assert_eq!(out, vec![lands]);
         assert_eq!(sp.buffered(), 0);
@@ -405,13 +437,22 @@ mod tests {
         let mut sp = Splitter::new();
         assert!(matches!(
             sp.push(&bad),
-            Err(SplitError::BadEmbeddedLength { header: header::GC_CHAT, size: 5 })
+            Err(SplitError::BadEmbeddedLength {
+                header: header::GC_CHAT,
+                size: 5
+            })
         ));
         // GC_LAND_LIST con size 1 → error.
         let mut bad = vec![130u8];
         bad.extend_from_slice(&1u16.to_le_bytes());
         let mut sp = Splitter::new();
-        assert!(matches!(sp.push(&bad), Err(SplitError::BadEmbeddedLength { header: 130, size: 1 })));
+        assert!(matches!(
+            sp.push(&bad),
+            Err(SplitError::BadEmbeddedLength {
+                header: 130,
+                size: 1
+            })
+        ));
     }
 
     #[test]
@@ -422,7 +463,10 @@ mod tests {
         assert!(matches!(err, SplitError::UnknownHeader { header: 0x60 }));
         // GC_PHASE es S→C; un C→S (6 = CG_CHARACTER_SELECT) aquí es desync.
         let mut sp = Splitter::new();
-        assert!(matches!(sp.push(&[6u8, 0]), Err(SplitError::UnknownHeader { header: 6 })));
+        assert!(matches!(
+            sp.push(&[6u8, 0]),
+            Err(SplitError::UnknownHeader { header: 6 })
+        ));
     }
 
     #[tokio::test]

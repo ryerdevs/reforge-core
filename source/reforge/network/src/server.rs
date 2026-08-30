@@ -80,8 +80,9 @@ mod tests {
 
         // cliente raw
         let mut client = TcpStream::connect(addr).await.unwrap();
-        let payload =
-            TPacketCGLogin3::new_channel("test", "1234", [1, 2, 3, 4]).to_bytes_channel().to_vec();
+        let payload = TPacketCGLogin3::new_channel("test", "1234", [1, 2, 3, 4])
+            .to_bytes_channel()
+            .to_vec();
         client.write_all(&payload).await.unwrap();
 
         // respuesta completa (eco)

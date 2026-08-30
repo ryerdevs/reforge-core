@@ -139,8 +139,12 @@ pub fn is_aggressive(ai_flag: Option<&str>) -> bool {
 fn has_aiflag(ai_flag: Option<&str>, flag: &str) -> bool {
     ai_flag.is_some_and(|f| f.split(',').any(|t| t.trim() == flag))
 }
-pub fn is_coward(ai_flag: Option<&str>) -> bool { has_aiflag(ai_flag, "COWARD") }
-pub fn is_berserker(ai_flag: Option<&str>) -> bool { has_aiflag(ai_flag, "BERSERK") }
+pub fn is_coward(ai_flag: Option<&str>) -> bool {
+    has_aiflag(ai_flag, "COWARD")
+}
+pub fn is_berserker(ai_flag: Option<&str>) -> bool {
+    has_aiflag(ai_flag, "BERSERK")
+}
 
 /// PASO DE PATRULLAJE del mob idle (parity `UpdateState` IDLE —
 /// `char_state.cpp:668-688`): con probabilidad `1/7` por tick, el mob elige
@@ -491,7 +495,7 @@ mod tests {
             "a 157.5 u de la víctima en la dirección del mob"
         );
         // RANGE: fMin = 175×0.8 = 140.
-        let (x, y) = change_attack_dest(100, 0, 0, 0, BATTLE_TYPE_RANGE, 175, &mut |lo, hi| 0);
+        let (x, y) = change_attack_dest(100, 0, 0, 0, BATTLE_TYPE_RANGE, 175, &mut |_lo, _hi| 0);
         assert_eq!((x, y), (140, 0), "fMin rango = ×0.8");
         // Lejos (600 > 500): ángulo completamente aleatorio (roll 90 → 90°).
         let (x, y) = change_attack_dest(600, 0, 0, 0, BATTLE_TYPE_MAGIC, 175, &mut |lo, hi| {

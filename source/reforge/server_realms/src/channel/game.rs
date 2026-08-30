@@ -19,7 +19,10 @@ use protocol::header;
 use game_core::ecs::{CombatIntent, Intent};
 
 use crate::channel::session::Session;
-use crate::channel::{chat, combat, dragon_soul, events, horse, items, land, locale, movement, party, pvp, quest, quickslot, safebox, script, shop, skills, trade};
+use crate::channel::{
+    chat, combat, dragon_soul, events, horse, items, land, locale, movement, party, pvp, quest,
+    quickslot, safebox, script, shop, skills, trade,
+};
 
 /// Loop de juego de la conexión: corre SOLO con la sesión llena (las fases
 /// 1-7 las hizo `entry::run`). `Err` = cierre con razón (fatal o protocolario

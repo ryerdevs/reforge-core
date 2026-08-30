@@ -49,7 +49,11 @@ mod tests {
     fn real_proto_weight_rejects_carry_at_limit() {
         let max = max_weight(1, 12); // (30 + 3 + 24) × 10 = 570
         let espada = weight_for_item(ESPADA, 1); // 19 u = 3.3 % del máximo
-        assert_eq!(weight_for_item(ESPADA, 10), 190, "10 espadas = 1/3 del máximo");
+        assert_eq!(
+            weight_for_item(ESPADA, 10),
+            190,
+            "10 espadas = 1/3 del máximo"
+        );
         assert!(
             !can_carry(max, espada, max),
             "peso al límite → el pickup se rechaza"

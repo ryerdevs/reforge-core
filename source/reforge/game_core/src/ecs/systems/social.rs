@@ -25,7 +25,7 @@ use crate::ecs::events::{
 };
 use crate::ecs::resources::NpcIndex;
 use crate::ecs::world::WorldSim;
-use crate::shop::{Shop, ShopError, ShopRepo, SHOP_MAX_DISTANCE};
+use crate::shop::{SHOP_MAX_DISTANCE, Shop, ShopError, ShopRepo};
 use crate::trade::{TradeCommitPlan, TradeSession};
 use database::item::ItemRow;
 
@@ -110,7 +110,10 @@ impl WorldSim {
 
     fn handle_shop(&mut self, intent: ShopIntent) -> Vec<NpcEvent> {
         match intent {
-            ShopIntent::Open { player_vid, npc_vid } => {
+            ShopIntent::Open {
+                player_vid,
+                npc_vid,
+            } => {
                 // Parity `StartShopping` (shop_manager.cpp:102-152):
                 // distancia < SHOP_MAX_DISTANCE (1000), vivo, sin otro
                 // window de trade — y el NPC es de un shop conocido.
@@ -137,22 +140,31 @@ impl WorldSim {
                     );
                     return Vec::new();
                 };
-                let Some((px, py)) = self.player_pos(player_vid) else { return Vec::new() };
-                let Some((nx, ny)) = self.entity_pos(npc_vid) else { return Vec::new() };
+                let Some((px, py)) = self.player_pos(player_vid) else {
+                    return Vec::new();
+                };
+                let Some((nx, ny)) = self.entity_pos(npc_vid) else {
+                    return Vec::new();
+                };
                 if distance_approx(px - nx, py - ny) >= SHOP_MAX_DISTANCE as i32 {
                     return Vec::new(); // silencioso (parity)
                 }
                 let items = shop.items.clone();
                 self.open_shops.insert(
                     player_vid,
-                    ShopOpen { npc_vnum: shop.npc_vnum, npc_vid },
+                    ShopOpen {
+                        npc_vnum: shop.npc_vnum,
+                        npc_vid,
+                    },
                 );
-                vec![SocialEvent::Shop(ShopEvent::Opened {
-                    player_vid,
-                    npc_vid,
-                    items,
-                })
-                .into()]
+                vec![
+                    SocialEvent::Shop(ShopEvent::Opened {
+                        player_vid,
+                        npc_vid,
+                        items,
+                    })
+                    .into(),
+                ]
             }
             ShopIntent::Close { player_vid } => {
                 if self.open_shops.remove(&player_vid).is_some() {
@@ -161,44 +173,59 @@ impl WorldSim {
                 Vec::new()
             }
             ShopIntent::Buy { player_vid, pos } => {
-                let Some(open) = self.shop_of(player_vid) else { return Vec::new() };
+                let Some(open) = self.shop_of(player_vid) else {
+                    return Vec::new();
+                };
                 // La tabla está keyed por npc_vnum (el shop del NPC — la
                 // misma clave que resolvió el Open).
-                let Some(shop) = self.world.resource::<ShopTable>().0.get(&open.npc_vnum).cloned()
+                let Some(shop) = self
+                    .world
+                    .resource::<ShopTable>()
+                    .0
+                    .get(&open.npc_vnum)
+                    .cloned()
                 else {
                     return Vec::new();
                 };
                 let Some(item) = shop.items.get(pos as usize).copied() else {
-                    return vec![SocialEvent::Shop(ShopEvent::BuyRejected {
-                        player_vid,
-                        pos,
-                        error: ShopError::InvalidPos,
-                    })
-                    .into()];
+                    return vec![
+                        SocialEvent::Shop(ShopEvent::BuyRejected {
+                            player_vid,
+                            pos,
+                            error: ShopError::InvalidPos,
+                        })
+                        .into(),
+                    ];
                 };
                 // Parity `CShop::Buy` (shop.cpp:219-223): price <= 0 →
                 // rechazo (el precio ya viene resuelto del load; defensivo).
                 if item.price <= 0 {
-                    return vec![SocialEvent::Shop(ShopEvent::BuyRejected {
+                    return vec![
+                        SocialEvent::Shop(ShopEvent::BuyRejected {
+                            player_vid,
+                            pos,
+                            error: ShopError::NotEnoughMoney,
+                        })
+                        .into(),
+                    ];
+                }
+                vec![
+                    SocialEvent::Shop(ShopEvent::BuyResult {
                         player_vid,
                         pos,
-                        error: ShopError::NotEnoughMoney,
+                        vnum: item.vnum,
+                        count: item.count,
+                        price: item.price,
                     })
-                    .into()];
-                }
-                vec![SocialEvent::Shop(ShopEvent::BuyResult {
-                    player_vid,
-                    pos,
-                    vnum: item.vnum,
-                    count: item.count,
-                    price: item.price,
-                })
-                .into()]
+                    .into(),
+                ]
             }
             ShopIntent::Sell { player_vid, cell } => self.shop_sell_gate(player_vid, cell, 0),
-            ShopIntent::Sell2 { player_vid, cell, count } => {
-                self.shop_sell_gate(player_vid, cell, i64::from(count))
-            }
+            ShopIntent::Sell2 {
+                player_vid,
+                cell,
+                count,
+            } => self.shop_sell_gate(player_vid, cell, i64::from(count)),
         }
     }
 
@@ -210,7 +237,14 @@ impl WorldSim {
         if self.shop_of(player_vid).is_none() {
             return Vec::new();
         }
-        vec![SocialEvent::Shop(ShopEvent::SellResult { player_vid, cell, count }).into()]
+        vec![
+            SocialEvent::Shop(ShopEvent::SellResult {
+                player_vid,
+                cell,
+                count,
+            })
+            .into(),
+        ]
     }
 
     /// El shop del NPC (npc_vnum → tabla cargada).
@@ -243,11 +277,18 @@ impl WorldSim {
 
     fn handle_trade(&mut self, intent: TradeIntent) -> Vec<NpcEvent> {
         match intent {
-            TradeIntent::Start { player_vid, target_vid } => {
-                self.trade_start(player_vid, target_vid)
-            }
-            TradeIntent::ItemAdd { player_vid, row, display_pos } => {
-                let Some(pair) = self.trades.get(&player_vid).cloned() else { return Vec::new() };
+            TradeIntent::Start {
+                player_vid,
+                target_vid,
+            } => self.trade_start(player_vid, target_vid),
+            TradeIntent::ItemAdd {
+                player_vid,
+                row,
+                display_pos,
+            } => {
+                let Some(pair) = self.trades.get(&player_vid).cloned() else {
+                    return Vec::new();
+                };
                 let mut pair = pair.lock().expect("trade pair lock");
                 let side = pair.side_of(player_vid);
                 let other = pair.other(player_vid);
@@ -271,8 +312,13 @@ impl WorldSim {
                     Err(_) => Vec::new(), // silencioso (parity: AddItem false)
                 }
             }
-            TradeIntent::ItemDel { player_vid, display_pos } => {
-                let Some(pair) = self.trades.get(&player_vid).cloned() else { return Vec::new() };
+            TradeIntent::ItemDel {
+                player_vid,
+                display_pos,
+            } => {
+                let Some(pair) = self.trades.get(&player_vid).cloned() else {
+                    return Vec::new();
+                };
                 let mut pair = pair.lock().expect("trade pair lock");
                 let side = pair.side_of(player_vid);
                 let other = pair.other(player_vid);
@@ -289,7 +335,9 @@ impl WorldSim {
                 vec![event(true, player_vid).into(), event(false, other).into()]
             }
             TradeIntent::GoldAdd { player_vid, gold } => {
-                let Some(pair) = self.trades.get(&player_vid).cloned() else { return Vec::new() };
+                let Some(pair) = self.trades.get(&player_vid).cloned() else {
+                    return Vec::new();
+                };
                 let mut pair = pair.lock().expect("trade pair lock");
                 let side = pair.side_of(player_vid);
                 let other = pair.other(player_vid);
@@ -297,7 +345,11 @@ impl WorldSim {
                     return Vec::new(); // silencioso (parity AddGold false)
                 }
                 let event = |is_me: bool, pv: u32| {
-                    SocialEvent::Trade(TradeEvent::GoldAdded { player_vid: pv, is_me, gold })
+                    SocialEvent::Trade(TradeEvent::GoldAdded {
+                        player_vid: pv,
+                        is_me,
+                        gold,
+                    })
                 };
                 vec![event(true, player_vid).into(), event(false, other).into()]
             }
@@ -306,14 +358,18 @@ impl WorldSim {
             TradeIntent::CommitOk { player_vid } => {
                 // El ejecutor confirmó: Done a AMBOS (memory+wire) y libera
                 // (AMBAS claves del par).
-                let Some(pair) = self.trades.remove(&player_vid) else { return Vec::new() };
+                let Some(pair) = self.trades.remove(&player_vid) else {
+                    return Vec::new();
+                };
                 let pair = pair.lock().expect("trade pair lock");
                 let other = pair.other(player_vid);
                 self.trades.remove(&other);
                 let side_exec = pair.side_of(player_vid);
                 let side_other = 1 - side_exec;
-                let (gold_exec, gold_other) =
-                    (pair.session.sides[side_exec].gold, pair.session.sides[side_other].gold);
+                let (gold_exec, gold_other) = (
+                    pair.session.sides[side_exec].gold,
+                    pair.session.sides[side_other].gold,
+                );
                 // El ejecutor ENTREGA sus offers y RECIBE los del partner.
                 let (offers_exec, offers_other) = (
                     pair.session.sides[side_exec]
@@ -327,19 +383,26 @@ impl WorldSim {
                         .map(|i| i.row.clone())
                         .collect::<Vec<_>>(),
                 );
-                let done = |pv: u32, delta: i64, received: Vec<ItemRow>, delivered: Vec<ItemRow>| {
-                    SocialEvent::Trade(TradeEvent::Done {
-                        player_vid: pv,
-                        gold_delta: delta,
-                        received: received
-                            .into_iter()
-                            .map(|row| TradeReceivedItem { row })
-                            .collect(),
-                        delivered,
-                    })
-                };
+                let done =
+                    |pv: u32, delta: i64, received: Vec<ItemRow>, delivered: Vec<ItemRow>| {
+                        SocialEvent::Trade(TradeEvent::Done {
+                            player_vid: pv,
+                            gold_delta: delta,
+                            received: received
+                                .into_iter()
+                                .map(|row| TradeReceivedItem { row })
+                                .collect(),
+                            delivered,
+                        })
+                    };
                 vec![
-                    done(player_vid, gold_other, offers_other.clone(), offers_exec.clone()).into(),
+                    done(
+                        player_vid,
+                        gold_other,
+                        offers_other.clone(),
+                        offers_exec.clone(),
+                    )
+                    .into(),
                     done(other, gold_exec, offers_exec, offers_other).into(),
                 ]
             }
@@ -367,18 +430,31 @@ impl WorldSim {
         if self.open_shops.contains_key(&player_vid) {
             return Vec::new(); // PREVENT_TRADE_WINDOW (shop abierto)
         }
-        let Some((px, py)) = self.player_pos(player_vid) else { return Vec::new() };
-        let Some((tx, ty)) = self.player_pos(target_vid) else { return Vec::new() };
+        let Some((px, py)) = self.player_pos(player_vid) else {
+            return Vec::new();
+        };
+        let Some((tx, ty)) = self.player_pos(target_vid) else {
+            return Vec::new();
+        };
         if distance_approx(px - tx, py - ty) >= crate::trade::EXCHANGE_MAX_DISTANCE as i32 {
             return Vec::new(); // silencioso (parity :75-78)
         }
-        let pair = std::sync::Arc::new(std::sync::Mutex::new(TradePair::new(player_vid, target_vid)));
+        let pair = std::sync::Arc::new(std::sync::Mutex::new(TradePair::new(
+            player_vid, target_vid,
+        )));
         self.trades.insert(player_vid, pair.clone());
         self.trades.insert(target_vid, pair);
         vec![
-            SocialEvent::Trade(TradeEvent::Start { player_vid, other_vid: target_vid }).into(),
-            SocialEvent::Trade(TradeEvent::Start { player_vid: target_vid, other_vid: player_vid })
-                .into(),
+            SocialEvent::Trade(TradeEvent::Start {
+                player_vid,
+                other_vid: target_vid,
+            })
+            .into(),
+            SocialEvent::Trade(TradeEvent::Start {
+                player_vid: target_vid,
+                other_vid: player_vid,
+            })
+            .into(),
         ]
     }
 
@@ -386,14 +462,20 @@ impl WorldSim {
     /// (el último en aceptar — su sesión tiene el WorldStore/Batcher). El
     /// resto de cambios desaceptan (parity exchange.cpp:487-593).
     fn trade_accept(&mut self, player_vid: u32) -> Vec<NpcEvent> {
-        let Some(pair) = self.trades.get(&player_vid).cloned() else { return Vec::new() };
+        let Some(pair) = self.trades.get(&player_vid).cloned() else {
+            return Vec::new();
+        };
         let mut pair = pair.lock().expect("trade pair lock");
         let side = pair.side_of(player_vid);
         let other = pair.other(player_vid);
         if !pair.session.accept(side) {
             // Primer accept: GC_ACCEPT(is_me, 1) a ambos (parity :589-590).
             let event = |is_me: bool, pv: u32| {
-                SocialEvent::Trade(TradeEvent::AcceptState { player_vid: pv, is_me, accept: true })
+                SocialEvent::Trade(TradeEvent::AcceptState {
+                    player_vid: pv,
+                    is_me,
+                    accept: true,
+                })
             };
             return vec![event(true, player_vid).into(), event(false, other).into()];
         }
@@ -408,8 +490,16 @@ impl WorldSim {
         let (offers_exec, offers_partner) = {
             let (se, sp) = (pair.side_of(executor), pair.side_of(partner));
             (
-                pair.session.sides[se].items.iter().map(|i| i.row.clone()).collect::<Vec<_>>(),
-                pair.session.sides[sp].items.iter().map(|i| i.row.clone()).collect::<Vec<_>>(),
+                pair.session.sides[se]
+                    .items
+                    .iter()
+                    .map(|i| i.row.clone())
+                    .collect::<Vec<_>>(),
+                pair.session.sides[sp]
+                    .items
+                    .iter()
+                    .map(|i| i.row.clone())
+                    .collect::<Vec<_>>(),
             )
         };
         let plan = TradeCommitPlan {
@@ -420,17 +510,25 @@ impl WorldSim {
             offers_executor: offers_exec,
             offers_partner,
         };
-        vec![SocialEvent::Trade(TradeEvent::Commit { player_vid: executor, plan }).into()]
+        vec![
+            SocialEvent::Trade(TradeEvent::Commit {
+                player_vid: executor,
+                plan,
+            })
+            .into(),
+        ]
     }
 
     /// Cancel del par (parity `CExchange::Cancel` — exchange.cpp:595-613):
     /// GC_END a ambos + libera. `from_fail` = el commit falló (mismo wire).
     fn trade_cancel(&mut self, player_vid: u32, from_fail: bool) -> Vec<NpcEvent> {
-        let Some(pair) = self.trades.remove(&player_vid) else { return Vec::new() };
+        let Some(pair) = self.trades.remove(&player_vid) else {
+            return Vec::new();
+        };
         let other = pair.lock().expect("trade pair lock").other(player_vid);
         self.trades.remove(&other);
         let _ = from_fail; // el wire es el mismo (GC_END); el log del canal
-                           // distingue (CommitFail se loguea en el ejecutor)
+        // distingue (CommitFail se loguea en el ejecutor)
         vec![
             SocialEvent::Trade(TradeEvent::Cancelled { player_vid }).into(),
             SocialEvent::Trade(TradeEvent::Cancelled { player_vid: other }).into(),
@@ -475,7 +573,14 @@ mod tests {
         let mut w = world_with(42);
         join_at(&mut w, 1, 0, 0);
         join_at(&mut w, 2, 200, 0); // dentro de EXCHANGE_MAX_DISTANCE (1000)
-        let ev = w.process_intent(TradeIntent::Start { player_vid: 1, target_vid: 2 }.into(), 0);
+        let ev = w.process_intent(
+            TradeIntent::Start {
+                player_vid: 1,
+                target_vid: 2,
+            }
+            .into(),
+            0,
+        );
         let starts: Vec<u32> = ev
             .iter()
             .filter_map(|e| match e {
@@ -488,7 +593,14 @@ mod tests {
         assert_eq!(starts, vec![1, 2], "ambos reciben Start");
         assert!(w.trades.contains_key(&1) && w.trades.contains_key(&2));
         // Target ocupado → Already al que pidió.
-        let ev = w.process_intent(TradeIntent::Start { player_vid: 3, target_vid: 1 }.into(), 0);
+        let ev = w.process_intent(
+            TradeIntent::Start {
+                player_vid: 3,
+                target_vid: 1,
+            }
+            .into(),
+            0,
+        );
         assert!(
             ev.iter().any(|e| matches!(
                 e,
@@ -505,18 +617,39 @@ mod tests {
         join_at(&mut w, 1, 0, 0);
         join_at(&mut w, 2, 2_000, 0); // fuera de 1000
         assert!(
-            w.process_intent(TradeIntent::Start { player_vid: 1, target_vid: 2 }.into(), 0)
-                .is_empty(),
+            w.process_intent(
+                TradeIntent::Start {
+                    player_vid: 1,
+                    target_vid: 2
+                }
+                .into(),
+                0
+            )
+            .is_empty(),
             "lejos → silencio"
         );
         assert!(
-            w.process_intent(TradeIntent::Start { player_vid: 1, target_vid: 99 }.into(), 0)
-                .is_empty(),
+            w.process_intent(
+                TradeIntent::Start {
+                    player_vid: 1,
+                    target_vid: 99
+                }
+                .into(),
+                0
+            )
+            .is_empty(),
             "target inexistente → silencio"
         );
         assert!(
-            w.process_intent(TradeIntent::Start { player_vid: 1, target_vid: 1 }.into(), 0)
-                .is_empty(),
+            w.process_intent(
+                TradeIntent::Start {
+                    player_vid: 1,
+                    target_vid: 1
+                }
+                .into(),
+                0
+            )
+            .is_empty(),
             "self → silencio"
         );
     }
@@ -528,10 +661,21 @@ mod tests {
         let mut w = world_with(42);
         join_at(&mut w, 1, 0, 0);
         join_at(&mut w, 2, 100, 0);
-        w.process_intent(TradeIntent::Start { player_vid: 1, target_vid: 2 }.into(), 0);
+        w.process_intent(
+            TradeIntent::Start {
+                player_vid: 1,
+                target_vid: 2,
+            }
+            .into(),
+            0,
+        );
         let ev = w.process_intent(
-            TradeIntent::ItemAdd { player_vid: 1, row: inv_row(10, 3, 101, 5), display_pos: 0 }
-                .into(),
+            TradeIntent::ItemAdd {
+                player_vid: 1,
+                row: inv_row(10, 3, 101, 5),
+                display_pos: 0,
+            }
+            .into(),
             0,
         );
         let adds: Vec<(u32, bool)> = ev
@@ -546,9 +690,20 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(adds, vec![(1, true), (2, false)], "owner is_me=true, target false");
+        assert_eq!(
+            adds,
+            vec![(1, true), (2, false)],
+            "owner is_me=true, target false"
+        );
         // GoldAdd a ambos.
-        let ev = w.process_intent(TradeIntent::GoldAdd { player_vid: 2, gold: 500 }.into(), 0);
+        let ev = w.process_intent(
+            TradeIntent::GoldAdd {
+                player_vid: 2,
+                gold: 500,
+            }
+            .into(),
+            0,
+        );
         let golds: Vec<(u32, bool, i64)> = ev
             .iter()
             .filter_map(|e| match e {
@@ -562,7 +717,14 @@ mod tests {
             .collect();
         assert_eq!(golds, vec![(2, true, 500), (1, false, 500)]);
         // ItemDel.
-        let ev = w.process_intent(TradeIntent::ItemDel { player_vid: 1, display_pos: 0 }.into(), 0);
+        let ev = w.process_intent(
+            TradeIntent::ItemDel {
+                player_vid: 1,
+                display_pos: 0,
+            }
+            .into(),
+            0,
+        );
         assert_eq!(ev.len(), 2, "ItemRemoved a ambos");
         // El estado puro: la sesión del mundo quedó consistente.
         let pair = w.trades.get(&1).expect("par").lock().expect("lock");
@@ -577,19 +739,40 @@ mod tests {
         let mut w = world_with(42);
         join_at(&mut w, 1, 0, 0);
         join_at(&mut w, 2, 100, 0);
-        w.process_intent(TradeIntent::Start { player_vid: 1, target_vid: 2 }.into(), 0);
         w.process_intent(
-            TradeIntent::ItemAdd { player_vid: 1, row: inv_row(10, 3, 101, 5), display_pos: 0 }
-                .into(),
+            TradeIntent::Start {
+                player_vid: 1,
+                target_vid: 2,
+            }
+            .into(),
             0,
         );
-        w.process_intent(TradeIntent::GoldAdd { player_vid: 2, gold: 500 }.into(), 0);
+        w.process_intent(
+            TradeIntent::ItemAdd {
+                player_vid: 1,
+                row: inv_row(10, 3, 101, 5),
+                display_pos: 0,
+            }
+            .into(),
+            0,
+        );
+        w.process_intent(
+            TradeIntent::GoldAdd {
+                player_vid: 2,
+                gold: 500,
+            }
+            .into(),
+            0,
+        );
         // Primer accept: AcceptState a ambos.
         let ev = w.process_intent(TradeIntent::Accept { player_vid: 1 }.into(), 0);
         assert_eq!(ev.len(), 2, "AcceptState a ambos: {ev:?}");
         assert!(ev.iter().all(|e| matches!(
             e,
-            NpcEvent::Social(SocialEvent::Trade(TradeEvent::AcceptState { accept: true, .. }))
+            NpcEvent::Social(SocialEvent::Trade(TradeEvent::AcceptState {
+                accept: true,
+                ..
+            }))
         )));
         // Segundo accept: Commit al ejecutor (el 2) con el plan.
         let ev = w.process_intent(TradeIntent::Accept { player_vid: 2 }.into(), 0);
@@ -622,13 +805,31 @@ mod tests {
         let mut w = world_with(42);
         join_at(&mut w, 1, 0, 0);
         join_at(&mut w, 2, 100, 0);
-        w.process_intent(TradeIntent::Start { player_vid: 1, target_vid: 2 }.into(), 0);
         w.process_intent(
-            TradeIntent::ItemAdd { player_vid: 1, row: inv_row(10, 3, 101, 5), display_pos: 0 }
-                .into(),
+            TradeIntent::Start {
+                player_vid: 1,
+                target_vid: 2,
+            }
+            .into(),
             0,
         );
-        w.process_intent(TradeIntent::GoldAdd { player_vid: 2, gold: 500 }.into(), 0);
+        w.process_intent(
+            TradeIntent::ItemAdd {
+                player_vid: 1,
+                row: inv_row(10, 3, 101, 5),
+                display_pos: 0,
+            }
+            .into(),
+            0,
+        );
+        w.process_intent(
+            TradeIntent::GoldAdd {
+                player_vid: 2,
+                gold: 500,
+            }
+            .into(),
+            0,
+        );
         w.process_intent(TradeIntent::Accept { player_vid: 1 }.into(), 0);
         w.process_intent(TradeIntent::Accept { player_vid: 2 }.into(), 0);
         let ev = w.process_intent(TradeIntent::CommitOk { player_vid: 2 }.into(), 0);
@@ -647,7 +848,10 @@ mod tests {
         // El ejecutor (2) ofreció 500 de oro: recibe el item 101 del 1 y no
         // entrega items. El 1 ofreció el item: recibe 500 y entrega el item.
         assert_eq!(dones, vec![(2, 0, 1, 0), (1, 500, 0, 1)]);
-        assert!(!w.trades.contains_key(&1) && !w.trades.contains_key(&2), "par liberado");
+        assert!(
+            !w.trades.contains_key(&1) && !w.trades.contains_key(&2),
+            "par liberado"
+        );
     }
 
     /// CommitFail: Cancelled a ambos + par liberado.
@@ -656,7 +860,14 @@ mod tests {
         let mut w = world_with(42);
         join_at(&mut w, 1, 0, 0);
         join_at(&mut w, 2, 100, 0);
-        w.process_intent(TradeIntent::Start { player_vid: 1, target_vid: 2 }.into(), 0);
+        w.process_intent(
+            TradeIntent::Start {
+                player_vid: 1,
+                target_vid: 2,
+            }
+            .into(),
+            0,
+        );
         w.process_intent(TradeIntent::Accept { player_vid: 1 }.into(), 0);
         w.process_intent(TradeIntent::Accept { player_vid: 2 }.into(), 0);
         let ev = w.process_intent(TradeIntent::CommitFail { player_vid: 2 }.into(), 0);
@@ -670,7 +881,14 @@ mod tests {
         let mut w = world_with(42);
         join_at(&mut w, 1, 0, 0);
         join_at(&mut w, 2, 100, 0);
-        w.process_intent(TradeIntent::Start { player_vid: 1, target_vid: 2 }.into(), 0);
+        w.process_intent(
+            TradeIntent::Start {
+                player_vid: 1,
+                target_vid: 2,
+            }
+            .into(),
+            0,
+        );
         let ev = w.process_intent(TradeIntent::Cancel { player_vid: 1 }.into(), 0);
         assert_eq!(ev.len(), 2, "Cancelled a ambos");
         assert!(w.trades.is_empty());
@@ -688,21 +906,42 @@ mod tests {
             Shop {
                 vnum: 1,
                 npc_vnum: 9001,
-                items: vec![ShopItem { vnum: 20, count: 1, price: 400, display_pos: 0 }],
+                items: vec![ShopItem {
+                    vnum: 20,
+                    count: 1,
+                    price: 400,
+                    display_pos: 0,
+                }],
             },
         );
         join_at(&mut w, 1, 0, 0);
         // Open: el shop del NPC.
-        let ev = w.process_intent(ShopIntent::Open { player_vid: 1, npc_vid: 10_000 }.into(), 0);
+        let ev = w.process_intent(
+            ShopIntent::Open {
+                player_vid: 1,
+                npc_vid: 10_000,
+            }
+            .into(),
+            0,
+        );
         let opened = ev.iter().find_map(|e| match e {
-            NpcEvent::Social(SocialEvent::Shop(ShopEvent::Opened { items, .. })) => Some(items.clone()),
+            NpcEvent::Social(SocialEvent::Shop(ShopEvent::Opened { items, .. })) => {
+                Some(items.clone())
+            }
             _ => None,
         });
         let items = opened.expect("Opened");
         assert_eq!(items.len(), 1);
         assert_eq!((items[0].vnum, items[0].price), (20, 400));
         // Buy: precio resuelto.
-        let ev = w.process_intent(ShopIntent::Buy { player_vid: 1, pos: 0 }.into(), 0);
+        let ev = w.process_intent(
+            ShopIntent::Buy {
+                player_vid: 1,
+                pos: 0,
+            }
+            .into(),
+            0,
+        );
         let buy = ev.iter().find_map(|e| match e {
             NpcEvent::Social(SocialEvent::Shop(ShopEvent::BuyResult { price, vnum, .. })) => {
                 Some((*vnum, *price))
@@ -711,7 +950,14 @@ mod tests {
         });
         assert_eq!(buy, Some((20, 400)));
         // Buy pos inválido → BuyRejected.
-        let ev = w.process_intent(ShopIntent::Buy { player_vid: 1, pos: 9 }.into(), 0);
+        let ev = w.process_intent(
+            ShopIntent::Buy {
+                player_vid: 1,
+                pos: 9,
+            }
+            .into(),
+            0,
+        );
         assert!(
             ev.iter().any(|e| matches!(
                 e,
@@ -730,7 +976,15 @@ mod tests {
         )));
         // Sin shop abierto: Buy → silencio (parity).
         assert!(
-            w.process_intent(ShopIntent::Buy { player_vid: 1, pos: 0 }.into(), 0).is_empty()
+            w.process_intent(
+                ShopIntent::Buy {
+                    player_vid: 1,
+                    pos: 0
+                }
+                .into(),
+                0
+            )
+            .is_empty()
         );
     }
 
@@ -741,22 +995,44 @@ mod tests {
         w.load_table(41, vec![(entry(9001, 3_000, 0, 1), mob_row(9001))]);
         w.world.resource_mut::<ShopTable>().0.insert(
             9001,
-            Shop { vnum: 1, npc_vnum: 9001, items: Vec::new() },
+            Shop {
+                vnum: 1,
+                npc_vnum: 9001,
+                items: Vec::new(),
+            },
         );
         w.world.resource_mut::<ShopTable>().0.insert(
             9001,
-            Shop { vnum: 1, npc_vnum: 9001, items: Vec::new() },
+            Shop {
+                vnum: 1,
+                npc_vnum: 9001,
+                items: Vec::new(),
+            },
         );
         join_at(&mut w, 1, 0, 0);
         assert!(
-            w.process_intent(ShopIntent::Open { player_vid: 1, npc_vid: 10_000 }.into(), 0)
-                .is_empty(),
+            w.process_intent(
+                ShopIntent::Open {
+                    player_vid: 1,
+                    npc_vid: 10_000
+                }
+                .into(),
+                0
+            )
+            .is_empty(),
             "a 3000 (>= SHOP_MAX_DISTANCE 1000) → silencio"
         );
         assert!(
-            w.process_intent(ShopIntent::Sell { player_vid: 1, cell: 3 }.into(), 0).is_empty(),
+            w.process_intent(
+                ShopIntent::Sell {
+                    player_vid: 1,
+                    cell: 3
+                }
+                .into(),
+                0
+            )
+            .is_empty(),
             "sell sin shop abierto → silencio"
         );
     }
 }
-

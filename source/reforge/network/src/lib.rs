@@ -21,9 +21,11 @@ pub mod handshake;
 pub mod server;
 
 pub use connection::Connection;
-pub use framer::{packet_range, packet_size, read_exact_size, ConnectionRole, FramingError, Framer};
+pub use framer::{
+    ConnectionRole, Framer, FramingError, packet_range, packet_size, read_exact_size,
+};
 pub use handshake::{
-    perform, perform_with, Handshake, HandshakeConfig, HandshakeError, CLOCK_BIAS_TOLERANCE_MS,
-    HANDSHAKE_ATTEMPT_TIMEOUT, HANDSHAKE_RETRY_DELAY, HANDSHAKE_RETRY_LIMIT,
+    CLOCK_BIAS_TOLERANCE_MS, HANDSHAKE_ATTEMPT_TIMEOUT, HANDSHAKE_RETRY_DELAY,
+    HANDSHAKE_RETRY_LIMIT, Handshake, HandshakeConfig, HandshakeError, perform, perform_with,
 };
 pub use server::serve;

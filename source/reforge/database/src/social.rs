@@ -86,8 +86,12 @@ ON CONFLICT (id) DO UPDATE SET
 /// Literales SET en orden de definicion (canonicalizacion de MariaDB del SET;
 /// parity bitmask guild.h:92-95). El typo `REMOVE_MEMEBER` es legacy
 /// (guild.cpp:106/838) y el CHECK de guild_grade lo exige literal.
-const GUILD_AUTH_LITERALS: [(u8, &str); 4] =
-    [(1, "ADD_MEMBER"), (2, "REMOVE_MEMEBER"), (4, "NOTICE"), (8, "USE_SKILL")];
+const GUILD_AUTH_LITERALS: [(u8, &str); 4] = [
+    (1, "ADD_MEMBER"),
+    (2, "REMOVE_MEMEBER"),
+    (4, "NOTICE"),
+    (8, "USE_SKILL"),
+];
 
 /// Bitmask de auth -> SET textual; 0 -> `''` (ambos aceptados por el CHECK).
 fn auth_to_set(auth: u8) -> String {
@@ -110,7 +114,10 @@ impl GuildRepo {
     }
 
     async fn connect(&self) -> Result<Client, String> {
-        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
+        self.pool
+            .get()
+            .await
+            .map_err(|e| format!("PG pool get: {e}"))
     }
 
     /// Load de TODAS las guildas (boot del db — `GuildManager.cpp:161`,
@@ -138,9 +145,21 @@ impl GuildRepo {
     /// `id` no existe, UPDATE de las 8 columnas si existe. Idempotente.
     pub async fn save_guild(&self, guild: &GuildRow) -> Result<(), String> {
         let client = self.connect().await?;
-        let GuildRow { id, name, ladder_point, win, draw, loss, gold, level } = guild;
+        let GuildRow {
+            id,
+            name,
+            ladder_point,
+            win,
+            draw,
+            loss,
+            gold,
+            level,
+        } = guild;
         client
-            .execute(GUILD_UPSERT_SQL, &[id, name, ladder_point, win, draw, loss, gold, level])
+            .execute(
+                GUILD_UPSERT_SQL,
+                &[id, name, ladder_point, win, draw, loss, gold, level],
+            )
             .await
             .map(|_| ())
             .map_err(|e| pg_err("GUILD_UPSERT", &e))
@@ -159,7 +178,8 @@ impl GuildRepo {
                 Ok((
                     r.try_get(0).map_err(|e| format!("col0 id: {e}"))?,
                     r.try_get(1).map_err(|e| format!("col1 name: {e}"))?,
-                    r.try_get(2).map_err(|e| format!("col2 ladder_point: {e}"))?,
+                    r.try_get(2)
+                        .map_err(|e| format!("col2 ladder_point: {e}"))?,
                 ))
             })
             .collect()
@@ -167,7 +187,12 @@ impl GuildRepo {
 
     /// Declara guerra PG (idempotente, ids ordenados). Parity `guild_war` PK.
     pub async fn declare_war(&self, a: i64, b: i64) -> Result<bool, String> {
-        let c = self.connect().await?; let n = c.execute(GUILD_WAR_DECLARE_SQL, &[&a, &b]).await.map_err(|e| pg_err("GUILD_WAR_DECLARE", &e))?; Ok(n == 1)
+        let c = self.connect().await?;
+        let n = c
+            .execute(GUILD_WAR_DECLARE_SQL, &[&a, &b])
+            .await
+            .map_err(|e| pg_err("GUILD_WAR_DECLARE", &e))?;
+        Ok(n == 1)
     }
 
     /// Upsert de un grade (`player.guild_grade`, PK guild_id+grade). `grade`
@@ -197,7 +222,9 @@ fn guild_from_row(r: &tokio_postgres::Row) -> Result<GuildRow, String> {
     Ok(GuildRow {
         id: r.try_get(0).map_err(|e| format!("col0 id: {e}"))?,
         name: r.try_get(1).map_err(|e| format!("col1 name: {e}"))?,
-        ladder_point: r.try_get(2).map_err(|e| format!("col2 ladder_point: {e}"))?,
+        ladder_point: r
+            .try_get(2)
+            .map_err(|e| format!("col2 ladder_point: {e}"))?,
         win: r.try_get(3).map_err(|e| format!("col3 win: {e}"))?,
         draw: r.try_get(4).map_err(|e| format!("col4 draw: {e}"))?,
         loss: r.try_get(5).map_err(|e| format!("col5 loss: {e}"))?,
@@ -223,11 +250,23 @@ mod tests {
             .collect();
         assert_eq!(
             cols,
-            ["id", "name", "ladder_point", "win", "draw", "loss", "gold", "level"]
+            [
+                "id",
+                "name",
+                "ladder_point",
+                "win",
+                "draw",
+                "loss",
+                "gold",
+                "level"
+            ]
         );
         assert!(GUILD_LOAD_ALL_SQL.contains("FROM player.guild"));
         assert!(!GUILD_LOAD_ALL_SQL.contains("WHERE"), "boot carga todas");
-        assert!(!GUILD_LOAD_ALL_SQL.contains("ORDER BY"), "sin orden (parity)");
+        assert!(
+            !GUILD_LOAD_ALL_SQL.contains("ORDER BY"),
+            "sin orden (parity)"
+        );
     }
 
     /// Load uno: mismas 8 columnas + WHERE id = $1 (`GuildManager.cpp:191`).
@@ -262,8 +301,14 @@ mod tests {
     /// El re-export del messenger sigue disponible desde el modulo social.
     #[test]
     fn social_reexports_messenger_repo() {
-        let _ = MessengerRepo::new(crate::pool::new_pool("host=127.0.0.1 port=1 user=x password=x dbname=x", 2).expect("pool"));
-        let row = MessengerRow { account: "a".into(), companion: "b".into() };
+        let _ = MessengerRepo::new(
+            crate::pool::new_pool("host=127.0.0.1 port=1 user=x password=x dbname=x", 2)
+                .expect("pool"),
+        );
+        let row = MessengerRow {
+            account: "a".into(),
+            companion: "b".into(),
+        };
         assert_eq!(row.account, "a");
     }
 
@@ -275,7 +320,10 @@ mod tests {
         assert_eq!(auth_to_set(1), "ADD_MEMBER");
         assert_eq!(auth_to_set(6), "REMOVE_MEMEBER,NOTICE");
         assert_eq!(auth_to_set(10), "REMOVE_MEMEBER,USE_SKILL");
-        assert_eq!(auth_to_set(15), "ADD_MEMBER,REMOVE_MEMEBER,NOTICE,USE_SKILL");
+        assert_eq!(
+            auth_to_set(15),
+            "ADD_MEMBER,REMOVE_MEMEBER,NOTICE,USE_SKILL"
+        );
     }
 
     /// Verifier live-PG (gated, patrón locale.rs): save→load roundtrip sobre
@@ -290,13 +338,30 @@ mod tests {
         });
         let repo = GuildRepo::new(crate::pool::new_pool(&pg, 2).expect("pool"));
         let id = 9_000_000_001; // rango de test (ids reales u32 << 9e9)
-        let g = GuildRow { id, name: "Verifier".into(), ladder_point: 7, win: 3, draw: 1, loss: 2, gold: 500, level: 3 };
+        let g = GuildRow {
+            id,
+            name: "Verifier".into(),
+            ladder_point: 7,
+            win: 3,
+            draw: 1,
+            loss: 2,
+            gold: 500,
+            level: 3,
+        };
         repo.save_guild(&g).await.expect("save INSERT");
         assert_eq!(repo.load_guild(id).await.expect("load"), Some(g.clone()));
-        let g2 = GuildRow { ladder_point: 9, gold: 600, ..g };
+        let g2 = GuildRow {
+            ladder_point: 9,
+            gold: 600,
+            ..g
+        };
         repo.save_guild(&g2).await.expect("save ON CONFLICT");
         assert_eq!(repo.load_guild(id).await.expect("load"), Some(g2));
-        repo.connect().await.expect("pool")
-            .execute("DELETE FROM player.guild WHERE id = $1", &[&id]).await.expect("cleanup");
+        repo.connect()
+            .await
+            .expect("pool")
+            .execute("DELETE FROM player.guild WHERE id = $1", &[&id])
+            .await
+            .expect("cleanup");
     }
 }

@@ -234,7 +234,8 @@ fn parse_string(raw: &str, err: &dyn Fn(&str) -> String) -> Result<String, Strin
 
 /// Entero u16 (para `exp_rate`/`gold_rate`/`drop_rate`/`port`).
 fn parse_u16(raw: &str, err: &dyn Fn(&str) -> String, what: &str) -> Result<u16, String> {
-    raw.parse().map_err(|_| err(&format!("{what} debe ser un entero (u16)")))
+    raw.parse()
+        .map_err(|_| err(&format!("{what} debe ser un entero (u16)")))
 }
 
 /// F5 — parsea `channels = [{name = "CH-1", ip = "172.25.104.175",
@@ -258,9 +259,16 @@ fn parse_channels(raw: &str, err: &dyn Fn(&str) -> String) -> Result<Vec<Channel
         let entry = entry
             .strip_prefix('{')
             .and_then(|e| e.strip_suffix('}'))
-            .ok_or_else(|| err("channels: cada canal debe ser `{name = ..., ip = ..., port = ...}`"))?;
+            .ok_or_else(|| {
+                err("channels: cada canal debe ser `{name = ..., ip = ..., port = ...}`")
+            })?;
 
-        let mut ch = ChannelCfg { name: String::new(), ip: String::new(), port: 0, players: 0 };
+        let mut ch = ChannelCfg {
+            name: String::new(),
+            ip: String::new(),
+            port: 0,
+            players: 0,
+        };
         let mut have_name = false;
         let mut have_ip = false;
         let mut have_port = false;
@@ -365,8 +373,18 @@ mod tests {
         assert_eq!(
             cfg.channels,
             vec![
-                ChannelCfg { name: "CH-1".into(), ip: "172.25.104.175".into(), port: 30003, players: 0 },
-                ChannelCfg { name: "CH-2".into(), ip: "172.25.104.175".into(), port: 30007, players: 42 },
+                ChannelCfg {
+                    name: "CH-1".into(),
+                    ip: "172.25.104.175".into(),
+                    port: 30003,
+                    players: 0
+                },
+                ChannelCfg {
+                    name: "CH-2".into(),
+                    ip: "172.25.104.175".into(),
+                    port: 30007,
+                    players: 42
+                },
             ]
         );
         assert_eq!(cfg.exp_rate, 150);
@@ -380,7 +398,10 @@ mod tests {
     fn channels_default_to_empty_and_rates_100() {
         let cfg = Config::parse("listen = \"127.0.0.1:30001\"\n").unwrap();
         assert!(cfg.channels.is_empty());
-        assert_eq!((cfg.exp_rate, cfg.gold_rate, cfg.drop_rate), (100, 100, 100));
+        assert_eq!(
+            (cfg.exp_rate, cfg.gold_rate, cfg.drop_rate),
+            (100, 100, 100)
+        );
         assert_eq!(cfg.stat_points_per_level, 5, "default 5 por nivel");
     }
 
@@ -391,7 +412,10 @@ mod tests {
         let cfg = Config::parse("stat_points_per_level = 7\n").unwrap();
         assert_eq!(cfg.stat_points_per_level, 7);
         assert!(Config::parse("stat_points_per_level = \"x\"\n").is_err());
-        assert!(Config::parse("stat_points_per_level = 300\n").is_err(), "u8");
+        assert!(
+            Config::parse("stat_points_per_level = 300\n").is_err(),
+            "u8"
+        );
     }
 
     /// F5: errores del array — canal sin ip, malformado, campo desconocido.
@@ -399,7 +423,12 @@ mod tests {
     fn rejects_malformed_channels() {
         assert!(Config::parse("channels = [\"x\"]\n").is_err());
         assert!(Config::parse("channels = [{name = \"CH-1\", port = 30003}]\n").is_err());
-        assert!(Config::parse("channels = [{name = \"CH-1\", ip = \"1.2.3.4\", port = 30003, bogus = 1}]\n").is_err());
+        assert!(
+            Config::parse(
+                "channels = [{name = \"CH-1\", ip = \"1.2.3.4\", port = 30003, bogus = 1}]\n"
+            )
+            .is_err()
+        );
         assert!(Config::parse("channels = [{name = \"CH-1\", ip = \"1.2.3.4\"}]\n").is_err());
         assert!(Config::parse("channels = {name = \"CH-1\"}\n").is_err());
         assert!(Config::parse("exp_rate = \"x\"\n").is_err());

@@ -18,7 +18,7 @@
 //!   1842-1852`): START=0, ITEM_ADD=1, ITEM_DEL=2, GOLD_ADD=3, ACCEPT=4,
 //!   END=5, ALREADY=6, LESS_GOLD=7.
 
-use database::economy::{checked_gold_delta, checked_gold_sub, GOLD_MAX};
+use database::economy::{GOLD_MAX, checked_gold_delta, checked_gold_sub};
 use database::item::{ItemRepo, ItemRow};
 use database::player::PlayerRepo;
 use game_core::ecs::{TradeEvent, TradeIntent};
@@ -26,8 +26,8 @@ use game_core::trade::{self, TradeCommitPlan};
 use protocol::header;
 use protocol::world::{TItemPos, TPacketGCItemDelDeprecated, TPacketGCItemSet};
 
-use crate::channel::session::{Outcome, Session};
 use crate::channel::INVENTORY_MAX_NUM;
+use crate::channel::session::{Outcome, Session};
 
 /// Subheaders GC_EXCHANGE (Packet.h:1842-1852 — alineados con el server).
 const EXCHANGE_SUBHEADER_GC_START: u8 = 0;
@@ -56,11 +56,20 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
     let sub = pkt[1];
     let arg1 = u32::from_le_bytes([pkt[2], pkt[3], pkt[4], pkt[5]]);
     let arg2 = pkt[6];
-    let pos = TItemPos { window: pkt[7], cell: u16::from_le_bytes([pkt[8], pkt[9]]) };
+    let pos = TItemPos {
+        window: pkt[7],
+        cell: u16::from_le_bytes([pkt[8], pkt[9]]),
+    };
     match sub {
         0 => {
             // EXCHANGE_SUBHEADER_CG_START — arg1 = vid del target.
-            session.intent(TradeIntent::Start { player_vid: pv, target_vid: arg1 }.into())?;
+            session.intent(
+                TradeIntent::Start {
+                    player_vid: pv,
+                    target_vid: arg1,
+                }
+                .into(),
+            )?;
         }
         1 => {
             // EXCHANGE_SUBHEADER_CG_ITEM_ADD — Pos = item del inventario,
@@ -74,18 +83,24 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
             else {
                 return Ok(Outcome::Continue); // parity: AddItem false (silencioso)
             };
-            session.intent(TradeIntent::ItemAdd {
-                player_vid: pv,
-                row,
-                display_pos: arg2,
-            }.into())?;
+            session.intent(
+                TradeIntent::ItemAdd {
+                    player_vid: pv,
+                    row,
+                    display_pos: arg2,
+                }
+                .into(),
+            )?;
         }
         2 => {
             // EXCHANGE_SUBHEADER_CG_ITEM_DEL — arg1 = display_pos.
-            session.intent(TradeIntent::ItemDel {
-                player_vid: pv,
-                display_pos: arg1 as u8,
-            }.into())?;
+            session.intent(
+                TradeIntent::ItemDel {
+                    player_vid: pv,
+                    display_pos: arg1 as u8,
+                }
+                .into(),
+            )?;
         }
         3 => {
             // EXCHANGE_SUBHEADER_CG_ELK_ADD — arg1 = oro.
@@ -94,12 +109,26 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
                 // Parity `AddGold` (exchange.cpp:240-262): LESS_GOLD al
                 // propio owner.
                 session
-                    .send(&gc_exchange(EXCHANGE_SUBHEADER_GC_LESS_GOLD, 1, 0, TItemPos { window: 0, cell: 0 }, 0, [0; 3], [(0, 0); 7]))
+                    .send(&gc_exchange(
+                        EXCHANGE_SUBHEADER_GC_LESS_GOLD,
+                        1,
+                        0,
+                        TItemPos { window: 0, cell: 0 },
+                        0,
+                        [0; 3],
+                        [(0, 0); 7],
+                    ))
                     .await
                     .map_err(|e| format!("enviando GC_EXCHANGE LESS_GOLD: {e}"))?;
                 return Ok(Outcome::Continue);
             }
-            session.intent(TradeIntent::GoldAdd { player_vid: pv, gold }.into())?;
+            session.intent(
+                TradeIntent::GoldAdd {
+                    player_vid: pv,
+                    gold,
+                }
+                .into(),
+            )?;
         }
         4 => {
             // EXCHANGE_SUBHEADER_CG_ACCEPT.
@@ -124,46 +153,67 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
 /// CommitOk/CommitFail al mundo.
 pub(super) async fn emit(session: &mut Session, e: TradeEvent) -> Result<(), String> {
     match e {
-        TradeEvent::Start { other_vid, .. } => {
-            session
-                .send(&gc_exchange(EXCHANGE_SUBHEADER_GC_START, 0, other_vid, TItemPos { window: 0, cell: 0 }, 0, [0; 3], [(0, 0); 7]))
-                .await
-                .map_err(|e| format!("enviando GC_EXCHANGE START: {e}"))
-        }
-        TradeEvent::Already { .. } => {
-            session
-                .send(&gc_exchange(EXCHANGE_SUBHEADER_GC_ALREADY, 0, 0, TItemPos { window: 0, cell: 0 }, 0, [0; 3], [(0, 0); 7]))
-                .await
-                .map_err(|e| format!("enviando GC_EXCHANGE ALREADY: {e}"))
-        }
-        TradeEvent::ItemAdded { is_me, display_pos, vnum, count, sockets, attrs, .. } => {
-            session
-                .send(&gc_exchange(
-                    EXCHANGE_SUBHEADER_GC_ITEM_ADD,
-                    u8::from(is_me),
-                    vnum as u32,
-                    TItemPos { window: 0, cell: u16::from(display_pos) },
-                    count as u32,
-                    sockets,
-                    attrs,
-                ))
-                .await
-                .map_err(|e| format!("enviando GC_EXCHANGE ITEM_ADD: {e}"))
-        }
-        TradeEvent::ItemRemoved { is_me, display_pos, .. } => {
-            session
-                .send(&gc_exchange(
-                    EXCHANGE_SUBHEADER_GC_ITEM_DEL,
-                    u8::from(is_me),
-                    u32::from(display_pos),
-                    TItemPos { window: 0, cell: 0 },
-                    0,
-                    [0; 3],
-                    [(0, 0); 7],
-                ))
-                .await
-                .map_err(|e| format!("enviando GC_EXCHANGE ITEM_DEL: {e}"))
-        }
+        TradeEvent::Start { other_vid, .. } => session
+            .send(&gc_exchange(
+                EXCHANGE_SUBHEADER_GC_START,
+                0,
+                other_vid,
+                TItemPos { window: 0, cell: 0 },
+                0,
+                [0; 3],
+                [(0, 0); 7],
+            ))
+            .await
+            .map_err(|e| format!("enviando GC_EXCHANGE START: {e}")),
+        TradeEvent::Already { .. } => session
+            .send(&gc_exchange(
+                EXCHANGE_SUBHEADER_GC_ALREADY,
+                0,
+                0,
+                TItemPos { window: 0, cell: 0 },
+                0,
+                [0; 3],
+                [(0, 0); 7],
+            ))
+            .await
+            .map_err(|e| format!("enviando GC_EXCHANGE ALREADY: {e}")),
+        TradeEvent::ItemAdded {
+            is_me,
+            display_pos,
+            vnum,
+            count,
+            sockets,
+            attrs,
+            ..
+        } => session
+            .send(&gc_exchange(
+                EXCHANGE_SUBHEADER_GC_ITEM_ADD,
+                u8::from(is_me),
+                vnum as u32,
+                TItemPos {
+                    window: 0,
+                    cell: u16::from(display_pos),
+                },
+                count as u32,
+                sockets,
+                attrs,
+            ))
+            .await
+            .map_err(|e| format!("enviando GC_EXCHANGE ITEM_ADD: {e}")),
+        TradeEvent::ItemRemoved {
+            is_me, display_pos, ..
+        } => session
+            .send(&gc_exchange(
+                EXCHANGE_SUBHEADER_GC_ITEM_DEL,
+                u8::from(is_me),
+                u32::from(display_pos),
+                TItemPos { window: 0, cell: 0 },
+                0,
+                [0; 3],
+                [(0, 0); 7],
+            ))
+            .await
+            .map_err(|e| format!("enviando GC_EXCHANGE ITEM_DEL: {e}")),
         TradeEvent::GoldAdded { is_me, gold, .. } => {
             let Ok(gold) = u32::try_from(gold) else {
                 eprintln!(
@@ -173,26 +223,49 @@ pub(super) async fn emit(session: &mut Session, e: TradeEvent) -> Result<(), Str
                 return Ok(());
             };
             session
-                .send(&gc_exchange(EXCHANGE_SUBHEADER_GC_GOLD_ADD, u8::from(is_me), gold, TItemPos { window: 0, cell: 0 }, 0, [0; 3], [(0, 0); 7]))
+                .send(&gc_exchange(
+                    EXCHANGE_SUBHEADER_GC_GOLD_ADD,
+                    u8::from(is_me),
+                    gold,
+                    TItemPos { window: 0, cell: 0 },
+                    0,
+                    [0; 3],
+                    [(0, 0); 7],
+                ))
                 .await
                 .map_err(|e| format!("enviando GC_EXCHANGE GOLD_ADD: {e}"))
         }
-        TradeEvent::AcceptState { is_me, accept, .. } => {
-            session
-                .send(&gc_exchange(EXCHANGE_SUBHEADER_GC_ACCEPT, u8::from(is_me), u32::from(accept), TItemPos { window: 0, cell: 0 }, 0, [0; 3], [(0, 0); 7]))
-                .await
-                .map_err(|e| format!("enviando GC_EXCHANGE ACCEPT: {e}"))
-        }
+        TradeEvent::AcceptState { is_me, accept, .. } => session
+            .send(&gc_exchange(
+                EXCHANGE_SUBHEADER_GC_ACCEPT,
+                u8::from(is_me),
+                u32::from(accept),
+                TItemPos { window: 0, cell: 0 },
+                0,
+                [0; 3],
+                [(0, 0); 7],
+            ))
+            .await
+            .map_err(|e| format!("enviando GC_EXCHANGE ACCEPT: {e}")),
         TradeEvent::Commit { plan, .. } => apply_commit(session, &plan).await,
-        TradeEvent::Done { gold_delta, received, delivered, .. } => {
-            apply_done(session, gold_delta, &received, &delivered).await
-        }
-        TradeEvent::Cancelled { .. } => {
-            session
-                .send(&gc_exchange(EXCHANGE_SUBHEADER_GC_END, 0, 0, TItemPos { window: 0, cell: 0 }, 0, [0; 3], [(0, 0); 7]))
-                .await
-                .map_err(|e| format!("enviando GC_EXCHANGE END: {e}"))
-        }
+        TradeEvent::Done {
+            gold_delta,
+            received,
+            delivered,
+            ..
+        } => apply_done(session, gold_delta, &received, &delivered).await,
+        TradeEvent::Cancelled { .. } => session
+            .send(&gc_exchange(
+                EXCHANGE_SUBHEADER_GC_END,
+                0,
+                0,
+                TItemPos { window: 0, cell: 0 },
+                0,
+                [0; 3],
+                [(0, 0); 7],
+            ))
+            .await
+            .map_err(|e| format!("enviando GC_EXCHANGE END: {e}")),
     }
 }
 
@@ -235,7 +308,12 @@ async fn commit_fail(
         "server_realms: channel conn {}: trade {}<->{}: commit rechazado: {why}",
         session.conn_id, executor, partner
     );
-    session.intent(TradeIntent::CommitFail { player_vid: executor }.into())?;
+    session.intent(
+        TradeIntent::CommitFail {
+            player_vid: executor,
+        }
+        .into(),
+    )?;
     Ok(())
 }
 
@@ -314,10 +392,7 @@ async fn apply_commit(session: &mut Session, plan: &TradeCommitPlan) -> Result<(
     };
     // (3) Las unidades ACID (ids nuevos del rango — patrón del split).
     let base = ItemRepo::new(session.pool.clone())
-        .max_id_in_range(
-            trade::ITEM_ID_RANGE_MIN,
-            trade::ITEM_ID_RANGE_MAX,
-        )
+        .max_id_in_range(trade::ITEM_ID_RANGE_MIN, trade::ITEM_ID_RANGE_MAX)
         .await?
         .map(|m| m + 1)
         .unwrap_or(trade::ITEM_ID_RANGE_MIN);
@@ -330,12 +405,22 @@ async fn apply_commit(session: &mut Session, plan: &TradeCommitPlan) -> Result<(
     let units = trade::build_commit_units(plan, gold_now, partner_gold, &mut next);
     for unit in &units {
         if let Err(e) = session.store().exchange(unit).await {
-            return commit_fail(session, plan.executor, plan.partner, format!("unidad ACID falló: {e}"))
-                .await;
+            return commit_fail(
+                session,
+                plan.executor,
+                plan.partner,
+                format!("unidad ACID falló: {e}"),
+            )
+            .await;
         }
     }
     // (4) Confirmación.
-    session.intent(TradeIntent::CommitOk { player_vid: plan.executor }.into())?;
+    session.intent(
+        TradeIntent::CommitOk {
+            player_vid: plan.executor,
+        }
+        .into(),
+    )?;
     eprintln!(
         "server_realms: channel conn {}: trade {}<->{} COMMITEADO ({} unidades ACID)",
         session.conn_id,
@@ -363,7 +448,10 @@ async fn apply_done(
     for d in delivered {
         if let Some(idx) = session.inventory.iter().position(|i| i.id == d.id) {
             let del = TPacketGCItemDelDeprecated::new(
-                TItemPos { window: TItemPos::WINDOW_INVENTORY, cell: session.inventory[idx].pos as u16 },
+                TItemPos {
+                    window: TItemPos::WINDOW_INVENTORY,
+                    cell: session.inventory[idx].pos as u16,
+                },
                 0,
                 0,
             );
@@ -386,7 +474,10 @@ async fn apply_done(
         row.pos = i32::from(cell);
         let set = TPacketGCItemSet {
             header: TPacketGCItemSet::HEADER,
-            cell: TItemPos { window: TItemPos::WINDOW_INVENTORY, cell },
+            cell: TItemPos {
+                window: TItemPos::WINDOW_INVENTORY,
+                cell,
+            },
             vnum: row.vnum as u32,
             count: row.count as u8,
             flags: 0,
@@ -407,14 +498,25 @@ async fn apply_done(
         session.inventory.push(row);
     }
     // Oro + cierre del window + puntos.
-    session.row_mut().gold = i32::try_from(new_gold)
-        .map_err(|e| format!("convirtiendo gold de trade: {e}"))?;
+    session.row_mut().gold =
+        i32::try_from(new_gold).map_err(|e| format!("convirtiendo gold de trade: {e}"))?;
     session
-        .send(&gc_exchange(EXCHANGE_SUBHEADER_GC_END, 0, 0, TItemPos { window: 0, cell: 0 }, 0, [0; 3], [(0, 0); 7]))
+        .send(&gc_exchange(
+            EXCHANGE_SUBHEADER_GC_END,
+            0,
+            0,
+            TItemPos { window: 0, cell: 0 },
+            0,
+            [0; 3],
+            [(0, 0); 7],
+        ))
         .await
         .map_err(|e| format!("enviando GC_EXCHANGE END: {e}"))?;
     session
-        .send(&game_core::packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
+        .send(
+            &game_core::packets::points_packet(session.row(), session.next_exp, &session.battle)
+                .to_bytes(),
+        )
         .await
         .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
     Ok(())
@@ -435,10 +537,21 @@ mod tests {
             EXCHANGE_SUBHEADER_GC_ITEM_ADD,
             1,
             0x01020304,
-            TItemPos { window: 0, cell: 0x0506 },
+            TItemPos {
+                window: 0,
+                cell: 0x0506,
+            },
             7,
             [1, 2, 3],
-            [(4, 5), (6, 7), (8, 9), (10, 11), (12, 13), (14, 15), (16, 17)],
+            [
+                (4, 5),
+                (6, 7),
+                (8, 9),
+                (10, 11),
+                (12, 13),
+                (14, 15),
+                (16, 17),
+            ],
         );
         assert_eq!(pkt.len(), 47, "TPacketGCExchange: 1+1+1+4+3+4+3×4+7×3");
         assert_eq!(pkt[0], 42);
@@ -491,20 +604,23 @@ mod tests {
             for partner in [0, 1, GOLD_MAX - 1, GOLD_MAX] {
                 for offered_executor in [0, 1, executor] {
                     for offered_partner in [0, 1, partner] {
-                        if let Some((executor_post, partner_post)) = trade_gold_posts(
-                            executor,
-                            partner,
-                            offered_executor,
-                            offered_partner,
-                        ) {
+                        if let Some((executor_post, partner_post)) =
+                            trade_gold_posts(executor, partner, offered_executor, offered_partner)
+                        {
                             assert!((0..=GOLD_MAX).contains(&executor_post));
                             assert!((0..=GOLD_MAX).contains(&partner_post));
-                            assert!((0..=GOLD_MAX).contains(
-                                &checked_gold_delta(executor_post, offered_partner).expect("validated")
-                            ));
-                            assert!((0..=GOLD_MAX).contains(
-                                &checked_gold_delta(partner_post, offered_executor).expect("validated")
-                            ));
+                            assert!(
+                                (0..=GOLD_MAX).contains(
+                                    &checked_gold_delta(executor_post, offered_partner)
+                                        .expect("validated")
+                                )
+                            );
+                            assert!(
+                                (0..=GOLD_MAX).contains(
+                                    &checked_gold_delta(partner_post, offered_executor)
+                                        .expect("validated")
+                                )
+                            );
                         }
                     }
                 }

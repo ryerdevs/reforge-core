@@ -81,7 +81,11 @@ async fn account_login_contract_against_real_pg() {
         "pi.pid1..pid5 (cuenta test)"
     );
     assert_eq!(acc.status, "OK", "a.status");
-    assert_eq!(acc.lang.len(), 2, "a.lang es ISO 2 chars (el valor exacto lo sobreescribe el cliente)");
+    assert_eq!(
+        acc.lang.len(),
+        2,
+        "a.lang es ISO 2 chars (el valor exacto lo sobreescribe el cliente)"
+    );
     assert_eq!(acc.player_id(0), 1, "helper player_id");
     assert_eq!(acc.player_id(3), 0, "pid4=0 -> ranura vacia");
 
@@ -116,10 +120,17 @@ async fn account_set_lang_hwid_persist_and_restore() {
             .expect("set_hwid");
         let (lang, hwid) = read_lang_hwid(&conn, "test").await;
         assert_eq!(lang, "de", "lang persistido");
-        assert_eq!(hwid, "aabbccddeeff00112233445566778899", "hwid persistido (hex TEXT)");
+        assert_eq!(
+            hwid, "aabbccddeeff00112233445566778899",
+            "hwid persistido (hex TEXT)"
+        );
 
         // login() sigue funcionando con el estado modificado.
-        let acc = repo.login("test", "1234").await.expect("login").expect("valido");
+        let acc = repo
+            .login("test", "1234")
+            .await
+            .expect("login")
+            .expect("valido");
         assert_eq!(acc.lang, "de", "login() ve el lang nuevo");
         Ok::<(), String>(())
     }
@@ -128,7 +139,11 @@ async fn account_set_lang_hwid_persist_and_restore() {
     // Restaurar SIEMPRE (aunque el bloque falle) — no romper la cuenta test.
     write_lang_hwid(&conn, "test", &prev_lang, &prev_hwid).await;
     let (lang, hwid) = read_lang_hwid(&conn, "test").await;
-    assert_eq!((lang.as_str(), hwid.as_str()), (prev_lang.as_str(), prev_hwid.as_str()), "estado restaurado");
+    assert_eq!(
+        (lang.as_str(), hwid.as_str()),
+        (prev_lang.as_str(), prev_hwid.as_str()),
+        "estado restaurado"
+    );
 
     result.expect("set_lang/set_hwid contra PG real");
 }

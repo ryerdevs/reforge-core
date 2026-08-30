@@ -66,7 +66,14 @@ pub fn uuidv7() -> [u8; 16] {
 /// uuidv7 -> string canónico `8-4-4-4-12` (lowercase hex).
 pub fn uuidv7_string(u: &[u8; 16]) -> String {
     let h: String = u.iter().map(|b| format!("{b:02x}")).collect();
-    format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
+    format!(
+        "{}-{}-{}-{}-{}",
+        &h[0..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..32]
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -139,11 +146,7 @@ impl ToSql for Param {
 impl fmt::Display for Param {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Param::Text(s) => write!(
-                f,
-                "\"{}\"",
-                s.replace('\\', "\\\\").replace('"', "\\\"")
-            ),
+            Param::Text(s) => write!(f, "\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
             Param::Int(i) => write!(f, "{i}"),
             Param::Bytes(b) => write!(
                 f,
@@ -169,12 +172,20 @@ pub struct Mutation {
 impl Mutation {
     /// Mutation nueva con uuidv7 propio.
     pub fn new(sql: impl Into<String>, params: Vec<Param>) -> Self {
-        Self { id: uuidv7(), sql: sql.into(), params }
+        Self {
+            id: uuidv7(),
+            sql: sql.into(),
+            params,
+        }
     }
 
     /// Mutation con id fijo (tests de replay idempotente).
     pub fn with_id(id: [u8; 16], sql: impl Into<String>, params: Vec<Param>) -> Self {
-        Self { id, sql: sql.into(), params }
+        Self {
+            id,
+            sql: sql.into(),
+            params,
+        }
     }
 
     /// Payload jsonb del audit (string json valido, sin serde).
@@ -238,7 +249,10 @@ payload text NOT NULL)"
 /// sink contador (sin PG). RPITIT con `+ Send` explicito para que el worker
 /// del Batcher (tokio::spawn) pueda esperar el future.
 pub trait MutationSink: Send + 'static {
-    fn apply(&mut self, batch: Vec<Mutation>) -> impl std::future::Future<Output = Result<(), String>> + Send;
+    fn apply(
+        &mut self,
+        batch: Vec<Mutation>,
+    ) -> impl std::future::Future<Output = Result<(), String>> + Send;
 }
 
 /// Sink real: conexion PG por batch, transaccion, replay idempotente + audit
@@ -253,7 +267,10 @@ pub struct PgMutationSink {
 
 impl PgMutationSink {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool, audit_table: "log.mutation_audit".to_string() }
+        Self {
+            pool,
+            audit_table: "log.mutation_audit".to_string(),
+        }
     }
 
     pub fn with_audit_table(mut self, audit_table: impl Into<String>) -> Self {
@@ -262,12 +279,21 @@ impl PgMutationSink {
     }
 
     async fn connect(&self) -> Result<Client, String> {
-        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
+        self.pool
+            .get()
+            .await
+            .map_err(|e| format!("PG pool get: {e}"))
     }
 }
 
 impl MutationSink for PgMutationSink {
-    fn apply(&mut self, batch: Vec<Mutation>) -> impl std::future::Future<Output = Result<(), String>> + Send {
+    // RPITIT + Send explícito (no `async fn`): el Batcher hace tokio::spawn
+    // del future — la garantía Send viaja en la firma del trait.
+    #[allow(clippy::manual_async_fn)]
+    fn apply(
+        &mut self,
+        batch: Vec<Mutation>,
+    ) -> impl std::future::Future<Output = Result<(), String>> + Send {
         async move {
             let mut client = self.connect().await?;
             let tx = client
@@ -277,17 +303,15 @@ impl MutationSink for PgMutationSink {
             for m in &batch {
                 let params: Vec<&(dyn ToSql + Sync)> =
                     m.params.iter().map(|p| p as &(dyn ToSql + Sync)).collect();
-                tx.execute(&m.sql, &params)
-                    .await
-                    .map_err(|e| {
-                        // Display corto ("db error") — el mensaje real del
-                        // servidor vive en el DbError (mismo patron del audit).
-                        let detail = e
-                            .as_db_error()
-                            .map(|d| d.message().to_string())
-                            .unwrap_or_default();
-                        format!("mutation {}: {e} ({detail})", uuidv7_string(&m.id))
-                    })?;
+                tx.execute(&m.sql, &params).await.map_err(|e| {
+                    // Display corto ("db error") — el mensaje real del
+                    // servidor vive en el DbError (mismo patron del audit).
+                    let detail = e
+                        .as_db_error()
+                        .map(|d| d.message().to_string())
+                        .unwrap_or_default();
+                    format!("mutation {}: {e} ({detail})", uuidv7_string(&m.id))
+                })?;
                 // Audit en la MISMA tx; replay idempotente: si el mutation_id
                 // ya esta (re-aplicacion), el insert no hace nada.
                 // $1 viaja como uuid nativo (feature with-uuid-1); $2 es text
@@ -368,7 +392,9 @@ impl Batcher {
                 // re-aplicara al arrancar).
                 let result = sink.apply(batch).await;
                 if let Err(e) = &result {
-                    eprintln!("database: wal: batch falló: {e} — el WAL local lo re-aplicará al arrancar");
+                    eprintln!(
+                        "database: wal: batch falló: {e} — el WAL local lo re-aplicará al arrancar"
+                    );
                 }
                 if let Some(ack) = flush_ack {
                     let _ = ack.send(result);
@@ -396,7 +422,9 @@ impl Batcher {
     pub async fn flush(&self) -> Result<(), String> {
         let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
         let _ = self.tx.send(Msg::Flush(ack_tx));
-        ack_rx.await.map_err(|e| format!("batcher worker caido: {e}"))?
+        ack_rx
+            .await
+            .map_err(|e| format!("batcher worker caido: {e}"))?
     }
 }
 
@@ -442,12 +470,21 @@ pub struct WalSink<S: MutationSink> {
 
 impl<S: MutationSink> WalSink<S> {
     pub fn new(inner: S, wal_dir: impl Into<String>) -> Self {
-        Self { inner, wal_dir: wal_dir.into() }
+        Self {
+            inner,
+            wal_dir: wal_dir.into(),
+        }
     }
 }
 
 impl<S: MutationSink> MutationSink for WalSink<S> {
-    fn apply(&mut self, batch: Vec<Mutation>) -> impl std::future::Future<Output = Result<(), String>> + Send {
+    // RPITIT + Send explícito (no `async fn`): el Batcher hace tokio::spawn
+    // del future — la garantía Send viaja en la firma del trait.
+    #[allow(clippy::manual_async_fn)]
+    fn apply(
+        &mut self,
+        batch: Vec<Mutation>,
+    ) -> impl std::future::Future<Output = Result<(), String>> + Send {
         async move {
             // 1. Durable-first: persiste el batch completo ANTES de tocar PG.
             let file = persist_batch(&self.wal_dir, &batch)
@@ -464,7 +501,9 @@ impl<S: MutationSink> MutationSink for WalSink<S> {
                 Err(e) => {
                     // El archivo QUEDA en disco: el replay del siguiente
                     // arranque lo re-aplica (idempotente).
-                    eprintln!("database: wal: batch con error — {file:?} queda para el replay: {e}");
+                    eprintln!(
+                        "database: wal: batch con error — {file:?} queda para el replay: {e}"
+                    );
                     Err(e)
                 }
             }
@@ -507,19 +546,18 @@ pub async fn replay_wal(wal_dir: &str, pool: &PgPool) -> Result<usize, String> {
     let mut sink = PgMutationSink::new(pool.clone());
     let mut replayed = 0usize;
     for path in files {
-        let content = std::fs::read_to_string(&path)
-            .map_err(|e| format!("leyendo {path:?}: {e}"))?;
+        let content =
+            std::fs::read_to_string(&path).map_err(|e| format!("leyendo {path:?}: {e}"))?;
         let mut batch = Vec::new();
         for line in content.lines() {
             if line.trim().is_empty() {
                 continue;
             }
-            batch.push(
-                parse_payload_json(line)
-                    .map_err(|e| format!("parseando {path:?}: {e}"))?,
-            );
+            batch.push(parse_payload_json(line).map_err(|e| format!("parseando {path:?}: {e}"))?);
         }
-        sink.apply(batch).await.map_err(|e| format!("replay de {path:?}: {e}"))?;
+        sink.apply(batch)
+            .await
+            .map_err(|e| format!("replay de {path:?}: {e}"))?;
         std::fs::remove_file(&path).map_err(|e| format!("borrando {path:?}: {e}"))?;
         replayed += 1;
     }
@@ -561,7 +599,10 @@ fn parse_payload_json(line: &str) -> Result<Mutation, String> {
                 rest = rest[n..].trim_start();
             }
         }
-        rest = rest.strip_prefix(',').map(|r| r.trim_start()).unwrap_or(rest);
+        rest = rest
+            .strip_prefix(',')
+            .map(|r| r.trim_start())
+            .unwrap_or(rest);
         if rest.starts_with('}') {
             break;
         }
@@ -644,13 +685,16 @@ fn parse_json_param(s: &str) -> Result<(Param, usize), String> {
         let (v, n) = parse_json_string(trimmed)?;
         // Bytes: el Display produce "\xHEX" — distinguir del Text escapado.
         if let Some(hex) = v.strip_prefix("\\x")
-            && hex.len() % 2 == 0 && !hex.is_empty() && hex.bytes().all(|c| c.is_ascii_hexdigit()) {
-                let bytes = (0..hex.len())
-                    .step_by(2)
-                    .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("hex valido"))
-                    .collect();
-                return Ok((Param::Bytes(bytes), off + n));
-            }
+            && hex.len() % 2 == 0
+            && !hex.is_empty()
+            && hex.bytes().all(|c| c.is_ascii_hexdigit())
+        {
+            let bytes = (0..hex.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("hex valido"))
+                .collect();
+            return Ok((Param::Bytes(bytes), off + n));
+        }
         return Ok((Param::Text(v), off + n));
     }
     // Número (Display de Int: i64 con signo).
@@ -677,9 +721,7 @@ fn parse_json_value(s: &str) -> Result<(String, usize), String> {
         Ok((String::new(), off + 4))
     } else {
         // número u otro token simple: hasta la coma o llave.
-        let end = trimmed
-            .find([',', '}'])
-            .unwrap_or(trimmed.len());
+        let end = trimmed.find([',', '}']).unwrap_or(trimmed.len());
         Ok((trimmed[..end].to_string(), off + end))
     }
 }
@@ -718,7 +760,10 @@ mod tests {
         // version 7 en el 3er grupo (primer hex = 7).
         assert!(s[14..15].starts_with('7'), "version 7: {s}");
         // variant 10xx en el 4o grupo (8,9,a,b).
-        assert!(matches!(s[19..20].as_bytes()[0], b'8' | b'9' | b'a' | b'b'), "variant: {s}");
+        assert!(
+            matches!(s.as_bytes()[19], b'8' | b'9' | b'a' | b'b'),
+            "variant: {s}"
+        );
         assert!(s.bytes().all(|c| c.is_ascii_hexdigit() || c == b'-'));
     }
 
@@ -736,7 +781,10 @@ mod tests {
         let a = uuidv7_from(1000, 0xDEADBEEF);
         let b = uuidv7_from(2000, 0xDEADBEEF);
         assert!(a < b, "bytes lexicograficos: ts menor -> uuid menor");
-        assert!(uuidv7_string(&a) < uuidv7_string(&b), "string canónico también ordena");
+        assert!(
+            uuidv7_string(&a) < uuidv7_string(&b),
+            "string canónico también ordena"
+        );
         // Mismo ts, rand distinto: el orden NO es estricto (solo rand) — solo
         // se garantiza que version/variant se mantienen.
         let c = uuidv7_from(1000, 0x1111);
@@ -765,7 +813,10 @@ mod tests {
         );
         let p = m.payload_json();
         assert!(p.starts_with("{\"mutation_id\":\""), "json: {p}");
-        assert!(p.contains("\"sql\":\"INSERT INTO t (id, v)"), "sql escapado: {p}");
+        assert!(
+            p.contains("\"sql\":\"INSERT INTO t (id, v)"),
+            "sql escapado: {p}"
+        );
         assert!(p.contains("\\\""), "comillas escapadas: {p}");
         assert!(p.ends_with('}'));
         // El id del payload == el id de la mutation (misma string).
@@ -779,10 +830,16 @@ mod tests {
             "INSERT INTO t (a, b) VALUES ($1, $2)",
             vec![Param::Null, Param::Bytes(vec![0x01, 0x00])],
         );
-        assert!(m.payload_json().contains("null"), "payload: {}", m.payload_json());
+        assert!(
+            m.payload_json().contains("null"),
+            "payload: {}",
+            m.payload_json()
+        );
         let mut out = BytesMut::new();
         assert!(matches!(
-            Param::Null.to_sql_checked(&Type::INT4, &mut out).expect("to_sql"),
+            Param::Null
+                .to_sql_checked(&Type::INT4, &mut out)
+                .expect("to_sql"),
             IsNull::Yes
         ));
         assert!(out.is_empty(), "NULL no escribe bytes");
@@ -804,7 +861,9 @@ mod tests {
         assert_eq!(&out[..], &[0, 0, 0, 0, 0, 0, 0, 5], "int8 8 bytes");
         // Negativos (i16/i32 truncado) preservan el signo.
         let mut out = BytesMut::new();
-        Param::Int(-1).to_sql(&Type::INT2, &mut out).expect("int2 neg");
+        Param::Int(-1)
+            .to_sql(&Type::INT2, &mut out)
+            .expect("int2 neg");
         assert_eq!(&out[..], &[0xff, 0xff], "int2 -1");
     }
 
@@ -815,7 +874,12 @@ mod tests {
     struct CountingSink(Arc<Mutex<Vec<Vec<Mutation>>>>);
 
     impl MutationSink for CountingSink {
-        fn apply(&mut self, batch: Vec<Mutation>) -> impl std::future::Future<Output = Result<(), String>> + Send {
+        // RPITIT + Send: firma del trait, igual que los sinks reales.
+        #[allow(clippy::manual_async_fn)]
+        fn apply(
+            &mut self,
+            batch: Vec<Mutation>,
+        ) -> impl std::future::Future<Output = Result<(), String>> + Send {
             async move {
                 self.0.lock().unwrap().push(batch);
                 Ok(())
@@ -921,7 +985,12 @@ mod tests {
         #[derive(Clone)]
         struct AlwaysFailSink;
         impl MutationSink for AlwaysFailSink {
-            fn apply(&mut self, _batch: Vec<Mutation>) -> impl std::future::Future<Output = Result<(), String>> + Send {
+            // RPITIT + Send: firma del trait, igual que los sinks reales.
+            #[allow(clippy::manual_async_fn)]
+            fn apply(
+                &mut self,
+                _batch: Vec<Mutation>,
+            ) -> impl std::future::Future<Output = Result<(), String>> + Send {
                 async move { Err("PG caída (simulado)".into()) }
             }
         }
@@ -981,7 +1050,10 @@ mod tests {
         );
         let path = persist_batch(dir.to_str().expect("utf8"), &[m1.clone(), m2.clone()])
             .expect("persistir");
-        assert!(path.extension().map(|e| e == "wal").unwrap_or(false), "extensión .wal");
+        assert!(
+            path.extension().map(|e| e == "wal").unwrap_or(false),
+            "extensión .wal"
+        );
         let content = std::fs::read_to_string(&path).expect("leer archivo");
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines.len(), 2, "una línea por mutation");
@@ -1009,7 +1081,12 @@ mod tests {
         #[derive(Clone)]
         struct AlwaysFailSink;
         impl MutationSink for AlwaysFailSink {
-            fn apply(&mut self, _batch: Vec<Mutation>) -> impl std::future::Future<Output = Result<(), String>> + Send {
+            // RPITIT + Send: firma del trait, igual que los sinks reales.
+            #[allow(clippy::manual_async_fn)]
+            fn apply(
+                &mut self,
+                _batch: Vec<Mutation>,
+            ) -> impl std::future::Future<Output = Result<(), String>> + Send {
                 async move { Err("PG caída (simulado)".into()) }
             }
         }
@@ -1020,14 +1097,23 @@ mod tests {
         assert!(sink1.apply(vec![m.clone()]).await.is_err(), "falla");
         assert_eq!(count_files(&dir1), 1, "el batch con error queda en el WAL");
         assert!(sink1.apply(vec![m]).await.is_err(), "falla otra vez");
-        assert_eq!(count_files(&dir1), 2, "cada batch fallido acumula su archivo");
+        assert_eq!(
+            count_files(&dir1),
+            2,
+            "cada batch fallido acumula su archivo"
+        );
         std::fs::remove_dir_all(&dir1).expect("cleanup dir1");
 
         // Escenario 2: sink OK -> archivo borrado tras el commit.
         #[derive(Clone, Default)]
         struct OkSink;
         impl MutationSink for OkSink {
-            fn apply(&mut self, _batch: Vec<Mutation>) -> impl std::future::Future<Output = Result<(), String>> + Send {
+            // RPITIT + Send: firma del trait, igual que los sinks reales.
+            #[allow(clippy::manual_async_fn)]
+            fn apply(
+                &mut self,
+                _batch: Vec<Mutation>,
+            ) -> impl std::future::Future<Output = Result<(), String>> + Send {
                 async move { Ok(()) }
             }
         }

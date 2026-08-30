@@ -28,12 +28,20 @@ impl std::fmt::Display for ParseError {
 type R<T> = Result<T, ParseError>;
 
 fn err<T>(line: usize, msg: impl Into<String>) -> R<T> {
-    Err(ParseError { line, col: 1, msg: msg.into() })
+    Err(ParseError {
+        line,
+        col: 1,
+        msg: msg.into(),
+    })
 }
 
 /// Parse a quest file (imports + blocks + quests).
 pub fn parse(text: &str) -> R<QuestFile> {
-    let mut file = QuestFile { imports: Vec::new(), blocks: Vec::new(), quests: Vec::new() };
+    let mut file = QuestFile {
+        imports: Vec::new(),
+        blocks: Vec::new(),
+        quests: Vec::new(),
+    };
     let mut lines = Vec::new();
     for (i, raw) in text.lines().enumerate() {
         let line_no = i + 1;
@@ -63,7 +71,10 @@ pub fn parse(text: &str) -> R<QuestFile> {
     while idx < lines.len() {
         let (ln, ind, text) = &lines[idx];
         if *ind != 0 {
-            return err(*ln, format!("esperaba quest/block en nivel raíz, encontré: {text}"));
+            return err(
+                *ln,
+                format!("esperaba quest/block en nivel raíz, encontré: {text}"),
+            );
         }
         if let Some(rest) = text.strip_prefix("block ") {
             let (block, next) = parse_block(&lines, idx, rest)?;
@@ -82,7 +93,11 @@ pub fn parse(text: &str) -> R<QuestFile> {
 
 fn parse_block(lines: &[Line], idx: usize, rest: &str) -> R<(Block, usize)> {
     let (name, params) = parse_name_params(rest)?;
-    let mut block = Block { name, params, body: Vec::new() };
+    let mut block = Block {
+        name,
+        params,
+        body: Vec::new(),
+    };
     let mut i = idx + 1;
     while i < lines.len() && lines[i].1 > 0 {
         let (sln, _ind, stext) = &lines[i];
@@ -101,7 +116,14 @@ fn parse_quest(lines: &[Line], idx: usize) -> R<(Quest, usize)> {
         let name = rest[..eq].trim();
         let base_rest = rest[eq + 3..].trim();
         let (base, args) = parse_name_args(base_rest)?;
-        return Ok((Quest::Instance(InstanceDef { name: name.to_string(), base, args }), idx + 1));
+        return Ok((
+            Quest::Instance(InstanceDef {
+                name: name.to_string(),
+                base,
+                args,
+            }),
+            idx + 1,
+        ));
     }
 
     // Family: `quest X family (params)`
@@ -110,13 +132,26 @@ fn parse_quest(lines: &[Line], idx: usize) -> R<(Quest, usize)> {
         let params_rest = rest[fpos + 8..].trim();
         let (_, params) = parse_name_params(params_rest)?;
         let (states, next) = parse_states(lines, idx + 1)?;
-        return Ok((Quest::Family { name: name.to_string(), params, states }, next));
+        return Ok((
+            Quest::Family {
+                name: name.to_string(),
+                params,
+                states,
+            },
+            next,
+        ));
     }
 
     // Concrete: `quest X` + states.
     let name = rest.trim();
     let (states, next) = parse_states(lines, idx + 1)?;
-    Ok((Quest::Concrete(QuestDef { name: name.to_string(), states }), next))
+    Ok((
+        Quest::Concrete(QuestDef {
+            name: name.to_string(),
+            states,
+        }),
+        next,
+    ))
 }
 
 fn parse_states(lines: &[Line], start: usize) -> R<(Vec<State>, usize)> {
@@ -125,24 +160,37 @@ fn parse_states(lines: &[Line], start: usize) -> R<(Vec<State>, usize)> {
     while i < lines.len() && lines[i].1 > 0 {
         let (ln, ind, text) = &lines[i];
         if *ind != 2 {
-            return err(*ln, format!("se esperaba `state` con indentación 2, encontré: {text}"));
+            return err(
+                *ln,
+                format!("se esperaba `state` con indentación 2, encontré: {text}"),
+            );
         }
         let Some(rest) = text.strip_prefix("state ") else {
             return err(*ln, format!("se esperaba `state`, encontré: {text}"));
         };
         let name = rest.trim();
-        let mut state = State { name: name.to_string(), events: Vec::new() };
+        let mut state = State {
+            name: name.to_string(),
+            events: Vec::new(),
+        };
         i += 1;
         while i < lines.len() && lines[i].1 > 2 {
             let (eln, eind, etext) = &lines[i];
             if *eind != 4 {
-                return err(*eln, format!("se esperaba `on` con indentación 4, encontré: {etext}"));
+                return err(
+                    *eln,
+                    format!("se esperaba `on` con indentación 4, encontré: {etext}"),
+                );
             }
             let Some(orest) = etext.strip_prefix("on ") else {
                 return err(*eln, format!("se esperaba `on`, encontré: {etext}"));
             };
             let (triggers, cond, body, next) = parse_event(lines, i, orest)?;
-            state.events.push(Event { triggers, condition: cond, body });
+            state.events.push(Event {
+                triggers,
+                condition: cond,
+                body,
+            });
             i = next;
         }
         states.push(state);
@@ -156,11 +204,7 @@ type Line = (usize, usize, String);
 /// Resultado de un evento parseado: (triggers, condición, cuerpo, próximo índice).
 type ParsedEvent = (Vec<Trigger>, Option<Expr>, Vec<Stmt>, usize);
 
-fn parse_event(
-    lines: &[Line],
-    idx: usize,
-    rest: &str,
-) -> R<ParsedEvent> {
+fn parse_event(lines: &[Line], idx: usize, rest: &str) -> R<ParsedEvent> {
     let (ln, _, _) = &lines[idx];
     // `on t1, t2 [with expr]`
     let mut triggers = Vec::new();
@@ -169,7 +213,11 @@ fn parse_event(
     if let Some(w) = head.find(" with ") {
         let cexpr = head[w + 6..].trim().to_string();
         head = head[..w].trim().to_string();
-        cond = Some(parse_expr(&cexpr).map_err(|m| ParseError { line: *ln, col: 1, msg: m })?);
+        cond = Some(parse_expr(&cexpr).map_err(|m| ParseError {
+            line: *ln,
+            col: 1,
+            msg: m,
+        })?);
     }
     for t in head.split(',') {
         triggers.push(parse_trigger(t.trim()).map_err(|m| ParseError { line: *ln, ..m })?);
@@ -182,9 +230,11 @@ fn parse_event(
         // branch BODY is the following lines with MORE indentation (1 level).
         if stext.starts_with("if ") || stext == "else" {
             let condition = match stext.strip_prefix("if ") {
-                Some(c) => {
-                    Some(parse_expr(c.trim()).map_err(|m| ParseError { line: *sln, col: 1, msg: m })?)
-                }
+                Some(c) => Some(parse_expr(c.trim()).map_err(|m| ParseError {
+                    line: *sln,
+                    col: 1,
+                    msg: m,
+                })?),
                 None => None,
             };
             let mut bbody = Vec::new();
@@ -194,7 +244,10 @@ fn parse_event(
                 bbody.push(parse_stmt(*bsln, bstext)?);
                 i += 1;
             }
-            body.push(Stmt::Branch(Branch { condition, body: bbody }));
+            body.push(Stmt::Branch(Branch {
+                condition,
+                body: bbody,
+            }));
         } else {
             body.push(parse_stmt(*sln, stext)?);
             i += 1;
@@ -211,10 +264,20 @@ fn parse_stmt(line: usize, text: &str) -> R<Stmt> {
         let (name, args) = parse_use_args(rest)?;
         Ok(Stmt::Use { name, args })
     } else if let Some(rest) = text.strip_prefix("if ") {
-        let cond = parse_expr(rest).map_err(|m| ParseError { line, col: 1, msg: m })?;
-        Ok(Stmt::Branch(Branch { condition: Some(cond), body: Vec::new() }))
+        let cond = parse_expr(rest).map_err(|m| ParseError {
+            line,
+            col: 1,
+            msg: m,
+        })?;
+        Ok(Stmt::Branch(Branch {
+            condition: Some(cond),
+            body: Vec::new(),
+        }))
     } else if text == "else" {
-        Ok(Stmt::Branch(Branch { condition: None, body: Vec::new() }))
+        Ok(Stmt::Branch(Branch {
+            condition: None,
+            body: Vec::new(),
+        }))
     } else {
         err(line, format!("sentencia desconocida: {text}"))
     }
@@ -346,7 +409,11 @@ fn parse_value(text: &str) -> R<Value> {
     // Full expression args: literals come back as literals (`5` → Num),
     // anything else becomes Value::Expr.
     if text.contains(|c: char| "()+-*/<>=~' ".contains(c)) {
-        let e = parse_expr(text).map_err(|m| ParseError { line: 1, col: 1, msg: m })?;
+        let e = parse_expr(text).map_err(|m| ParseError {
+            line: 1,
+            col: 1,
+            msg: m,
+        })?;
         return Ok(match e {
             Expr::Value(v) => v,
             other => Value::Expr(Box::new(other)),
@@ -404,9 +471,15 @@ fn parse_name_params(text: &str) -> R<(String, Vec<Param>)> {
                     "str" => ParamType::Str,
                     other => return err(1, format!("tipo de param desconocido: {other}")),
                 };
-                params.push(Param { name: pname.to_string(), ty: Some(ty) });
+                params.push(Param {
+                    name: pname.to_string(),
+                    ty: Some(ty),
+                });
             }
-            None => params.push(Param { name: p.to_string(), ty: None }),
+            None => params.push(Param {
+                name: p.to_string(),
+                ty: None,
+            }),
         }
     }
     Ok((name, params))
@@ -443,17 +516,31 @@ fn parse_trigger(text: &str) -> R<Trigger> {
         "__TARGET__.target.click" => TriggerKind::TargetClick,
         _ => {
             if let Some(vnum) = text.strip_suffix(".chat") {
-                return Ok(Trigger { kind: TriggerKind::Chat { target: parse_target(vnum)? } });
+                return Ok(Trigger {
+                    kind: TriggerKind::Chat {
+                        target: parse_target(vnum)?,
+                    },
+                });
             }
             if let Some(vnum) = text.strip_suffix(".kill") {
-                return Ok(Trigger { kind: TriggerKind::Kill { target: parse_target(vnum)? } });
+                return Ok(Trigger {
+                    kind: TriggerKind::Kill {
+                        target: parse_target(vnum)?,
+                    },
+                });
             }
             if let Some(vnum) = text.strip_suffix(".use") {
-                return Ok(Trigger { kind: TriggerKind::Use { target: parse_target(vnum)? } });
+                return Ok(Trigger {
+                    kind: TriggerKind::Use {
+                        target: parse_target(vnum)?,
+                    },
+                });
             }
             // `arena.*`, `oxevent.*`, `d.*`, `wedding.*` → Rust modules.
             if text.contains('.') && text.ends_with(".*") {
-                return Ok(Trigger { kind: TriggerKind::Rust(text.to_string()) });
+                return Ok(Trigger {
+                    kind: TriggerKind::Rust(text.to_string()),
+                });
             }
             return err(1, format!("trigger desconocido: {text}"));
         }
@@ -479,10 +566,16 @@ fn parse_target(text: &str) -> R<TriggerTarget> {
 /// Grammar (precedence): or → and → comparison → between → add/sub → mul/div
 /// → primary (number, string, `@key`, `(param)`, func call, `not expr`).
 pub fn parse_expr(text: &str) -> Result<Expr, String> {
-    let mut p = ExprParser { toks: tokenize(text)?, pos: 0 };
+    let mut p = ExprParser {
+        toks: tokenize(text)?,
+        pos: 0,
+    };
     let e = p.parse_or()?;
     if p.pos != p.toks.len() {
-        return Err(format!("expresión malformada cerca de: {:?}", &p.toks[p.pos..]));
+        return Err(format!(
+            "expresión malformada cerca de: {:?}",
+            &p.toks[p.pos..]
+        ));
     }
     Ok(e)
 }
@@ -514,7 +607,12 @@ fn tokenize(text: &str) -> Result<Vec<String>, String> {
                 }
                 out.push(c.to_string());
             }
-            c if c.is_ascii_digit() || c.is_ascii_alphabetic() || c == '_' || c == '@' || c == '.' => {
+            c if c.is_ascii_digit()
+                || c.is_ascii_alphabetic()
+                || c == '_'
+                || c == '@'
+                || c == '.' =>
+            {
                 cur.push(c);
             }
             _ => {
@@ -579,27 +677,51 @@ impl ExprParser {
         match self.peek() {
             Some("==") => {
                 self.pos += 1;
-                Ok(Expr::Compare(Box::new(lhs), CmpOp::Eq, Box::new(self.parse_between()?)))
+                Ok(Expr::Compare(
+                    Box::new(lhs),
+                    CmpOp::Eq,
+                    Box::new(self.parse_between()?),
+                ))
             }
             Some("!=") => {
                 self.pos += 1;
-                Ok(Expr::Compare(Box::new(lhs), CmpOp::Ne, Box::new(self.parse_between()?)))
+                Ok(Expr::Compare(
+                    Box::new(lhs),
+                    CmpOp::Ne,
+                    Box::new(self.parse_between()?),
+                ))
             }
             Some("<") => {
                 self.pos += 1;
-                Ok(Expr::Compare(Box::new(lhs), CmpOp::Lt, Box::new(self.parse_between()?)))
+                Ok(Expr::Compare(
+                    Box::new(lhs),
+                    CmpOp::Lt,
+                    Box::new(self.parse_between()?),
+                ))
             }
             Some(">") => {
                 self.pos += 1;
-                Ok(Expr::Compare(Box::new(lhs), CmpOp::Gt, Box::new(self.parse_between()?)))
+                Ok(Expr::Compare(
+                    Box::new(lhs),
+                    CmpOp::Gt,
+                    Box::new(self.parse_between()?),
+                ))
             }
             Some("<=") => {
                 self.pos += 1;
-                Ok(Expr::Compare(Box::new(lhs), CmpOp::Le, Box::new(self.parse_between()?)))
+                Ok(Expr::Compare(
+                    Box::new(lhs),
+                    CmpOp::Le,
+                    Box::new(self.parse_between()?),
+                ))
             }
             Some(">=") => {
                 self.pos += 1;
-                Ok(Expr::Compare(Box::new(lhs), CmpOp::Ge, Box::new(self.parse_between()?)))
+                Ok(Expr::Compare(
+                    Box::new(lhs),
+                    CmpOp::Ge,
+                    Box::new(self.parse_between()?),
+                ))
             }
             _ => Ok(lhs),
         }
@@ -653,7 +775,12 @@ impl ExprParser {
         };
         let t = tok.to_string();
         // Function call: `name(...)`.
-        if self.toks.get(self.pos + 1).map(|s| s == "(").unwrap_or(false) {
+        if self
+            .toks
+            .get(self.pos + 1)
+            .map(|s| s == "(")
+            .unwrap_or(false)
+        {
             self.pos += 2; // name + (
             let mut args = Vec::new();
             if !self.eat(")") {
@@ -695,7 +822,11 @@ impl ExprParser {
             // splits `(` and `)` as separate tokens, so the pattern is
             // `(`, name, `)`.
             let name = self.toks.get(self.pos).cloned();
-            let close = self.toks.get(self.pos + 1).map(|s| s == ")").unwrap_or(false);
+            let close = self
+                .toks
+                .get(self.pos + 1)
+                .map(|s| s == ")")
+                .unwrap_or(false);
             if let (Some(name), true) = (name, close) {
                 self.pos += 2;
                 Ok(Expr::Value(Value::Param(name)))
@@ -736,26 +867,35 @@ mod tests {
             "# quests/biology/collect_quest_lv30.quest\nquest collect_quest_lv30\n  state start\n    on login, levelup with pc.level >= 30\n      -> set_state(information)\n  state information\n    on 601.kill with number(1, 100) <= 5\n      -> give_item2(30006, 1)\n",
         );
         assert_eq!(f.quests.len(), 1);
-        let Quest::Concrete(q) = &f.quests[0] else { panic!("esperaba concrete") };
+        let Quest::Concrete(q) = &f.quests[0] else {
+            panic!("esperaba concrete")
+        };
         assert_eq!(q.name, "collect_quest_lv30");
         assert_eq!(q.states.len(), 2);
         let e = &q.states[0].events[0];
         assert_eq!(e.triggers.len(), 2);
         assert!(matches!(e.triggers[0].kind, TriggerKind::Login));
         assert!(matches!(e.triggers[1].kind, TriggerKind::LevelUp));
-        let Stmt::Action { action, .. } = &e.body[0] else { panic!("esperaba action") };
+        let Stmt::Action { action, .. } = &e.body[0] else {
+            panic!("esperaba action")
+        };
         assert!(matches!(action.name, ActionName::SetState));
         assert_eq!(action.args, vec![Value::Str("information".into())]);
     }
 
     #[test]
     fn parses_kill_trigger_with_vnum() {
-        let f = parse_ok(
-            "quest q\n  state start\n    on 601.kill\n      -> wait()\n",
-        );
-        let Quest::Concrete(q) = &f.quests[0] else { panic!() };
+        let f = parse_ok("quest q\n  state start\n    on 601.kill\n      -> wait()\n");
+        let Quest::Concrete(q) = &f.quests[0] else {
+            panic!()
+        };
         let e = &q.states[0].events[0];
-        assert!(matches!(e.triggers[0].kind, TriggerKind::Kill { target: TriggerTarget::Num(601) }));
+        assert!(matches!(
+            e.triggers[0].kind,
+            TriggerKind::Kill {
+                target: TriggerTarget::Num(601)
+            }
+        ));
     }
 
     #[test]
@@ -780,12 +920,20 @@ mod tests {
         assert_eq!(f.blocks.len(), 1);
         assert_eq!(f.blocks[0].name, "reward_sequence");
         assert_eq!(f.blocks[0].params.len(), 3);
-        let Quest::Concrete(q) = &f.quests[0] else { panic!() };
-        let Stmt::Use { name, args } = &q.states[0].events[0].body[0] else { panic!() };
+        let Quest::Concrete(q) = &f.quests[0] else {
+            panic!()
+        };
+        let Stmt::Use { name, args } = &q.states[0].events[0].body[0] else {
+            panic!()
+        };
         assert_eq!(name, "reward_sequence");
         assert_eq!(
             args.as_slice(),
-            &[Value::Key("a".into()), Value::Key("b".into()), Value::Str("go".into())]
+            &[
+                Value::Key("a".into()),
+                Value::Key("b".into()),
+                Value::Str("go".into())
+            ]
         );
     }
 
@@ -794,15 +942,21 @@ mod tests {
         let f = parse_ok(
             "quest q\n  state start\n    on 20011.chat\n      -> select(@_20_say, @_30_say) as choice\n      if choice == 1\n        -> warp(896500, 24600)\n      else\n        -> return\n",
         );
-        let Quest::Concrete(q) = &f.quests[0] else { panic!() };
+        let Quest::Concrete(q) = &f.quests[0] else {
+            panic!()
+        };
         let body = &q.states[0].events[0].body;
         assert_eq!(body.len(), 3);
-        let Stmt::Action { capture, .. } = &body[0] else { panic!() };
+        let Stmt::Action { capture, .. } = &body[0] else {
+            panic!()
+        };
         assert_eq!(capture.as_deref(), Some("choice"));
         let Stmt::Branch(b) = &body[1] else { panic!() };
         assert!(b.condition.is_some());
         assert_eq!(b.body.len(), 1);
-        let Stmt::Branch(els) = &body[2] else { panic!() };
+        let Stmt::Branch(els) = &body[2] else {
+            panic!()
+        };
         assert!(els.condition.is_none());
         assert_eq!(els.body.len(), 1);
     }
@@ -823,7 +977,9 @@ mod tests {
 
     #[test]
     fn comments_and_empty_lines_ignored() {
-        let f = parse_ok("# solo comentario\n\nquest q\n  state start\n    on login\n      -> wait()\n");
+        let f = parse_ok(
+            "# solo comentario\n\nquest q\n  state start\n    on login\n      -> wait()\n",
+        );
         assert_eq!(f.quests.len(), 1);
     }
 
@@ -832,25 +988,43 @@ mod tests {
         let f = parse_ok(
             "quest q\n  state start\n    on login\n      -> set_qf(duration, get_time() + 60 * 60 * 22)\n      -> affect_add(apply.MOV_SPEED, 10, 60*60*24*365*60)\n",
         );
-        let Quest::Concrete(q) = &f.quests[0] else { panic!() };
+        let Quest::Concrete(q) = &f.quests[0] else {
+            panic!()
+        };
         let body = &q.states[0].events[0].body;
-        let Stmt::Action { action, .. } = &body[0] else { panic!() };
+        let Stmt::Action { action, .. } = &body[0] else {
+            panic!()
+        };
         assert_eq!(action.name, ActionName::SetQf);
         assert_eq!(action.args[0], Value::Str("duration".into()));
-        assert!(matches!(&action.args[1], Value::Expr(e) if matches!(e.as_ref(), Expr::Add(_, _))), "{:?}", action.args);
-        let Stmt::Action { action, .. } = &body[1] else { panic!() };
+        assert!(
+            matches!(&action.args[1], Value::Expr(e) if matches!(e.as_ref(), Expr::Add(_, _))),
+            "{:?}",
+            action.args
+        );
+        let Stmt::Action { action, .. } = &body[1] else {
+            panic!()
+        };
         assert_eq!(action.name, ActionName::AffectAdd);
         assert_eq!(action.args[0], Value::Str("apply.MOV_SPEED".into()));
         assert_eq!(action.args[1], Value::Num(10));
-        assert!(matches!(&action.args[2], Value::Expr(_)), "{:?}", action.args);
+        assert!(
+            matches!(&action.args[2], Value::Expr(_)),
+            "{:?}",
+            action.args
+        );
     }
 
     #[test]
     fn parses_bare_func_arg() {
         // `get_time` bare (the render form) still parses as an expression.
         let f = parse_ok("quest q\n  state start\n    on login\n      -> set_qf(x, get_time)\n");
-        let Quest::Concrete(q) = &f.quests[0] else { panic!() };
-        let Stmt::Action { action, .. } = &q.states[0].events[0].body[0] else { panic!() };
+        let Quest::Concrete(q) = &f.quests[0] else {
+            panic!()
+        };
+        let Stmt::Action { action, .. } = &q.states[0].events[0].body[0] else {
+            panic!()
+        };
         assert!(
             matches!(&action.args[1], Value::Expr(e) if matches!(e.as_ref(), Expr::Func(FuncName::GetTime, a) if a.is_empty())),
             "{:?}",
@@ -861,7 +1035,8 @@ mod tests {
     #[test]
     fn rejects_garbage_expr_arg() {
         // Operator-containing text must be a VALID expression, not a Str.
-        let err = parse("quest q\n  state start\n    on login\n      -> set_qf(x, 60 * * 22)\n").unwrap_err();
+        let err = parse("quest q\n  state start\n    on login\n      -> set_qf(x, 60 * * 22)\n")
+            .unwrap_err();
         assert!(err.msg.contains("expresión"), "{err}");
     }
 }

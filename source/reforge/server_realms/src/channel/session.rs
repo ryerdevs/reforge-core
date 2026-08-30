@@ -20,10 +20,10 @@ use database::affect::AffectRow;
 use database::common::CommonRepo;
 use database::item::{ItemRepo, ItemRow};
 use database::player::PlayerRow;
-use network::framer::{ConnectionRole, Framer};
-use network::Connection;
 use game_core::ecs::{CombatIntent, Intent, ItemIntent, KillInfo, NpcEvent};
 use game_core::world::WorldStore;
+use network::Connection;
+use network::framer::{ConnectionRole, Framer};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
@@ -80,7 +80,9 @@ pub struct LeaveGuard {
 
 impl Drop for LeaveGuard {
     fn drop(&mut self) {
-        let _ = self.tx.send(Intent::Leave { player_vid: self.player_vid });
+        let _ = self.tx.send(Intent::Leave {
+            player_vid: self.player_vid,
+        });
     }
 }
 
@@ -146,7 +148,9 @@ impl ChannelLoginGuard {
             return None;
         }
         set.insert(login.to_string());
-        Some(Self { login: login.to_string() })
+        Some(Self {
+            login: login.to_string(),
+        })
     }
 }
 
@@ -346,9 +350,7 @@ fn level_up_step(row: &mut PlayerRow, next_exp: i64, stat_points_per_level: i16)
     let prev_level = row.level;
     row.exp = (i64::from(row.exp) - next_exp) as i32;
     row.level = prev_level.saturating_add(1);
-    row.stat_point = row
-        .stat_point
-        .saturating_add(stat_points_per_level);
+    row.stat_point = row.stat_point.saturating_add(stat_points_per_level);
     row.level
 }
 
@@ -356,6 +358,9 @@ impl Session {
     /// Sesión nueva de una conexión aceptada: wire + guards + canales S→C.
     /// El resto de campos se llenan en las fases de `entry` (login/select/
     /// world join).
+    // 9 parámetros = el contexto de conexión (wire, config, canales, PG) —
+    // cada uno es una dependencia distinta; un struct añadiría indirección.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         stream: TcpStream,
         config: Config,
@@ -441,12 +446,16 @@ impl Session {
 
     /// El estado de movimiento (invariante: seteado en la fase select).
     pub fn motion(&self) -> &game_core::movement::PlayerMotion {
-        self.motion.as_ref().expect("motion: seteado en la fase select")
+        self.motion
+            .as_ref()
+            .expect("motion: seteado en la fase select")
     }
 
     /// Acceso MUTABLE al estado de movimiento (mismo invariante que `motion`).
     pub fn motion_mut(&mut self) -> &mut game_core::movement::PlayerMotion {
-        self.motion.as_mut().expect("motion: seteado en la fase select")
+        self.motion
+            .as_mut()
+            .expect("motion: seteado en la fase select")
     }
 
     /// El vid del player en el wire (= su id en PG — parity del canal).
@@ -461,7 +470,13 @@ impl Session {
 
     /// Lectura con timeout de inactividad + captura (wrap de `recv_packet_idle`).
     pub async fn recv_idle(&mut self) -> Result<Vec<u8>, String> {
-        recv_packet_idle(&mut self.conn, &mut self.framer, self.config.timeout, self.conn_id).await
+        recv_packet_idle(
+            &mut self.conn,
+            &mut self.framer,
+            self.config.timeout,
+            self.conn_id,
+        )
+        .await
     }
 
     /// Envía un intent hacia el mundo COMPARTIDO (el mpsc vive con la tarea
@@ -507,11 +522,8 @@ impl Session {
         // (mob_level+15) − player_level sobre `aiPercentByDeltaLev`; el
         // helper `combat::apply_exp_delta` es el camino testeado). Matar
         // mobs mucho más débiles da 1% de la exp (antes: exp llena).
-        let mut exp_gain = game_core::combat::apply_exp_delta(
-            exp_gain,
-            i32::from(self.row().level),
-            v.mob_level,
-        );
+        let mut exp_gain =
+            game_core::combat::apply_exp_delta(exp_gain, i32::from(self.row().level), v.mob_level);
         // C33: cap 10% del next_exp por kill (parity `iExp = MIN(
         // GetNextExp() / 10, iExp)` — char_battle.cpp:2267; se necesitan al
         // menos 10 kills del mismo mob para subir de nivel).
@@ -530,7 +542,9 @@ impl Session {
         let exp_gain = crate::channel::party::distribute_exp(self, exp_gain, v.x, v.y);
         {
             let row = self.row_mut();
-            row.gold = row.gold.saturating_add(gold_gain.min(i32::MAX as i64) as i32);
+            row.gold = row
+                .gold
+                .saturating_add(gold_gain.min(i32::MAX as i64) as i32);
         }
         let leveled = self.gain_exp(exp_gain).await?;
         // F5.3: DROP del mob — el drop primario (`mob_proto.drop_item`), con
@@ -576,7 +590,10 @@ impl Session {
     /// del canal (`attr_tables`). Vnum sin fila en item_proto → sin attrs
     /// (mismo no-op que el C++ con proto inexistente).
     async fn roll_drop_attrs(&self, vnum: i64) -> Result<([i64; 3], [(i16, i16); 7]), String> {
-        let Some(proto) = ItemRepo::new(self.pool.clone()).load_proto_use_values(vnum).await? else {
+        let Some(proto) = ItemRepo::new(self.pool.clone())
+            .load_proto_use_values(vnum)
+            .await?
+        else {
             return Ok(([0; 3], [(0, 0); 7]));
         };
         let mut sockets = [0i64; 3];
@@ -615,8 +632,10 @@ impl Session {
             let next = self.next_exp;
             let level = level_up_step(self.row_mut(), next, per_level);
             leveled = true;
-            self.next_exp =
-                CommonRepo::new(self.pool.clone()).next_exp(level).await.unwrap_or(0);
+            self.next_exp = CommonRepo::new(self.pool.clone())
+                .next_exp(level)
+                .await
+                .unwrap_or(0);
         }
         if leveled {
             // El nivel del mundo COMPARTIDO (la DEF del ataque del mob lo usa).
@@ -629,9 +648,11 @@ impl Session {
             crate::channel::party::update_member_level(self.player_vid(), self.row().level);
         }
         // GC_POINTS actualizado (el cliente muestra exp/gold/nivel) + persistencia.
-        self.send(&game_core::packets::points_packet(self.row(), self.next_exp, &self.battle).to_bytes())
-            .await
-            .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
+        self.send(
+            &game_core::packets::points_packet(self.row(), self.next_exp, &self.battle).to_bytes(),
+        )
+        .await
+        .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
         self.save();
         Ok(leveled)
     }
@@ -714,7 +735,9 @@ impl Session {
     /// EOF), guild mark, slot vacío). Sin store/row/motion -> save omitido
     /// (no hay estado que persistir).
     pub fn save(&mut self) {
-        let Some(store) = self.store.as_ref() else { return };
+        let Some(store) = self.store.as_ref() else {
+            return;
+        };
         if let Some(m) = self.motion.as_ref()
             && let Some(row) = self.row.as_mut()
         {
@@ -766,21 +789,27 @@ mod tests {
 
         // t=0: primer paquete → recv OK (el timer nace en la llamada).
         client_side.write_all(&move_pkt).await.unwrap();
-        let pkt = recv_packet_idle(&mut conn, &mut framer, timeout, 1).await.expect("t=0");
+        let pkt = recv_packet_idle(&mut conn, &mut framer, timeout, 1)
+            .await
+            .expect("t=0");
         assert_eq!(pkt[0], 7);
 
         // t=0..150: silencio; a t=150 llega otro paquete → recv OK
         // (150 < 200 — dentro de la ventana de la llamada).
         tokio::time::advance(Duration::from_millis(150)).await;
         client_side.write_all(&move_pkt).await.unwrap();
-        let pkt = recv_packet_idle(&mut conn, &mut framer, timeout, 1).await.expect("t=150");
+        let pkt = recv_packet_idle(&mut conn, &mut framer, timeout, 1)
+            .await
+            .expect("t=150");
         assert_eq!(pkt[0], 7);
 
         // t=150..300: silencio; a t=300 llega otro → recv OK (300-150=150 < 200
         // — el timer de ESTA llamada nace en t=150).
         tokio::time::advance(Duration::from_millis(150)).await;
         client_side.write_all(&move_pkt).await.unwrap();
-        let pkt = recv_packet_idle(&mut conn, &mut framer, timeout, 1).await.expect("t=300");
+        let pkt = recv_packet_idle(&mut conn, &mut framer, timeout, 1)
+            .await
+            .expect("t=300");
         assert_eq!(pkt[0], 7);
 
         // t=300..: silencio total → avanzar 250 > 200 → el timer dispara.

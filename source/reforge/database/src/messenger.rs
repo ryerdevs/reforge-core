@@ -50,7 +50,10 @@ impl MessengerRepo {
     }
 
     async fn connect(&self) -> Result<Client, String> {
-        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
+        self.pool
+            .get()
+            .await
+            .map_err(|e| format!("PG pool get: {e}"))
     }
 
     /// Lista de companeros de la cuenta (Login -> LoadList). Vec vacio = sin
@@ -111,7 +114,10 @@ impl MessengerRepo {
 pub(crate) fn add_mutation(account: &str, companion: &str) -> Mutation {
     Mutation::new(
         ADD_SQL,
-        vec![Param::Text(account.to_string()), Param::Text(companion.to_string())],
+        vec![
+            Param::Text(account.to_string()),
+            Param::Text(companion.to_string()),
+        ],
     )
 }
 
@@ -134,7 +140,10 @@ mod tests {
             .collect();
         assert_eq!(cols, ["account", "companion"]);
         assert!(LIST_SQL.contains("FROM player.messenger_list WHERE account = $1"));
-        assert!(!LIST_SQL.contains("ORDER BY"), "sin orden (parity: sets del C++)");
+        assert!(
+            !LIST_SQL.contains("ORDER BY"),
+            "sin orden (parity: sets del C++)"
+        );
     }
 
     /// Add: el INSERT plano del C++ con conflict target sobre la PK natural
@@ -156,9 +165,15 @@ mod tests {
     fn add_mutation_uses_shared_sql_and_params() {
         let m = add_mutation("alice", "bob");
         assert_eq!(m.sql, ADD_SQL, "mismo SQL (una fuente de verdad)");
-        assert_eq!(m.params, vec![Param::Text("alice".into()), Param::Text("bob".into())]);
+        assert_eq!(
+            m.params,
+            vec![Param::Text("alice".into()), Param::Text("bob".into())]
+        );
         assert_eq!(m.id[6] >> 4, 7, "version 7 del uuidv7");
-        assert!(m.payload_json().contains(&uuidv7_string(&m.id)), "audit payload con mutation_id");
+        assert!(
+            m.payload_json().contains(&uuidv7_string(&m.id)),
+            "audit payload con mutation_id"
+        );
     }
 
     /// Wiring del Batcher: `add_mutated` llega como mutation al sink — el
@@ -171,7 +186,12 @@ mod tests {
         #[derive(Clone, Default)]
         struct CountingSink(Arc<Mutex<Vec<Vec<Mutation>>>>);
         impl MutationSink for CountingSink {
-            fn apply(&mut self, batch: Vec<Mutation>) -> impl std::future::Future<Output = Result<(), String>> + Send {
+            // RPITIT + Send: firma del trait, igual que los sinks reales.
+            #[allow(clippy::manual_async_fn)]
+            fn apply(
+                &mut self,
+                batch: Vec<Mutation>,
+            ) -> impl std::future::Future<Output = Result<(), String>> + Send {
                 async move {
                     self.0.lock().unwrap().push(batch);
                     Ok(())
@@ -181,7 +201,10 @@ mod tests {
 
         let sink = CountingSink::default();
         let batcher = Batcher::spawn(std::time::Duration::from_millis(100), 64, sink.clone());
-        let repo = MessengerRepo::new(crate::pool::new_pool("host=127.0.0.1 port=1 user=x password=x dbname=x", 2).expect("pool"));
+        let repo = MessengerRepo::new(
+            crate::pool::new_pool("host=127.0.0.1 port=1 user=x password=x dbname=x", 2)
+                .expect("pool"),
+        );
         repo.add_mutated(&batcher, "alice", "bob");
         repo.add_mutated(&batcher, "alice", "carol");
         // Fases del reloj pausado (patron de player.rs/wal.rs).
@@ -189,7 +212,7 @@ mod tests {
         tokio::task::yield_now().await;
         tokio::time::advance(std::time::Duration::from_millis(120)).await;
         for _ in 0..200 {
-            if sink.0.lock().unwrap().len() >= 1 {
+            if !sink.0.lock().unwrap().is_empty() {
                 break;
             }
             tokio::task::yield_now().await;

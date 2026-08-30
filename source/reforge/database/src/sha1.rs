@@ -1,4 +1,4 @@
-﻿//! SHA-1 (FIPS 180-1) by hand - no dependency.
+//! SHA-1 (FIPS 180-1) by hand - no dependency.
 //!
 //! Copy of the verified module from `mysql_proxy` (FIPS 180-1 vectors + cross
 //! checked against .NET SHA1, 2026-08-10). The same module also lives in
@@ -24,7 +24,13 @@ pub fn digest(data: &[u8]) -> [u8; 20] {
     }
     msg.extend_from_slice(&bit_len.to_be_bytes());
 
-    let mut h = [0x6745_2301u32, 0xEFCD_AB89, 0x98BA_DCFE, 0x1032_5476, 0xC3D2_E1F0];
+    let mut h = [
+        0x6745_2301u32,
+        0xEFCD_AB89,
+        0x98BA_DCFE,
+        0x1032_5476,
+        0xC3D2_E1F0,
+    ];
 
     for chunk in msg.chunks_exact(64) {
         let mut w = [0u32; 80];
@@ -81,8 +87,14 @@ mod tests {
     /// Vectores FIPS 180-1 (test cases 1-3).
     #[test]
     fn fips_vectors() {
-        assert_eq!(hex(&digest(b"")), "da39a3ee5e6b4b0d3255bfef95601890afd80709");
-        assert_eq!(hex(&digest(b"abc")), "a9993e364706816aba3e25717850c26c9cd0d89d");
+        assert_eq!(
+            hex(&digest(b"")),
+            "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+        );
+        assert_eq!(
+            hex(&digest(b"abc")),
+            "a9993e364706816aba3e25717850c26c9cd0d89d"
+        );
         assert_eq!(
             hex(&digest(b"The quick brown fox jumps over the lazy dog")),
             "2fd4e1c67a2d28fced849ee1bb76e7391b93eb12"
@@ -99,6 +111,9 @@ mod tests {
     /// digest("1234") = 7110eda4d09e062aa5e4a390b0a572ac0d2c0220.
     #[test]
     fn cross_validated_with_dotnet() {
-        assert_eq!(hex(&digest(b"1234")), "7110eda4d09e062aa5e4a390b0a572ac0d2c0220");
+        assert_eq!(
+            hex(&digest(b"1234")),
+            "7110eda4d09e062aa5e4a390b0a572ac0d2c0220"
+        );
     }
 }

@@ -140,13 +140,20 @@ mod tests {
     #[test]
     fn parses_explicit_roles() {
         assert_eq!(
-            parse_args(&["--role".into(), "auth".into(), "--config".into(), "a.toml".into()])
-                .unwrap()
-                .config_path,
+            parse_args(&[
+                "--role".into(),
+                "auth".into(),
+                "--config".into(),
+                "a.toml".into()
+            ])
+            .unwrap()
+            .config_path,
             "a.toml"
         );
         assert_eq!(
-            parse_args(&["--role".into(), "channel".into()]).unwrap().role,
+            parse_args(&["--role".into(), "channel".into()])
+                .unwrap()
+                .role,
             Role::Channel
         );
     }
@@ -161,9 +168,17 @@ mod tests {
 
     #[test]
     fn parses_bench_capture_flag() {
-        let a = parse_args(&["--role".into(), "channel".into(), "--bench-capture".into(), "capture".into()])
-            .unwrap();
+        let a = parse_args(&[
+            "--role".into(),
+            "channel".into(),
+            "--bench-capture".into(),
+            "capture".into(),
+        ])
+        .unwrap();
         assert_eq!(a.bench_capture.as_deref(), Some("capture"));
-        assert!(parse_args(&["--bench-capture".into()]).is_err(), "falta el valor");
+        assert!(
+            parse_args(&["--bench-capture".into()]).is_err(),
+            "falta el valor"
+        );
     }
 }

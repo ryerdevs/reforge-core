@@ -14,8 +14,8 @@
 
 use std::collections::HashMap;
 
-use quest_dsl::ast::{ActionName, Expr, FuncName, Stmt, TriggerKind, TriggerTarget, Value};
 use quest_dsl::QuestDef;
+use quest_dsl::ast::{ActionName, Expr, FuncName, Stmt, TriggerKind, TriggerTarget, Value};
 
 /// Trigger de evento del jugador (mapea al `TriggerKind` del DSL — spec §3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,11 +93,19 @@ pub enum QuestEffect {
     /// Carta de quest (`send_letter` → GC_SCRIPT con [LETTER]).
     SendLetter(String),
     /// Flecha de quest (parity `target.vid`, questlua_target.cpp).
-    TargetVid { name: String, vid: u32, title: String },
+    TargetVid {
+        name: String,
+        vid: u32,
+        title: String,
+    },
     /// Borra flecha (`target.delete`).
     TargetDelete { name: String },
     /// Buff de quest (`affect.add_collect`).
-    AffectAdd { apply: String, value: i32, duration: i32 },
+    AffectAdd {
+        apply: String,
+        value: i32,
+        duration: i32,
+    },
     /// Quita buff (`affect.remove_all_collect`).
     AffectRemove { apply: String },
 }
@@ -117,9 +125,25 @@ pub struct QuestRuntime {
 }
 
 impl QuestRuntime {
-    pub fn add_timer(&mut self, quest: &str, name: &str, secs: i64, now_s: i64) { self.timers.insert((quest.to_string(), name.to_string()), now_s + secs.max(0)); }
-    pub fn cancel_timer(&mut self, quest: &str, name: &str) { self.timers.remove(&(quest.to_string(), name.to_string())); }
-    pub fn take_due(&mut self, now_s: i64) -> Vec<(String, String)> { let due: Vec<_> = self.timers.iter().filter(|(_, e)| **e <= now_s).map(|(k, _)| k.clone()).collect(); for k in &due { self.timers.remove(k); } due }
+    pub fn add_timer(&mut self, quest: &str, name: &str, secs: i64, now_s: i64) {
+        self.timers
+            .insert((quest.to_string(), name.to_string()), now_s + secs.max(0));
+    }
+    pub fn cancel_timer(&mut self, quest: &str, name: &str) {
+        self.timers.remove(&(quest.to_string(), name.to_string()));
+    }
+    pub fn take_due(&mut self, now_s: i64) -> Vec<(String, String)> {
+        let due: Vec<_> = self
+            .timers
+            .iter()
+            .filter(|(_, e)| **e <= now_s)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in &due {
+            self.timers.remove(k);
+        }
+        due
+    }
     /// Carga las filas persistidas del entry: `{quest}.__status` = el estado
     /// actual; el resto = flags.
     pub fn load(rows: &[PersistedFlag]) -> QuestRuntime {
@@ -204,7 +228,10 @@ impl QuestEngine {
             }
         }
         quests.extend(quest_dsl::expand_families(&file)?);
-        Ok(QuestEngine { quests, texts: std::collections::HashMap::new() })
+        Ok(QuestEngine {
+            quests,
+            texts: std::collections::HashMap::new(),
+        })
     }
 
     /// Adjunta el diccionario de textos (clave -> texto) — la resolución
@@ -215,7 +242,20 @@ impl QuestEngine {
         self
     }
 
-    pub fn check_timers(&self, rt: &mut QuestRuntime, level: i32, map_index: u32, now_s: i64, items: &std::collections::HashMap<u32,i64>, rng: &mut dyn FnMut(i64,i64)->i64) -> Vec<QuestOutcome> { let due = rt.take_due(now_s); due.into_iter().map(|_| self.run(rt, QuestTrigger::Timer, level, map_index, now_s, items, rng)).collect() }
+    pub fn check_timers(
+        &self,
+        rt: &mut QuestRuntime,
+        level: i32,
+        map_index: u32,
+        now_s: i64,
+        items: &std::collections::HashMap<u32, i64>,
+        rng: &mut dyn FnMut(i64, i64) -> i64,
+    ) -> Vec<QuestOutcome> {
+        let due = rt.take_due(now_s);
+        due.into_iter()
+            .map(|_| self.run(rt, QuestTrigger::Timer, level, map_index, now_s, items, rng))
+            .collect()
+    }
     /// Las quests concretas (familias ya expandidas) — en orden del archivo.
     pub fn quests(&self) -> &[QuestDef] {
         &self.quests
@@ -248,7 +288,14 @@ impl QuestEngine {
         rng: &mut dyn FnMut(i64, i64) -> i64,
     ) -> QuestOutcome {
         let empty = HashMap::new();
-        let mut ctx = EvalCtx { level, map_index, now_s, items, captures: &empty, rng };
+        let mut ctx = EvalCtx {
+            level,
+            map_index,
+            now_s,
+            items,
+            captures: &empty,
+            rng,
+        };
         let mut out = QuestOutcome::default();
         if rt.suspended.is_some() {
             return out;
@@ -259,7 +306,9 @@ impl QuestEngine {
         for q in &self.quests {
             let st = rt.states.get(&q.name).copied().unwrap_or(0);
             let target = if st == 0 { 1 } else { st };
-            let Some(sd) = q.states.get(target - 1) else { continue };
+            let Some(sd) = q.states.get(target - 1) else {
+                continue;
+            };
             for (ei, ev) in sd.events.iter().enumerate() {
                 if !ev.triggers.iter().any(|t| trigger.matches(&t.kind)) {
                     continue;
@@ -269,7 +318,10 @@ impl QuestEngine {
                     Some(c) => match self.eval_expr(&flags, &q.name, c, &mut ctx) {
                         Ok(v) => v != 0,
                         Err(e) => {
-                            eprintln!("game_core: quest {}: condición del evento {ei}: {e}", q.name);
+                            eprintln!(
+                                "game_core: quest {}: condición del evento {ei}: {e}",
+                                q.name
+                            );
                             false
                         }
                     },
@@ -290,7 +342,17 @@ impl QuestEngine {
                 }
                 let mut script = String::new();
                 let res = self.exec_body(
-                    rt, &mut flags, q, target, ei, &ev.body, 0, None, &mut ctx, &mut script, &mut out,
+                    rt,
+                    &mut flags,
+                    q,
+                    target,
+                    ei,
+                    &ev.body,
+                    0,
+                    None,
+                    &mut ctx,
+                    &mut script,
+                    &mut out,
                 );
                 match res {
                     Ok(Some(susp)) => {
@@ -328,10 +390,18 @@ impl QuestEngine {
         rng: &mut dyn FnMut(i64, i64) -> i64,
     ) -> QuestOutcome {
         let mut out = QuestOutcome::default();
-        let Some(susp) = rt.suspended.take() else { return out };
-        let Some(q) = self.quest(&susp.quest) else { return out };
-        let Some(sd) = q.states.get(susp.state - 1) else { return out };
-        let Some(ev) = sd.events.get(susp.event) else { return out };
+        let Some(susp) = rt.suspended.take() else {
+            return out;
+        };
+        let Some(q) = self.quest(&susp.quest) else {
+            return out;
+        };
+        let Some(sd) = q.states.get(susp.state - 1) else {
+            return out;
+        };
+        let Some(ev) = sd.events.get(susp.event) else {
+            return out;
+        };
         let body = match susp.branch {
             Some(b) => match ev.body.get(b) {
                 Some(Stmt::Branch(br)) => &br.body,
@@ -343,11 +413,27 @@ impl QuestEngine {
         if let Some(c) = &susp.capture {
             captures.insert(c.clone(), answer);
         }
-        let mut ctx = EvalCtx { level, map_index, now_s, items, captures: &captures, rng };
+        let mut ctx = EvalCtx {
+            level,
+            map_index,
+            now_s,
+            items,
+            captures: &captures,
+            rng,
+        };
         let mut flags = rt.flags.clone();
         let mut script = String::new();
         let res = self.exec_body(
-            rt, &mut flags, q, susp.state, susp.event, body, susp.stmt, susp.branch, &mut ctx, &mut script,
+            rt,
+            &mut flags,
+            q,
+            susp.state,
+            susp.event,
+            body,
+            susp.stmt,
+            susp.branch,
+            &mut ctx,
+            &mut script,
             &mut out,
         );
         match res {
@@ -440,7 +526,9 @@ impl QuestEngine {
                         ActionName::SetState => {
                             // Parity `set_state` → flag `{quest}.__status`
                             // (questpc.cpp:115-118) — índice 1-based.
-                            let name = args.first().ok_or_else(|| "set_state sin nombre".to_string())?;
+                            let name = args
+                                .first()
+                                .ok_or_else(|| "set_state sin nombre".to_string())?;
                             let target = Self::name_text(name)?;
                             let Some(idx) = Self::state_index(q, &target) else {
                                 return Err(format!("set_state a estado desconocido `{target}`"));
@@ -453,15 +541,25 @@ impl QuestEngine {
                             });
                         }
                         ActionName::SetQf => {
-                            let flag = Self::name_text(args.first().ok_or_else(|| "set_qf sin nombre".to_string())?)?;
-                            let value = args.get(1).ok_or_else(|| "set_qf sin valor".to_string())?;
+                            let flag = Self::name_text(
+                                args.first()
+                                    .ok_or_else(|| "set_qf sin nombre".to_string())?,
+                            )?;
+                            let value =
+                                args.get(1).ok_or_else(|| "set_qf sin valor".to_string())?;
                             let v = self.eval_arg(flags, &q.name, value, ctx)?;
                             rt.flags.insert((q.name.clone(), flag.clone()), v);
                             flags.insert((q.name.clone(), flag.clone()), v);
-                            out.dirty.push(DirtyFlag { quest: q.name.clone(), flag, value: v });
+                            out.dirty.push(DirtyFlag {
+                                quest: q.name.clone(),
+                                flag,
+                                value: v,
+                            });
                         }
                         ActionName::GiveItem2 => {
-                            let vnum = args.first().ok_or_else(|| "give_item2 sin vnum".to_string())?;
+                            let vnum = args
+                                .first()
+                                .ok_or_else(|| "give_item2 sin vnum".to_string())?;
                             let v = u32::try_from(self.eval_arg(flags, &q.name, vnum, ctx)?)
                                 .map_err(|_| format!("give_item2 vnum fuera de rango: {vnum:?}"))?;
                             let c = match args.get(1) {
@@ -469,19 +567,47 @@ impl QuestEngine {
                                     .map_err(|_| "give_item2 count fuera de rango".to_string())?,
                                 None => 1,
                             };
-                            out.effects.push(QuestEffect::GiveItem { vnum: v, count: c.max(1) });
+                            out.effects.push(QuestEffect::GiveItem {
+                                vnum: v,
+                                count: c.max(1),
+                            });
                         }
                         ActionName::RemoveItem => {
-                            let vnum = args.first().ok_or_else(|| "remove_item sin vnum".to_string())?;
+                            let vnum = args
+                                .first()
+                                .ok_or_else(|| "remove_item sin vnum".to_string())?;
                             let v = u32::try_from(self.eval_arg(flags, &q.name, vnum, ctx)?)
-                                .map_err(|_| format!("remove_item vnum fuera de rango: {vnum:?}"))?;
-                            let c = u32::try_from(self.eval_arg(flags, &q.name, args.get(1).ok_or_else(|| "remove_item sin count".to_string())?, ctx)?)
-                                .map_err(|_| "remove_item count fuera de rango".to_string())?;
-                            out.effects.push(QuestEffect::RemoveItem { vnum: v, count: c.max(1) });
+                                .map_err(|_| {
+                                    format!("remove_item vnum fuera de rango: {vnum:?}")
+                                })?;
+                            let c = u32::try_from(
+                                self.eval_arg(
+                                    flags,
+                                    &q.name,
+                                    args.get(1)
+                                        .ok_or_else(|| "remove_item sin count".to_string())?,
+                                    ctx,
+                                )?,
+                            )
+                            .map_err(|_| "remove_item count fuera de rango".to_string())?;
+                            out.effects.push(QuestEffect::RemoveItem {
+                                vnum: v,
+                                count: c.max(1),
+                            });
                         }
                         ActionName::Warp => {
-                            let x = self.eval_arg(flags, &q.name, args.first().ok_or_else(|| "warp sin x".to_string())?, ctx)?;
-                            let y = self.eval_arg(flags, &q.name, args.get(1).ok_or_else(|| "warp sin y".to_string())?, ctx)?;
+                            let x = self.eval_arg(
+                                flags,
+                                &q.name,
+                                args.first().ok_or_else(|| "warp sin x".to_string())?,
+                                ctx,
+                            )?;
+                            let y = self.eval_arg(
+                                flags,
+                                &q.name,
+                                args.get(1).ok_or_else(|| "warp sin y".to_string())?,
+                                ctx,
+                            )?;
                             out.effects.push(QuestEffect::Warp { x, y });
                         }
                         ActionName::Notice => {
@@ -489,52 +615,97 @@ impl QuestEngine {
                             out.effects.push(QuestEffect::Notice(self.key_text(k)?));
                         }
                         ActionName::SayReward => {
-                            let k = args.first().ok_or_else(|| "say_reward sin clave".to_string())?;
+                            let k = args
+                                .first()
+                                .ok_or_else(|| "say_reward sin clave".to_string())?;
                             script.push_str(&self.key_text(k)?);
                             script.push_str("[ENTER]");
                         }
                         ActionName::SendLetter => {
-                            let k = args.first().ok_or_else(|| "send_letter sin clave".to_string())?;
+                            let k = args
+                                .first()
+                                .ok_or_else(|| "send_letter sin clave".to_string())?;
                             out.effects.push(QuestEffect::SendLetter(self.key_text(k)?));
                         }
                         ActionName::SetQuestState => {
                             // Parity `_set_quest_state` (questlua_global.cpp:872-906 +
                             // questpc.cpp:120-131): cruza a otra quest; si
                             // quest==actual, actualiza `pqs->st` además del flag.
-                            let qn = Self::name_text(args.first().ok_or_else(|| "set_quest_state sin quest".to_string())?)?;
-                            let sn = Self::name_text(args.get(1).ok_or_else(|| "set_quest_state sin state".to_string())?)?;
+                            let qn = Self::name_text(
+                                args.first()
+                                    .ok_or_else(|| "set_quest_state sin quest".to_string())?,
+                            )?;
+                            let sn = Self::name_text(
+                                args.get(1)
+                                    .ok_or_else(|| "set_quest_state sin state".to_string())?,
+                            )?;
                             let Some(tq) = self.quests.iter().find(|qq| qq.name == qn) else {
                                 return Err(format!("set_quest_state quest desconocida `{qn}`"));
                             };
                             let Some(idx) = Self::state_index(tq, &sn) else {
-                                return Err(format!("set_quest_state state desconocido `{qn}.{sn}`"));
+                                return Err(format!(
+                                    "set_quest_state state desconocido `{qn}.{sn}`"
+                                ));
                             };
                             rt.states.insert(qn.clone(), idx);
-                            out.dirty.push(DirtyFlag { quest: qn.clone(), flag: format!("{qn}.__status"), value: idx as i64 });
+                            out.dirty.push(DirtyFlag {
+                                quest: qn.clone(),
+                                flag: format!("{qn}.__status"),
+                                value: idx as i64,
+                            });
                         }
                         ActionName::TargetVid => {
                             let name = Self::name_text(args.first().ok_or("target_vid sin name")?)?;
-                            let vid = u32::try_from(self.eval_arg(flags, &q.name, args.get(1).ok_or("target_vid sin vid")?, ctx)?).map_err(|_| "target_vid vid fuera de rango")?;
+                            let vid = u32::try_from(self.eval_arg(
+                                flags,
+                                &q.name,
+                                args.get(1).ok_or("target_vid sin vid")?,
+                                ctx,
+                            )?)
+                            .map_err(|_| "target_vid vid fuera de rango")?;
                             let title = self.key_text(args.get(2).ok_or("target_vid sin key")?)?;
-                            out.effects.push(QuestEffect::TargetVid { name, vid, title });
+                            out.effects
+                                .push(QuestEffect::TargetVid { name, vid, title });
                         }
                         ActionName::TargetDelete => {
-                            let name = Self::name_text(args.first().ok_or("target_delete sin name")?)?;
+                            let name =
+                                Self::name_text(args.first().ok_or("target_delete sin name")?)?;
                             out.effects.push(QuestEffect::TargetDelete { name });
                         }
                         ActionName::AffectAdd => {
-                            let apply = Self::name_text(args.first().ok_or("affect_add sin apply")?)?;
-                            let value = self.eval_arg(flags, &q.name, args.get(1).ok_or("affect_add sin value")?, ctx)? as i32;
-                            let duration = self.eval_arg(flags, &q.name, args.get(2).ok_or("affect_add sin duration")?, ctx)? as i32;
-                            out.effects.push(QuestEffect::AffectAdd { apply, value, duration });
+                            let apply =
+                                Self::name_text(args.first().ok_or("affect_add sin apply")?)?;
+                            let value = self.eval_arg(
+                                flags,
+                                &q.name,
+                                args.get(1).ok_or("affect_add sin value")?,
+                                ctx,
+                            )? as i32;
+                            let duration = self.eval_arg(
+                                flags,
+                                &q.name,
+                                args.get(2).ok_or("affect_add sin duration")?,
+                                ctx,
+                            )? as i32;
+                            out.effects.push(QuestEffect::AffectAdd {
+                                apply,
+                                value,
+                                duration,
+                            });
                         }
                         ActionName::AffectRemove => {
-                            let apply = args.first().map(|v| Self::name_text(v).unwrap_or_default()).unwrap_or_default();
+                            let apply = args
+                                .first()
+                                .map(|v| Self::name_text(v).unwrap_or_default())
+                                .unwrap_or_default();
                             out.effects.push(QuestEffect::AffectRemove { apply });
                         }
                         ActionName::Return => return Ok(None),
                         other => {
-                            eprintln!("game_core: quest {}: acción `{other:?}` mapeada-pero-pendiente (ignorada)", q.name);
+                            eprintln!(
+                                "game_core: quest {}: acción `{other:?}` mapeada-pero-pendiente (ignorada)",
+                                q.name
+                            );
                         }
                     }
                 }
@@ -548,7 +719,17 @@ impl QuestEngine {
                     };
                     if cond_ok
                         && let Some(susp) = self.exec_body(
-                            rt, flags, q, state, event, &b.body, 0, Some(i), ctx, script, out,
+                            rt,
+                            flags,
+                            q,
+                            state,
+                            event,
+                            &b.body,
+                            0,
+                            Some(i),
+                            ctx,
+                            script,
+                            out,
                         )?
                     {
                         return Ok(Some(susp));
@@ -557,7 +738,10 @@ impl QuestEngine {
                 Stmt::Use { name, .. } => {
                     // Los bloques sin resolver son del loader (futuro) — no
                     // llegan al runtime (los .family.quest los expande quest_dsl).
-                    eprintln!("game_core: quest {}: `use {name}` sin resolver (loader pendiente)", q.name);
+                    eprintln!(
+                        "game_core: quest {}: `use {name}` sin resolver (loader pendiente)",
+                        q.name
+                    );
                 }
             }
             i += 1;
@@ -595,7 +779,10 @@ impl QuestEngine {
                 Ok(i64::from(lo <= v && v <= hi))
             }
             Expr::Compare(a, op, b) => {
-                let (x, y) = (self.eval_expr(flags, quest, a, ctx)?, self.eval_expr(flags, quest, b, ctx)?);
+                let (x, y) = (
+                    self.eval_expr(flags, quest, a, ctx)?,
+                    self.eval_expr(flags, quest, b, ctx)?,
+                );
                 let r = match op {
                     quest_dsl::ast::CmpOp::Eq => x == y,
                     quest_dsl::ast::CmpOp::Ne => x != y,
@@ -606,11 +793,20 @@ impl QuestEngine {
                 };
                 Ok(i64::from(r))
             }
-            Expr::Add(a, b) => Ok(self.eval_expr(flags, quest, a, ctx)? + self.eval_expr(flags, quest, b, ctx)?),
-            Expr::Sub(a, b) => Ok(self.eval_expr(flags, quest, a, ctx)? - self.eval_expr(flags, quest, b, ctx)?),
-            Expr::Mul(a, b) => Ok(self.eval_expr(flags, quest, a, ctx)? * self.eval_expr(flags, quest, b, ctx)?),
+            Expr::Add(a, b) => {
+                Ok(self.eval_expr(flags, quest, a, ctx)? + self.eval_expr(flags, quest, b, ctx)?)
+            }
+            Expr::Sub(a, b) => {
+                Ok(self.eval_expr(flags, quest, a, ctx)? - self.eval_expr(flags, quest, b, ctx)?)
+            }
+            Expr::Mul(a, b) => {
+                Ok(self.eval_expr(flags, quest, a, ctx)? * self.eval_expr(flags, quest, b, ctx)?)
+            }
             Expr::Div(a, b) => {
-                let (x, y) = (self.eval_expr(flags, quest, a, ctx)?, self.eval_expr(flags, quest, b, ctx)?);
+                let (x, y) = (
+                    self.eval_expr(flags, quest, a, ctx)?,
+                    self.eval_expr(flags, quest, b, ctx)?,
+                );
                 if y == 0 {
                     Err("división por cero".into())
                 } else {
@@ -618,10 +814,12 @@ impl QuestEngine {
                 }
             }
             Expr::And(a, b) => Ok(i64::from(
-                self.eval_expr(flags, quest, a, ctx)? != 0 && self.eval_expr(flags, quest, b, ctx)? != 0,
+                self.eval_expr(flags, quest, a, ctx)? != 0
+                    && self.eval_expr(flags, quest, b, ctx)? != 0,
             )),
             Expr::Or(a, b) => Ok(i64::from(
-                self.eval_expr(flags, quest, a, ctx)? != 0 || self.eval_expr(flags, quest, b, ctx)? != 0,
+                self.eval_expr(flags, quest, a, ctx)? != 0
+                    || self.eval_expr(flags, quest, b, ctx)? != 0,
             )),
             Expr::Not(a) => Ok(i64::from(self.eval_expr(flags, quest, a, ctx)? == 0)),
             Expr::Func(f, args) => self.eval_func(flags, quest, f, args, ctx),
@@ -637,13 +835,15 @@ impl QuestEngine {
         ctx: &mut EvalCtx,
     ) -> Result<i64, String> {
         let arg = |i: usize| -> Result<&Expr, String> {
-            args.get(i).ok_or_else(|| format!("función sin argumento {i}"))
+            args.get(i)
+                .ok_or_else(|| format!("función sin argumento {i}"))
         };
         match f {
             FuncName::PcLevel => Ok(i64::from(ctx.level)),
             FuncName::CountItem => {
                 let v = self.eval_expr(flags, quest, arg(0)?, ctx)?;
-                let vnum = u32::try_from(v).map_err(|_| format!("count_item vnum inválido: {v}"))?;
+                let vnum =
+                    u32::try_from(v).map_err(|_| format!("count_item vnum inválido: {v}"))?;
                 Ok(*ctx.items.get(&vnum).unwrap_or(&0))
             }
             FuncName::GetQf => {
@@ -651,12 +851,15 @@ impl QuestEngine {
                 Ok(*flags.get(&(quest.to_string(), name)).unwrap_or(&0))
             }
             FuncName::Number => {
-                let (lo, hi) = (self.eval_expr(flags, quest, arg(0)?, ctx)?, self.eval_expr(flags, quest, arg(1)?, ctx)?);
+                let (lo, hi) = (
+                    self.eval_expr(flags, quest, arg(0)?, ctx)?,
+                    self.eval_expr(flags, quest, arg(1)?, ctx)?,
+                );
                 Ok((ctx.rng)(lo, hi))
             }
             FuncName::GetTime => Ok(ctx.now_s),
             FuncName::GetMapIndex => Ok(i64::from(ctx.map_index)),
-            FuncName::GetGmLevel => Ok(0),  // subset sin GM (documentado)
+            FuncName::GetGmLevel => Ok(0), // subset sin GM (documentado)
             FuncName::PetIsSummon => Ok(0), // subset sin mascotas (documentado)
             FuncName::IsTestServer => Ok(0),
         }
@@ -717,7 +920,11 @@ mod tests {
         Box::new(move |_, _| v)
     }
 
-    fn ctx_bits(level: i32, now_s: i64, items: &HashMap<u32, i64>) -> (i32, u32, i64, &HashMap<u32, i64>) {
+    fn ctx_bits(
+        level: i32,
+        now_s: i64,
+        items: &HashMap<u32, i64>,
+    ) -> (i32, u32, i64, &HashMap<u32, i64>) {
         (level, 41, now_s, items)
     }
 
@@ -774,7 +981,9 @@ quest collect_lv40 = fam(level: 40, mob: 602, herb: 30007)
 
     #[test]
     fn trigger_matching_catalog() {
-        let t = TriggerKind::Chat { target: TriggerTarget::Num(20084) };
+        let t = TriggerKind::Chat {
+            target: TriggerTarget::Num(20084),
+        };
         assert!(QuestTrigger::Chat(20084).matches(&t));
         assert!(!QuestTrigger::Chat(20085).matches(&t));
         assert!(!QuestTrigger::Kill(20084).matches(&t));
@@ -783,7 +992,9 @@ quest collect_lv40 = fam(level: 40, mob: 602, herb: 30007)
         assert!(QuestTrigger::Letter.matches(&TriggerKind::Letter));
         assert!(QuestTrigger::Timer.matches(&TriggerKind::Timer));
         // Un Param sin expandir nunca matchea (invariante del runtime).
-        let p = TriggerKind::Kill { target: TriggerTarget::Param("mob".into()) };
+        let p = TriggerKind::Kill {
+            target: TriggerTarget::Param("mob".into()),
+        };
         assert!(!QuestTrigger::Kill(601).matches(&p));
     }
 
@@ -793,18 +1004,43 @@ quest collect_lv40 = fam(level: 40, mob: 602, herb: 30007)
         let mut rt = QuestRuntime::default();
         let items = HashMap::new();
         let (level, map, now, items_ref) = ctx_bits(30, 1_000, &items);
-        let out = e.run(&mut rt, QuestTrigger::Login, level, map, now, items_ref, &mut *rng_fixed(5));
+        let out = e.run(
+            &mut rt,
+            QuestTrigger::Login,
+            level,
+            map,
+            now,
+            items_ref,
+            &mut *rng_fixed(5),
+        );
         // Arranque + set_state(information): dos filas sucias del estado.
         assert_eq!(out.effects, vec![]);
         assert_eq!(out.script, None);
-        assert_eq!(rt.states.get("collect_quest_lv30"), Some(&2), "{:?}", rt.states);
-        let status: Vec<&DirtyFlag> = out.dirty.iter().filter(|d| d.flag.ends_with(".__status")).collect();
+        assert_eq!(
+            rt.states.get("collect_quest_lv30"),
+            Some(&2),
+            "{:?}",
+            rt.states
+        );
+        let status: Vec<&DirtyFlag> = out
+            .dirty
+            .iter()
+            .filter(|d| d.flag.ends_with(".__status"))
+            .collect();
         assert_eq!(status.len(), 2, "{:?}", out.dirty);
         assert_eq!(status[0].value, 1);
         assert_eq!(status[1].value, 2);
         // Nivel bajo: la condición falla y la quest no arranca.
         let mut rt2 = QuestRuntime::default();
-        let out2 = e.run(&mut rt2, QuestTrigger::Login, 29, map, now, items_ref, &mut *rng_fixed(5));
+        let out2 = e.run(
+            &mut rt2,
+            QuestTrigger::Login,
+            29,
+            map,
+            now,
+            items_ref,
+            &mut *rng_fixed(5),
+        );
         assert!(out2.dirty.is_empty() && out2.effects.is_empty(), "{out2:?}");
         assert!(rt2.states.is_empty());
     }
@@ -816,15 +1052,54 @@ quest collect_lv40 = fam(level: 40, mob: 602, herb: 30007)
         let items = HashMap::new();
         let (_, map, now, items_ref) = ctx_bits(30, 1_000, &items);
         // La quest arranca con el login (nivel 30).
-        e.run(&mut rt, QuestTrigger::Login, 30, map, now, items_ref, &mut *rng_fixed(5));
+        e.run(
+            &mut rt,
+            QuestTrigger::Login,
+            30,
+            map,
+            now,
+            items_ref,
+            &mut *rng_fixed(5),
+        );
         // number(1,100) <= 5 con rng 5 → recompensa.
-        let out = e.run(&mut rt, QuestTrigger::Kill(601), 30, map, now, items_ref, &mut *rng_fixed(5));
-        assert_eq!(out.effects, vec![QuestEffect::GiveItem { vnum: 30006, count: 1 }], "{out:?}");
+        let out = e.run(
+            &mut rt,
+            QuestTrigger::Kill(601),
+            30,
+            map,
+            now,
+            items_ref,
+            &mut *rng_fixed(5),
+        );
+        assert_eq!(
+            out.effects,
+            vec![QuestEffect::GiveItem {
+                vnum: 30006,
+                count: 1
+            }],
+            "{out:?}"
+        );
         // rng 6 → la condición falla → sin recompensa.
-        let out = e.run(&mut rt, QuestTrigger::Kill(601), 30, map, now, items_ref, &mut *rng_fixed(6));
+        let out = e.run(
+            &mut rt,
+            QuestTrigger::Kill(601),
+            30,
+            map,
+            now,
+            items_ref,
+            &mut *rng_fixed(6),
+        );
         assert!(out.effects.is_empty(), "{out:?}");
         // El kill de otro mob no matchea.
-        let out = e.run(&mut rt, QuestTrigger::Kill(602), 30, map, now, items_ref, &mut *rng_fixed(5));
+        let out = e.run(
+            &mut rt,
+            QuestTrigger::Kill(602),
+            30,
+            map,
+            now,
+            items_ref,
+            &mut *rng_fixed(5),
+        );
         assert!(out.effects.is_empty(), "{out:?}");
     }
 
@@ -834,22 +1109,59 @@ quest collect_lv40 = fam(level: 40, mob: 602, herb: 30007)
         let mut rt = QuestRuntime::default();
         let items = HashMap::from([(30006u32, 1i64)]);
         let (_, map, now, items_ref) = ctx_bits(30, 1_000, &items);
-        e.run(&mut rt, QuestTrigger::Login, 30, map, now, items_ref, &mut *rng_fixed(5));
+        e.run(
+            &mut rt,
+            QuestTrigger::Login,
+            30,
+            map,
+            now,
+            items_ref,
+            &mut *rng_fixed(5),
+        );
         // Sin el item en el inventario: la condición count_item falla.
         let empty = HashMap::new();
-        let out = e.run(&mut rt, QuestTrigger::Chat(20084), 30, map, now, &empty, &mut *rng_fixed(5));
+        let out = e.run(
+            &mut rt,
+            QuestTrigger::Chat(20084),
+            30,
+            map,
+            now,
+            &empty,
+            &mut *rng_fixed(5),
+        );
         assert!(out.effects.is_empty(), "{out:?}");
         // Con el item: remove + set_qf(get_time()+...)+ set_state.
-        let out = e.run(&mut rt, QuestTrigger::Chat(20084), 30, map, now, items_ref, &mut *rng_fixed(5));
+        let out = e.run(
+            &mut rt,
+            QuestTrigger::Chat(20084),
+            30,
+            map,
+            now,
+            items_ref,
+            &mut *rng_fixed(5),
+        );
         assert_eq!(
             out.effects,
-            vec![QuestEffect::RemoveItem { vnum: 30006, count: 1 }],
+            vec![QuestEffect::RemoveItem {
+                vnum: 30006,
+                count: 1
+            }],
             "{out:?}"
         );
         assert_eq!(rt.states.get("collect_quest_lv30"), Some(&3));
-        let dur = rt.flags.get(&("collect_quest_lv30".into(), "duration".into())).copied().unwrap_or(0);
+        let dur = rt
+            .flags
+            .get(&("collect_quest_lv30".into(), "duration".into()))
+            .copied()
+            .unwrap_or(0);
         assert_eq!(dur, now + 60 * 60 * 22, "get_time() + 60*60*22");
-        assert!(out.dirty.iter().any(|d| d.flag == "duration" && d.value == dur), "{:?}", out.dirty);
+        assert!(
+            out.dirty
+                .iter()
+                .any(|d| d.flag == "duration" && d.value == dur),
+            "{:?}",
+            out.dirty
+        );
     }
 
     #[test]
@@ -859,26 +1171,75 @@ quest collect_lv40 = fam(level: 40, mob: 602, herb: 30007)
         // El evento de chat exige count_item(30006) > 0 — el jugador tiene el item.
         let items = HashMap::from([(30006u32, 1i64)]);
         let (_, map, now, items_ref) = ctx_bits(30, 1_000, &items);
-        e.run(&mut rt, QuestTrigger::Login, 30, map, now, items_ref, &mut *rng_fixed(5));
-        e.run(&mut rt, QuestTrigger::Chat(20084), 30, map, now, items_ref, &mut *rng_fixed(5));
+        e.run(
+            &mut rt,
+            QuestTrigger::Login,
+            30,
+            map,
+            now,
+            items_ref,
+            &mut *rng_fixed(5),
+        );
+        e.run(
+            &mut rt,
+            QuestTrigger::Chat(20084),
+            30,
+            map,
+            now,
+            items_ref,
+            &mut *rng_fixed(5),
+        );
         // go_to_disciple: letter → say_title + say + wait → suspensión.
-        let out = e.run(&mut rt, QuestTrigger::Letter, 30, map, now, items_ref, &mut *rng_fixed(5));
+        let out = e.run(
+            &mut rt,
+            QuestTrigger::Letter,
+            30,
+            map,
+            now,
+            items_ref,
+            &mut *rng_fixed(5),
+        );
         let script = out.script.expect("diálogo");
-        assert!(script.contains("gameforge.collect_quest_lv30._50_sayTitle[ENTER]"), "{script}");
-        assert!(script.contains("gameforge.collect_quest_lv30._40_say[ENTER]"), "{script}");
+        assert!(
+            script.contains("gameforge.collect_quest_lv30._50_sayTitle[ENTER]"),
+            "{script}"
+        );
+        assert!(
+            script.contains("gameforge.collect_quest_lv30._40_say[ENTER]"),
+            "{script}"
+        );
         assert!(script.ends_with("[NEXT]"), "{script}");
         assert!(out.suspended);
         assert!(rt.suspended.is_some());
         // Mientras está suspendida, ningún otro evento corre (parity IsRunning).
-        let out = e.run(&mut rt, QuestTrigger::Kill(601), 30, map, now, items_ref, &mut *rng_fixed(5));
+        let out = e.run(
+            &mut rt,
+            QuestTrigger::Kill(601),
+            30,
+            map,
+            now,
+            items_ref,
+            &mut *rng_fixed(5),
+        );
         assert!(out.effects.is_empty() && !out.suspended, "{out:?}");
         // Reanudación (answer 0 del [NEXT]): set_qf(done, 1).
         let out = e.answer(&mut rt, 0, 30, map, now, items_ref, &mut *rng_fixed(5));
         assert!(!out.suspended);
         assert!(rt.suspended.is_none());
-        assert_eq!(rt.flags.get(&("collect_quest_lv30".into(), "done".into())), Some(&1));
+        assert_eq!(
+            rt.flags.get(&("collect_quest_lv30".into(), "done".into())),
+            Some(&1)
+        );
         // La quest terminó: el evento letter ya no vuelve a disparar.
-        let out = e.run(&mut rt, QuestTrigger::Letter, 30, map, now, items_ref, &mut *rng_fixed(5));
+        let out = e.run(
+            &mut rt,
+            QuestTrigger::Letter,
+            30,
+            map,
+            now,
+            items_ref,
+            &mut *rng_fixed(5),
+        );
         assert!(out.script.is_none(), "{out:?}");
     }
 
@@ -891,15 +1252,38 @@ quest collect_lv40 = fam(level: 40, mob: 602, herb: 30007)
         let mut rt = QuestRuntime::default();
         let items = HashMap::new();
         let (_, map, now, items_ref) = ctx_bits(5, 0, &items);
-        let out = e.run(&mut rt, QuestTrigger::Chat(20011), 5, map, now, items_ref, &mut *rng_fixed(0));
+        let out = e.run(
+            &mut rt,
+            QuestTrigger::Chat(20011),
+            5,
+            map,
+            now,
+            items_ref,
+            &mut *rng_fixed(0),
+        );
         let script = out.script.expect("diálogo");
         assert_eq!(script, "[QUESTION 1;_20_say|2;_30_say]", "{script}");
         assert!(out.suspended);
         // answer 1 → la rama warp.
         let out = e.answer(&mut rt, 1, 5, map, now, items_ref, &mut *rng_fixed(0));
-        assert_eq!(out.effects, vec![QuestEffect::Warp { x: 896500, y: 24600 }], "{out:?}");
+        assert_eq!(
+            out.effects,
+            vec![QuestEffect::Warp {
+                x: 896500,
+                y: 24600
+            }],
+            "{out:?}"
+        );
         // answer 2 → la rama return (sin efectos).
-        let out = e.run(&mut rt, QuestTrigger::Chat(20011), 5, map, now, items_ref, &mut *rng_fixed(0));
+        let out = e.run(
+            &mut rt,
+            QuestTrigger::Chat(20011),
+            5,
+            map,
+            now,
+            items_ref,
+            &mut *rng_fixed(0),
+        );
         assert!(out.suspended, "{out:?}");
         let out = e.answer(&mut rt, 2, 5, map, now, items_ref, &mut *rng_fixed(0));
         assert!(out.effects.is_empty(), "{out:?}");
@@ -917,16 +1301,63 @@ quest collect_lv40 = fam(level: 40, mob: 602, herb: 30007)
         let items = HashMap::new();
         let (_, map, now, items_ref) = ctx_bits(5, 100, &items);
         // Primer uso: remove + cooldown.
-        let out = e.run(&mut rt, QuestTrigger::Use(71035), 5, map, now, items_ref, &mut *rng_fixed(0));
-        assert_eq!(out.effects, vec![QuestEffect::RemoveItem { vnum: 71035, count: 1 }]);
-        assert_eq!(rt.flags.get(&("drug".into(), "duration".into())), Some(&(100 + 3600)));
+        let out = e.run(
+            &mut rt,
+            QuestTrigger::Use(71035),
+            5,
+            map,
+            now,
+            items_ref,
+            &mut *rng_fixed(0),
+        );
+        assert_eq!(
+            out.effects,
+            vec![QuestEffect::RemoveItem {
+                vnum: 71035,
+                count: 1
+            }]
+        );
+        assert_eq!(
+            rt.flags.get(&("drug".into(), "duration".into())),
+            Some(&(100 + 3600))
+        );
         // Segundo uso (mismo tiempo): el cooldown bloquea.
-        let out = e.run(&mut rt, QuestTrigger::Use(71035), 5, map, now, items_ref, &mut *rng_fixed(0));
+        let out = e.run(
+            &mut rt,
+            QuestTrigger::Use(71035),
+            5,
+            map,
+            now,
+            items_ref,
+            &mut *rng_fixed(0),
+        );
         assert!(out.effects.is_empty(), "{out:?}");
         // El reset del evento 999.chat vuelve a permitir el uso.
-        e.run(&mut rt, QuestTrigger::Chat(999), 5, map, now, items_ref, &mut *rng_fixed(0));
-        let out = e.run(&mut rt, QuestTrigger::Use(71035), 5, map, now, items_ref, &mut *rng_fixed(0));
-        assert_eq!(out.effects, vec![QuestEffect::RemoveItem { vnum: 71035, count: 1 }]);
+        e.run(
+            &mut rt,
+            QuestTrigger::Chat(999),
+            5,
+            map,
+            now,
+            items_ref,
+            &mut *rng_fixed(0),
+        );
+        let out = e.run(
+            &mut rt,
+            QuestTrigger::Use(71035),
+            5,
+            map,
+            now,
+            items_ref,
+            &mut *rng_fixed(0),
+        );
+        assert_eq!(
+            out.effects,
+            vec![QuestEffect::RemoveItem {
+                vnum: 71035,
+                count: 1
+            }]
+        );
     }
 
     #[test]
@@ -940,20 +1371,54 @@ quest collect_lv40 = fam(level: 40, mob: 602, herb: 30007)
         let (_, map, now, items_ref) = ctx_bits(5, 0, &items);
         // Primer kill: la quest arranca (state start) y transiciona — SIN
         // recompensa (el evento del state fighting no corre en este evento).
-        let out = e.run(&mut rt, QuestTrigger::Kill(601), 5, map, now, items_ref, &mut *rng_fixed(0));
+        let out = e.run(
+            &mut rt,
+            QuestTrigger::Kill(601),
+            5,
+            map,
+            now,
+            items_ref,
+            &mut *rng_fixed(0),
+        );
         assert!(out.effects.is_empty(), "{out:?}");
         assert_eq!(rt.states.get("two_states"), Some(&2));
         // Segundo kill: ya en fighting → recompensa.
-        let out = e.run(&mut rt, QuestTrigger::Kill(601), 5, map, now, items_ref, &mut *rng_fixed(0));
-        assert_eq!(out.effects, vec![QuestEffect::GiveItem { vnum: 30006, count: 1 }]);
+        let out = e.run(
+            &mut rt,
+            QuestTrigger::Kill(601),
+            5,
+            map,
+            now,
+            items_ref,
+            &mut *rng_fixed(0),
+        );
+        assert_eq!(
+            out.effects,
+            vec![QuestEffect::GiveItem {
+                vnum: 30006,
+                count: 1
+            }]
+        );
     }
 
     #[test]
     fn runtime_loads_persisted_flags() {
         let rows = vec![
-            PersistedFlag { quest: "q".into(), flag: "q.__status".into(), value: 2 },
-            PersistedFlag { quest: "q".into(), flag: "duration".into(), value: 42 },
-            PersistedFlag { quest: "q".into(), flag: "q.__status".into(), value: 3 }, // overwrite
+            PersistedFlag {
+                quest: "q".into(),
+                flag: "q.__status".into(),
+                value: 2,
+            },
+            PersistedFlag {
+                quest: "q".into(),
+                flag: "duration".into(),
+                value: 42,
+            },
+            PersistedFlag {
+                quest: "q".into(),
+                flag: "q.__status".into(),
+                value: 3,
+            }, // overwrite
         ];
         let rt = QuestRuntime::load(&rows);
         assert_eq!(rt.states.get("q"), Some(&3));
@@ -979,7 +1444,15 @@ quest collect_lv40 = fam(level: 40, mob: 602, herb: 30007)
         let mut rt = QuestRuntime::default();
         let items = HashMap::new();
         let (_, map, now, items_ref) = ctx_bits(5, 0, &items);
-        let out = e.run(&mut rt, QuestTrigger::Letter, 5, map, now, items_ref, &mut *rng_fixed(0));
+        let out = e.run(
+            &mut rt,
+            QuestTrigger::Letter,
+            5,
+            map,
+            now,
+            items_ref,
+            &mut *rng_fixed(0),
+        );
         assert_eq!(out.script.as_deref(), Some("reward_key[ENTER]"), "{out:?}");
     }
 
@@ -995,7 +1468,15 @@ quest collect_lv40 = fam(level: 40, mob: 602, herb: 30007)
         let mut rt = QuestRuntime::default();
         let items = HashMap::new();
         let (_, map, now, items_ref) = ctx_bits(5, 0, &items);
-        let out = e.run(&mut rt, QuestTrigger::Letter, 5, map, now, items_ref, &mut *rng_fixed(0));
+        let out = e.run(
+            &mut rt,
+            QuestTrigger::Letter,
+            5,
+            map,
+            now,
+            items_ref,
+            &mut *rng_fixed(0),
+        );
         assert_eq!(out.effects, vec![QuestEffect::SendLetter("Carta!".into())]);
     }
 
@@ -1009,12 +1490,37 @@ quest collect_lv40 = fam(level: 40, mob: 602, herb: 30007)
         let mut rt = QuestRuntime::default();
         let items = HashMap::new();
         let (_, map, now, items_ref) = ctx_bits(5, 0, &items);
-        let out = e.run(&mut rt, QuestTrigger::Letter, 5, map, now, items_ref, &mut *rng_fixed(0));
+        let out = e.run(
+            &mut rt,
+            QuestTrigger::Letter,
+            5,
+            map,
+            now,
+            items_ref,
+            &mut *rng_fixed(0),
+        );
         assert_eq!(rt.states.get("other"), Some(&2), "{:?}", rt.states);
-        assert!(out.dirty.iter().any(|d| d.quest == "other" && d.flag == "other.__status" && d.value == 2), "{:?}", out.dirty);
+        assert!(
+            out.dirty
+                .iter()
+                .any(|d| d.quest == "other" && d.flag == "other.__status" && d.value == 2),
+            "{:?}",
+            out.dirty
+        );
         // La quest cruzada ya puede disparar su evento del nuevo state.
-        let out2 = e.run(&mut rt, QuestTrigger::Letter, 5, map, now, items_ref, &mut *rng_fixed(0));
-        assert!(out2.script.as_deref().unwrap_or("").contains("b[ENTER]"), "{out2:?}");
+        let out2 = e.run(
+            &mut rt,
+            QuestTrigger::Letter,
+            5,
+            map,
+            now,
+            items_ref,
+            &mut *rng_fixed(0),
+        );
+        assert!(
+            out2.script.as_deref().unwrap_or("").contains("b[ENTER]"),
+            "{out2:?}"
+        );
     }
     #[test]
     fn target_vid_and_affect_verifier() {
@@ -1024,23 +1530,61 @@ quest collect_lv40 = fam(level: 40, mob: 602, herb: 30007)
         let mut rt = QuestRuntime::default();
         let items = HashMap::new();
         let (_, map, now, items_ref) = ctx_bits(5, 0, &items);
-        let out = e.run(&mut rt, QuestTrigger::Letter, 5, map, now, items_ref, &mut *rng_fixed(0));
-        assert_eq!(out.effects[0], QuestEffect::TargetVid { name: "__TARGET__".into(), vid: 20084, title: "Objetivo!".into() });
-        assert_eq!(out.effects[1], QuestEffect::AffectAdd { apply: "apply.MOV_SPEED".into(), value: 10, duration: 3600 });
-        assert_eq!(out.effects[2], QuestEffect::AffectRemove { apply: "apply.MOV_SPEED".into() });
-        assert_eq!(out.effects[3], QuestEffect::TargetDelete { name: "__TARGET__".into() });
+        let out = e.run(
+            &mut rt,
+            QuestTrigger::Letter,
+            5,
+            map,
+            now,
+            items_ref,
+            &mut *rng_fixed(0),
+        );
+        assert_eq!(
+            out.effects[0],
+            QuestEffect::TargetVid {
+                name: "__TARGET__".into(),
+                vid: 20084,
+                title: "Objetivo!".into()
+            }
+        );
+        assert_eq!(
+            out.effects[1],
+            QuestEffect::AffectAdd {
+                apply: "apply.MOV_SPEED".into(),
+                value: 10,
+                duration: 3600
+            }
+        );
+        assert_eq!(
+            out.effects[2],
+            QuestEffect::AffectRemove {
+                apply: "apply.MOV_SPEED".into()
+            }
+        );
+        assert_eq!(
+            out.effects[3],
+            QuestEffect::TargetDelete {
+                name: "__TARGET__".into()
+            }
+        );
         assert_eq!(out.script, None);
         // mutation: without handler effects would be empty -> fails
         assert!(out.effects.len() == 4, "verifier: 4 effects");
     }
     #[test]
     fn timers_add_check_and_cancel_verifier() {
-        let e = QuestEngine::load("quest q\n  state start\n    on timer\n      -> notice(@fired)\n").expect("parse");
+        let e =
+            QuestEngine::load("quest q\n  state start\n    on timer\n      -> notice(@fired)\n")
+                .expect("parse");
         let mut rt = QuestRuntime::default();
         let items = std::collections::HashMap::new();
         let (_, map, _, items_ref) = ctx_bits(5, 0, &items);
         rt.add_timer("q", "t1", 10, 100);
-        assert_eq!(e.check_timers(&mut rt, 5, map, 105, items_ref, &mut *rng_fixed(0)).len(), 0);
+        assert_eq!(
+            e.check_timers(&mut rt, 5, map, 105, items_ref, &mut *rng_fixed(0))
+                .len(),
+            0
+        );
         let out = e.check_timers(&mut rt, 5, map, 110, items_ref, &mut *rng_fixed(0));
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].effects, vec![QuestEffect::Notice("fired".into())]);

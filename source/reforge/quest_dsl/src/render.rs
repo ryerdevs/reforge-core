@@ -21,7 +21,11 @@ pub fn render(file: &QuestFile) -> String {
                 let _ = writeln!(out, "quest {}", d.name);
                 render_states(&mut out, &d.states);
             }
-            Quest::Family { name, params, states } => {
+            Quest::Family {
+                name,
+                params,
+                states,
+            } => {
                 let _ = writeln!(out, "quest {name} family ({})", render_params(params));
                 render_states(&mut out, states);
             }
@@ -78,8 +82,15 @@ fn render_stmt(st: &Stmt) -> String {
     match st {
         Stmt::Action { action, capture } => {
             let args: Vec<String> = action.args.iter().map(render_value).collect();
-            let cap = capture.as_ref().map(|c| format!(" as {c}")).unwrap_or_default();
-            format!("-> {}({}){cap}", render_action(&action.name), args.join(", "))
+            let cap = capture
+                .as_ref()
+                .map(|c| format!(" as {c}"))
+                .unwrap_or_default();
+            format!(
+                "-> {}({}){cap}",
+                render_action(&action.name),
+                args.join(", ")
+            )
         }
         Stmt::Branch(b) => match &b.condition {
             Some(c) => format!("if {}", render_expr(c)),
@@ -178,7 +189,12 @@ pub fn render_value(v: &Value) -> String {
 
 fn render_expr(e: &Expr) -> String {
     match e {
-        Expr::Between(a, b, c) => format!("{} between {}, {}", render_expr(a), render_expr(b), render_expr(c)),
+        Expr::Between(a, b, c) => format!(
+            "{} between {}, {}",
+            render_expr(a),
+            render_expr(b),
+            render_expr(c)
+        ),
         Expr::Compare(a, op, b) => {
             let op = match op {
                 CmpOp::Eq => "==",
@@ -271,7 +287,13 @@ mod tests {
         assert_eq!(file, file2);
         // Canonical render: zero-arg funcs stay bare, mul chains left-assoc;
         // `apply.MOV_SPEED` is a bare word → string (quoted).
-        assert!(out.contains("set_qf(\"duration\", get_time + 60 * 60 * 22)"), "{out}");
-        assert!(out.contains("affect_add(\"apply.MOV_SPEED\", 10, 60 * 60 * 24 * 365 * 60)"), "{out}");
+        assert!(
+            out.contains("set_qf(\"duration\", get_time + 60 * 60 * 22)"),
+            "{out}"
+        );
+        assert!(
+            out.contains("affect_add(\"apply.MOV_SPEED\", 10, 60 * 60 * 24 * 365 * 60)"),
+            "{out}"
+        );
     }
 }

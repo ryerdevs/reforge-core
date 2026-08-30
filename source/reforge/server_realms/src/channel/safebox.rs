@@ -77,18 +77,18 @@
 
 use std::time::Duration;
 
-use database::economy::{checked_gold_delta, checked_gold_sub, is_valid_gold, GOLD_MAX};
+use database::economy::{GOLD_MAX, checked_gold_delta, checked_gold_sub, is_valid_gold};
 use database::item::{ItemRepo, ItemRow};
 use database::safebox::SafeboxRepo;
 use game_core::packets;
 use protocol::world::{
-    TPacketCGSafeboxCheckin, TPacketCGSafeboxCheckout, TPacketCGSafeboxMoney,
+    TItemPos, TPacketCGSafeboxCheckin, TPacketCGSafeboxCheckout, TPacketCGSafeboxMoney,
     TPacketGCItemDel, TPacketGCItemDelDeprecated, TPacketGCItemSet, TPacketGCSafeboxMoneyChange,
-    TPacketGCSafeboxSize, TPacketGCSafeboxWrongPassword, TItemPos,
+    TPacketGCSafeboxSize, TPacketGCSafeboxWrongPassword,
 };
 
 use crate::channel::session::{Outcome, Session};
-use crate::channel::{belt, gm, quickslot, INVENTORY_MAX_NUM, ITEM_COUNT_LIMIT};
+use crate::channel::{INVENTORY_MAX_NUM, ITEM_COUNT_LIMIT, belt, gm, quickslot};
 
 /// `SAFEBOX_PASSWORD_MAX_LEN = 6` (tables.h:692).
 const SAFEBOX_PASSWORD_MAX_LEN: usize = 6;
@@ -161,11 +161,9 @@ fn strip_cells(pos: u16, size: u16) -> Vec<u16> {
 /// `IsEmptyItemGrid`) y no pisar ninguna celda de `occupied` (parity
 /// `CGrid::IsEmpty`, grid.h:13).
 fn strip_fits(pos: u16, size: u16, cells: u16, page: Option<u16>, occupied: &[u16]) -> bool {
-    strip_cells(pos, size).into_iter().all(|c| {
-        c < cells
-            && page.is_none_or(|pc| c / pc == pos / pc)
-            && !occupied.contains(&c)
-    })
+    strip_cells(pos, size)
+        .into_iter()
+        .all(|c| c < cells && page.is_none_or(|pc| c / pc == pos / pc) && !occupied.contains(&c))
 }
 
 /// Gates puros del checkin (parity `SafeboxCheckin`, input_main.cpp:
@@ -173,7 +171,14 @@ fn strip_fits(pos: u16, size: u16, cells: u16, page: Option<u16>, occupied: &[u1
 /// llevar el antiflag SAFEBOX (item_length.h:371), y su strip debe caber
 /// libre en el grid (`IsEmpty(p->bSafePos, 1, pkItem->GetSize())`, :1969).
 /// `size`/`antiflag` vienen del item_proto (fail-open 1/0 si no existe).
-fn checkin_gate(vnum: i64, size: u16, antiflag: i64, pos: u16, cells: u16, occupied: &[u16]) -> bool {
+fn checkin_gate(
+    vnum: i64,
+    size: u16,
+    antiflag: i64,
+    pos: u16,
+    cells: u16,
+    occupied: &[u16],
+) -> bool {
     vnum != UNIQUE_ITEM_SAFEBOX_EXPAND
         && antiflag & ITEM_ANTIFLAG_SAFEBOX == 0
         && strip_fits(pos, size, cells, None, occupied)
@@ -247,7 +252,11 @@ pub async fn open(session: &mut Session, password: &str) -> Result<Outcome, Stri
     if let Some(until) = session.safebox_cooldown_until
         && tokio::time::Instant::now() < until
     {
-        gm::gm_info(session, "<Safebox> You can only open the safebox once every 10 seconds.").await?;
+        gm::gm_info(
+            session,
+            "<Safebox> You can only open the safebox once every 10 seconds.",
+        )
+        .await?;
         return Ok(Outcome::Continue);
     }
     // Load de la fila + validación de la password (parity RESULT_SAFEBOX_LOAD).
@@ -282,9 +291,7 @@ pub async fn open(session: &mut Session, password: &str) -> Result<Outcome, Stri
     // handler de dinero funcione entre sesiones.
     let gold = repo.get_gold(session.account_id).await?.unwrap_or(0);
     if !is_valid_gold(i64::from(gold)) {
-        return Err(format!(
-            "SAFEBOX_GOLD: oro {gold} fuera de 0..={GOLD_MAX}"
-        ));
+        return Err(format!("SAFEBOX_GOLD: oro {gold} fuera de 0..={GOLD_MAX}"));
     }
     let items = ItemRepo::new(session.pool.clone())
         .load_safebox(session.account_id)
@@ -310,11 +317,7 @@ pub async fn open(session: &mut Session, password: &str) -> Result<Outcome, Stri
             .await
             .map_err(|e| format!("enviando GC_SAFEBOX_SET (open): {e}"))?;
     }
-    session.safebox = Some(SafeboxState {
-        size,
-        gold,
-        items,
-    });
+    session.safebox = Some(SafeboxState { size, gold, items });
     eprintln!(
         "server_realms: channel conn {}: {} abrió la safebox (cuenta {}, \
          tamaño {size}, {} items, {gold} oro)",
@@ -442,7 +445,9 @@ pub async fn set_size(session: &mut Session, size: u8) -> Result<Outcome, String
     eprintln!(
         "server_realms: channel conn {}: GM {} cambió el tamaño de la \
          safebox a {size} (cuenta {})",
-        session.conn_id, session.row().name, session.account_id
+        session.conn_id,
+        session.row().name,
+        session.account_id
     );
     Ok(Outcome::Continue)
 }
@@ -562,13 +567,18 @@ pub async fn handle_checkin(session: &mut Session, pkt: &[u8]) -> Result<Outcome
         .send(&set_packet(&item, p.b_safe_pos as u16).to_bytes())
         .await
         .map_err(|e| format!("enviando GC_SAFEBOX_SET (checkin): {e}"))?;
-    let st = session.safebox.as_mut().expect("caja abierta (gate arriba)");
+    let st = session
+        .safebox
+        .as_mut()
+        .expect("caja abierta (gate arriba)");
     st.items.push(item);
     session.save();
     eprintln!(
         "server_realms: channel conn {}: {} metió item vnum {vnum} en la \
          safebox (pos {})",
-        session.conn_id, session.row().name, p.b_safe_pos
+        session.conn_id,
+        session.row().name,
+        p.b_safe_pos
     );
     Ok(Outcome::Continue)
 }
@@ -623,11 +633,11 @@ pub async fn handle_checkout(session: &mut Session, pkt: &[u8]) -> Result<Outcom
         );
         return Ok(Outcome::Continue);
     }
-    let Some(idx) = session
-        .safebox
-        .as_ref()
-        .and_then(|st| st.items.iter().position(|i| i.pos as u16 == p.b_safe_pos as u16))
-    else {
+    let Some(idx) = session.safebox.as_ref().and_then(|st| {
+        st.items
+            .iter()
+            .position(|i| i.pos as u16 == p.b_safe_pos as u16)
+    }) else {
         eprintln!(
             "server_realms: channel conn {}: checkout de pos {} sin item",
             session.conn_id, p.b_safe_pos
@@ -644,7 +654,10 @@ pub async fn handle_checkout(session: &mut Session, pkt: &[u8]) -> Result<Outcom
     // `IsEmptyItemGrid` char_item.cpp:547-567; el `GetSize` del belt es
     // siempre 1 — solo potions).
     let src_vnum = {
-        let st = session.safebox.as_ref().expect("caja abierta (gate arriba)");
+        let st = session
+            .safebox
+            .as_ref()
+            .expect("caja abierta (gate arriba)");
         st.items[idx].vnum
     };
     // Gate DS: tipo del item vs window destino (parity input_main.cpp:2059-2093).
@@ -731,10 +744,9 @@ pub async fn handle_checkout(session: &mut Session, pkt: &[u8]) -> Result<Outcom
             bp.values[0]
         };
         if !belt::is_available_cell(p.item_pos.cell, grade)
-            || session
-                .inventory
-                .iter()
-                .any(|i| i.window == "BELT_INVENTORY" && i.pos == belt::belt_pos_of(p.item_pos.cell))
+            || session.inventory.iter().any(|i| {
+                i.window == "BELT_INVENTORY" && i.pos == belt::belt_pos_of(p.item_pos.cell)
+            })
         {
             eprintln!(
                 "server_realms: channel conn {}: checkout a belt cell {} \
@@ -763,7 +775,10 @@ pub async fn handle_checkout(session: &mut Session, pkt: &[u8]) -> Result<Outcom
     // parity `pkSafebox->Remove` + `AddToCharacter`; belt = BELT_INVENTORY,
     // DS = DRAGON_SOUL_INVENTORY).
     let item = {
-        let st = session.safebox.as_mut().expect("caja abierta (gate arriba)");
+        let st = session
+            .safebox
+            .as_mut()
+            .expect("caja abierta (gate arriba)");
         st.items.remove(idx)
     };
     let vnum = item.vnum;
@@ -808,7 +823,10 @@ pub async fn handle_checkout(session: &mut Session, pkt: &[u8]) -> Result<Outcom
     eprintln!(
         "server_realms: channel conn {}: {} sacó item vnum {vnum} de la \
          safebox (pos {} → celda {})",
-        session.conn_id, session.row().name, p.b_safe_pos, p.item_pos.cell
+        session.conn_id,
+        session.row().name,
+        p.b_safe_pos,
+        p.item_pos.cell
     );
     Ok(Outcome::Continue)
 }
@@ -942,10 +960,7 @@ pub async fn handle_item_move(session: &mut Session, pkt: &[u8]) -> Result<Outco
         })
         .copied()
         .unwrap_or_default();
-    if !same_vnum
-        || !same_sockets
-        || !stackable_dst(dst_proto.flag, dst_proto.antiflag)
-    {
+    if !same_vnum || !same_sockets || !stackable_dst(dst_proto.flag, dst_proto.antiflag) {
         eprintln!(
             "server_realms: channel conn {}: stack en safebox de vnums/\
              sockets distintos o destino no apilable — rechazado (parity \
@@ -1071,8 +1086,8 @@ pub async fn handle_money(session: &mut Session, pkt: &[u8]) -> Result<Outcome, 
     };
     session.row_mut().gold = i32::try_from(new_player_gold)
         .map_err(|e| format!("convirtiendo gold del monedero: {e}"))?;
-    session.safebox.as_mut().expect("caja abierta").gold = i32::try_from(new_box_gold)
-        .map_err(|e| format!("convirtiendo gold de la safebox: {e}"))?;
+    session.safebox.as_mut().expect("caja abierta").gold =
+        i32::try_from(new_box_gold).map_err(|e| format!("convirtiendo gold de la safebox: {e}"))?;
     let box_gold = session.safebox.as_ref().expect("caja abierta").gold;
     // GC_POINTS (monedero) + GC_SAFEBOX_MONEY_CHANGE (84, oro de la caja) +
     // persistencia (parity PointChange + SafeboxMoney del C++ completo).
@@ -1148,7 +1163,11 @@ mod tests {
     #[test]
     fn gm_size_clamp() {
         assert_eq!(SAFEBOX_SIZE_MAX, 3);
-        assert_eq!((4u8 > SAFEBOX_SIZE_MAX) as u8, 1, "4 → clamp a 0 en set_size");
+        assert_eq!(
+            (4u8 > SAFEBOX_SIZE_MAX) as u8,
+            1,
+            "4 → clamp a 0 en set_size"
+        );
     }
 
     // ── Grid de `size` celdas (items 2×2 — cerrado 2026-08-27) ─────────
@@ -1169,8 +1188,14 @@ mod tests {
     /// de `occupied` del strip → rojo.
     #[test]
     fn checkin_gate_rejects_2x2_over_strip_cell() {
-        assert!(!checkin_gate(30001, 2, 0, 0, 10, &[5]), "2×2 en 0 pisa la 5");
-        assert!(checkin_gate(30001, 1, 0, 0, 10, &[5]), "1×1 en 0 no pisa la 5");
+        assert!(
+            !checkin_gate(30001, 2, 0, 0, 10, &[5]),
+            "2×2 en 0 pisa la 5"
+        );
+        assert!(
+            checkin_gate(30001, 1, 0, 0, 10, &[5]),
+            "1×1 en 0 no pisa la 5"
+        );
     }
 
     /// VERIFIER (mutation): un 2×2 que sobresale por debajo del grid se
@@ -1178,8 +1203,14 @@ mod tests {
     #[test]
     fn checkin_gate_rejects_2x2_out_of_grid() {
         assert!(!checkin_gate(30001, 2, 0, 5, 10, &[]), "fila 1 + 2 > 2");
-        assert!(!checkin_gate(30001, 2, 0, 9, 10, &[]), "esquina en la última");
-        assert!(checkin_gate(30001, 2, 0, 0, 10, &[]), "esquina 0,0: 2 filas");
+        assert!(
+            !checkin_gate(30001, 2, 0, 9, 10, &[]),
+            "esquina en la última"
+        );
+        assert!(
+            checkin_gate(30001, 2, 0, 0, 10, &[]),
+            "esquina 0,0: 2 filas"
+        );
     }
 
     /// VERIFIER (mutation): el antiflag SAFEBOX (1<<17 — 667 vnums reales
@@ -1239,8 +1270,8 @@ mod tests {
         assert_eq!(ITEM_DS, 29, "type DS = 29");
         assert_eq!(DRAGON_SOUL_INVENTORY_MAX_NUM, 1152, "6*6*32 MYTH");
         // Celda DS válida vive en 0..1151; 1152 ya fuera.
-        assert!(1151 < DRAGON_SOUL_INVENTORY_MAX_NUM);
-        assert!(1152 >= DRAGON_SOUL_INVENTORY_MAX_NUM);
+        const { assert!(1151 < DRAGON_SOUL_INVENTORY_MAX_NUM) }
+        const { assert!(1152 >= DRAGON_SOUL_INVENTORY_MAX_NUM) }
     }
 
     /// VERIFIER DS: un DS no puede ir a INVENTORY y un non-DS no puede ir a DS.

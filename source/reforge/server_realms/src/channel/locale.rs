@@ -10,9 +10,9 @@
 //! ambos roles sirven el par; el auth cierra, el canal ignora con log, C6a).
 
 use database::locale::LocaleRepo;
-use protocol::locale::{encode_chunks, encode_payload, CgLocaleRequest, LocaleBundle};
+use protocol::locale::{CgLocaleRequest, LocaleBundle, encode_chunks, encode_payload};
 
-use crate::auth::{extract_lang, GC_LOCALE_MAX_CHUNK};
+use crate::auth::{GC_LOCALE_MAX_CHUNK, extract_lang};
 use crate::channel::session::{Outcome, Session};
 
 /// Nombres de las 16 lenguas (parity locale.cpp:20-24, UPPERCASE — `strcasecmp`).
@@ -22,7 +22,10 @@ const LANG_NAMES: [&str; 16] = [
 
 /// Índice de la lengua — "es" → 5 (input_db.cpp:150-158); desconocida = ES.
 pub fn lang_index(lang: &str) -> u8 {
-    LANG_NAMES.iter().position(|n| n.eq_ignore_ascii_case(lang)).map_or(5, |i| i as u8)
+    LANG_NAMES
+        .iter()
+        .position(|n| n.eq_ignore_ascii_case(lang))
+        .map_or(5, |i| i as u8)
 }
 
 /// Chunks wire del bundle — el camino EXACTO del push.
@@ -33,21 +36,33 @@ fn locale_chunks(bundle: &LocaleBundle) -> Vec<Vec<u8>> {
 /// Handler del push AL CONECTAR (fin del entry): `GC_LOCALE` (140) chunked
 /// de la lengua de la cuenta; `Ok(())` siempre (fail-open).
 pub async fn send_player_locale(session: &mut Session, lang: &str) -> Result<(), String> {
-    let bundle = match LocaleRepo::new(session.pool.clone()).load_for_lang(lang).await {
+    let bundle = match LocaleRepo::new(session.pool.clone())
+        .load_for_lang(lang)
+        .await
+    {
         Ok(b) => b,
         Err(e) => {
-            eprintln!("server_realms: channel conn {}: locale {lang}: {e} — push omitido (fail-open)", session.conn_id);
+            eprintln!(
+                "server_realms: channel conn {}: locale {lang}: {e} — push omitido (fail-open)",
+                session.conn_id
+            );
             return Ok(());
         }
     };
     let chunks = locale_chunks(&bundle);
     eprintln!(
         "server_realms: channel conn {}: GC_LOCALE envío lang={lang} (idx {}) — {} pares, {} B, {} chunks",
-        session.conn_id, lang_index(lang), bundle.len(),
-        chunks.iter().map(|c| c.len() - 4).sum::<usize>(), chunks.len()
+        session.conn_id,
+        lang_index(lang),
+        bundle.len(),
+        chunks.iter().map(|c| c.len() - 4).sum::<usize>(),
+        chunks.len()
     );
     for chunk in chunks {
-        session.send(&chunk).await.map_err(|e| format!("enviando GC_LOCALE: {e}"))?;
+        session
+            .send(&chunk)
+            .await
+            .map_err(|e| format!("enviando GC_LOCALE: {e}"))?;
     }
     Ok(())
 }
@@ -79,7 +94,7 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
 #[cfg(test)]
 mod tests {
     use super::*;
-    use protocol::locale::{decode_chunks, decode_payload, HEADER_GC_LOCALE};
+    use protocol::locale::{HEADER_GC_LOCALE, decode_chunks, decode_payload};
 
     /// Verifier del push: lo que `send_player_locale` envía para "es" — un
     /// TPacketGCLocale cuyo payload reensambla al bundle ES intacto ("Perro
@@ -92,7 +107,10 @@ mod tests {
         };
         let chunks = locale_chunks(&bundle);
         let payload = decode_chunks(&[chunks[0].as_slice()]).expect("reensamblar");
-        assert!(payload.windows(13).any(|w| w == b"Perro Salvaje"), "el nombre ES viaja");
+        assert!(
+            payload.windows(13).any(|w| w == b"Perro Salvaje"),
+            "el nombre ES viaja"
+        );
         assert_eq!(decode_payload(&payload).expect("parsear"), bundle);
         assert_eq!(lang_index("es"), 5, "es → índice 5 (input_db.cpp:150-158)");
     }
@@ -112,7 +130,9 @@ mod tests {
     #[ignore = "requiere la PG real (host=127.0.0.1:5432, bd metin2)"]
     async fn pull_request_to_response() {
         use tokio::io::AsyncReadExt;
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
         let addr = listener.local_addr().expect("addr");
         let mut peer = tokio::net::TcpStream::connect(addr).await.expect("connect");
         let (server_side, _) = listener.accept().await.expect("accept");
@@ -143,7 +163,9 @@ mod tests {
             batcher,
             std::sync::Arc::new(database::attr::AttrTables::default()),
         );
-        handle(&mut s, &CgLocaleRequest::new("es").to_bytes()).await.expect("pull responde");
+        handle(&mut s, &CgLocaleRequest::new("es").to_bytes())
+            .await
+            .expect("pull responde");
         // Lee los chunks del GC_LOCALE hasta el flag final (0) — layout
         // 0x8c + u16 payload_len (flag + chunk) — parity request_locale.
         let mut payload = Vec::new();

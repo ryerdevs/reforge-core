@@ -10,7 +10,7 @@
 //! observadores (`PacketAround(&pack, ..., ch)` — el `ch` queda EXCLUIDO,
 //! `input_main.cpp:1576-1588`); el cliente mueve su personaje localmente.
 
-use crate::{rd_u32, ProtocolError, Result};
+use crate::{ProtocolError, Result, rd_u32};
 
 /// `TPacketCGMove` (16 B, header 7).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

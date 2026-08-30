@@ -6,10 +6,10 @@
 //!   `packet.h:952-961` + `char.cpp:1539-1549` — ver doc de la struct).
 //! - `TPacketGCPoints` (1021 B, header 16) — `packet.h:1000-1004`
 //!   + `char.cpp:1553-1581` (PointsPacket; `POINT_MAX_NUM = 255`,
-//!   `length.h:70`).
+//!     `length.h:70`).
 //! - `TPacketGCSkillLevel` (1531 B, header 76) — `packet.h:1006-1010`
 //!   + `char_skill.cpp:184-194` (SkillLevelPacket; `SKILL_MAX_NUM = 255`,
-//!   `TPlayerSkill` = 6 B x86: `tables.h:351-356`).
+//!     `TPlayerSkill` = 6 B x86: `tables.h:351-356`).
 //! - `TPacketGCLandList` (3 B + 24 B×N, header 130) — `packet.h:1996-2008`
 //!   + `building.cpp:931-979` (SendLandList).
 //!
@@ -17,7 +17,7 @@
 
 use crate::header;
 use crate::{
-    cstr_str, from_cstr, rd_arr, rd_u32, wr_u32, ProtocolError, Result, CHARACTER_NAME_MAX_LEN,
+    CHARACTER_NAME_MAX_LEN, ProtocolError, Result, cstr_str, from_cstr, rd_arr, rd_u32, wr_u32,
 };
 
 /// `TPlayerSkill` (6 B packed x86: `tables.h:351-356` — bMasterType BYTE,
@@ -660,9 +660,9 @@ impl RefineMaterial {
 /// de resultado). `SPacketGCRefineInformaion` = header + type + pos BYTE +
 /// src_vnum + result_vnum DWORD + material_count BYTE + cost int + prob int
 /// + `TRefineMaterial materials[5]` (REFINE_MATERIAL_MAX_NUM = 5,
-/// item_length.h:29). El C++ lo manda en `RefineInformation`
-/// (char_item.cpp:1218) al usar un scroll sobre un item o al pedir el
-/// refine del herrero.
+///   item_length.h:29). El C++ lo manda en `RefineInformation`
+///   (char_item.cpp:1218) al usar un scroll sobre un item o al pedir el
+///   refine del herrero.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(C)]
 pub struct TPacketGCRefineInformation {
@@ -888,10 +888,10 @@ impl TPacketCGItemDrop2 {
 
 /// `TPacketGCItemDelDeprecated` (42 B packed, header 20 — `Packet.h:1676-1684`
 /// + `packet.h:1071-1085`): el borrado de un item del INVENTARIO. El cliente
-/// lo registra con `sizeof(TPacketGCItemDelDeprecated)` (PythonNetworkStream
-/// .cpp:71) y el handler `RecvItemSetPacket` lee el struct completo — el C++
-/// manda el layout LEGACY (header + TItemPos + vnum + count + sockets +
-/// attrs) aunque el nombre diga "Del". 1+3+4+1+12+21 = 42.
+///   lo registra con `sizeof(TPacketGCItemDelDeprecated)` (PythonNetworkStream
+///   .cpp:71) y el handler `RecvItemSetPacket` lee el struct completo — el C++
+///   manda el layout LEGACY (header + TItemPos + vnum + count + sockets +
+///   attrs) aunque el nombre diga "Del". 1+3+4+1+12+21 = 42.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(C)]
 pub struct TPacketGCItemDelDeprecated {
@@ -2805,11 +2805,7 @@ mod tests {
         assert_eq!(b.len(), 5);
         assert_eq!(b[0], 106);
         assert_eq!(TPacketGCTime::from_bytes(&b).unwrap(), t);
-        assert_eq!(
-            TPacketGCTime::from_bytes(&b[..4]).is_err(),
-            true,
-            "5 B exactos"
-        );
+        assert!(TPacketGCTime::from_bytes(&b[..4]).is_err(), "5 B exactos");
 
         let c = TPacketGCChannel::new(1);
         let b = c.to_bytes();
@@ -3327,7 +3323,11 @@ mod tests {
         ] {
             assert_eq!(bytes[0], h, "header {h}");
             assert_eq!(bytes.len(), 9);
-            assert_eq!(u32::from_le_bytes(bytes[5..9].try_into().unwrap()), 42, "vid");
+            assert_eq!(
+                u32::from_le_bytes(bytes[5..9].try_into().unwrap()),
+                42,
+                "vid"
+            );
         }
         assert_eq!(
             TPacketGCPartyLink::from_bytes(&TPacketGCPartyLink::new(1, 2).to_bytes()).unwrap(),

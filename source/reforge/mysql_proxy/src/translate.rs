@@ -178,7 +178,10 @@ pub fn split_statements(sql: &str) -> Vec<&str> {
 // ---------------------------------------------------------------------------
 
 /// Traduce un statement (sin `;` final) a PG.
-pub async fn rewrite<C: TableCatalog>(sql: &str, catalog: &mut C) -> Result<Rewritten, TranslateError> {
+pub async fn rewrite<C: TableCatalog>(
+    sql: &str,
+    catalog: &mut C,
+) -> Result<Rewritten, TranslateError> {
     let sql = sql.trim();
     if sql.is_empty() {
         return Ok(Rewritten::NoOp);
@@ -203,13 +206,19 @@ pub async fn rewrite<C: TableCatalog>(sql: &str, catalog: &mut C) -> Result<Rewr
         // literales `\0` escapados. Si no se puede parsear/la tabla no existe
         // → fallback al camino genérico (PG dará su error, paridad 1146).
         if let Some(rewritten) = rewrite_update(&sql, catalog).await? {
-            return Ok(Rewritten::Execute(ExecPlan { sql: rewritten, insert_id: InsertIdHint::None }));
+            return Ok(Rewritten::Execute(ExecPlan {
+                sql: rewritten,
+                insert_id: InsertIdHint::None,
+            }));
         }
         scanned = drop_trailing_limit(&scanned);
     } else if kw_at(&sql, "DELETE") {
         scanned = drop_trailing_limit(&scanned);
     }
-    Ok(Rewritten::Execute(ExecPlan { sql: scanned.trim().to_string(), insert_id: InsertIdHint::None }))
+    Ok(Rewritten::Execute(ExecPlan {
+        sql: scanned.trim().to_string(),
+        insert_id: InsertIdHint::None,
+    }))
 }
 
 /// Reescribe un UPDATE aplicando el fix bytea a sus asignaciones SET.
@@ -219,7 +228,10 @@ pub async fn rewrite<C: TableCatalog>(sql: &str, catalog: &mut C) -> Result<Rewr
 /// y reconstruye con `scan()` (el resto de reglas siguen aplicando:
 /// backticks, NOW(), @var, …). Devuelve `None` si no puede parsear o la tabla
 /// no está en el catálogo → el caller usa el camino genérico.
-async fn rewrite_update<C: TableCatalog>(sql: &str, catalog: &mut C) -> Result<Option<String>, TranslateError> {
+async fn rewrite_update<C: TableCatalog>(
+    sql: &str,
+    catalog: &mut C,
+) -> Result<Option<String>, TranslateError> {
     let s = skip_ws(&sql[6..]); // "UPDATE"
     let (table, end) = match parse_ident(s) {
         Some(x) => x,
@@ -290,10 +302,15 @@ fn rewrite_set(sql: &str) -> Result<Rewritten, TranslateError> {
             .unwrap_or(rest.len());
         let name = &rest[..name_end];
         if name.is_empty() {
-            return Err(TranslateError::Syntax("SET @ sin nombre de variable".into()));
+            return Err(TranslateError::Syntax(
+                "SET @ sin nombre de variable".into(),
+            ));
         }
         let expr = skip_ws(&rest[name_end..]);
-        let expr = skip_ws(expr.strip_prefix('=').ok_or_else(|| TranslateError::Syntax("SET @ sin '='".into()))?);
+        let expr = skip_ws(
+            expr.strip_prefix('=')
+                .ok_or_else(|| TranslateError::Syntax("SET @ sin '='".into()))?,
+        );
         if expr.is_empty() {
             return Err(TranslateError::Syntax("SET @ sin valor".into()));
         }
@@ -302,28 +319,49 @@ fn rewrite_set(sql: &str) -> Result<Rewritten, TranslateError> {
         } else {
             expr
         };
-        let sql2 = if inner.trim_start().to_ascii_lowercase().starts_with("select") {
+        let sql2 = if inner
+            .trim_start()
+            .to_ascii_lowercase()
+            .starts_with("select")
+        {
             format!(
                 "CREATE TEMP TABLE pg_temp.m2var_{name} AS SELECT v FROM ({}) AS _m2var(v)",
                 scan(inner)
             )
         } else {
-            format!("CREATE TEMP TABLE pg_temp.m2var_{name} AS SELECT {} AS v", scan(inner))
+            format!(
+                "CREATE TEMP TABLE pg_temp.m2var_{name} AS SELECT {} AS v",
+                scan(inner)
+            )
         };
-        return Ok(Rewritten::Execute(ExecPlan { sql: sql2, insert_id: InsertIdHint::None }));
+        return Ok(Rewritten::Execute(ExecPlan {
+            sql: sql2,
+            insert_id: InsertIdHint::None,
+        }));
     }
     // Otro SET → passthrough a PG.
-    Ok(Rewritten::Execute(ExecPlan { sql: scan(sql).trim().to_string(), insert_id: InsertIdHint::None }))
+    Ok(Rewritten::Execute(ExecPlan {
+        sql: scan(sql).trim().to_string(),
+        insert_id: InsertIdHint::None,
+    }))
 }
 
 // ---------------------------------------------------------------------------
 // INSERT
 // ---------------------------------------------------------------------------
 
-async fn rewrite_insert<C: TableCatalog>(sql: &str, catalog: &mut C) -> Result<Rewritten, TranslateError> {
+async fn rewrite_insert<C: TableCatalog>(
+    sql: &str,
+    catalog: &mut C,
+) -> Result<Rewritten, TranslateError> {
     let s = skip_ws(&sql[6..]); // "INSERT"
-    let s = if kw_at(s, "INTO") { skip_ws(&s[4..]) } else { s };
-    let (table, end) = parse_ident(s).ok_or_else(|| TranslateError::Syntax("INSERT sin tabla".into()))?;
+    let s = if kw_at(s, "INTO") {
+        skip_ws(&s[4..])
+    } else {
+        s
+    };
+    let (table, end) =
+        parse_ident(s).ok_or_else(|| TranslateError::Syntax("INSERT sin tabla".into()))?;
     let body = skip_ws(&s[end..]);
     let odku_pos = find_kw_outside_strings(body, "ON DUPLICATE KEY UPDATE");
     let (main, odku) = match odku_pos {
@@ -336,17 +374,28 @@ async fn rewrite_insert<C: TableCatalog>(sql: &str, catalog: &mut C) -> Result<R
         .ok_or_else(|| TranslateError::NoSuchTable(table.clone()))?;
     let (cols, tuples, select_part) = parse_insert_body(main, &info)?;
     let (sql2, hint) = build_insert(&table, &cols, &tuples, &select_part, odku, &info)?;
-    Ok(Rewritten::Execute(ExecPlan { sql: sql2, insert_id: hint }))
+    Ok(Rewritten::Execute(ExecPlan {
+        sql: sql2,
+        insert_id: hint,
+    }))
 }
 
 // ---------------------------------------------------------------------------
 // REPLACE
 // ---------------------------------------------------------------------------
 
-async fn rewrite_replace<C: TableCatalog>(sql: &str, catalog: &mut C) -> Result<Rewritten, TranslateError> {
+async fn rewrite_replace<C: TableCatalog>(
+    sql: &str,
+    catalog: &mut C,
+) -> Result<Rewritten, TranslateError> {
     let s = skip_ws(&sql[7..]); // "REPLACE"
-    let s = if kw_at(s, "INTO") { skip_ws(&s[4..]) } else { s };
-    let (table, end) = parse_ident(s).ok_or_else(|| TranslateError::Syntax("REPLACE sin tabla".into()))?;
+    let s = if kw_at(s, "INTO") {
+        skip_ws(&s[4..])
+    } else {
+        s
+    };
+    let (table, end) =
+        parse_ident(s).ok_or_else(|| TranslateError::Syntax("REPLACE sin tabla".into()))?;
     let body = skip_ws(&s[end..]);
     let info = catalog
         .table_info(&table)
@@ -357,12 +406,24 @@ async fn rewrite_replace<C: TableCatalog>(sql: &str, catalog: &mut C) -> Result<
     // REPLACE = DELETE+INSERT → upsert completo con TODAS las columnas del
     // statement (OD-3: nadie depende del churn de ids; no hay triggers).
     let pk = quote_pk(&table, &info.pk)?;
-    let sets: Vec<String> = cols.iter().map(|c| format!("\"{c}\"=EXCLUDED.\"{c}\"")).collect();
-    let sql3 = format!("{sql2} ON CONFLICT ({pk}) DO UPDATE SET {}", sets.join(", "));
-    Ok(Rewritten::Execute(ExecPlan { sql: sql3, insert_id: hint }))
+    let sets: Vec<String> = cols
+        .iter()
+        .map(|c| format!("\"{c}\"=EXCLUDED.\"{c}\""))
+        .collect();
+    let sql3 = format!(
+        "{sql2} ON CONFLICT ({pk}) DO UPDATE SET {}",
+        sets.join(", ")
+    );
+    Ok(Rewritten::Execute(ExecPlan {
+        sql: sql3,
+        insert_id: hint,
+    }))
 }
 
 /// Formas de INSERT/REPLACE → (columnas, tuplas VALUES, parte SELECT).
+// Tipo de retorno contextual (cols, rows, select opcional) — un alias se
+// usaría una sola vez.
+#[allow(clippy::type_complexity)]
 fn parse_insert_body(
     body: &str,
     info: &TableInfo,
@@ -373,23 +434,33 @@ fn parse_insert_body(
         return Ok((cols, vec![vals], None));
     }
     if body.starts_with('(') {
-        let (cols_inner, end2) = paren_arg(body, 0).ok_or_else(|| TranslateError::Syntax("INSERT: lista de columnas".into()))?;
-        let cols: Vec<String> = split_top_level(&cols_inner).iter().map(|c| unquote_ident(c).to_ascii_lowercase()).collect();
+        let (cols_inner, end2) = paren_arg(body, 0)
+            .ok_or_else(|| TranslateError::Syntax("INSERT: lista de columnas".into()))?;
+        let cols: Vec<String> = split_top_level(&cols_inner)
+            .iter()
+            .map(|c| unquote_ident(c).to_ascii_lowercase())
+            .collect();
         let rest = skip_ws(&body[end2..]);
         if kw_at(rest, "VALUES") {
-            let tuples = values_of_tuples(&rest[6..]).ok_or_else(|| TranslateError::Syntax("INSERT: VALUES malformado".into()))?;
+            let tuples = values_of_tuples(&rest[6..])
+                .ok_or_else(|| TranslateError::Syntax("INSERT: VALUES malformado".into()))?;
             return Ok((cols, tuples, None));
         }
         if kw_at(rest, "SELECT") {
             return Ok((cols, Vec::new(), Some(rest.to_string())));
         }
-        return Err(TranslateError::Syntax("INSERT: se esperaba VALUES o SELECT".into()));
+        return Err(TranslateError::Syntax(
+            "INSERT: se esperaba VALUES o SELECT".into(),
+        ));
     }
     if kw_at(body, "VALUES") {
-        let tuples = values_of_tuples(&body[6..]).ok_or_else(|| TranslateError::Syntax("INSERT: VALUES malformado".into()))?;
+        let tuples = values_of_tuples(&body[6..])
+            .ok_or_else(|| TranslateError::Syntax("INSERT: VALUES malformado".into()))?;
         return Ok((info.columns.clone(), tuples, None));
     }
-    Err(TranslateError::Syntax("INSERT/REPLACE: forma no soportada".into()))
+    Err(TranslateError::Syntax(
+        "INSERT/REPLACE: forma no soportada".into(),
+    ))
 }
 
 /// Tuplas de VALUES → valores por tupla: `(a, b), (c, d)` →
@@ -416,7 +487,9 @@ fn build_insert(
     let mut explicit_id: Option<u64> = None;
     for tuple in tuples.iter_mut() {
         if tuple.len() != cols.len() {
-            return Err(TranslateError::Syntax("INSERT: count de columnas != count de valores".into()));
+            return Err(TranslateError::Syntax(
+                "INSERT: count de columnas != count de valores".into(),
+            ));
         }
         for (j, col) in cols.iter().enumerate() {
             let val = &mut tuple[j];
@@ -427,10 +500,10 @@ fn build_insert(
                     // (NO_AUTO_VALUE_ON_ZERO off) — player create
                     // `ClientManagerPlayer.cpp:853-863`.
                     *val = "DEFAULT".to_string();
-                } else if let Ok(n) = trimmed.parse::<u64>() {
-                    if explicit_id.is_none() {
-                        explicit_id = Some(n);
-                    }
+                } else if let Ok(n) = trimmed.parse::<u64>()
+                    && explicit_id.is_none()
+                {
+                    explicit_id = Some(n);
                 }
             }
             if let Some(fixed) = fix_enum_value(table, col, val) {
@@ -438,10 +511,10 @@ fn build_insert(
             }
             // Regresión 22021: columnas bytea con blobs escapados MySQL (`\0`)
             // → decode('<hex>', 'hex') (nunca un NUL en un literal text de PG).
-            if info.bytea.iter().any(|c| c == col) {
-                if let Some(lit) = bytea_literal(val) {
-                    *val = lit;
-                }
+            if info.bytea.iter().any(|c| c == col)
+                && let Some(lit) = bytea_literal(val)
+            {
+                *val = lit;
             }
         }
     }
@@ -454,7 +527,12 @@ fn build_insert(
     } else {
         let tuples_sql: Vec<String> = tuples
             .iter()
-            .map(|t| format!("({})", t.iter().map(|v| scan(v)).collect::<Vec<_>>().join(", ")))
+            .map(|t| {
+                format!(
+                    "({})",
+                    t.iter().map(|v| scan(v)).collect::<Vec<_>>().join(", ")
+                )
+            })
             .collect();
         sql.push_str(" VALUES ");
         sql.push_str(&tuples_sql.join(", "));
@@ -470,16 +548,23 @@ fn build_insert(
         let pk = quote_pk(table, &info.pk)?;
         let mut sets = Vec::new();
         for a in split_top_level(odku_body) {
-            let (col, end) = parse_ident(a).ok_or_else(|| TranslateError::Syntax("ON DUPLICATE KEY UPDATE: assignment sin columna".into()))?;
+            let (col, end) = parse_ident(a).ok_or_else(|| {
+                TranslateError::Syntax("ON DUPLICATE KEY UPDATE: assignment sin columna".into())
+            })?;
             let col = col.to_ascii_lowercase();
             let rest = skip_ws(&a[end..]);
-            let rest = skip_ws(rest.strip_prefix('=').ok_or_else(|| TranslateError::Syntax("ON DUPLICATE KEY UPDATE: assignment sin '='".into()))?);
+            let rest = skip_ws(rest.strip_prefix('=').ok_or_else(|| {
+                TranslateError::Syntax("ON DUPLICATE KEY UPDATE: assignment sin '='".into())
+            })?);
             // Misma conversión índice→literal que en los VALUES (item.window;
             // el ODKU del QUERY_ITEM_SAVE repite el setQuery con window=índice).
             let rhs = fix_enum_value(table, &col, rest).unwrap_or_else(|| scan(rest));
             sets.push(format!("\"{col}\" = {rhs}"));
         }
-        sql.push_str(&format!(" ON CONFLICT ({pk}) DO UPDATE SET {}", sets.join(", ")));
+        sql.push_str(&format!(
+            " ON CONFLICT ({pk}) DO UPDATE SET {}",
+            sets.join(", ")
+        ));
     }
 
     let has_identity = !info.identity.is_empty();
@@ -495,7 +580,11 @@ fn quote_pk(table: &str, pk: &[String]) -> Result<String, TranslateError> {
     if pk.is_empty() {
         return Err(TranslateError::NoPrimaryKey(table.to_string()));
     }
-    Ok(pk.iter().map(|c| format!("\"{c}\"")).collect::<Vec<_>>().join(", "))
+    Ok(pk
+        .iter()
+        .map(|c| format!("\"{c}\""))
+        .collect::<Vec<_>>()
+        .join(", "))
 }
 
 /// `item.window` es text en PG (enum→text, `legacy-schema.md` §7.2); el C++
@@ -511,14 +600,15 @@ fn fix_enum_value(table: &str, col: &str, val: &str) -> Option<String> {
         "BELT_INVENTORY",
         "GROUND",
     ];
-    if table == "item" && col == "window" {
-        if let Ok(idx) = val.trim().parse::<usize>() {
-            if (1..=7).contains(&idx) {
-                return Some(format!("'{}'", ITEM_WINDOW[idx - 1]));
-            }
-            if idx == 0 {
-                return Some("''".into());
-            }
+    if table == "item"
+        && col == "window"
+        && let Ok(idx) = val.trim().parse::<usize>()
+    {
+        if (1..=7).contains(&idx) {
+            return Some(format!("'{}'", ITEM_WINDOW[idx - 1]));
+        }
+        if idx == 0 {
+            return Some("''".into());
         }
     }
     None
@@ -561,45 +651,466 @@ enum EnumKind {
 /// NOTA: setAffectFlag/setAffectFlag2 son ENUM en MariaDB (no SET) pese al
 /// nombre — se tratan como ENUM (índice), que es lo que devuelve `+0`.
 static ENUM_COLUMNS: &[(&str, &str, EnumKind)] = &[
-    ("item", "window", EnumKind::Enum(&["INVENTORY", "EQUIPMENT", "SAFEBOX", "MALL", "DRAGON_SOUL_INVENTORY", "BELT_INVENTORY", "GROUND"])),
-    ("mob_proto", "size", EnumKind::Enum(&["SMALL", "MEDIUM", "BIG"])),
+    (
+        "item",
+        "window",
+        EnumKind::Enum(&[
+            "INVENTORY",
+            "EQUIPMENT",
+            "SAFEBOX",
+            "MALL",
+            "DRAGON_SOUL_INVENTORY",
+            "BELT_INVENTORY",
+            "GROUND",
+        ]),
+    ),
+    (
+        "mob_proto",
+        "size",
+        EnumKind::Enum(&["SMALL", "MEDIUM", "BIG"]),
+    ),
     (
         "mob_proto",
         "ai_flag",
-        EnumKind::Set(&["AGGR", "NOMOVE", "COWARD", "NOATTSHINSU", "NOATTCHUNJO", "NOATTJINNO", "ATTMOB", "BERSERK", "STONESKIN", "GODSPEED", "DEATHBLOW", "REVIVE"]),
+        EnumKind::Set(&[
+            "AGGR",
+            "NOMOVE",
+            "COWARD",
+            "NOATTSHINSU",
+            "NOATTCHUNJO",
+            "NOATTJINNO",
+            "ATTMOB",
+            "BERSERK",
+            "STONESKIN",
+            "GODSPEED",
+            "DEATHBLOW",
+            "REVIVE",
+        ]),
     ),
     (
         "mob_proto",
         "setRaceFlag",
-        EnumKind::Set(&["ANIMAL", "UNDEAD", "DEVIL", "HUMAN", "ORC", "MILGYO", "INSECT", "FIRE", "ICE", "DESERT", "TREE", "ATT_ELEC", "ATT_FIRE", "ATT_ICE", "ATT_WIND", "ATT_EARTH", "ATT_DARK"]),
+        EnumKind::Set(&[
+            "ANIMAL",
+            "UNDEAD",
+            "DEVIL",
+            "HUMAN",
+            "ORC",
+            "MILGYO",
+            "INSECT",
+            "FIRE",
+            "ICE",
+            "DESERT",
+            "TREE",
+            "ATT_ELEC",
+            "ATT_FIRE",
+            "ATT_ICE",
+            "ATT_WIND",
+            "ATT_EARTH",
+            "ATT_DARK",
+        ]),
     ),
-    ("mob_proto", "setImmuneFlag", EnumKind::Set(&["STUN", "SLOW", "FALL", "CURSE", "POISON", "TERROR", "REFLECT"])),
-    ("item_proto", "immuneflag", EnumKind::Set(&["PARA", "CURSE", "STUN", "SLEEP", "SLOW", "POISON", "TERROR"])),
+    (
+        "mob_proto",
+        "setImmuneFlag",
+        EnumKind::Set(&[
+            "STUN", "SLOW", "FALL", "CURSE", "POISON", "TERROR", "REFLECT",
+        ]),
+    ),
+    (
+        "item_proto",
+        "immuneflag",
+        EnumKind::Set(&["PARA", "CURSE", "STUN", "SLEEP", "SLOW", "POISON", "TERROR"]),
+    ),
     (
         "skill_proto",
         "setFlag",
-        EnumKind::Set(&["ATTACK", "USE_MELEE_DAMAGE", "COMPUTE_ATTGRADE", "SELFONLY", "USE_MAGIC_DAMAGE", "USE_HP_AS_COST", "COMPUTE_MAGIC_DAMAGE", "SPLASH", "GIVE_PENALTY", "USE_ARROW_DAMAGE", "PENETRATE", "IGNORE_TARGET_RATING", "ATTACK_SLOW", "ATTACK_STUN", "HP_ABSORB", "SP_ABSORB", "ATTACK_FIRE_CONT", "REMOVE_BAD_AFFECT", "REMOVE_GOOD_AFFECT", "CRUSH", "ATTACK_POISON", "TOGGLE", "DISABLE_BY_POINT_UP", "CRUSH_LONG", "ATTACK_WIND", "ATTACK_ELEC", "ATTACK_FIRE", "ATTACK_BLEEDING", "PARTY"]),
+        EnumKind::Set(&[
+            "ATTACK",
+            "USE_MELEE_DAMAGE",
+            "COMPUTE_ATTGRADE",
+            "SELFONLY",
+            "USE_MAGIC_DAMAGE",
+            "USE_HP_AS_COST",
+            "COMPUTE_MAGIC_DAMAGE",
+            "SPLASH",
+            "GIVE_PENALTY",
+            "USE_ARROW_DAMAGE",
+            "PENETRATE",
+            "IGNORE_TARGET_RATING",
+            "ATTACK_SLOW",
+            "ATTACK_STUN",
+            "HP_ABSORB",
+            "SP_ABSORB",
+            "ATTACK_FIRE_CONT",
+            "REMOVE_BAD_AFFECT",
+            "REMOVE_GOOD_AFFECT",
+            "CRUSH",
+            "ATTACK_POISON",
+            "TOGGLE",
+            "DISABLE_BY_POINT_UP",
+            "CRUSH_LONG",
+            "ATTACK_WIND",
+            "ATTACK_ELEC",
+            "ATTACK_FIRE",
+            "ATTACK_BLEEDING",
+            "PARTY",
+        ]),
     ),
     (
         "skill_proto",
         "setAffectFlag",
-        EnumKind::Enum(&["YMIR", "INVISIBILITY", "SPAWN", "POISON", "SLOW", "STUN", "DUNGEON_READY", "DUNGEON_UNIQUE", "BUILDING_CONSTRUCTION_SMALL", "BUILDING_CONSTRUCTION_LARGE", "BUILDING_UPGRADE", "MOV_SPEED_POTION", "ATT_SPEED_POTION", "FISH_MIND", "JEONGWIHON", "GEOMGYEONG", "CHEONGEUN", "GYEONGGONG", "EUNHYUNG", "GWIGUM", "TERROR", "JUMAGAP", "HOSIN", "BOHO", "KWAESOK", "MANASHIELD", "MUYEONG", "REVIVE_INVISIBLE", "FIRE", "GICHEON", "JEUNGRYEOK", "TANHWAN_DASH", "PABEOP", "CHEONGEUN_WITH_FALL", "POLYMORPH", "WAR_FLAG1", "WAR_FLAG2", "WAR_FLAG3", "CHINA_FIREWORK", "HAIR", "GERMANY", "RAMADAN_RING", "BLEEDING", "RED_POSSESSION", "BLUE_POSSESSION"]),
+        EnumKind::Enum(&[
+            "YMIR",
+            "INVISIBILITY",
+            "SPAWN",
+            "POISON",
+            "SLOW",
+            "STUN",
+            "DUNGEON_READY",
+            "DUNGEON_UNIQUE",
+            "BUILDING_CONSTRUCTION_SMALL",
+            "BUILDING_CONSTRUCTION_LARGE",
+            "BUILDING_UPGRADE",
+            "MOV_SPEED_POTION",
+            "ATT_SPEED_POTION",
+            "FISH_MIND",
+            "JEONGWIHON",
+            "GEOMGYEONG",
+            "CHEONGEUN",
+            "GYEONGGONG",
+            "EUNHYUNG",
+            "GWIGUM",
+            "TERROR",
+            "JUMAGAP",
+            "HOSIN",
+            "BOHO",
+            "KWAESOK",
+            "MANASHIELD",
+            "MUYEONG",
+            "REVIVE_INVISIBLE",
+            "FIRE",
+            "GICHEON",
+            "JEUNGRYEOK",
+            "TANHWAN_DASH",
+            "PABEOP",
+            "CHEONGEUN_WITH_FALL",
+            "POLYMORPH",
+            "WAR_FLAG1",
+            "WAR_FLAG2",
+            "WAR_FLAG3",
+            "CHINA_FIREWORK",
+            "HAIR",
+            "GERMANY",
+            "RAMADAN_RING",
+            "BLEEDING",
+            "RED_POSSESSION",
+            "BLUE_POSSESSION",
+        ]),
     ),
     (
         "skill_proto",
         "setAffectFlag2",
-        EnumKind::Enum(&["YMIR", "INVISIBILITY", "SPAWN", "POISON", "SLOW", "STUN", "DUNGEON_READY", "DUNGEON_UNIQUE", "BUILDING_CONSTRUCTION_SMALL", "BUILDING_CONSTRUCTION_LARGE", "BUILDING_UPGRADE", "MOV_SPEED_POTION", "ATT_SPEED_POTION", "FISH_MIND", "JEONGWIHON", "GEOMGYEONG", "CHEONGEUN", "GYEONGGONG", "EUNHYUNG", "GWIGUM", "TERROR", "JUMAGAP", "HOSIN", "BOHO", "KWAESOK", "MANASHIELD", "MUYEONG", "REVIVE_INVISIBLE", "FIRE", "GICHEON", "JEUNGRYEOK", "TANHWAN_DASH", "PABEOP", "CHEONGEUN_WITH_FALL", "POLYMORPH", "WAR_FLAG1", "WAR_FLAG2", "WAR_FLAG3", "CHINA_FIREWORK", "HAIR", "GERMANY", "RAMADAN_RING", "BLEEDING", "RED_POSSESSION", "BLUE_POSSESSION"]),
+        EnumKind::Enum(&[
+            "YMIR",
+            "INVISIBILITY",
+            "SPAWN",
+            "POISON",
+            "SLOW",
+            "STUN",
+            "DUNGEON_READY",
+            "DUNGEON_UNIQUE",
+            "BUILDING_CONSTRUCTION_SMALL",
+            "BUILDING_CONSTRUCTION_LARGE",
+            "BUILDING_UPGRADE",
+            "MOV_SPEED_POTION",
+            "ATT_SPEED_POTION",
+            "FISH_MIND",
+            "JEONGWIHON",
+            "GEOMGYEONG",
+            "CHEONGEUN",
+            "GYEONGGONG",
+            "EUNHYUNG",
+            "GWIGUM",
+            "TERROR",
+            "JUMAGAP",
+            "HOSIN",
+            "BOHO",
+            "KWAESOK",
+            "MANASHIELD",
+            "MUYEONG",
+            "REVIVE_INVISIBLE",
+            "FIRE",
+            "GICHEON",
+            "JEUNGRYEOK",
+            "TANHWAN_DASH",
+            "PABEOP",
+            "CHEONGEUN_WITH_FALL",
+            "POLYMORPH",
+            "WAR_FLAG1",
+            "WAR_FLAG2",
+            "WAR_FLAG3",
+            "CHINA_FIREWORK",
+            "HAIR",
+            "GERMANY",
+            "RAMADAN_RING",
+            "BLEEDING",
+            "RED_POSSESSION",
+            "BLUE_POSSESSION",
+        ]),
     ),
-    ("skill_proto", "eSkillType", EnumKind::Enum(&["NORMAL", "MELEE", "RANGE", "MAGIC"])),
+    (
+        "skill_proto",
+        "eSkillType",
+        EnumKind::Enum(&["NORMAL", "MELEE", "RANGE", "MAGIC"]),
+    ),
     (
         "item_attr",
         "apply",
-        EnumKind::Enum(&["MAX_HP", "MAX_SP", "CON", "INT", "STR", "DEX", "ATT_SPEED", "MOV_SPEED", "CAST_SPEED", "HP_REGEN", "SP_REGEN", "POISON_PCT", "STUN_PCT", "SLOW_PCT", "CRITICAL_PCT", "PENETRATE_PCT", "ATTBONUS_HUMAN", "ATTBONUS_ANIMAL", "ATTBONUS_ORC", "ATTBONUS_MILGYO", "ATTBONUS_UNDEAD", "ATTBONUS_DEVIL", "STEAL_HP", "STEAL_SP", "MANA_BURN_PCT", "DAMAGE_SP_RECOVER", "BLOCK", "DODGE", "RESIST_SWORD", "RESIST_TWOHAND", "RESIST_DAGGER", "RESIST_BELL", "RESIST_FAN", "RESIST_BOW", "RESIST_FIRE", "RESIST_ELEC", "RESIST_MAGIC", "RESIST_WIND", "REFLECT_MELEE", "REFLECT_CURSE", "POISON_REDUCE", "KILL_SP_RECOVER", "EXP_DOUBLE_BONUS", "GOLD_DOUBLE_BONUS", "ITEM_DROP_BONUS", "POTION_BONUS", "KILL_HP_RECOVER", "IMMUNE_STUN", "IMMUNE_SLOW", "IMMUNE_FALL", "SKILL", "BOW_DISTANCE", "ATT_GRADE_BONUS", "DEF_GRADE_BONUS", "MAGIC_ATT_GRADE_BONUS", "MAGIC_DEF_GRADE_BONUS", "CURSE_PCT", "MAX_STAMINA", "ATT_BONUS_TO_WARRIOR", "ATT_BONUS_TO_ASSASSIN", "ATT_BONUS_TO_SURA", "ATT_BONUS_TO_SHAMAN", "ATT_BONUS_TO_MONSTER", "ATT_BONUS", "MALL_DEFBONUS", "MALL_EXPBONUS", "MALL_ITEMBONUS", "MALL_GOLDBONUS", "MAX_HP_PCT", "MAX_SP_PCT", "SKILL_DAMAGE_BONUS", "NORMAL_HIT_DAMAGE_BONUS", "SKILL_DEFEND_BONUS", "NORMAL_HIT_DEFEND_BONUS", "PC_BANG_EXP_BONUS", "PC_BANG_DROP_BONUS", "EXTRACT_HP_PCT", "RESIST_WARRIOR", "RESIST_ASSASSIN", "RESIST_SURA", "RESIST_SHAMAN", "ENERGY", "DEF_GRADE", "COSTUME_ATTR_BONUS", "MAGIC_ATT_BONUS_PER", "MELEE_MAGIC_ATT_BONUS_PER", "RESIST_ICE", "RESIST_EARTH", "RESIST_DARK", "RESIST_CRITICAL", "RESIST_PENETRATE", "BLEEDING_REDUCE", "BLEEDING_PCT", "ATT_BONUS_TO_WOLFMAN", "RESIST_WOLFMAN", "RESIST_CLAW", "ACCEDRAIN_RATE", "RESIST_MAGIC_REDUCTION", "ENCHANT_ELECT", "ENCHANT_FIRE", "ENCHANT_ICE", "ENCHANT_WIND", "ENCHANT_EARTH", "ENCHANT_DARK", "ATTBONUS_CZ", "ATTBONUS_INSECT", "ATTBONUS_DESERT", "ATTBONUS_SWORD", "ATTBONUS_TWOHAND", "ATTBONUS_DAGGER", "ATTBONUS_BELL", "ATTBONUS_FAN", "ATTBONUS_BOW", "ATTBONUS_CLAW", "RESIST_HUMAN", "RESIST_MOUNT_FALL", "UNK_117", "MOUNT"]),
+        EnumKind::Enum(&[
+            "MAX_HP",
+            "MAX_SP",
+            "CON",
+            "INT",
+            "STR",
+            "DEX",
+            "ATT_SPEED",
+            "MOV_SPEED",
+            "CAST_SPEED",
+            "HP_REGEN",
+            "SP_REGEN",
+            "POISON_PCT",
+            "STUN_PCT",
+            "SLOW_PCT",
+            "CRITICAL_PCT",
+            "PENETRATE_PCT",
+            "ATTBONUS_HUMAN",
+            "ATTBONUS_ANIMAL",
+            "ATTBONUS_ORC",
+            "ATTBONUS_MILGYO",
+            "ATTBONUS_UNDEAD",
+            "ATTBONUS_DEVIL",
+            "STEAL_HP",
+            "STEAL_SP",
+            "MANA_BURN_PCT",
+            "DAMAGE_SP_RECOVER",
+            "BLOCK",
+            "DODGE",
+            "RESIST_SWORD",
+            "RESIST_TWOHAND",
+            "RESIST_DAGGER",
+            "RESIST_BELL",
+            "RESIST_FAN",
+            "RESIST_BOW",
+            "RESIST_FIRE",
+            "RESIST_ELEC",
+            "RESIST_MAGIC",
+            "RESIST_WIND",
+            "REFLECT_MELEE",
+            "REFLECT_CURSE",
+            "POISON_REDUCE",
+            "KILL_SP_RECOVER",
+            "EXP_DOUBLE_BONUS",
+            "GOLD_DOUBLE_BONUS",
+            "ITEM_DROP_BONUS",
+            "POTION_BONUS",
+            "KILL_HP_RECOVER",
+            "IMMUNE_STUN",
+            "IMMUNE_SLOW",
+            "IMMUNE_FALL",
+            "SKILL",
+            "BOW_DISTANCE",
+            "ATT_GRADE_BONUS",
+            "DEF_GRADE_BONUS",
+            "MAGIC_ATT_GRADE_BONUS",
+            "MAGIC_DEF_GRADE_BONUS",
+            "CURSE_PCT",
+            "MAX_STAMINA",
+            "ATT_BONUS_TO_WARRIOR",
+            "ATT_BONUS_TO_ASSASSIN",
+            "ATT_BONUS_TO_SURA",
+            "ATT_BONUS_TO_SHAMAN",
+            "ATT_BONUS_TO_MONSTER",
+            "ATT_BONUS",
+            "MALL_DEFBONUS",
+            "MALL_EXPBONUS",
+            "MALL_ITEMBONUS",
+            "MALL_GOLDBONUS",
+            "MAX_HP_PCT",
+            "MAX_SP_PCT",
+            "SKILL_DAMAGE_BONUS",
+            "NORMAL_HIT_DAMAGE_BONUS",
+            "SKILL_DEFEND_BONUS",
+            "NORMAL_HIT_DEFEND_BONUS",
+            "PC_BANG_EXP_BONUS",
+            "PC_BANG_DROP_BONUS",
+            "EXTRACT_HP_PCT",
+            "RESIST_WARRIOR",
+            "RESIST_ASSASSIN",
+            "RESIST_SURA",
+            "RESIST_SHAMAN",
+            "ENERGY",
+            "DEF_GRADE",
+            "COSTUME_ATTR_BONUS",
+            "MAGIC_ATT_BONUS_PER",
+            "MELEE_MAGIC_ATT_BONUS_PER",
+            "RESIST_ICE",
+            "RESIST_EARTH",
+            "RESIST_DARK",
+            "RESIST_CRITICAL",
+            "RESIST_PENETRATE",
+            "BLEEDING_REDUCE",
+            "BLEEDING_PCT",
+            "ATT_BONUS_TO_WOLFMAN",
+            "RESIST_WOLFMAN",
+            "RESIST_CLAW",
+            "ACCEDRAIN_RATE",
+            "RESIST_MAGIC_REDUCTION",
+            "ENCHANT_ELECT",
+            "ENCHANT_FIRE",
+            "ENCHANT_ICE",
+            "ENCHANT_WIND",
+            "ENCHANT_EARTH",
+            "ENCHANT_DARK",
+            "ATTBONUS_CZ",
+            "ATTBONUS_INSECT",
+            "ATTBONUS_DESERT",
+            "ATTBONUS_SWORD",
+            "ATTBONUS_TWOHAND",
+            "ATTBONUS_DAGGER",
+            "ATTBONUS_BELL",
+            "ATTBONUS_FAN",
+            "ATTBONUS_BOW",
+            "ATTBONUS_CLAW",
+            "RESIST_HUMAN",
+            "RESIST_MOUNT_FALL",
+            "UNK_117",
+            "MOUNT",
+        ]),
     ),
     (
         "item_attr_rare",
         "apply",
-        EnumKind::Enum(&["MAX_HP", "MAX_SP", "CON", "INT", "STR", "DEX", "ATT_SPEED", "MOV_SPEED", "CAST_SPEED", "HP_REGEN", "SP_REGEN", "POISON_PCT", "STUN_PCT", "SLOW_PCT", "CRITICAL_PCT", "PENETRATE_PCT", "ATTBONUS_HUMAN", "ATTBONUS_ANIMAL", "ATTBONUS_ORC", "ATTBONUS_MILGYO", "ATTBONUS_UNDEAD", "ATTBONUS_DEVIL", "STEAL_HP", "STEAL_SP", "MANA_BURN_PCT", "DAMAGE_SP_RECOVER", "BLOCK", "DODGE", "RESIST_SWORD", "RESIST_TWOHAND", "RESIST_DAGGER", "RESIST_BELL", "RESIST_FAN", "RESIST_BOW", "RESIST_FIRE", "RESIST_ELEC", "RESIST_MAGIC", "RESIST_WIND", "REFLECT_MELEE", "REFLECT_CURSE", "POISON_REDUCE", "KILL_SP_RECOVER", "EXP_DOUBLE_BONUS", "GOLD_DOUBLE_BONUS", "ITEM_DROP_BONUS", "POTION_BONUS", "KILL_HP_RECOVER", "IMMUNE_STUN", "IMMUNE_SLOW", "IMMUNE_FALL", "SKILL", "BOW_DISTANCE", "ATT_GRADE_BONUS", "DEF_GRADE_BONUS", "MAGIC_ATT_GRADE_BONUS", "MAGIC_DEF_GRADE_BONUS", "CURSE_PCT", "MAX_STAMINA", "ATT_BONUS_TO_WARRIOR", "ATT_BONUS_TO_ASSASSIN", "ATT_BONUS_TO_SURA", "ATT_BONUS_TO_SHAMAN", "ATT_BONUS_TO_MONSTER", "ATT_BONUS", "MALL_DEFBONUS", "MALL_EXPBONUS", "MALL_ITEMBONUS", "MALL_GOLDBONUS", "MAX_HP_PCT", "MAX_SP_PCT", "SKILL_DAMAGE_BONUS", "NORMAL_HIT_DAMAGE_BONUS", "SKILL_DEFEND_BONUS", "NORMAL_HIT_DEFEND_BONUS", "PC_BANG_EXP_BONUS", "PC_BANG_DROP_BONUS", "EXTRACT_HP_PCT", "RESIST_WARRIOR", "RESIST_ASSASSIN", "RESIST_SURA", "RESIST_SHAMAN", "ENERGY", "DEF_GRADE", "COSTUME_ATTR_BONUS", "MAGIC_ATT_BONUS_PER", "MELEE_MAGIC_ATT_BONUS_PER", "RESIST_ICE", "RESIST_EARTH", "RESIST_DARK", "RESIST_CRITICAL", "RESIST_PENETRATE", "BLEEDING_REDUCE", "BLEEDING_PCT", "ATT_BONUS_TO_WOLFMAN", "RESIST_WOLFMAN", "RESIST_CLAW", "ACCEDRAIN_RATE", "RESIST_MAGIC_REDUCTION", "ENCHANT_ELECT", "ENCHANT_FIRE", "ENCHANT_ICE", "ENCHANT_WIND", "ENCHANT_EARTH", "ENCHANT_DARK", "ATTBONUS_CZ", "ATTBONUS_INSECT", "ATTBONUS_DESERT", "ATTBONUS_SWORD", "ATTBONUS_TWOHAND", "ATTBONUS_DAGGER", "ATTBONUS_BELL", "ATTBONUS_FAN", "ATTBONUS_BOW", "ATTBONUS_CLAW", "RESIST_HUMAN", "RESIST_MOUNT_FALL", "UNK_117", "MOUNT"]),
+        EnumKind::Enum(&[
+            "MAX_HP",
+            "MAX_SP",
+            "CON",
+            "INT",
+            "STR",
+            "DEX",
+            "ATT_SPEED",
+            "MOV_SPEED",
+            "CAST_SPEED",
+            "HP_REGEN",
+            "SP_REGEN",
+            "POISON_PCT",
+            "STUN_PCT",
+            "SLOW_PCT",
+            "CRITICAL_PCT",
+            "PENETRATE_PCT",
+            "ATTBONUS_HUMAN",
+            "ATTBONUS_ANIMAL",
+            "ATTBONUS_ORC",
+            "ATTBONUS_MILGYO",
+            "ATTBONUS_UNDEAD",
+            "ATTBONUS_DEVIL",
+            "STEAL_HP",
+            "STEAL_SP",
+            "MANA_BURN_PCT",
+            "DAMAGE_SP_RECOVER",
+            "BLOCK",
+            "DODGE",
+            "RESIST_SWORD",
+            "RESIST_TWOHAND",
+            "RESIST_DAGGER",
+            "RESIST_BELL",
+            "RESIST_FAN",
+            "RESIST_BOW",
+            "RESIST_FIRE",
+            "RESIST_ELEC",
+            "RESIST_MAGIC",
+            "RESIST_WIND",
+            "REFLECT_MELEE",
+            "REFLECT_CURSE",
+            "POISON_REDUCE",
+            "KILL_SP_RECOVER",
+            "EXP_DOUBLE_BONUS",
+            "GOLD_DOUBLE_BONUS",
+            "ITEM_DROP_BONUS",
+            "POTION_BONUS",
+            "KILL_HP_RECOVER",
+            "IMMUNE_STUN",
+            "IMMUNE_SLOW",
+            "IMMUNE_FALL",
+            "SKILL",
+            "BOW_DISTANCE",
+            "ATT_GRADE_BONUS",
+            "DEF_GRADE_BONUS",
+            "MAGIC_ATT_GRADE_BONUS",
+            "MAGIC_DEF_GRADE_BONUS",
+            "CURSE_PCT",
+            "MAX_STAMINA",
+            "ATT_BONUS_TO_WARRIOR",
+            "ATT_BONUS_TO_ASSASSIN",
+            "ATT_BONUS_TO_SURA",
+            "ATT_BONUS_TO_SHAMAN",
+            "ATT_BONUS_TO_MONSTER",
+            "ATT_BONUS",
+            "MALL_DEFBONUS",
+            "MALL_EXPBONUS",
+            "MALL_ITEMBONUS",
+            "MALL_GOLDBONUS",
+            "MAX_HP_PCT",
+            "MAX_SP_PCT",
+            "SKILL_DAMAGE_BONUS",
+            "NORMAL_HIT_DAMAGE_BONUS",
+            "SKILL_DEFEND_BONUS",
+            "NORMAL_HIT_DEFEND_BONUS",
+            "PC_BANG_EXP_BONUS",
+            "PC_BANG_DROP_BONUS",
+            "EXTRACT_HP_PCT",
+            "RESIST_WARRIOR",
+            "RESIST_ASSASSIN",
+            "RESIST_SURA",
+            "RESIST_SHAMAN",
+            "ENERGY",
+            "DEF_GRADE",
+            "COSTUME_ATTR_BONUS",
+            "MAGIC_ATT_BONUS_PER",
+            "MELEE_MAGIC_ATT_BONUS_PER",
+            "RESIST_ICE",
+            "RESIST_EARTH",
+            "RESIST_DARK",
+            "RESIST_CRITICAL",
+            "RESIST_PENETRATE",
+            "BLEEDING_REDUCE",
+            "BLEEDING_PCT",
+            "ATT_BONUS_TO_WOLFMAN",
+            "RESIST_WOLFMAN",
+            "RESIST_CLAW",
+            "ACCEDRAIN_RATE",
+            "RESIST_MAGIC_REDUCTION",
+            "ENCHANT_ELECT",
+            "ENCHANT_FIRE",
+            "ENCHANT_ICE",
+            "ENCHANT_WIND",
+            "ENCHANT_EARTH",
+            "ENCHANT_DARK",
+            "ATTBONUS_CZ",
+            "ATTBONUS_INSECT",
+            "ATTBONUS_DESERT",
+            "ATTBONUS_SWORD",
+            "ATTBONUS_TWOHAND",
+            "ATTBONUS_DAGGER",
+            "ATTBONUS_BELL",
+            "ATTBONUS_FAN",
+            "ATTBONUS_BOW",
+            "ATTBONUS_CLAW",
+            "RESIST_HUMAN",
+            "RESIST_MOUNT_FALL",
+            "UNK_117",
+            "MOUNT",
+        ]),
     ),
 ];
 
@@ -619,7 +1130,11 @@ fn enum_index_expr(col: &str, lits: &[&str]) -> String {
 /// `WITH ORDINALITY` da pos bigint → cast a int para el shift (PG no tiene
 /// `int << bigint`).
 fn set_bitmask_expr(col: &str, lits: &[&str]) -> String {
-    let list = lits.iter().map(|l| format!("'{l}'")).collect::<Vec<_>>().join(", ");
+    let list = lits
+        .iter()
+        .map(|l| format!("'{l}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
     format!(
         "CASE WHEN {col} IS NULL THEN NULL ELSE COALESCE((SELECT sum(1 << ((pos - 1)::int)) FROM unnest(string_to_array({col}, ',')) WITH ORDINALITY t(v, pos) WHERE v IN ({list})), 0) END"
     )
@@ -678,28 +1193,29 @@ fn rewrite_enum_zero(sql: &str) -> String {
             b'`' => {
                 let end = skip_backtick(sql, i);
                 let name = &sql[i + 1..end - 1];
-                if plus_zero_at(sql, end) {
-                    if let Some((_, kind)) = cols.iter().find(|(c, _)| c.eq_ignore_ascii_case(name)) {
-                        out.push_str(&enum_zero_expr(&sql[i..end], kind));
-                        i = end + 2;
-                        continue;
-                    }
+                if plus_zero_at(sql, end)
+                    && let Some((_, kind)) = cols.iter().find(|(c, _)| c.eq_ignore_ascii_case(name))
+                {
+                    out.push_str(&enum_zero_expr(&sql[i..end], kind));
+                    i = end + 2;
+                    continue;
                 }
                 out.push_str(&sql[i..end]);
                 i = end;
             }
             _ if b[i].is_ascii_alphanumeric() || b[i] == b'_' || b[i] == b'$' => {
                 let start = i;
-                while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_' || b[i] == b'$') {
+                while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_' || b[i] == b'$')
+                {
                     i += 1;
                 }
                 let name = &sql[start..i];
-                if plus_zero_at(sql, i) {
-                    if let Some((_, kind)) = cols.iter().find(|(c, _)| c.eq_ignore_ascii_case(name)) {
-                        out.push_str(&enum_zero_expr(name, kind));
-                        i += 2;
-                        continue;
-                    }
+                if plus_zero_at(sql, i)
+                    && let Some((_, kind)) = cols.iter().find(|(c, _)| c.eq_ignore_ascii_case(name))
+                {
+                    out.push_str(&enum_zero_expr(name, kind));
+                    i += 2;
+                    continue;
                 }
                 out.push_str(name);
             }
@@ -753,52 +1269,50 @@ fn unescape_mysql(s: &str) -> Option<Vec<u8>> {
     let mut i = 0;
     while i < b.len() {
         match b[i] {
-            b'\\' => {
-                match *b.get(i + 1)? {
-                    b'x' => {
-                        let hi = (*b.get(i + 2)? as char).to_digit(16)? as u8;
-                        let lo = (*b.get(i + 3)? as char).to_digit(16)? as u8;
-                        out.push((hi << 4) | lo);
-                        i += 4;
-                    }
-                    b'0' => {
-                        out.push(0x00);
-                        i += 2;
-                    }
-                    b'n' => {
-                        out.push(b'\n');
-                        i += 2;
-                    }
-                    b'r' => {
-                        out.push(b'\r');
-                        i += 2;
-                    }
-                    b't' => {
-                        out.push(b'\t');
-                        i += 2;
-                    }
-                    b'Z' => {
-                        out.push(0x1a);
-                        i += 2;
-                    }
-                    b'\\' => {
-                        out.push(b'\\');
-                        i += 2;
-                    }
-                    b'\'' => {
-                        out.push(b'\'');
-                        i += 2;
-                    }
-                    b'"' => {
-                        out.push(b'"');
-                        i += 2;
-                    }
-                    other => {
-                        out.push(other);
-                        i += 2;
-                    }
+            b'\\' => match *b.get(i + 1)? {
+                b'x' => {
+                    let hi = (*b.get(i + 2)? as char).to_digit(16)? as u8;
+                    let lo = (*b.get(i + 3)? as char).to_digit(16)? as u8;
+                    out.push((hi << 4) | lo);
+                    i += 4;
                 }
-            }
+                b'0' => {
+                    out.push(0x00);
+                    i += 2;
+                }
+                b'n' => {
+                    out.push(b'\n');
+                    i += 2;
+                }
+                b'r' => {
+                    out.push(b'\r');
+                    i += 2;
+                }
+                b't' => {
+                    out.push(b'\t');
+                    i += 2;
+                }
+                b'Z' => {
+                    out.push(0x1a);
+                    i += 2;
+                }
+                b'\\' => {
+                    out.push(b'\\');
+                    i += 2;
+                }
+                b'\'' => {
+                    out.push(b'\'');
+                    i += 2;
+                }
+                b'"' => {
+                    out.push(b'"');
+                    i += 2;
+                }
+                other => {
+                    out.push(other);
+                    i += 2;
+                }
+            },
             b'\'' => {
                 if b.get(i + 1) == Some(&b'\'') {
                     out.push(b'\'');
@@ -820,7 +1334,7 @@ fn unescape_mysql(s: &str) -> Option<Vec<u8>> {
 /// de columnas bytea que sean literales `'…'` a `decode('<hex>', 'hex')`.
 fn fix_bytea_values(cols: &[String], vals: Vec<String>, info: &TableInfo) -> Vec<String> {
     cols.iter()
-        .zip(vals.into_iter())
+        .zip(vals)
         .map(|(col, val)| {
             if info.bytea.iter().any(|c| c == col) {
                 bytea_literal(&val).unwrap_or(val)
@@ -953,52 +1467,57 @@ fn match_keyword(rest: &str) -> Option<(usize, String)> {
         }
         return Some((consumed, format!("EXTRACT(EPOCH FROM {})", scan(inner))));
     }
-    if lower.starts_with("date_add(") {
-        if let Some((inner, consumed)) = paren_arg(rest, "date_add".len()) {
-            if let Some(rep) = rewrite_date_add(&inner) {
-                return Some((consumed, rep));
-            }
+    if lower.starts_with("date_add(")
+        && let Some((inner, consumed)) = paren_arg(rest, "date_add".len())
+        && let Some(rep) = rewrite_date_add(&inner)
+    {
+        return Some((consumed, rep));
+    }
+    if lower.starts_with("timediff(")
+        && let Some((inner, consumed)) = paren_arg(rest, "timediff".len())
+    {
+        let parts = split_top_level(&inner);
+        if parts.len() == 2 {
+            return Some((
+                consumed,
+                format!("({} - {})", scan(parts[0]), scan(parts[1])),
+            ));
         }
     }
-    if lower.starts_with("timediff(") {
-        if let Some((inner, consumed)) = paren_arg(rest, "timediff".len()) {
-            let parts = split_top_level(&inner);
-            if parts.len() == 2 {
-                return Some((consumed, format!("({} - {})", scan(parts[0]), scan(parts[1]))));
-            }
-        }
+    if lower.starts_with("from_unixtime(")
+        && let Some((inner, consumed)) = paren_arg(rest, "from_unixtime".len())
+    {
+        return Some((consumed, format!("to_timestamp({})", scan(inner.trim()))));
     }
-    if lower.starts_with("from_unixtime(") {
-        if let Some((inner, consumed)) = paren_arg(rest, "from_unixtime".len()) {
-            return Some((consumed, format!("to_timestamp({})", scan(inner.trim()))));
-        }
+    if lower.starts_with("inet_aton(")
+        && let Some((inner, consumed)) = paren_arg(rest, "inet_aton".len())
+    {
+        return Some((
+            consumed,
+            format!("({})::inet - '0.0.0.0'::inet", scan(inner.trim())),
+        ));
     }
-    if lower.starts_with("inet_aton(") {
-        if let Some((inner, consumed)) = paren_arg(rest, "inet_aton".len()) {
-            return Some((consumed, format!("({})::inet - '0.0.0.0'::inet", scan(inner.trim()))));
+    if lower.starts_with("cast(")
+        && let Some((inner, consumed)) = paren_arg(rest, "cast".len())
+    {
+        let inner_lower = inner.to_ascii_lowercase();
+        if let Some(pos) = inner_lower.find(" as unsigned") {
+            let expr = inner[..pos].trim();
+            // MySQL `CAST(x AS unsigned)` parsea el PREFIJO numérico del
+            // string: "0 5 6 8" → 0, "123abc" → 123, "abc" → 0, " 42" → 42.
+            // PG `::bigint` es estricto → 22P02 (config.cpp:576, locale
+            // SKILL_POWER_BY_LEVEL*: "0 5 6 8 ..."). `regexp_match` devuelve
+            // NULL sin match → COALESCE 0 (semántica MySQL).
+            return Some((
+                consumed,
+                format!(
+                    "COALESCE((regexp_match({}, '^[[:space:]]*[+-]?[0-9]+'))[1]::bigint, 0)",
+                    scan(expr)
+                ),
+            ));
         }
-    }
-    if lower.starts_with("cast(") {
-        if let Some((inner, consumed)) = paren_arg(rest, "cast".len()) {
-            let inner_lower = inner.to_ascii_lowercase();
-            if let Some(pos) = inner_lower.find(" as unsigned") {
-                let expr = inner[..pos].trim();
-                // MySQL `CAST(x AS unsigned)` parsea el PREFIJO numérico del
-                // string: "0 5 6 8" → 0, "123abc" → 123, "abc" → 0, " 42" → 42.
-                // PG `::bigint` es estricto → 22P02 (config.cpp:576, locale
-                // SKILL_POWER_BY_LEVEL*: "0 5 6 8 ..."). `regexp_match` devuelve
-                // NULL sin match → COALESCE 0 (semántica MySQL).
-                return Some((
-                    consumed,
-                    format!(
-                        "COALESCE((regexp_match({}, '^[[:space:]]*[+-]?[0-9]+'))[1]::bigint, 0)",
-                        scan(expr)
-                    ),
-                ));
-            }
-            // CAST con otro target → passthrough (PG dará su error, inventario §4).
-            return Some((consumed, format!("CAST({})", scan(&inner))));
-        }
+        // CAST con otro target → passthrough (PG dará su error, inventario §4).
+        return Some((consumed, format!("CAST({})", scan(&inner))));
     }
     if lower.starts_with("collate") {
         let after = skip_ws(&rest[7..]);
@@ -1026,7 +1545,9 @@ fn rewrite_date_add(inner: &str) -> Option<String> {
         return None;
     }
     let rest = skip_ws(&interval[8..]);
-    let n_end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+    let n_end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
     if n_end == 0 {
         return None;
     }
@@ -1207,9 +1728,13 @@ fn parse_assignments(parts: &[&str]) -> Result<(Vec<String>, Vec<String>), Trans
     let mut cols = Vec::new();
     let mut vals = Vec::new();
     for part in parts {
-        let (col, end) = parse_ident(part).ok_or_else(|| TranslateError::Syntax("assignment sin columna".into()))?;
+        let (col, end) = parse_ident(part)
+            .ok_or_else(|| TranslateError::Syntax("assignment sin columna".into()))?;
         let rest = skip_ws(&part[end..]);
-        let rest = skip_ws(rest.strip_prefix('=').ok_or_else(|| TranslateError::Syntax("assignment sin '='".into()))?);
+        let rest = skip_ws(
+            rest.strip_prefix('=')
+                .ok_or_else(|| TranslateError::Syntax("assignment sin '='".into()))?,
+        );
         vals.push(rest.to_string());
         cols.push(col.to_ascii_lowercase());
     }
@@ -1287,27 +1812,140 @@ mod tests {
                 bytea: vec![],
             };
             let mut m: HashMap<&'static str, TableInfo> = HashMap::new();
-            m.insert("quest", n(vec!["dwpid", "szname", "szstate", "lvalue"], vec!["dwpid", "szname", "szstate"], vec![]));
-            m.insert("affect", n(vec!["dwpid", "btype", "bapplyon", "lapplyvalue", "dwflag", "lduration", "lspcost"], vec!["dwpid", "btype", "bapplyon", "lapplyvalue"], vec![]));
+            m.insert(
+                "quest",
+                n(
+                    vec!["dwpid", "szname", "szstate", "lvalue"],
+                    vec!["dwpid", "szname", "szstate"],
+                    vec![],
+                ),
+            );
+            m.insert(
+                "affect",
+                n(
+                    vec![
+                        "dwpid",
+                        "btype",
+                        "bapplyon",
+                        "lapplyvalue",
+                        "dwflag",
+                        "lduration",
+                        "lspcost",
+                    ],
+                    vec!["dwpid", "btype", "bapplyon", "lapplyvalue"],
+                    vec![],
+                ),
+            );
             m.insert("horse_name", n(vec!["id", "name"], vec!["id"], vec![]));
-            m.insert("monarch", n(vec!["empire", "name", "windate", "money"], vec!["empire"], vec![]));
-            m.insert("myshop_pricelist", n(vec!["owner_id", "item_vnum", "price"], vec!["owner_id", "item_vnum"], vec![]));
-            m.insert("priv_settings", n(vec!["priv_type", "id", "type", "value", "duration"], vec!["priv_type", "id", "type"], vec![]));
-            m.insert("item", n(vec!["id", "owner_id", "window", "pos", "count", "vnum"], vec!["id"], vec!["id"]));
+            m.insert(
+                "monarch",
+                n(
+                    vec!["empire", "name", "windate", "money"],
+                    vec!["empire"],
+                    vec![],
+                ),
+            );
+            m.insert(
+                "myshop_pricelist",
+                n(
+                    vec!["owner_id", "item_vnum", "price"],
+                    vec!["owner_id", "item_vnum"],
+                    vec![],
+                ),
+            );
+            m.insert(
+                "priv_settings",
+                n(
+                    vec!["priv_type", "id", "type", "value", "duration"],
+                    vec!["priv_type", "id", "type"],
+                    vec![],
+                ),
+            );
+            m.insert(
+                "item",
+                n(
+                    vec!["id", "owner_id", "window", "pos", "count", "vnum"],
+                    vec!["id"],
+                    vec!["id"],
+                ),
+            );
             m.insert(
                 "player",
                 TableInfo {
-                    columns: vec!["id".into(), "account_id".into(), "name".into(), "level".into(), "skill_level".into(), "quickslot".into()],
+                    columns: vec![
+                        "id".into(),
+                        "account_id".into(),
+                        "name".into(),
+                        "level".into(),
+                        "skill_level".into(),
+                        "quickslot".into(),
+                    ],
                     pk: vec!["id".into()],
                     identity: vec!["id".into()],
                     bytea: vec!["skill_level".into(), "quickslot".into()],
                 },
             );
-            m.insert("player_index", n(vec!["id", "pid1", "pid2", "pid3", "pid4", "pid5", "empire"], vec!["id"], vec![]));
-            m.insert("object", n(vec!["id", "land_id", "vnum", "map_index", "x", "y"], vec!["id"], vec!["id"]));
-            m.insert("loginlog2", n(vec!["type", "is_gm", "login_time", "logout_time", "channel", "account_id", "pid", "ip", "client_version", "playtime"], vec![], vec![]));
-            m.insert("dragon_slay_log", n(vec!["guild_id", "dragon_vnum", "start_time", "end_time"], vec![], vec![]));
-            m.insert("chat_log", n(vec!["where", "who_id", "who_name", "whom_id", "whom_name", "type", "msg", "when", "ip"], vec![], vec![]));
+            m.insert(
+                "player_index",
+                n(
+                    vec!["id", "pid1", "pid2", "pid3", "pid4", "pid5", "empire"],
+                    vec!["id"],
+                    vec![],
+                ),
+            );
+            m.insert(
+                "object",
+                n(
+                    vec!["id", "land_id", "vnum", "map_index", "x", "y"],
+                    vec!["id"],
+                    vec!["id"],
+                ),
+            );
+            m.insert(
+                "loginlog2",
+                n(
+                    vec![
+                        "type",
+                        "is_gm",
+                        "login_time",
+                        "logout_time",
+                        "channel",
+                        "account_id",
+                        "pid",
+                        "ip",
+                        "client_version",
+                        "playtime",
+                    ],
+                    vec![],
+                    vec![],
+                ),
+            );
+            m.insert(
+                "dragon_slay_log",
+                n(
+                    vec!["guild_id", "dragon_vnum", "start_time", "end_time"],
+                    vec![],
+                    vec![],
+                ),
+            );
+            m.insert(
+                "chat_log",
+                n(
+                    vec![
+                        "where",
+                        "who_id",
+                        "who_name",
+                        "whom_id",
+                        "whom_name",
+                        "type",
+                        "msg",
+                        "when",
+                        "ip",
+                    ],
+                    vec![],
+                    vec![],
+                ),
+            );
             Self(m)
         }
     }
@@ -1329,7 +1967,9 @@ mod tests {
     }
 
     async fn assert_rw(sql: &str, expected: &str) {
-        let (got, _) = rw(sql).await.unwrap_or_else(|e| panic!("rewrite({sql:?}) falló: {e}"));
+        let (got, _) = rw(sql)
+            .await
+            .unwrap_or_else(|e| panic!("rewrite({sql:?}) falló: {e}"));
         assert_eq!(got.as_deref(), Some(expected), "input: {sql}");
     }
 
@@ -1362,7 +2002,10 @@ mod tests {
         let out = sql.unwrap();
         assert!(out.starts_with("SELECT apply, CASE WHEN apply IS NULL THEN NULL WHEN apply = 'MAX_HP' THEN 1 WHEN apply = 'MAX_SP' THEN 2"), "{out}");
         assert!(out.contains("WHEN apply = 'MOUNT' THEN 118"), "{out}");
-        assert!(out.ends_with("ELSE 0 END, prob, lv1 FROM item_attr ORDER BY apply"), "{out}");
+        assert!(
+            out.ends_with("ELSE 0 END, prob, lv1 FROM item_attr ORDER BY apply"),
+            "{out}"
+        );
         assert_eq!(out.matches("WHEN apply = ").count(), 118, "{out}");
         // El `apply` pelado (sin +0) NO se toca.
         assert!(out.starts_with("SELECT apply, CASE"), "{out}");
@@ -1407,7 +2050,10 @@ mod tests {
         // GAP 3: item 1 immuneflag+0 — MariaDB 0 ('' → 0), proxy ''.
         // El `size` pelado de item_proto (int en MySQL) NO se toca.
         assert!(out.contains("CASE WHEN immuneflag IS NULL THEN NULL ELSE COALESCE((SELECT sum(1 << ((pos - 1)::int)) FROM unnest(string_to_array(immuneflag, ',')) WITH ORDINALITY t(v, pos) WHERE v IN ('PARA', 'CURSE', 'STUN', 'SLEEP', 'SLOW', 'POISON', 'TERROR')), 0) END"), "{out}");
-        assert!(out.contains("weight, size, flag, wearflag, antiflag,"), "{out}");
+        assert!(
+            out.contains("weight, size, flag, wearflag, antiflag,"),
+            "{out}"
+        );
         assert!(out.contains("FROM item_proto ORDER BY vnum"), "{out}");
     }
 
@@ -1423,7 +2069,10 @@ mod tests {
         // setAffectFlag/setAffectFlag2 son ENUM (pese al nombre) → índice;
         // eSkillType ENUM de 4.
         assert!(out.contains("WHEN setAffectFlag = 'YMIR' THEN 1"), "{out}");
-        assert!(out.contains("WHEN setAffectFlag2 = 'BLUE_POSSESSION' THEN 45"), "{out}");
+        assert!(
+            out.contains("WHEN setAffectFlag2 = 'BLUE_POSSESSION' THEN 45"),
+            "{out}"
+        );
         assert!(out.contains("WHEN eSkillType = 'NORMAL' THEN 1 WHEN eSkillType = 'MELEE' THEN 2 WHEN eSkillType = 'RANGE' THEN 3 WHEN eSkillType = 'MAGIC' THEN 4 ELSE 0 END"), "{out}");
         assert!(out.contains("FROM skill_proto ORDER BY dwVnum"), "{out}");
     }
@@ -1437,26 +2086,34 @@ mod tests {
         let (sql, _) = rw("SELECT size+0 FROM mob_proto").await.unwrap();
         assert_eq!(
             sql.as_deref(),
-            Some("SELECT CASE WHEN size IS NULL THEN NULL WHEN size = 'SMALL' THEN 1 WHEN size = 'MEDIUM' THEN 2 WHEN size = 'BIG' THEN 3 ELSE 0 END FROM mob_proto")
+            Some(
+                "SELECT CASE WHEN size IS NULL THEN NULL WHEN size = 'SMALL' THEN 1 WHEN size = 'MEDIUM' THEN 2 WHEN size = 'BIG' THEN 3 ELSE 0 END FROM mob_proto"
+            )
         );
         // '' → 0 (SET): unnest('') no genera filas → SUM NULL → COALESCE 0.
         let (sql, _) = rw("SELECT immuneflag+0 FROM item_proto").await.unwrap();
         assert_eq!(
             sql.as_deref(),
-            Some("SELECT CASE WHEN immuneflag IS NULL THEN NULL ELSE COALESCE((SELECT sum(1 << ((pos - 1)::int)) FROM unnest(string_to_array(immuneflag, ',')) WITH ORDINALITY t(v, pos) WHERE v IN ('PARA', 'CURSE', 'STUN', 'SLEEP', 'SLOW', 'POISON', 'TERROR')), 0) END FROM item_proto")
+            Some(
+                "SELECT CASE WHEN immuneflag IS NULL THEN NULL ELSE COALESCE((SELECT sum(1 << ((pos - 1)::int)) FROM unnest(string_to_array(immuneflag, ',')) WITH ORDINALITY t(v, pos) WHERE v IN ('PARA', 'CURSE', 'STUN', 'SLEEP', 'SLOW', 'POISON', 'TERROR')), 0) END FROM item_proto"
+            )
         );
         // Multi-elemento → bitmask: skill 1 = 'ATTACK,USE_MELEE_DAMAGE' →
         // 1 + 2 = 3 (MariaDB verificado); NULL → NULL (20 filas NULL reales).
         let (sql, _) = rw("SELECT setFlag+0 FROM skill_proto").await.unwrap();
         assert_eq!(
             sql.as_deref(),
-            Some("SELECT CASE WHEN setFlag IS NULL THEN NULL ELSE COALESCE((SELECT sum(1 << ((pos - 1)::int)) FROM unnest(string_to_array(setFlag, ',')) WITH ORDINALITY t(v, pos) WHERE v IN ('ATTACK', 'USE_MELEE_DAMAGE', 'COMPUTE_ATTGRADE', 'SELFONLY', 'USE_MAGIC_DAMAGE', 'USE_HP_AS_COST', 'COMPUTE_MAGIC_DAMAGE', 'SPLASH', 'GIVE_PENALTY', 'USE_ARROW_DAMAGE', 'PENETRATE', 'IGNORE_TARGET_RATING', 'ATTACK_SLOW', 'ATTACK_STUN', 'HP_ABSORB', 'SP_ABSORB', 'ATTACK_FIRE_CONT', 'REMOVE_BAD_AFFECT', 'REMOVE_GOOD_AFFECT', 'CRUSH', 'ATTACK_POISON', 'TOGGLE', 'DISABLE_BY_POINT_UP', 'CRUSH_LONG', 'ATTACK_WIND', 'ATTACK_ELEC', 'ATTACK_FIRE', 'ATTACK_BLEEDING', 'PARTY')), 0) END FROM skill_proto")
+            Some(
+                "SELECT CASE WHEN setFlag IS NULL THEN NULL ELSE COALESCE((SELECT sum(1 << ((pos - 1)::int)) FROM unnest(string_to_array(setFlag, ',')) WITH ORDINALITY t(v, pos) WHERE v IN ('ATTACK', 'USE_MELEE_DAMAGE', 'COMPUTE_ATTGRADE', 'SELFONLY', 'USE_MAGIC_DAMAGE', 'USE_HP_AS_COST', 'COMPUTE_MAGIC_DAMAGE', 'SPLASH', 'GIVE_PENALTY', 'USE_ARROW_DAMAGE', 'PENETRATE', 'IGNORE_TARGET_RATING', 'ATTACK_SLOW', 'ATTACK_STUN', 'HP_ABSORB', 'SP_ABSORB', 'ATTACK_FIRE_CONT', 'REMOVE_BAD_AFFECT', 'REMOVE_GOOD_AFFECT', 'CRUSH', 'ATTACK_POISON', 'TOGGLE', 'DISABLE_BY_POINT_UP', 'CRUSH_LONG', 'ATTACK_WIND', 'ATTACK_ELEC', 'ATTACK_FIRE', 'ATTACK_BLEEDING', 'PARTY')), 0) END FROM skill_proto"
+            )
         );
         // eSkillType: MAGIC = 4 (MariaDB verificado).
         let (sql, _) = rw("SELECT eSkillType+0 FROM skill_proto").await.unwrap();
         assert_eq!(
             sql.as_deref(),
-            Some("SELECT CASE WHEN eSkillType IS NULL THEN NULL WHEN eSkillType = 'NORMAL' THEN 1 WHEN eSkillType = 'MELEE' THEN 2 WHEN eSkillType = 'RANGE' THEN 3 WHEN eSkillType = 'MAGIC' THEN 4 ELSE 0 END FROM skill_proto")
+            Some(
+                "SELECT CASE WHEN eSkillType IS NULL THEN NULL WHEN eSkillType = 'NORMAL' THEN 1 WHEN eSkillType = 'MELEE' THEN 2 WHEN eSkillType = 'RANGE' THEN 3 WHEN eSkillType = 'MAGIC' THEN 4 ELSE 0 END FROM skill_proto"
+            )
         );
         // item_attr_rare.apply — mismo enum que item_attr (118).
         let (sql, _) = rw("SELECT apply+0 FROM item_attr_rare").await.unwrap();
@@ -1475,7 +2132,10 @@ mod tests {
         let out = got.unwrap();
         // SAFEBOX = literal 3 del enum item.window → índice 3.
         assert!(out.contains("WHEN \"window\" = 'SAFEBOX' THEN 3"), "{out}");
-        assert!(out.ends_with("FROM item WHERE owner_id=1 AND \"window\"='SAFEBOX'"), "{out}");
+        assert!(
+            out.ends_with("FROM item WHERE owner_id=1 AND \"window\"='SAFEBOX'"),
+            "{out}"
+        );
     }
 
     // --- Fila 10e: fallback — `+0` de columnas/tablas NO catalogadas se
@@ -1484,7 +2144,11 @@ mod tests {
     async fn enum_zero_unknown_table_or_column_dropped() {
         assert_rw("SELECT foo+0 FROM bar", "SELECT foo FROM bar").await;
         assert_rw("SELECT vnum+0 FROM mob_proto", "SELECT vnum FROM mob_proto").await;
-        assert_rw("SELECT pid1+0 FROM player.player_index", "SELECT pid1 FROM player.player_index").await;
+        assert_rw(
+            "SELECT pid1+0 FROM player.player_index",
+            "SELECT pid1 FROM player.player_index",
+        )
+        .await;
     }
 
     // --- Fila 10f: columnas camelCase del C++ legacy → minúsculas (PG folds
@@ -1652,23 +2316,35 @@ mod tests {
 
         // Player create: VALUES(0, …) → DEFAULT + Generated
         // (ClientManagerPlayer.cpp:853-905 lee uiInsertID).
-        let (sql, hint) = rw("INSERT INTO player (id, account_id, name, level) VALUES(0, 5, 'Test', 1)").await.unwrap();
+        let (sql, hint) =
+            rw("INSERT INTO player (id, account_id, name, level) VALUES(0, 5, 'Test', 1)")
+                .await
+                .unwrap();
         assert_eq!(
             sql.as_deref(),
-            Some("INSERT INTO player (\"id\", \"account_id\", \"name\", \"level\") VALUES (DEFAULT, 5, 'Test', 1)")
+            Some(
+                "INSERT INTO player (\"id\", \"account_id\", \"name\", \"level\") VALUES (DEFAULT, 5, 'Test', 1)"
+            )
         );
         assert_eq!(hint, InsertIdHint::Generated);
 
         // Object: identity omitida de la lista → Generated.
-        let (sql, hint) = rw("INSERT INTO object (land_id, vnum, map_index, x, y) VALUES(1, 2, 3, 4, 5)").await.unwrap();
+        let (sql, hint) =
+            rw("INSERT INTO object (land_id, vnum, map_index, x, y) VALUES(1, 2, 3, 4, 5)")
+                .await
+                .unwrap();
         assert_eq!(
             sql.as_deref(),
-            Some("INSERT INTO object (\"land_id\", \"vnum\", \"map_index\", \"x\", \"y\") VALUES (1, 2, 3, 4, 5)")
+            Some(
+                "INSERT INTO object (\"land_id\", \"vnum\", \"map_index\", \"x\", \"y\") VALUES (1, 2, 3, 4, 5)"
+            )
         );
         assert_eq!(hint, InsertIdHint::Generated);
 
         // Sin identity (loginlog2) → None.
-        let (_, hint) = rw("INSERT INTO loginlog2 (type) VALUES('X')").await.unwrap();
+        let (_, hint) = rw("INSERT INTO loginlog2 (type) VALUES('X')")
+            .await
+            .unwrap();
         assert_eq!(hint, InsertIdHint::None);
     }
 
@@ -1817,7 +2493,11 @@ mod tests {
         )
         .await;
         // SELECT LIMIT es portable y se mantiene.
-        assert_rw("SELECT id FROM player WHERE name='x' LIMIT 1", "SELECT id FROM player WHERE name='x' LIMIT 1").await;
+        assert_rw(
+            "SELECT id FROM player WHERE name='x' LIMIT 1",
+            "SELECT id FROM player WHERE name='x' LIMIT 1",
+        )
+        .await;
     }
 
     // --- Fila 18: mysql_hash_password pasa tal cual (función PG en account) --
@@ -1850,7 +2530,9 @@ mod tests {
     #[tokio::test]
     async fn string_literals_are_invulnerable() {
         // Backtick, ';' y NOW() dentro de un literal no se tocan.
-        let (sql, _) = rw("INSERT INTO chat_log (`where`, `msg`) VALUES (1, 'a`b;c NOW()')").await.unwrap();
+        let (sql, _) = rw("INSERT INTO chat_log (`where`, `msg`) VALUES (1, 'a`b;c NOW()')")
+            .await
+            .unwrap();
         assert_eq!(
             sql.as_deref(),
             Some("INSERT INTO chat_log (\"where\", \"msg\") VALUES (1, 'a`b;c NOW()')")
@@ -1866,7 +2548,10 @@ mod tests {
     // --- split de multi-statements (defensivo; CLIENT_MULTI_STATEMENTS) -----
     #[tokio::test]
     async fn split_statements_works() {
-        assert_eq!(split_statements("SET sql_mode = ''; SELECT 1;"), vec!["SET sql_mode = ''", "SELECT 1"]);
+        assert_eq!(
+            split_statements("SET sql_mode = ''; SELECT 1;"),
+            vec!["SET sql_mode = ''", "SELECT 1"]
+        );
         assert_eq!(split_statements("SELECT 1"), vec!["SELECT 1"]);
         assert_eq!(split_statements("  ;  "), Vec::<&str>::new());
         assert_eq!(split_statements("SELECT 1;"), vec!["SELECT 1"]);
@@ -1875,7 +2560,9 @@ mod tests {
     // --- Ghost table: guild_invite_limit (legacy-schema.md §7.7) ------------
     #[tokio::test]
     async fn replace_unknown_table_errors_like_mysql() {
-        let err = rw("REPLACE INTO guild_invite_limit VALUES(1, 2)").await.unwrap_err();
+        let err = rw("REPLACE INTO guild_invite_limit VALUES(1, 2)")
+            .await
+            .unwrap_err();
         assert!(err.contains("guild_invite_limit"), "{err}");
         // En MySQL esa tabla no existe → el write falla silenciosamente;
         // el proxy responde ERR 1146 (paridad de comportamiento observable).
@@ -1890,7 +2577,10 @@ mod tests {
     #[tokio::test]
     async fn trailing_semicolon_handled_by_splitter() {
         let stmts = split_statements("SELECT vnum, name, type FROM mob_proto ORDER BY vnum;");
-        assert_eq!(stmts, vec!["SELECT vnum, name, type FROM mob_proto ORDER BY vnum"]);
+        assert_eq!(
+            stmts,
+            vec!["SELECT vnum, name, type FROM mob_proto ORDER BY vnum"]
+        );
     }
 
     // --- Regresión 22021 (bug crítico 2026-08-10): blobs escapados MySQL `\0`
@@ -1902,7 +2592,9 @@ mod tests {
     #[tokio::test]
     async fn player_create_insert_escaped_blobs_no_nul_in_text() {
         let sql = "INSERT INTO player (id, account_id, name, level, st, ht, dx, iq, job, voice, dir, x, y, z, hp, mp, random_hp, random_sp, stat_point, stamina, part_base, part_main, part_hair, part_acce, gold, playtime, skill_level, quickslot) VALUES(0, 1, 'kjkj', 1, 3, 4, 3, 6, 1, 0, 0, 969600, 278400, 0, 100, 50, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, '\\0\\0\\0', '\\0\\0\\0')";
-        let (got, hint) = rw(sql).await.unwrap_or_else(|e| panic!("rewrite({sql:?}) falló: {e}"));
+        let (got, hint) = rw(sql)
+            .await
+            .unwrap_or_else(|e| panic!("rewrite({sql:?}) falló: {e}"));
         let out = got.unwrap();
         // Los literales bytea se emiten como decode('<hex>', 'hex') — nunca un
         // `\0` crudo llega a un literal text de PG. En el INSERT los valores
@@ -1918,9 +2610,14 @@ mod tests {
     #[tokio::test]
     async fn player_save_update_escaped_blobs_no_nul_in_text() {
         let sql = "UPDATE player SET job = 7, voice = 0, dir = 0, x = 960658, y = 266626, z = 0, map_index = 41, exit_x = 960658, exit_y = 266626, exit_map_index = 41, hp = 860, mp = 320, stamina = 820, random_hp = 0, random_sp = 0, playtime = 100, level = 12, level_step = 1, st = 3, ht = 4, dx = 3, iq = 6, gold = 0, exp = 0, stat_point = 0, skill_point = 0, sub_skill_point = 0, stat_reset_count = 0, ip = '0.0.0.0', part_main = 0, part_hair = 0, part_acce = 0, last_play = NOW(), skill_group = 1, alignment = 0, horse_level = 0, horse_riding = 0, horse_hp = 0, horse_hp_droptime = 0, horse_stamina = 0, horse_skill_point = 0, skill_level = '\\0\\0\\0', quickslot = '\\0\\0\\0' WHERE id=4";
-        let (got, _) = rw(sql).await.unwrap_or_else(|e| panic!("rewrite({sql:?}) falló: {e}"));
+        let (got, _) = rw(sql)
+            .await
+            .unwrap_or_else(|e| panic!("rewrite({sql:?}) falló: {e}"));
         let out = got.unwrap();
-        assert!(out.contains("skill_level = decode('000000', 'hex')"), "{out}");
+        assert!(
+            out.contains("skill_level = decode('000000', 'hex')"),
+            "{out}"
+        );
         assert!(out.contains("quickslot = decode('000000', 'hex')"), "{out}");
         assert!(!out.contains("\\0"), "ningún \\0 escapado sobrevive: {out}");
         // El resto del UPDATE sigue traduciéndose (NOW() → LOCALTIMESTAMP).

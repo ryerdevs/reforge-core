@@ -72,9 +72,9 @@ use game_core::ecs::{CombatIntent, Intent};
 use protocol::header;
 use protocol::world::{
     TPacketCGPartyInvite, TPacketCGPartyInviteAnswer, TPacketCGPartyParameter,
-    TPacketCGPartyRemove, TPacketCGPartySetState, TPacketCGPartyUseSkill,
-    TPacketGCPartyAdd, TPacketGCPartyInvite, TPacketGCPartyLink, TPacketGCPartyParameter,
-    TPacketGCPartyRemove, TPacketGCPartyUnlink, TPacketGCPartyUpdate, TPacketGCWarp,
+    TPacketCGPartyRemove, TPacketCGPartySetState, TPacketCGPartyUseSkill, TPacketGCPartyAdd,
+    TPacketGCPartyInvite, TPacketGCPartyLink, TPacketGCPartyParameter, TPacketGCPartyRemove,
+    TPacketGCPartyUnlink, TPacketGCPartyUpdate, TPacketGCWarp,
 };
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -142,8 +142,7 @@ const CHAT_TYPE_INFO: u8 = 1;
 /// `PLAYER_EXP_TABLE_MAX` = 120 — length.h:52): el peso de nivel del reparto
 /// NON_PARITY (`FPartyDistributor`, char_battle.cpp:2473-2474).
 const PARTY_EXP_TABLE: [i64; 121] = [
-    0,
-    10, 10, 10, 10, 15, 15, 20, 25, 30, 40, // 1 - 10
+    0, 10, 10, 10, 10, 15, 15, 20, 25, 30, 40, // 1 - 10
     50, 60, 80, 100, 120, 140, 160, 184, 210, 240, // 11 - 20
     270, 300, 330, 360, 390, 420, 450, 480, 510, 550, // 21 - 30
     600, 640, 700, 760, 820, 880, 940, 1000, 1100, 1180, // 31 - 40
@@ -197,7 +196,10 @@ fn exp_shares(mode: u8, exp: i64, levels: &[i16]) -> Vec<i64> {
         PARTY_EXP_DISTRIBUTION_NON_PARITY => {
             let total: i64 = levels.iter().map(|&l| exp_weight(l)).sum();
             let total = total.max(1);
-            levels.iter().map(|&l| exp * exp_weight(l) / total).collect()
+            levels
+                .iter()
+                .map(|&l| exp * exp_weight(l) / total)
+                .collect()
         }
         _ => vec![0; n],
     }
@@ -494,10 +496,10 @@ enum RemoveReason {
 
 /// Saca a un miembro del party (parity `Quit` → `P2PQuit`, party.cpp:453-496
 /// + `SendPartyRemoveOneToAll` party.cpp:644-658): GC_PARTY_REMOVE(pid) a
-/// TODOS (el expulsado incluido — el C++ itera el mapa completo), INFO +
-/// LeftParty al expulsado. No-op si el miembro ya no está. Defensivo: si el
-/// pid fuera el del LÍDER (no debería — solo el líder expulsa y a sí mismo
-/// se disuelve) se disuelve la party (parity P2PQuit).
+///   TODOS (el expulsado incluido — el C++ itera el mapa completo), INFO +
+///   LeftParty al expulsado. No-op si el miembro ya no está. Defensivo: si el
+///   pid fuera el del LÍDER (no debería — solo el líder expulsa y a sí mismo
+///   se disuelve) se disuelve la party (parity P2PQuit).
 fn remove_member(party_id: u32, pid: u32, reason: RemoveReason) {
     let deliveries: Vec<(UnboundedSender<PartyMsg>, Vec<PartyMsg>)> = {
         let mut ps = parties().lock().expect("parties lock");
@@ -602,7 +604,9 @@ fn member_sync_msgs(party: &PartyState) -> Vec<PartyMsg> {
         ));
     }
     msgs.push(PartyMsg::Packet(
-        TPacketGCPartyParameter::new(party.exp_mode).to_bytes().to_vec(),
+        TPacketGCPartyParameter::new(party.exp_mode)
+            .to_bytes()
+            .to_vec(),
     ));
     msgs
 }
@@ -668,12 +672,21 @@ pub async fn handle_invite(session: &mut Session, pkt: &[u8]) -> Result<Outcome,
     // `IsPartyJoinableMutableCondition`, char.cpp:4741-4771: imperio,
     // nivel ±30, ya-en-party).
     if target.empire != session.empire {
-        info(session, "<Party> You can't invite someone from a different empire.").await?;
+        info(
+            session,
+            "<Party> You can't invite someone from a different empire.",
+        )
+        .await?;
         return Ok(Outcome::Continue);
     }
-    if (i64::from(session.row().level) - i64::from(target.level)).abs() > i64::from(PARTY_LEVEL_LIMIT)
+    if (i64::from(session.row().level) - i64::from(target.level)).abs()
+        > i64::from(PARTY_LEVEL_LIMIT)
     {
-        info(session, "<Party> The level difference is too big (max ±30).").await?;
+        info(
+            session,
+            "<Party> The level difference is too big (max ±30).",
+        )
+        .await?;
         return Ok(Outcome::Continue);
     }
     let target_in_party = {
@@ -707,7 +720,10 @@ pub async fn handle_invite(session: &mut Session, pkt: &[u8]) -> Result<Outcome,
     deliver(&target.out, vec![PartyMsg::Packet(bytes.to_vec())]);
     eprintln!(
         "server_realms: channel conn {}: {} invitó a {} (vid {}) al party",
-        session.conn_id, session.row().name, target.name, p.vid
+        session.conn_id,
+        session.row().name,
+        target.name,
+        p.vid
     );
     Ok(Outcome::Continue)
 }
@@ -756,7 +772,11 @@ pub async fn handle_invite_answer(session: &mut Session, pkt: &[u8]) -> Result<O
         let text = format!("<Party> {guest_name} refused your party invitation.");
         deliver(
             &invite.leader_out,
-            vec![PartyMsg::Packet(info_packet(p.leader_vid, invite.leader_empire, &text))],
+            vec![PartyMsg::Packet(info_packet(
+                p.leader_vid,
+                invite.leader_empire,
+                &text,
+            ))],
         );
         eprintln!(
             "server_realms: channel conn {}: {} RECHAZÓ la invitación de vid {}",
@@ -1046,7 +1066,11 @@ pub async fn handle_set_state(session: &mut Session, pkt: &[u8]) -> Result<Outco
         .get(&party_id)
         .is_some_and(|pt| pt.leader_pid == my_pid)
     {
-        info(session, "<Party> Only the party leader can set member states.").await?;
+        info(
+            session,
+            "<Party> Only the party leader can set member states.",
+        )
+        .await?;
         return Ok(Outcome::Continue);
     }
     if !is_member(party_id, p.pid) {
@@ -1073,18 +1097,27 @@ pub async fn handle_set_state(session: &mut Session, pkt: &[u8]) -> Result<Outco
         // (1 por rol — sin liderazgo en la variante, divergencia doc.);
         // unset → miembro con rol (NORMAL/LEADER → falla silenciosa).
         let ok = if p.flag == 1 {
-            member.role == PARTY_ROLE_NORMAL
-                && !party.members.values().any(|m| m.role == p.by_role)
+            member.role == PARTY_ROLE_NORMAL && !party.members.values().any(|m| m.role == p.by_role)
         } else {
             member.role != PARTY_ROLE_NORMAL && member.role != PARTY_ROLE_LEADER
         };
         if !ok {
             return Ok(Outcome::Continue);
         }
-        let new_role = if p.flag == 1 { p.by_role } else { PARTY_ROLE_NORMAL };
+        let new_role = if p.flag == 1 {
+            p.by_role
+        } else {
+            PARTY_ROLE_NORMAL
+        };
         let hp = member.hp_percent;
-        party.members.get_mut(&p.pid).expect("miembro chequeado").role = new_role;
-        let bytes = TPacketGCPartyUpdate::new(p.pid, new_role, hp).to_bytes().to_vec();
+        party
+            .members
+            .get_mut(&p.pid)
+            .expect("miembro chequeado")
+            .role = new_role;
+        let bytes = TPacketGCPartyUpdate::new(p.pid, new_role, hp)
+            .to_bytes()
+            .to_vec();
         party
             .members
             .values()
@@ -1103,7 +1136,11 @@ pub async fn handle_set_state(session: &mut Session, pkt: &[u8]) -> Result<Outco
         session.conn_id,
         session.row().name,
         p.pid,
-        if p.flag == 1 { p.by_role } else { PARTY_ROLE_NORMAL },
+        if p.flag == 1 {
+            p.by_role
+        } else {
+            PARTY_ROLE_NORMAL
+        },
         if p.flag == 1 { "on" } else { "off" }
     );
     Ok(Outcome::Continue)
@@ -1144,7 +1181,11 @@ pub async fn handle_use_skill(session: &mut Session, pkt: &[u8]) -> Result<Outco
         .get(&party_id)
         .is_some_and(|pt| pt.leader_pid == my_pid)
     {
-        info(session, "<Party> Only the party leader can use party skills.").await?;
+        info(
+            session,
+            "<Party> Only the party leader can use party skills.",
+        )
+        .await?;
         return Ok(Outcome::Continue);
     }
     match p.by_skill_index {
@@ -1171,7 +1212,8 @@ pub async fn handle_use_skill(session: &mut Session, pkt: &[u8]) -> Result<Outco
                         n += 1;
                     }
                 }
-                party.heal_at = Instant::now() + Duration::from_secs(PARTY_HEAL_COOLTIME_LONG_MIN * 60);
+                party.heal_at =
+                    Instant::now() + Duration::from_secs(PARTY_HEAL_COOLTIME_LONG_MIN * 60);
                 n
             };
             eprintln!(
@@ -1190,7 +1232,11 @@ pub async fn handle_use_skill(session: &mut Session, pkt: &[u8]) -> Result<Outco
                 ss.get(&p.vid).map(|peer| peer.pid)
             };
             let Some(target_pid) = summon else {
-                info(session, "<Party> The character you want to summon can't be found.").await?;
+                info(
+                    session,
+                    "<Party> The character you want to summon can't be found.",
+                )
+                .await?;
                 return Ok(Outcome::Continue);
             };
             let summon = {
@@ -1199,19 +1245,24 @@ pub async fn handle_use_skill(session: &mut Session, pkt: &[u8]) -> Result<Outco
                     return Ok(Outcome::Continue);
                 };
                 match party.members.get(&target_pid) {
-                    Some(member) => match (member.out.clone(), party.members.get(&party.leader_pid))
-                    {
-                        (Some(out), Some(leader)) => {
-                            let (dx, dy) = SUMMON_RING[(target_pid % 12) as usize];
-                            Some((out, leader.x + dx, leader.y + dy))
+                    Some(member) => {
+                        match (member.out.clone(), party.members.get(&party.leader_pid)) {
+                            (Some(out), Some(leader)) => {
+                                let (dx, dy) = SUMMON_RING[(target_pid % 12) as usize];
+                                Some((out, leader.x + dx, leader.y + dy))
+                            }
+                            _ => None,
                         }
-                        _ => None,
-                    },
+                    }
                     None => None,
                 }
             };
             let Some((out, x, y)) = summon else {
-                info(session, "<Party> The character you want to summon can't be found.").await?;
+                info(
+                    session,
+                    "<Party> The character you want to summon can't be found.",
+                )
+                .await?;
                 return Ok(Outcome::Continue);
             };
             deliver(&out, vec![PartyMsg::Summon { x, y }]);
@@ -1404,15 +1455,11 @@ pub fn distribute_exp(session: &Session, exp: i64, kill_x: i32, kill_y: i32) -> 
 /// `parties()` ya se actualizó en el emisor).
 pub async fn handle_msg(session: &mut Session, msg: PartyMsg) -> Result<(), String> {
     match msg {
-        PartyMsg::Packet(bytes) => {
-            session
-                .send(&bytes)
-                .await
-                .map_err(|e| format!("enviando party: {e}"))
-        }
-        PartyMsg::ExpGain { amount } => {
-            session.gain_exp(amount).await.map(|_| ())
-        }
+        PartyMsg::Packet(bytes) => session
+            .send(&bytes)
+            .await
+            .map_err(|e| format!("enviando party: {e}")),
+        PartyMsg::ExpGain { amount } => session.gain_exp(amount).await.map(|_| ()),
         PartyMsg::Joined { party_id } => {
             session.party_id = Some(party_id);
             // El mundo COMPARTIDO (el gate PvP "cannot attack same party" —
@@ -1458,10 +1505,10 @@ pub async fn handle_msg(session: &mut Session, msg: PartyMsg) -> Result<(), Stri
             session.motion = Some(game_core::movement::initial(x, y));
             session.save();
             update_position(session.player_vid(), x, y);
-            let (ip, port) = super::parse_listen(&session.config.listen)
-                .map_err(|e| format!("summon: {e}"))?;
-            let addr = game_core::packets::ip_to_inet_addr(&ip)
-                .map_err(|e| format!("summon: {e}"))?;
+            let (ip, port) =
+                super::parse_listen(&session.config.listen).map_err(|e| format!("summon: {e}"))?;
+            let addr =
+                game_core::packets::ip_to_inet_addr(&ip).map_err(|e| format!("summon: {e}"))?;
             session
                 .send(&TPacketGCWarp::new(x, y, addr, port).to_bytes())
                 .await
@@ -1487,6 +1534,9 @@ fn pvp_sync_party(session: &mut Session, party_id: Option<u32>) {
 }
 
 #[cfg(test)]
+// TEST_LOCK serializa tests que comparten statics de canal: el guard de
+// std::Mutex viaja a través de los .await de los tests A PROPÓSITO.
+#[allow(clippy::await_holding_lock)]
 mod tests {
     use super::*;
     use std::time::Duration;
@@ -1506,7 +1556,9 @@ mod tests {
     /// el poisoning y recupera el guard (el test que paniqueó ya soltó su
     /// sección crítica con el unwind).
     fn test_lock() -> std::sync::MutexGuard<'static, ()> {
-        TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn dummy_row(id: i64, name: &str, level: i16, map_index: i32, x: i32, y: i32) -> PlayerRow {
@@ -1587,8 +1639,10 @@ mod tests {
             64,
             database::wal::WalSink::new(database::wal::PgMutationSink::new(pool.clone()), wal_dir),
         ));
-        let mut cfg = crate::config::Config::default();
-        cfg.timeout = Duration::from_secs(5);
+        let cfg = crate::config::Config {
+            timeout: Duration::from_secs(5),
+            ..Default::default()
+        };
         let (intent_tx, _intent_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut s = Session::new(
             server_side,
@@ -1682,7 +1736,10 @@ mod tests {
     #[test]
     fn exp_shares_parity_equal_and_remainder_lost() {
         // PARITY: exp / n por miembro; el resto se pierde (parity C++).
-        assert_eq!(exp_shares(PARTY_EXP_DISTRIBUTION_PARITY, 100, &[10, 20]), vec![50, 50]);
+        assert_eq!(
+            exp_shares(PARTY_EXP_DISTRIBUTION_PARITY, 100, &[10, 20]),
+            vec![50, 50]
+        );
         assert_eq!(
             exp_shares(PARTY_EXP_DISTRIBUTION_PARITY, 100, &[10, 20, 30]),
             vec![33, 33, 33],
@@ -1690,7 +1747,10 @@ mod tests {
         );
         // Sin miembros / exp 0.
         assert!(exp_shares(PARTY_EXP_DISTRIBUTION_PARITY, 100, &[]).is_empty());
-        assert_eq!(exp_shares(PARTY_EXP_DISTRIBUTION_PARITY, 0, &[10, 20]), vec![0, 0]);
+        assert_eq!(
+            exp_shares(PARTY_EXP_DISTRIBUTION_PARITY, 0, &[10, 20]),
+            vec![0, 0]
+        );
     }
 
     #[test]
@@ -1699,7 +1759,11 @@ mod tests {
         // pesos: level 10 → 40, level 20 → 240 (constants.cpp:270-282).
         let shares = exp_shares(PARTY_EXP_DISTRIBUTION_NON_PARITY, 100, &[10, 20]);
         assert_eq!(shares, vec![100 * 40 / 280, 100 * 240 / 280]);
-        assert_eq!(shares[0] + shares[1], 99, "el residuo no se reparte (parity)");
+        assert_eq!(
+            shares[0] + shares[1],
+            99,
+            "el residuo no se reparte (parity)"
+        );
         // level > 120 o 0 → peso 14000 (parity __GetPartyExpNP).
         assert_eq!(exp_weight(0), 14000);
         assert_eq!(exp_weight(121), 14000);
@@ -1763,9 +1827,18 @@ mod tests {
         assert_eq!(adds_a, vec![1001, 1002]);
         assert_eq!(adds_b, vec![1001, 1002]);
         // El líder se marca (role LEADER = 1); el invitado NORMAL = 0.
-        assert_eq!(updates_a, vec![(1001, PARTY_ROLE_LEADER), (1002, PARTY_ROLE_NORMAL)]);
-        assert_eq!(updates_b, vec![(1001, PARTY_ROLE_LEADER), (1002, PARTY_ROLE_NORMAL)]);
-        assert!(param_a && param_b, "PARAMETER con el modo default (NON_PARITY)");
+        assert_eq!(
+            updates_a,
+            vec![(1001, PARTY_ROLE_LEADER), (1002, PARTY_ROLE_NORMAL)]
+        );
+        assert_eq!(
+            updates_b,
+            vec![(1001, PARTY_ROLE_LEADER), (1002, PARTY_ROLE_NORMAL)]
+        );
+        assert!(
+            param_a && param_b,
+            "PARAMETER con el modo default (NON_PARITY)"
+        );
         // El registro tiene la party (id = pid del líder) con 2 miembros.
         let ps = parties().lock().expect("parties lock");
         let party = ps.get(&1001).expect("party creada");
@@ -1872,7 +1945,9 @@ mod tests {
             );
         }
         let late = TPacketCGPartyInviteAnswer::new(4001, 1).to_bytes();
-        handle_invite_answer(&mut c, &late).await.expect("answer OK");
+        handle_invite_answer(&mut c, &late)
+            .await
+            .expect("answer OK");
         let info_c = read_info(&mut c_sock).await;
         assert!(
             String::from_utf8_lossy(&info_c[9..]).contains("expired"),
@@ -1904,18 +1979,14 @@ mod tests {
         let ab = TPacketCGPartyInviteAnswer::new(a.player_vid(), 1).to_bytes();
         handle_invite_answer(&mut b, &ab).await.expect("B acepta");
         for _ in 0..9 {
-
             let m = recv_msg(&mut a).await;
 
             apply_msg(&mut a, m).await;
-
         }
         for _ in 0..8 {
-
             let m = recv_msg(&mut b).await;
 
             apply_msg(&mut b, m).await;
-
         }
         let ic = TPacketCGPartyInvite::new(c.player_vid()).to_bytes();
         handle_invite(&mut a, &ic).await.expect("invite C");
@@ -1925,25 +1996,19 @@ mod tests {
         let ac = TPacketCGPartyInviteAnswer::new(a.player_vid(), 1).to_bytes();
         handle_invite_answer(&mut c, &ac).await.expect("C acepta");
         for _ in 0..3 {
-
             let m = recv_msg(&mut a).await;
 
             apply_msg(&mut a, m).await;
-
         }
         for _ in 0..3 {
-
             let m = recv_msg(&mut b).await;
 
             apply_msg(&mut b, m).await;
-
         }
         for _ in 0..11 {
-
             let m = recv_msg(&mut c).await;
 
             apply_msg(&mut c, m).await;
-
         }
         // El líder expulsa a B → GC_PARTY_REMOVE(5002)+UNLINK a todos.
         let rm = TPacketCGPartyRemove::new(5002).to_bytes();
@@ -1984,7 +2049,11 @@ mod tests {
         assert!(b.party_id.is_none(), "B ya no está en el party");
         // La party sigue con A + C.
         assert_eq!(
-            parties().lock().expect("parties lock").get(&5001).map(|p| p.members.len()),
+            parties()
+                .lock()
+                .expect("parties lock")
+                .get(&5001)
+                .map(|p| p.members.len()),
             Some(2)
         );
         // A (líder) se auto-expulsa con 2 miembros → DISOLUCIÓN: REMOVE con
@@ -2014,7 +2083,10 @@ mod tests {
             assert!(matches!(&m, PartyMsg::LeftParty));
         }
         assert!(a.party_id.is_none(), "A limpio su party_id");
-        assert!(parties().lock().expect("parties lock").get(&5001).is_none(), "party eliminada");
+        assert!(
+            parties().lock().expect("parties lock").get(&5001).is_none(),
+            "party eliminada"
+        );
     }
 
     // TODO(sync): este test de integración se cuelga esperando un mensaje
@@ -2031,18 +2103,14 @@ mod tests {
         make_party(&mut a, &mut b).await;
         // drenar el sync de A y B (aplicando — Joined mantiene party_id).
         for _ in 0..8 {
-
             let m = recv_msg(&mut a).await;
 
             apply_msg(&mut a, m).await;
-
         }
         for _ in 0..8 {
-
             let m = recv_msg(&mut b).await;
 
             apply_msg(&mut b, m).await;
-
         }
         let ic = TPacketCGPartyInvite::new(c.player_vid()).to_bytes();
         handle_invite(&mut a, &ic).await.expect("invite C");
@@ -2052,25 +2120,19 @@ mod tests {
         let ac = TPacketCGPartyInviteAnswer::new(a.player_vid(), 1).to_bytes();
         handle_invite_answer(&mut c, &ac).await.expect("C acepta");
         for _ in 0..3 {
-
             let m = recv_msg(&mut a).await;
 
             apply_msg(&mut a, m).await;
-
         }
         for _ in 0..3 {
-
             let m = recv_msg(&mut b).await;
 
             apply_msg(&mut b, m).await;
-
         }
         for _ in 0..11 {
-
             let m = recv_msg(&mut c).await;
 
             apply_msg(&mut c, m).await;
-
         }
         // B (no líder) se saca a sí mismo de una party de 3 → solo se va.
         let rm = TPacketCGPartyRemove::new(6002).to_bytes();
@@ -2095,7 +2157,11 @@ mod tests {
         apply_msg(&mut b, m).await;
         // La party sigue con A + C (el líder NO se fue).
         assert_eq!(
-            parties().lock().expect("parties lock").get(&6001).map(|p| p.members.len()),
+            parties()
+                .lock()
+                .expect("parties lock")
+                .get(&6001)
+                .map(|p| p.members.len()),
             Some(2)
         );
         // Un miembro NO puede expulsar a otro → INFO (parity
@@ -2136,16 +2202,25 @@ mod tests {
             let PartyMsg::Packet(bytes) = m else {
                 panic!("GC_PARTY_PARAMETER esperado");
             };
-            assert_eq!(bytes, [header::GC_PARTY_PARAMETER, PARTY_EXP_DISTRIBUTION_PARITY]);
+            assert_eq!(
+                bytes,
+                [header::GC_PARTY_PARAMETER, PARTY_EXP_DISTRIBUTION_PARITY]
+            );
         }
         assert_eq!(
-            parties().lock().expect("parties lock").get(&7001).map(|p| p.exp_mode),
+            parties()
+                .lock()
+                .expect("parties lock")
+                .get(&7001)
+                .map(|p| p.exp_mode),
             Some(PARTY_EXP_DISTRIBUTION_PARITY),
             "el modo queda guardado en la party (se usará para exp)"
         );
         // Modo inválido (>= 2) → rechazado sin broadcast (parity SetParameter).
         let bad = TPacketCGPartyParameter::new(9).to_bytes();
-        handle_parameter(&mut b, &bad).await.expect("bad parameter OK");
+        handle_parameter(&mut b, &bad)
+            .await
+            .expect("bad parameter OK");
         assert!(
             tokio::time::timeout(Duration::from_millis(100), a.party_rx.recv())
                 .await
@@ -2177,7 +2252,9 @@ mod tests {
         handle_invite(&mut a, &ic).await.expect("invite far");
         let _ = recv_msg(&mut far).await;
         let ac = TPacketCGPartyInviteAnswer::new(8001, 1).to_bytes();
-        handle_invite_answer(&mut far, &ac).await.expect("far acepta");
+        handle_invite_answer(&mut far, &ac)
+            .await
+            .expect("far acepta");
         for _ in 0..3 {
             let _ = recv_msg(&mut a).await;
         }
@@ -2292,7 +2369,7 @@ mod tests {
         {
             let mut ps = parties().lock().expect("parties lock");
             let pt = ps.get_mut(&8301).expect("party del líder");
-            pt.created_at = pt.created_at - Duration::from_secs(61 * 60);
+            pt.created_at -= Duration::from_secs(61 * 60);
         }
         let my_share = distribute_exp(&a, 100, 969700, 278500);
         assert_eq!(
@@ -2323,7 +2400,11 @@ mod tests {
         let _guard = test_lock();
         // Baseline SOLO: sin party → exp íntegra (1000).
         let (solo, _solo_sock) = test_session(8401, "Solo", 50, 1, 41, 969600, 278400).await;
-        assert_eq!(distribute_exp(&solo, 1000, 969700, 278500), 1000, "solo: íntegra");
+        assert_eq!(
+            distribute_exp(&solo, 1000, 969700, 278500),
+            1000,
+            "solo: íntegra"
+        );
         // Party de 2 (mismos niveles → NON_PARITY reparte a partes iguales).
         let (mut a, _a_sock) = test_session(8402, "Lead", 50, 1, 41, 969600, 278400).await;
         let (mut b, _b_sock) = test_session(8403, "Mate", 50, 1, 41, 970000, 278600).await;
@@ -2340,8 +2421,14 @@ mod tests {
             panic!("ExpGain esperado");
         };
         assert_eq!(amount, 560, "la misma parte para B");
-        assert!(my_share + amount > 1000, "party de 2 gana MÁS total que solo");
-        assert!(my_share < 1000, "cada miembro recibe MENOS que solo (reparto)");
+        assert!(
+            my_share + amount > 1000,
+            "party de 2 gana MÁS total que solo"
+        );
+        assert!(
+            my_share < 1000,
+            "cada miembro recibe MENOS que solo (reparto)"
+        );
     }
 
     #[tokio::test]
@@ -2351,7 +2438,9 @@ mod tests {
         // ExpGain directo (como lo entregaría distribute_exp): se aplica al
         // row + GC_POINTS + save. next_exp = 0 → sin level-up (sin PG).
         let before = b.row().exp;
-        handle_msg(&mut b, PartyMsg::ExpGain { amount: 50 }).await.expect("exp OK");
+        handle_msg(&mut b, PartyMsg::ExpGain { amount: 50 })
+            .await
+            .expect("exp OK");
         assert_eq!(b.row().exp, before + 50, "exp aplicada al row");
         // GC_POINTS es un struct FIJO de 1021 B (no size-prefixed).
         let mut pkt = vec![0u8; protocol::world::TPacketGCPoints::SIZE];
@@ -2359,11 +2448,19 @@ mod tests {
             .read_exact(&mut pkt)
             .await
             .expect("GC_POINTS del server");
-        assert_eq!(pkt[0], protocol::world::TPacketGCPoints::HEADER, "GC_POINTS");
+        assert_eq!(
+            pkt[0],
+            protocol::world::TPacketGCPoints::HEADER,
+            "GC_POINTS"
+        );
         // Joined/LeftParty mantienen el party_id.
-        handle_msg(&mut b, PartyMsg::Joined { party_id: 7 }).await.expect("joined OK");
+        handle_msg(&mut b, PartyMsg::Joined { party_id: 7 })
+            .await
+            .expect("joined OK");
         assert_eq!(b.party_id, Some(7));
-        handle_msg(&mut b, PartyMsg::LeftParty).await.expect("left OK");
+        handle_msg(&mut b, PartyMsg::LeftParty)
+            .await
+            .expect("left OK");
         assert!(b.party_id.is_none());
     }
 
@@ -2390,7 +2487,7 @@ mod tests {
         let _ = recv_msg(&mut c).await;
         let ac = TPacketCGPartyInviteAnswer::new(9001, 1).to_bytes();
         handle_invite_answer(&mut c, &ac).await.expect("C acepta");
-                for _ in 0..3 {
+        for _ in 0..3 {
             let _ = recv_msg(&mut a).await;
         }
         for _ in 0..3 {
@@ -2412,7 +2509,11 @@ mod tests {
             assert!(matches!(&m, PartyMsg::Packet(bytes) if bytes[0] == header::GC_PARTY_UNLINK));
         }
         assert_eq!(
-            parties().lock().expect("parties lock").get(&9001).map(|p| p.members.len()),
+            parties()
+                .lock()
+                .expect("parties lock")
+                .get(&9001)
+                .map(|p| p.members.len()),
             Some(2),
             "el miembro normal solo se va"
         );
@@ -2508,7 +2609,11 @@ mod tests {
             .read_exact(&mut pts)
             .await
             .expect("GC_POINTS del heal");
-        assert_eq!(pts[0], protocol::world::TPacketGCPoints::HEADER, "GC_POINTS");
+        assert_eq!(
+            pts[0],
+            protocol::world::TPacketGCPoints::HEADER,
+            "GC_POINTS"
+        );
         // Cooltime activo (60 min — parity sin liderazgo) → segundo heal no-op.
         handle_use_skill(&mut a, &heal).await.expect("heal OK");
         assert!(
@@ -2546,7 +2651,11 @@ mod tests {
         let mut got_link = false;
         for _ in 0..8 {
             let m = recv_msg(&mut a).await;
-            if let PartyMsg::Packet(b) = &m { if b[0]==header::GC_PARTY_LINK { got_link=true; } }
+            if let PartyMsg::Packet(b) = &m
+                && b[0] == header::GC_PARTY_LINK
+            {
+                got_link = true;
+            }
         }
         assert!(got_link, "GC_PARTY_LINK (91) debe enviarse al crear party");
         // UNLINK al disolver
@@ -2555,6 +2664,9 @@ mod tests {
         let m = recv_msg(&mut a).await;
         assert!(matches!(&m, PartyMsg::Packet(b) if b[0]==header::GC_PARTY_REMOVE));
         let m = recv_msg(&mut a).await;
-        assert!(matches!(&m, PartyMsg::Packet(b) if b[0]==header::GC_PARTY_UNLINK), "GC_PARTY_UNLINK al disolver");
+        assert!(
+            matches!(&m, PartyMsg::Packet(b) if b[0]==header::GC_PARTY_UNLINK),
+            "GC_PARTY_UNLINK al disolver"
+        );
     }
 }

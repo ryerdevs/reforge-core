@@ -53,11 +53,11 @@ use protocol::{
     TPacketGCEmpire, TPacketGCHandshake, TPacketGCLoginFailure, TPacketGCLoginSuccess,
 };
 use tokio::io::{AsyncRead, AsyncWriteExt};
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
 use crate::report::{BotReport, Status};
-use crate::splitter::{SplitError, Splitter, GC_CHANNEL_LIST};
+use crate::splitter::{GC_CHANNEL_LIST, SplitError, Splitter};
 
 /// Configuración de un bot (una sesión).
 #[derive(Debug, Clone)]
@@ -147,7 +147,8 @@ impl ServerClock {
 
     /// `dw_time` para los MOVE: est_server − margen (ver doc del módulo).
     fn move_time_ms(&self, local_ms: u64) -> u32 {
-        self.server_ms(local_ms).saturating_sub(CLOCK_MARGIN_MS as u64) as u32
+        self.server_ms(local_ms)
+            .saturating_sub(CLOCK_MARGIN_MS as u64) as u32
     }
 }
 
@@ -229,22 +230,37 @@ async fn client_handshake(
 ) -> Result<(), BotError> {
     let p = recv(rd, sp, timeout, "handshake_phase").await?;
     if p[0] != header::GC_PHASE || p[1] != phase::HANDSHAKE {
-        return Err(BotError::Unexpected(Stage::Auth, format!("esperando GC_PHASE(HANDSHAKE), got 0x{:02x}", p[0])));
+        return Err(BotError::Unexpected(
+            Stage::Auth,
+            format!("esperando GC_PHASE(HANDSHAKE), got 0x{:02x}", p[0]),
+        ));
     }
     let p = recv(rd, sp, timeout, "handshake").await?;
     if p[0] != header::GC_HANDSHAKE {
-        return Err(BotError::Unexpected(Stage::Auth, format!("esperando GC_HANDSHAKE, got 0x{:02x}", p[0])));
+        return Err(BotError::Unexpected(
+            Stage::Auth,
+            format!("esperando GC_HANDSHAKE, got 0x{:02x}", p[0]),
+        ));
     }
     let hs = TPacketGCHandshake::from_bytes(&p)
         .map_err(|e| BotError::Protocol("GC_HANDSHAKE", e.to_string()))?;
     clock.observe(hs.dw_time, local_ms());
-    send(wr, &TPacketCGHandshake::new(hs.dw_handshake, hs.dw_time, 0).to_bytes(), &mut Counts::default()).await?;
+    send(
+        wr,
+        &TPacketCGHandshake::new(hs.dw_handshake, hs.dw_time, 0).to_bytes(),
+        &mut Counts::default(),
+    )
+    .await?;
     Ok(())
 }
 
 /// Fase auth (:30001): handshake → `GC_PHASE(AUTH)` → LOGIN3 (68 B, lang
 /// "es") → `GC_AUTH_SUCCESS` (bResult=1).
-async fn auth_phase(cfg: &BotConfig, clock: &mut ServerClock, counts: &mut Counts) -> Result<(), BotError> {
+async fn auth_phase(
+    cfg: &BotConfig,
+    clock: &mut ServerClock,
+    counts: &mut Counts,
+) -> Result<(), BotError> {
     let stream = connect(&cfg.auth_addr, cfg.timeout).await?;
     let (mut rd, mut wr) = stream.into_split();
     let mut sp = Splitter::new();
@@ -261,13 +277,17 @@ async fn auth_phase(cfg: &BotConfig, clock: &mut ServerClock, counts: &mut Count
             header::GC_PHASE => continue,
             header::CG_TIME_SYNC | header::CG_PONG => continue,
             other => {
-                return Err(BotError::Unexpected(Stage::Auth, format!("header 0x{other:02x} esperando PHASE_AUTH")))
+                return Err(BotError::Unexpected(
+                    Stage::Auth,
+                    format!("header 0x{other:02x} esperando PHASE_AUTH"),
+                ));
             }
         }
     }
     send(
         &mut wr,
-        &TPacketCGLogin3::new_auth(&cfg.login, &cfg.password, client_key(&cfg.login), "es").to_bytes_auth(),
+        &TPacketCGLogin3::new_auth(&cfg.login, &cfg.password, client_key(&cfg.login), "es")
+            .to_bytes_auth(),
         counts,
     )
     .await?;
@@ -325,13 +345,14 @@ async fn channel_phase(
                 return Err(BotError::Unexpected(
                     Stage::ChannelLogin,
                     format!("header 0x{other:02x} esperando PHASE_LOGIN"),
-                ))
+                ));
             }
         }
     }
     send(
         &mut wr,
-        &TPacketCGLogin3::new_channel(&cfg.login, &cfg.password, client_key(&cfg.login)).to_bytes_channel(),
+        &TPacketCGLogin3::new_channel(&cfg.login, &cfg.password, client_key(&cfg.login))
+            .to_bytes_channel(),
         counts,
     )
     .await?;
@@ -355,7 +376,12 @@ async fn channel_phase(
                     .position(|pl| pl.dw_id != 0)
                     .ok_or(BotError::NoCharacter)? as u8;
                 let (x, y) = (s.players[slot as usize].x, s.players[slot as usize].y);
-                send(&mut wr, &TPacketCGPlayerSelect::new(slot).to_bytes(), counts).await?;
+                send(
+                    &mut wr,
+                    &TPacketCGPlayerSelect::new(slot).to_bytes(),
+                    counts,
+                )
+                .await?;
                 return Ok((slot, x, y, rd, wr, sp));
             }
             header::GC_LOGIN_FAILURE => {
@@ -429,13 +455,19 @@ struct Walk {
     origin_x: i32,
     origin_y: i32,
     step: i32,
-    dir: i32, // +1 este (rot 18), −1 oeste (rot 54)
+    dir: i32,  // +1 este (rot 18), −1 oeste (rot 54)
     out: bool, // true → salir a origen ± step; false → volver al origen
 }
 
 impl Walk {
     fn new(x: i32, y: i32, step: i32) -> Self {
-        Self { origin_x: x, origin_y: y, step, dir: 1, out: true }
+        Self {
+            origin_x: x,
+            origin_y: y,
+            step,
+            dir: 1,
+            out: true,
+        }
     }
 
     fn next(&mut self) -> (i32, i32, u8) {
@@ -474,8 +506,7 @@ pub async fn run_bot(cfg: BotConfig, index: usize) -> BotReport {
         auth_phase(&cfg, &mut clock, &mut counts).await?;
         auth_ms = Some(elapsed_ms(start));
 
-        let (slot, x, y, mut rd, mut wr, mut sp) =
-            channel_phase(&cfg, &mut counts).await?;
+        let (slot, x, y, mut rd, mut wr, mut sp) = channel_phase(&cfg, &mut counts).await?;
         channel_login_ms = Some(elapsed_ms(start));
         let _ = slot; // el slot elegido (información)
 
@@ -564,11 +595,15 @@ pub async fn run_bot(cfg: BotConfig, index: usize) -> BotReport {
 
 fn classify(e: &BotError) -> (Status, String) {
     match e {
-        BotError::Connect(addr, e) => (Status::Timeout, format!("connect {addr}: {e}")),        BotError::Timeout(label) => (Status::Timeout, format!("timeout en {label}")),
+        BotError::Connect(addr, e) => (Status::Timeout, format!("connect {addr}: {e}")),
+        BotError::Timeout(label) => (Status::Timeout, format!("timeout en {label}")),
         BotError::LoginFailure(s) => (Status::LoginFailed, s.clone()),
         BotError::AuthFailed => (Status::AuthFailed, "bResult=0".into()),
         BotError::NoCharacter => (Status::NoCharacter, "cuenta sin personaje".into()),
-        BotError::Desync(h) => (Status::Desync, format!("header 0x{h:02x} fuera de la tabla S→C")),
+        BotError::Desync(h) => (
+            Status::Desync,
+            format!("header 0x{h:02x} fuera de la tabla S→C"),
+        ),
         BotError::Eof => (Status::Disconnected, "server closed".into()),
         BotError::Protocol(ctx, e) => (Status::WorldFailed, format!("{ctx}: {e}")),
         BotError::Unexpected(Stage::Auth, m) => (Status::AuthFailed, m.clone()),
@@ -625,7 +660,11 @@ mod tests {
         assert_eq!(walk_step(200, Duration::from_millis(100)), 20);
         assert_eq!(walk_step(1, Duration::from_millis(1000)), 1, "mínimo 1 u");
         assert_eq!(walk_step(1000, Duration::from_millis(1)), 1, "1 ms → 1 u");
-        assert_eq!(walk_step(250, Duration::from_millis(1000)), 250, "knob --walk-speed");
+        assert_eq!(
+            walk_step(250, Duration::from_millis(1000)),
+            250,
+            "knob --walk-speed"
+        );
     }
 
     #[test]
@@ -661,11 +700,17 @@ mod tests {
     #[test]
     fn classify_maps_errors_to_statuses() {
         assert_eq!(classify(&BotError::AuthFailed).0, Status::AuthFailed);
-        assert_eq!(classify(&BotError::LoginFailure("ALREADY".into())).0, Status::LoginFailed);
+        assert_eq!(
+            classify(&BotError::LoginFailure("ALREADY".into())).0,
+            Status::LoginFailed
+        );
         assert_eq!(classify(&BotError::NoCharacter).0, Status::NoCharacter);
         assert_eq!(classify(&BotError::Desync(0x99)).0, Status::Desync);
         assert_eq!(classify(&BotError::Eof).0, Status::Disconnected);
-        assert_eq!(classify(&BotError::Timeout("auth_result")).0, Status::Timeout);
+        assert_eq!(
+            classify(&BotError::Timeout("auth_result")).0,
+            Status::Timeout
+        );
         assert_eq!(
             classify(&BotError::Unexpected(Stage::Auth, "x".into())).0,
             Status::AuthFailed

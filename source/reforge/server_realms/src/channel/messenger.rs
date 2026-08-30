@@ -63,7 +63,8 @@ const CHAT_TYPE_COMMAND: u8 = 5;
 
 /// Nivel GM del texto gmlist → i16 helper local (PLAYER si no hay fila).
 fn level_of(auth: Option<String>) -> i16 {
-    auth.and_then(|a| gm::gm_level_from_text(&a)).unwrap_or(gm::gm_level::PLAYER)
+    auth.and_then(|a| gm::gm_level_from_text(&a))
+        .unwrap_or(gm::gm_level::PLAYER)
 }
 
 /// Peticiones de amistad pendientes: `(inviter, accepter)` en minúsculas
@@ -88,7 +89,10 @@ fn gc_chat(chat_type: u8, empire: u8, payload: &str) -> Vec<u8> {
 
 async fn info(session: &mut Session, text: &str) -> Result<(), String> {
     let pkt = gc_chat(CHAT_TYPE_INFO, session.empire, text);
-    session.send(&pkt).await.map_err(|e| format!("enviando GC_CHAT (messenger info): {e}"))
+    session
+        .send(&pkt)
+        .await
+        .map_err(|e| format!("enviando GC_CHAT (messenger info): {e}"))
 }
 
 /// CG_MESSENGER (67) — dispatch por subheader (parity Messenger()
@@ -198,7 +202,10 @@ async fn staff_check(session: &mut Session, target: &str) -> Result<bool, String
         self_gm_authority(session)
             .await
             .inspect_err(|e| {
-                eprintln!("server_realms: channel conn {}: messenger staff-check (self): {e}", session.conn_id)
+                eprintln!(
+                    "server_realms: channel conn {}: messenger staff-check (self): {e}",
+                    session.conn_id
+                )
             })
             .unwrap_or(None),
     );
@@ -210,7 +217,10 @@ async fn staff_check(session: &mut Session, target: &str) -> Result<bool, String
             .gm_authority_by_name(target)
             .await
             .inspect_err(|e| {
-                eprintln!("server_realms: channel conn {}: messenger staff-check ({target}): {e}", session.conn_id)
+                eprintln!(
+                    "server_realms: channel conn {}: messenger staff-check ({target}): {e}",
+                    session.conn_id
+                )
             })
             .unwrap_or(None),
     );
@@ -292,10 +302,7 @@ pub async fn try_handle_command(
     let added = auth_to_add(session, inviter_raw, denied).await?;
     if added && denied {
         // parity :1184-1192: INFO al INVITADOR si está online.
-        let text = format!(
-            "{} rejected your friend request.",
-            session.row().name
-        );
+        let text = format!("{} rejected your friend request.", session.row().name);
         send_info_to_name(inviter_raw, &text);
     }
     Ok(Some(Outcome::Continue))
@@ -303,19 +310,24 @@ pub async fn try_handle_command(
 
 /// AuthToAdd (parity messenger_manager.cpp:179-204): la petición debe existir;
 /// al aceptar, AddToList EN AMBAS DIRECCIONES. Devuelve si la petición existía.
-async fn auth_to_add(
-    session: &mut Session,
-    inviter_raw: &str,
-    deny: bool,
-) -> Result<bool, String> {
-    let key = (inviter_raw.to_ascii_lowercase(), session.row().name.to_ascii_lowercase());
+async fn auth_to_add(session: &mut Session, inviter_raw: &str, deny: bool) -> Result<bool, String> {
+    let key = (
+        inviter_raw.to_ascii_lowercase(),
+        session.row().name.to_ascii_lowercase(),
+    );
     // parity :185-195: sin petición previa → sys_log + false (silencioso —
     // cierra el exploit del auto-add sin consentimiento).
-    if !requests().lock().expect("messenger requests lock").remove(&key) {
+    if !requests()
+        .lock()
+        .expect("messenger requests lock")
+        .remove(&key)
+    {
         eprintln!(
             "server_realms: channel conn {}: MessengerManager::AuthToAdd : \
              request not exist {} -> {}",
-            session.conn_id, inviter_raw, session.row().name
+            session.conn_id,
+            inviter_raw,
+            session.row().name
         );
         return Ok(false);
     }
@@ -343,9 +355,10 @@ async fn auth_to_add(
     }
     // Al ACCEPTER (esta sesión): INFO + LOGIN del invitador si online,
     // LOGOUT si no (parity :222-226).
-    info(session, &format!(
-        "<Messenger> {inviter} has been added to your messenger."
-    ))
+    info(
+        session,
+        &format!("<Messenger> {inviter} has been added to your messenger."),
+    )
     .await?;
     let status = if inviter_online.is_some() {
         psocial::login(&inviter)
@@ -390,9 +403,10 @@ async fn remove_one(
     let is_me = a.eq_ignore_ascii_case(&session.row().name);
     if is_me {
         // INFO al propio jugador (por el socket directo).
-        info(session, &format!(
-            "<Messenger> {b} has been removed from your messenger."
-        ))
+        info(
+            session,
+            &format!("<Messenger> {b} has been removed from your messenger."),
+        )
         .await?;
     } else if let Some((vid, ..)) = crate::channel::chat::find_player(a) {
         send_to_vid_info(
@@ -402,9 +416,10 @@ async fn remove_one(
         );
     }
     if let Some((vid, ..)) = crate::channel::chat::find_player(b)
-        && vid != session.player_vid() {
-            send_status(vid, &psocial::remove_friend(a));
-        }
+        && vid != session.player_vid()
+    {
+        send_status(vid, &psocial::remove_friend(a));
+    }
     eprintln!(
         "server_realms: channel conn {}: messenger remove {a} -> {b}",
         session.conn_id
@@ -470,6 +485,9 @@ fn send_info_to_name(name: &str, text: &str) {
 }
 
 #[cfg(test)]
+// TEST_LOCK serializa tests que comparten statics de canal: el guard de
+// std::Mutex viaja a través de los .await de los tests A PROPÓSITO.
+#[allow(clippy::await_holding_lock)]
 mod tests {
     use super::*;
     use std::time::Duration;
@@ -652,7 +670,10 @@ mod tests {
         // (el registro es compartido entre tests — no se exige vacío).
         assert!(a.chat_rx.try_recv().is_err(), "sin eco");
         assert!(
-            !requests().lock().unwrap().contains(&("solo".into(), "solo".into())),
+            !requests()
+                .lock()
+                .unwrap()
+                .contains(&("solo".into(), "solo".into())),
             "self/offline NO registra petición"
         );
     }
@@ -747,7 +768,12 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        assert!(try_handle_command(&mut a, "messenger_authy").await.unwrap().is_none());
+        assert!(
+            try_handle_command(&mut a, "messenger_authy")
+                .await
+                .unwrap()
+                .is_none()
+        );
         // Sin argumentos → consumido pero silencioso (parity :1177-1179).
         assert_eq!(
             try_handle_command(&mut a, "messenger_auth").await.unwrap(),
@@ -777,7 +803,10 @@ mod tests {
 
         let list_a = repo.list("MsgPairA").await.expect("list A");
         assert_eq!(list_a.len(), 1);
-        assert_eq!(list_a[0].companion, "MsgPairB", "columna companion = nombre");
+        assert_eq!(
+            list_a[0].companion, "MsgPairB",
+            "columna companion = nombre"
+        );
         assert_eq!(list_a[0].account, "MsgPairA");
 
         // Remove en AMBAS direcciones (parity @fixme183).

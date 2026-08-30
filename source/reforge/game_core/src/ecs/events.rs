@@ -113,7 +113,10 @@ pub enum CombatIntent {
     /// PK mode del jugador (CG_PVP 41 — el handler del canal lo manda al
     /// setear el flag de sesión; el gate PvP `battle_is_attackable` del
     /// mundo lo consume — el mundo es donde están AMBOS jugadores).
-    SetPvpMode { player_vid: u32, mode: crate::combat::PkMode },
+    SetPvpMode {
+        player_vid: u32,
+        mode: crate::combat::PkMode,
+    },
     /// Party del jugador (el canal lo sincroniza en Joined/LeftParty —
     /// "cannot attack same party", pvp.cpp:439-441).
     SetParty {

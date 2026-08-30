@@ -21,12 +21,12 @@
 
 use database::player::PlayerRow;
 use protocol::world::{
-    TPacketCGQuickSlotAdd, TPacketCGQuickSlotDel, TPacketCGQuickSlotSwap,
-    TPacketGCQuickSlotAdd, TPacketGCQuickSlotDel, TPacketGCQuickSlotSwap, TQuickslot,
+    TPacketCGQuickSlotAdd, TPacketCGQuickSlotDel, TPacketCGQuickSlotSwap, TPacketGCQuickSlotAdd,
+    TPacketGCQuickSlotDel, TPacketGCQuickSlotSwap, TQuickslot,
 };
 
-use crate::channel::session::{Outcome, Session};
 use crate::channel::INVENTORY_MAX_NUM;
+use crate::channel::session::{Outcome, Session};
 
 /// `QUICKSLOT_MAX_NUM = 36` (length.h:60) — slots de la barra.
 pub const QUICKSLOT_MAX_NUM: usize = 36;
@@ -75,9 +75,7 @@ fn persist(session: &mut Session, blob: &[u8]) {
 pub fn clear_item_refs(blob: &mut [u8], cell: u16) -> Vec<u8> {
     let mut cleared = Vec::new();
     for i in 0..QUICKSLOT_MAX_NUM {
-        if blob[i * 2] == QUICKSLOT_TYPE_ITEM
-            && u16::from(blob[i * 2 + 1]) == cell
-        {
+        if blob[i * 2] == QUICKSLOT_TYPE_ITEM && u16::from(blob[i * 2 + 1]) == cell {
             blob[i * 2..i * 2 + 2].copy_from_slice(&[0, 0]);
             cleared.push(i as u8);
         }
@@ -177,8 +175,7 @@ pub async fn handle_add(session: &mut Session, pkt: &[u8]) -> Result<Outcome, St
         }
     }
     // Set + eco GC_QUICKSLOT_ADD (28, 4 B — parity char_quickslot.cpp:90-98).
-    b[add.pos as usize * 2..add.pos as usize * 2 + 2]
-        .copy_from_slice(&add.slot.to_bytes());
+    b[add.pos as usize * 2..add.pos as usize * 2 + 2].copy_from_slice(&add.slot.to_bytes());
     session
         .send(&TPacketGCQuickSlotAdd::new(add.pos, add.slot).to_bytes())
         .await
@@ -219,7 +216,10 @@ pub async fn handle_del(session: &mut Session, pkt: &[u8]) -> Result<Outcome, St
         return Ok(Outcome::Continue);
     }
     let mut b = blob(session.row());
-    let before = slot_at(&b, del.pos).unwrap_or(TQuickslot { slot_type: 0, pos: 0 });
+    let before = slot_at(&b, del.pos).unwrap_or(TQuickslot {
+        slot_type: 0,
+        pos: 0,
+    });
     b[del.pos as usize * 2..del.pos as usize * 2 + 2].copy_from_slice(&[0, 0]);
     session
         .send(&TPacketGCQuickSlotDel::new(del.pos).to_bytes())
@@ -265,11 +265,16 @@ pub async fn handle_swap(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
         return Ok(Outcome::Continue); // no-op (parity: swap consigo mismo)
     }
     let mut b = blob(session.row());
-    let a = slot_at(&b, sw.pos).unwrap_or(TQuickslot { slot_type: 0, pos: 0 });
-    let c = slot_at(&b, sw.change_pos).unwrap_or(TQuickslot { slot_type: 0, pos: 0 });
+    let a = slot_at(&b, sw.pos).unwrap_or(TQuickslot {
+        slot_type: 0,
+        pos: 0,
+    });
+    let c = slot_at(&b, sw.change_pos).unwrap_or(TQuickslot {
+        slot_type: 0,
+        pos: 0,
+    });
     b[sw.pos as usize * 2..sw.pos as usize * 2 + 2].copy_from_slice(&c.to_bytes());
-    b[sw.change_pos as usize * 2..sw.change_pos as usize * 2 + 2]
-        .copy_from_slice(&a.to_bytes());
+    b[sw.change_pos as usize * 2..sw.change_pos as usize * 2 + 2].copy_from_slice(&a.to_bytes());
     session
         .send(&TPacketGCQuickSlotSwap::new(sw.pos, sw.change_pos).to_bytes())
         .await
@@ -277,7 +282,10 @@ pub async fn handle_swap(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
     persist(session, &b);
     eprintln!(
         "server_realms: channel conn {}: {} — quickslot swap {}/{}",
-        session.conn_id, session.row().name, sw.pos, sw.change_pos
+        session.conn_id,
+        session.row().name,
+        sw.pos,
+        sw.change_pos
     );
     Ok(Outcome::Continue)
 }
@@ -378,11 +386,11 @@ mod tests {
     #[test]
     fn add_gates_reject_out_of_range() {
         // pos 36+ → rechazado.
-        assert!(slot_at(&vec![0; 72], 36).is_none(), "pos 36 fuera");
-        assert!(slot_at(&vec![0; 72], 35).is_some(), "pos 35 último válido");
+        assert!(slot_at(&[0; 72], 36).is_none(), "pos 36 fuera");
+        assert!(slot_at(&[0; 72], 35).is_some(), "pos 35 último válido");
         // type 4 (QUICKSLOT_TYPE_MAX_NUM) → rechazado por el gate del C++.
-        assert!(QUICKSLOT_TYPE_MAX_NUM > QUICKSLOT_TYPE_COMMAND);
-        assert!(QUICKSLOT_TYPE_COMMAND < QUICKSLOT_TYPE_MAX_NUM);
+        const { assert!(QUICKSLOT_TYPE_MAX_NUM > QUICKSLOT_TYPE_COMMAND) }
+        const { assert!(QUICKSLOT_TYPE_COMMAND < QUICKSLOT_TYPE_MAX_NUM) }
         // Los tipos del length.h: NONE=0, ITEM=1, SKILL=2, COMMAND=3.
         assert_eq!(QUICKSLOT_TYPE_NONE, 0);
         assert_eq!(QUICKSLOT_TYPE_ITEM, 1);

@@ -100,7 +100,10 @@ pub enum LegacyStmt {
     /// (reported as unmapped by the converter).
     While { head: String, body: Vec<LegacyStmt> },
     /// `repeat ... until <cond>` — closed by `until`, no `end`.
-    Repeat { body: Vec<LegacyStmt>, until: String },
+    Repeat {
+        body: Vec<LegacyStmt>,
+        until: String,
+    },
     /// Any unrecognized line (kept for the discrepancy report).
     Raw(String),
 }
@@ -135,7 +138,11 @@ pub fn parse_qc(text: &str) -> Result<LegacyQuest, String> {
                 return Err(format!("línea {}: quest sin nombre: {t}", i + 1));
             }
             i += 1;
-            let mut quest = LegacyQuest { name: name.to_string(), states: Vec::new(), unparsed: pre };
+            let mut quest = LegacyQuest {
+                name: name.to_string(),
+                states: Vec::new(),
+                unparsed: pre,
+            };
             while i < lines.len() {
                 let t = lines[i].trim();
                 if t.is_empty() {
@@ -170,8 +177,17 @@ pub fn parse_qc(text: &str) -> Result<LegacyQuest, String> {
     Err("archivo sin quest".into())
 }
 
-fn parse_state_body(lines: &[String], mut i: usize, name: &str) -> Result<(LegacyState, usize), String> {
-    let mut state = LegacyState { name: name.to_string(), events: Vec::new(), helpers: Vec::new(), unparsed: Vec::new() };
+fn parse_state_body(
+    lines: &[String],
+    mut i: usize,
+    name: &str,
+) -> Result<(LegacyState, usize), String> {
+    let mut state = LegacyState {
+        name: name.to_string(),
+        events: Vec::new(),
+        helpers: Vec::new(),
+        unparsed: Vec::new(),
+    };
     while i < lines.len() {
         let t = lines[i].trim();
         if t.is_empty() {
@@ -214,7 +230,11 @@ fn find_begin(text: &str) -> Option<usize> {
     None
 }
 
-fn parse_when(lines: &[String], mut i: usize, first_rest: &str) -> Result<(LegacyEvent, usize), String> {
+fn parse_when(
+    lines: &[String],
+    mut i: usize,
+    first_rest: &str,
+) -> Result<(LegacyEvent, usize), String> {
     // The when head may span lines (`... or` / `... with` / `begin` on the
     // next line) and may carry an INLINE body: `when 20119.click begin
     // horse_menu.horse_menu() end` (horse_menu.quest).
@@ -237,7 +257,11 @@ fn parse_when(lines: &[String], mut i: usize, first_rest: &str) -> Result<(Legac
         Some(w) => (head[..w].trim(), Some(head[w + 6..].trim().to_string())),
         None => (head, None),
     };
-    let triggers: Vec<String> = trig_head.split_whitespace().filter(|w| *w != "or").map(str::to_string).collect();
+    let triggers: Vec<String> = trig_head
+        .split_whitespace()
+        .filter(|w| *w != "or")
+        .map(str::to_string)
+        .collect();
     if triggers.is_empty() {
         return Err(format!("línea {}: when sin triggers: {head}", i + 1));
     }
@@ -248,7 +272,14 @@ fn parse_when(lines: &[String], mut i: usize, first_rest: &str) -> Result<(Legac
             .strip_suffix(" end")
             .ok_or_else(|| format!("línea {}: when inline sin `end`: {inline}", i + 1))?;
         parse_inline(inl, &mut body)?;
-        return Ok((LegacyEvent { triggers, condition, body }, i + 1));
+        return Ok((
+            LegacyEvent {
+                triggers,
+                condition,
+                body,
+            },
+            i + 1,
+        ));
     }
     i += 1;
     while i < lines.len() {
@@ -258,7 +289,14 @@ fn parse_when(lines: &[String], mut i: usize, first_rest: &str) -> Result<(Legac
             continue;
         }
         if t == "end" {
-            return Ok((LegacyEvent { triggers, condition, body }, i + 1));
+            return Ok((
+                LegacyEvent {
+                    triggers,
+                    condition,
+                    body,
+                },
+                i + 1,
+            ));
         }
         let (stmt, next) = parse_stmt_line(lines, i, t)?;
         body.push(stmt);
@@ -303,7 +341,11 @@ fn parse_stmt_line(lines: &[String], i: usize, t: &str) -> Result<(LegacyStmt, u
     }
     if let Some(rest) = t.strip_prefix("return") {
         let v = rest.trim();
-        let value = if v.is_empty() { None } else { Some(v.to_string()) };
+        let value = if v.is_empty() {
+            None
+        } else {
+            Some(v.to_string())
+        };
         return Ok((LegacyStmt::Return { value }, i + 1));
     }
     if let Some(pos) = top_level_eq(t)
@@ -311,7 +353,13 @@ fn parse_stmt_line(lines: &[String], i: usize, t: &str) -> Result<(LegacyStmt, u
     {
         let name = t[..pos].trim();
         let value = t[pos + 1..].trim();
-        return Ok((LegacyStmt::Assign { name: name.to_string(), value: value.to_string() }, i + 1));
+        return Ok((
+            LegacyStmt::Assign {
+                name: name.to_string(),
+                value: value.to_string(),
+            },
+            i + 1,
+        ));
     }
     if let Some(open) = t.find('(')
         && t.ends_with(')')
@@ -334,7 +382,10 @@ fn parse_local(rest: &str) -> Result<LegacyStmt, String> {
             name: rest[..pos].trim().to_string(),
             value: Some(rest[pos + 1..].trim().to_string()),
         }),
-        _ => Ok(LegacyStmt::Local { name: rest.to_string(), value: None }),
+        _ => Ok(LegacyStmt::Local {
+            name: rest.to_string(),
+            value: None,
+        }),
     }
 }
 
@@ -363,7 +414,15 @@ fn parse_if(lines: &[String], mut i: usize, rest: &str) -> Result<(LegacyStmt, u
         parse_inline(inl, &mut then)?;
         i += 1;
         if inline_end {
-            return Ok((LegacyStmt::If { cond, then, elseif_: Vec::new(), els: Vec::new() }, i));
+            return Ok((
+                LegacyStmt::If {
+                    cond,
+                    then,
+                    elseif_: Vec::new(),
+                    els: Vec::new(),
+                },
+                i,
+            ));
         }
     } else {
         i += 1;
@@ -377,9 +436,19 @@ fn parse_if(lines: &[String], mut i: usize, rest: &str) -> Result<(LegacyStmt, u
         }
         let t = lines[i].trim();
         if t == "end" {
-            return Ok((LegacyStmt::If { cond, then, elseif_, els }, i + 1));
+            return Ok((
+                LegacyStmt::If {
+                    cond,
+                    then,
+                    elseif_,
+                    els,
+                },
+                i + 1,
+            ));
         }
-        let elseif_rest = t.strip_prefix("elseif ").or_else(|| t.strip_prefix("else if "));
+        let elseif_rest = t
+            .strip_prefix("elseif ")
+            .or_else(|| t.strip_prefix("else if "));
         if let Some(r) = elseif_rest {
             let mut etext = r.to_string();
             while find_then(&etext).is_none() {
@@ -424,7 +493,10 @@ fn parse_if(lines: &[String], mut i: usize, rest: &str) -> Result<(LegacyStmt, u
 fn parse_for(lines: &[String], mut i: usize, rest: &str) -> Result<(LegacyStmt, usize), String> {
     // `for <head> do [<inline> end]`
     let (head, inline) = match rest.find(" do") {
-        Some(p) => (rest[..p].trim().to_string(), rest[p + 3..].trim().to_string()),
+        Some(p) => (
+            rest[..p].trim().to_string(),
+            rest[p + 3..].trim().to_string(),
+        ),
         None => return Err(format!("línea {}: for sin `do`: {rest}", i + 1)),
     };
     let mut body = Vec::new();
@@ -453,11 +525,19 @@ fn parse_for(lines: &[String], mut i: usize, rest: &str) -> Result<(LegacyStmt, 
     Ok((LegacyStmt::For { head, body }, i))
 }
 
-fn parse_func(lines: &[String], i: usize, rest: &str) -> Result<(String, Vec<LegacyStmt>, usize), String> {
+fn parse_func(
+    lines: &[String],
+    i: usize,
+    rest: &str,
+) -> Result<(String, Vec<LegacyStmt>, usize), String> {
     // `function name(args)` or anonymous `function (args)` (a call argument:
     // `table.foreachi(list, function (n, v) ... end)`).
     let name = rest.split('(').next().unwrap_or("").trim().to_string();
-    let label = if name.is_empty() { "(anonymous)".to_string() } else { name.clone() };
+    let label = if name.is_empty() {
+        "(anonymous)".to_string()
+    } else {
+        name.clone()
+    };
     let mut i = i + 1;
     let body = collect_body(lines, &mut i)?;
     if i < lines.len() && lines[i].trim() == "end" {
@@ -472,7 +552,10 @@ fn parse_func(lines: &[String], i: usize, rest: &str) -> Result<(String, Vec<Leg
 /// loops inside ifs; the `end` must be tracked for correct nesting).
 fn parse_while(lines: &[String], mut i: usize, rest: &str) -> Result<(LegacyStmt, usize), String> {
     let (head, inline) = match rest.find(" do") {
-        Some(p) => (rest[..p].trim().to_string(), rest[p + 3..].trim().to_string()),
+        Some(p) => (
+            rest[..p].trim().to_string(),
+            rest[p + 3..].trim().to_string(),
+        ),
         None => return Err(format!("línea {}: while sin `do`: {rest}", i + 1)),
     };
     let mut body = Vec::new();
@@ -511,7 +594,13 @@ fn parse_repeat(lines: &[String], mut i: usize) -> Result<(LegacyStmt, usize), S
             continue;
         }
         if let Some(rest) = t.strip_prefix("until") {
-            return Ok((LegacyStmt::Repeat { body, until: rest.trim().to_string() }, i + 1));
+            return Ok((
+                LegacyStmt::Repeat {
+                    body,
+                    until: rest.trim().to_string(),
+                },
+                i + 1,
+            ));
         }
         let (s, next) = parse_stmt_line(lines, i, t)?;
         body.push(s);
@@ -550,7 +639,13 @@ fn parse_inline(text: &str, out: &mut Vec<LegacyStmt>) -> Result<(), String> {
     }
     if let Some(rest) = t.strip_prefix("return") {
         let v = rest.trim();
-        out.push(LegacyStmt::Return { value: if v.is_empty() { None } else { Some(v.to_string()) } });
+        out.push(LegacyStmt::Return {
+            value: if v.is_empty() {
+                None
+            } else {
+                Some(v.to_string())
+            },
+        });
         return Ok(());
     }
     if let Some(rest) = t.strip_prefix("local ") {
@@ -627,7 +722,11 @@ fn top_level_eq(text: &str) -> Option<usize> {
             '"' | '\'' if quote == Some(c) => quote = None,
             '(' if quote.is_none() => depth += 1,
             ')' if quote.is_none() => depth -= 1,
-            '=' if quote.is_none() && depth == 0 && prev != '=' && !text[idx + 1..].starts_with('=') => {
+            '=' if quote.is_none()
+                && depth == 0
+                && prev != '='
+                && !text[idx + 1..].starts_with('=') =>
+            {
                 return Some(idx);
             }
             _ => {}
@@ -740,19 +839,29 @@ end
         assert_eq!(q.states[0].name, "start");
         // when login or levelup with pc.level >= 30
         let ev = &q.states[0].events[0];
-        assert_eq!(ev.triggers, vec!["login".to_string(), "levelup".to_string()]);
+        assert_eq!(
+            ev.triggers,
+            vec!["login".to_string(), "levelup".to_string()]
+        );
         assert_eq!(ev.condition.as_deref(), Some("pc.level >= 30"));
         assert_eq!(ev.body.len(), 1);
-        let LegacyStmt::Call { name, .. } = &ev.body[0] else { panic!("set_state") };
+        let LegacyStmt::Call { name, .. } = &ev.body[0] else {
+            panic!("set_state")
+        };
         assert_eq!(name, "set_state");
         // information: find_npc_by_vnum idiom + send_letter
         let ev2 = &q.states[1].events[0];
         assert_eq!(ev2.triggers, vec!["letter".to_string()]);
         assert!(matches!(&ev2.body[0], LegacyStmt::Local { name, .. } if name == "v"));
         assert!(matches!(&ev2.body[1], LegacyStmt::If { .. }));
-        let LegacyStmt::Call { name, args } = &ev2.body[2] else { panic!() };
+        let LegacyStmt::Call { name, args } = &ev2.body[2] else {
+            panic!()
+        };
         assert_eq!(name, "send_letter");
-        assert_eq!(args, &vec!["gameforge.collect_quest_lv30._10_sendLetter".to_string()]);
+        assert_eq!(
+            args,
+            &vec!["gameforge.collect_quest_lv30._10_sendLetter".to_string()]
+        );
         // button or info
         let ev3 = &q.states[1].events[1];
         assert_eq!(ev3.triggers, vec!["button".to_string(), "info".to_string()]);
@@ -763,8 +872,13 @@ end
         let q = parse_qc("quest q begin\n\tstate start begin\n\t\twhen 20018.chat.gameforge.check_collect_reward._010_npcChat   begin\n\t\t\tsay(gameforge.check_collect_reward._030_say)\n\t\tend\n\tend\nend\n")
             .expect("parse");
         let ev = &q.states[0].events[0];
-        assert_eq!(ev.triggers, vec!["20018.chat.gameforge.check_collect_reward._010_npcChat".to_string()]);
-        let LegacyStmt::Call { name, .. } = &ev.body[0] else { panic!() };
+        assert_eq!(
+            ev.triggers,
+            vec!["20018.chat.gameforge.check_collect_reward._010_npcChat".to_string()]
+        );
+        let LegacyStmt::Call { name, .. } = &ev.body[0] else {
+            panic!()
+        };
         assert_eq!(name, "say");
     }
 
@@ -789,14 +903,29 @@ end
         .expect("parse");
         let body = &q.states[0].events[0].body;
         assert_eq!(body.len(), 3);
-        let LegacyStmt::If { cond, then, elseif_, els } = &body[0] else { panic!() };
+        let LegacyStmt::If {
+            cond,
+            then,
+            elseif_,
+            els,
+        } = &body[0]
+        else {
+            panic!()
+        };
         assert_eq!(cond, "pc.getqf(\"basic_weapon\") != 0");
         assert!(matches!(&then[0], LegacyStmt::Return { value: None }));
         assert!(elseif_.is_empty() && els.is_empty());
-        let LegacyStmt::If { cond, then, .. } = &body[1] else { panic!() };
+        let LegacyStmt::If { cond, then, .. } = &body[1] else {
+            panic!()
+        };
         assert_eq!(cond, "lev == 0");
         assert!(matches!(&then[0], LegacyStmt::Return { .. }));
-        let LegacyStmt::If { cond, elseif_, els, .. } = &body[2] else { panic!() };
+        let LegacyStmt::If {
+            cond, elseif_, els, ..
+        } = &body[2]
+        else {
+            panic!()
+        };
         assert_eq!(cond, "reward == 1");
         assert_eq!(elseif_.len(), 1);
         assert_eq!(elseif_[0].0, "reward == 2");
@@ -811,16 +940,22 @@ end
         .expect("parse");
         let st = &q.states[0];
         let body = &st.events[0].body;
-        let LegacyStmt::For { head, body: fbody } = &body[0] else { panic!("for") };
+        let LegacyStmt::For { head, body: fbody } = &body[0] else {
+            panic!("for")
+        };
         assert_eq!(head, "_, elem in ipairs(itemJob[pc.job])");
         assert!(matches!(&fbody[0], LegacyStmt::Call { name, .. } if name == "pc.give_item2"));
-        let LegacyStmt::Call { name, .. } = &body[1] else { panic!() };
+        let LegacyStmt::Call { name, .. } = &body[1] else {
+            panic!()
+        };
         assert_eq!(name, "pc.setqf");
         // state-level helper function
         let run = &q.states[1];
         assert_eq!(run.helpers.len(), 1);
         assert_eq!(run.helpers[0].name, "show_mob_pos");
-        assert!(matches!(&run.helpers[0].body[0], LegacyStmt::Assign { name, .. } if name == "map_index"));
+        assert!(
+            matches!(&run.helpers[0].body[0], LegacyStmt::Assign { name, .. } if name == "map_index")
+        );
     }
 
     #[test]
@@ -830,7 +965,9 @@ end
         )
         .expect("parse");
         let body = &q.states[0].events[0].body;
-        let LegacyStmt::Call { name, args } = &body[0] else { panic!() };
+        let LegacyStmt::Call { name, args } = &body[0] else {
+            panic!()
+        };
         assert_eq!(name, "say");
         assert_eq!(args, &vec!["\"a--b\"".to_string()]);
     }
@@ -840,7 +977,10 @@ end
         let q = parse_qc("\u{feff}define ENABLE_SAY false\nquest q begin\n\tstate start begin\n\t\twhen login begin\n\t\t\treturn\n\t\tend\n\tend\nend\n")
             .expect("parse");
         assert_eq!(q.name, "q");
-        assert!(matches!(&q.states[0].events[0].body[0], LegacyStmt::Return { value: None }));
+        assert!(matches!(
+            &q.states[0].events[0].body[0],
+            LegacyStmt::Return { value: None }
+        ));
     }
 
     #[test]
@@ -858,11 +998,26 @@ end
         )
         .expect("parse");
         let evs = &q.states[0].events;
-        assert_eq!(evs[0].triggers, vec!["__TARGET__.target.click".to_string(), "20084.chat.gameforge.q._30_npcChat".to_string()]);
+        assert_eq!(
+            evs[0].triggers,
+            vec![
+                "__TARGET__.target.click".to_string(),
+                "20084.chat.gameforge.q._30_npcChat".to_string()
+            ]
+        );
         assert_eq!(evs[1].triggers, vec!["71178.use".to_string()]);
-        assert_eq!(evs[2].triggers, vec!["9011.chat.gameforge.marriage_manage._540_npcChat".to_string()]);
-        assert_eq!(evs[2].condition.as_deref(), Some("pc.count_item(30006) > 0"));
-        assert_eq!(evs[3].triggers, vec!["20047.click".to_string(), "20048.click".to_string()]);
+        assert_eq!(
+            evs[2].triggers,
+            vec!["9011.chat.gameforge.marriage_manage._540_npcChat".to_string()]
+        );
+        assert_eq!(
+            evs[2].condition.as_deref(),
+            Some("pc.count_item(30006) > 0")
+        );
+        assert_eq!(
+            evs[3].triggers,
+            vec!["20047.click".to_string(), "20048.click".to_string()]
+        );
     }
 
     #[test]
@@ -875,17 +1030,25 @@ end
         .expect("parse");
         let body = &q.states[0].events[0].body;
         assert_eq!(body.len(), 4);
-        let LegacyStmt::If { cond, .. } = &body[0] else { panic!() };
+        let LegacyStmt::If { cond, .. } = &body[0] else {
+            panic!()
+        };
         assert!(cond.starts_with("current == 0 and"));
         assert!(cond.contains("pc.get_level() < 90"));
-        let LegacyStmt::If { cond, .. } = &body[1] else { panic!() };
+        let LegacyStmt::If { cond, .. } = &body[1] else {
+            panic!()
+        };
         assert!(cond.contains("collect_count"));
         // inline without end + else on the next line
-        let LegacyStmt::If { then, els, .. } = &body[2] else { panic!() };
+        let LegacyStmt::If { then, els, .. } = &body[2] else {
+            panic!()
+        };
         assert!(matches!(&then[0], LegacyStmt::Assign { name, .. } if name == "s"));
         assert!(matches!(&els[0], LegacyStmt::Return { .. }));
         // `else if` variant
-        let LegacyStmt::If { elseif_, els, .. } = &body[3] else { panic!() };
+        let LegacyStmt::If { elseif_, els, .. } = &body[3] else {
+            panic!()
+        };
         assert_eq!(elseif_.len(), 1);
         assert!(!els.is_empty());
     }
@@ -908,16 +1071,24 @@ end
         .expect("parse");
         let evs = &q.states[0].events;
         // inline when body
-        let LegacyStmt::Call { name, .. } = &evs[0].body[0] else { panic!("inline call") };
+        let LegacyStmt::Call { name, .. } = &evs[0].body[0] else {
+            panic!("inline call")
+        };
         assert_eq!(name, "horse_menu.horse_menu");
         // while + repeat nested inside if
         let body = &evs[1].body;
-        let LegacyStmt::If { then, .. } = &body[0] else { panic!("if") };
+        let LegacyStmt::If { then, .. } = &body[0] else {
+            panic!("if")
+        };
         assert!(matches!(&then[0], LegacyStmt::Local { .. }));
-        let LegacyStmt::While { head, body: wb } = &then[1] else { panic!("while") };
+        let LegacyStmt::While { head, body: wb } = &then[1] else {
+            panic!("while")
+        };
         assert_eq!(head, "counter2 < 5");
         assert_eq!(wb.len(), 2); // if + assign
-        let LegacyStmt::Repeat { body: rb, until } = &then[2] else { panic!("repeat") };
+        let LegacyStmt::Repeat { body: rb, until } = &then[2] else {
+            panic!("repeat")
+        };
         assert_eq!(rb.len(), 1);
         assert_eq!(until, "counter2 <= 0");
         assert!(matches!(&then[3], LegacyStmt::Call { name, .. } if name == "pc.setqf"));

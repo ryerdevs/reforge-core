@@ -100,14 +100,24 @@ pub struct PgSession {
 
 impl PgSession {
     /// Conecta y aplica el init de sesión (search_path, escaping, timezone).
-    pub async fn connect(conn_str: &str, search_path: &str, timezone: &str) -> Result<Self, PgError> {
+    pub async fn connect(
+        conn_str: &str,
+        search_path: &str,
+        timezone: &str,
+    ) -> Result<Self, PgError> {
         let (client, connection) = tokio_postgres::connect(conn_str, NoTls)
             .await
-            .map_err(|e| PgError { sqlstate: None, message: format!("PG connect: {e}") })?;
+            .map_err(|e| PgError {
+                sqlstate: None,
+                message: format!("PG connect: {e}"),
+            })?;
         tokio::spawn(async move {
             let _ = connection.await;
         });
-        let s = Self { client, tables: HashMap::new() };
+        let s = Self {
+            client,
+            tables: HashMap::new(),
+        };
         s.init(search_path, timezone).await?;
         Ok(s)
     }
@@ -157,9 +167,19 @@ impl PgSession {
                     for f in fields.iter() {
                         let is_bytea = bytea_cols.iter().any(|c| c == f.name());
                         let (type_code, charset, column_length, flags) = if is_bytea {
-                            (wire::MYSQL_TYPE_BLOB, wire::CHARSET_BINARY, 65_535u32, wire::BLOB_FLAG | wire::BINARY_FLAG)
+                            (
+                                wire::MYSQL_TYPE_BLOB,
+                                wire::CHARSET_BINARY,
+                                65_535u32,
+                                wire::BLOB_FLAG | wire::BINARY_FLAG,
+                            )
                         } else {
-                            (wire::MYSQL_TYPE_VAR_STRING, wire::CHARSET_UTF8MB4_GENERAL_CI, 255, 0)
+                            (
+                                wire::MYSQL_TYPE_VAR_STRING,
+                                wire::CHARSET_UTF8MB4_GENERAL_CI,
+                                255,
+                                0,
+                            )
                         };
                         columns.push(wire::ColumnDef {
                             name: f.name().to_string(),
@@ -179,7 +199,10 @@ impl PgSession {
                         match row.try_get::<usize>(i).ok().flatten() {
                             None => r.push(None),
                             Some(text) => {
-                                let is_bytea = columns.get(i).map(|c| c.type_code == wire::MYSQL_TYPE_BLOB).unwrap_or(false);
+                                let is_bytea = columns
+                                    .get(i)
+                                    .map(|c| c.type_code == wire::MYSQL_TYPE_BLOB)
+                                    .unwrap_or(false);
                                 let bytes = if is_bytea {
                                     wire::decode_bytea_text(text.as_bytes())
                                 } else {
@@ -195,7 +218,12 @@ impl PgSession {
                 _ => {}
             }
         }
-        Ok(QueryOutcome { columns, rows, affected, is_result_set })
+        Ok(QueryOutcome {
+            columns,
+            rows,
+            affected,
+            is_result_set,
+        })
     }
 
     /// `uiInsertID` para `InsertIdHint::Generated`: `SELECT lastval()` (error → 0,
@@ -204,10 +232,10 @@ impl PgSession {
         match self.client.simple_query("SELECT lastval()").await {
             Ok(msgs) => {
                 for m in msgs {
-                    if let SimpleQueryMessage::Row(row) = m {
-                        if let Some(v) = row.try_get::<usize>(0).ok().flatten() {
-                            return v.trim().parse::<u64>().unwrap_or(0);
-                        }
+                    if let SimpleQueryMessage::Row(row) = m
+                        && let Some(v) = row.try_get::<usize>(0).ok().flatten()
+                    {
+                        return v.trim().parse::<u64>().unwrap_or(0);
                     }
                 }
                 0
@@ -267,7 +295,12 @@ impl PgSession {
             .iter()
             .filter_map(|r| r.try_get::<_, String>(0).ok())
             .collect::<Vec<_>>();
-        let info = TableInfo { columns, pk, identity, bytea };
+        let info = TableInfo {
+            columns,
+            pk,
+            identity,
+            bytea,
+        };
         self.tables.insert(table.to_string(), Some(info.clone()));
         Some(info)
     }
@@ -284,7 +317,10 @@ impl TableCatalog for PgSession {
 fn pg_err(e: tokio_postgres::Error) -> PgError {
     PgError {
         sqlstate: e.code().map(|c| c.code().to_string()),
-        message: e.as_db_error().map(|d| d.message().to_string()).unwrap_or_else(|| e.to_string()),
+        message: e
+            .as_db_error()
+            .map(|d| d.message().to_string())
+            .unwrap_or_else(|| e.to_string()),
     }
 }
 
@@ -322,14 +358,13 @@ fn first_from_table(sql: &str) -> Option<String> {
                 if depth == 0
                     && sql[i..].len() >= 4
                     && sql[i..i + 4].eq_ignore_ascii_case("from")
+                    && let Some(t) = parse_ident(sql[i + 4..].trim_start())
                 {
-                    if let Some(t) = parse_ident(sql[i + 4..].trim_start()) {
-                        return Some(t);
-                    }
-                    // `FROM (subquery)` o forma rara → la primera "tabla" no es
-                    // un identificador simple: seguir escaneando (el FROM de una
-                    // subquery está a depth > 0 y se ignora).
+                    return Some(t);
                 }
+                // `FROM (subquery)` o forma rara → la primera "tabla" no es
+                // un identificador simple: seguir escaneando (el FROM de una
+                // subquery está a depth > 0 y se ignora).
                 i += 1;
             }
         }
@@ -348,7 +383,11 @@ fn parse_ident(s: &str) -> Option<String> {
             while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_' || b[i] == b'$') {
                 i += 1;
             }
-            return if i == 0 { None } else { Some(s[..i].to_string()) };
+            return if i == 0 {
+                None
+            } else {
+                Some(s[..i].to_string())
+            };
         }
     };
     let mut i = 1;
@@ -428,7 +467,8 @@ mod tests {
     #[test]
     fn from_table_of_select() {
         assert_eq!(
-            first_from_table("SELECT vnum, name, locale_name FROM mob_proto ORDER BY vnum").as_deref(),
+            first_from_table("SELECT vnum, name, locale_name FROM mob_proto ORDER BY vnum")
+                .as_deref(),
             Some("mob_proto")
         );
         assert_eq!(
@@ -440,7 +480,10 @@ mod tests {
             Some("shop")
         );
         assert_eq!(
-            first_from_table("SELECT a.name, NOW() FROM player AS a, player_index AS b WHERE a.id=1").as_deref(),
+            first_from_table(
+                "SELECT a.name, NOW() FROM player AS a, player_index AS b WHERE a.id=1"
+            )
+            .as_deref(),
             Some("player")
         );
         assert_eq!(first_from_table("SELECT 1"), None);
@@ -464,7 +507,10 @@ mod tests {
         // La misma query YA TRADUCIDA (lo que ejecuta el proxy — el caso que
         // fallaba: EXTRACT(EPOCH FROM …) delante del FROM de la cláusula).
         let player_load_translated = "SELECT id,name,job,voice,dir,x,y,z,map_index,exit_x,exit_y,exit_map_index,hp,mp,stamina,random_hp,random_sp,playtime,gold,level,level_step,st,ht,dx,iq,exp,stat_point,skill_point,sub_skill_point,stat_reset_count,part_base,part_hair,part_acce,skill_level,quickslot,skill_group,alignment,horse_level,horse_riding,horse_hp,horse_hp_droptime,horse_stamina,EXTRACT(EPOCH FROM LOCALTIMESTAMP)-EXTRACT(EPOCH FROM last_play),horse_skill_point,cheque FROM player WHERE id=1";
-        assert_eq!(first_from_table(player_load_translated).as_deref(), Some("player"));
+        assert_eq!(
+            first_from_table(player_load_translated).as_deref(),
+            Some("player")
+        );
         // FROM de subquery a profundidad 1 → se ignora; sin tabla simple en la
         // cláusula → None (las subqueries en el FROM no existen en fase 1).
         assert_eq!(

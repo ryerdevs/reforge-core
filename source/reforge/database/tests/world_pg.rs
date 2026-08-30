@@ -24,7 +24,7 @@ use database::messenger::MessengerRepo;
 use database::player::{PlayerCreate, PlayerRepo};
 use database::quest::{QuestRepo, QuestRow};
 use database::safebox::SafeboxRepo;
-use database::wal::{audit_ddl, Batcher, PgMutationSink};
+use database::wal::{Batcher, PgMutationSink, audit_ddl};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_PG: &str = "host=127.0.0.1 port=5432 user=mt2 password=mt2 dbname=metin2";
@@ -87,18 +87,36 @@ async fn wait_for_audit(client: &tokio_postgres::Client, audit: &str, expected: 
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
 async fn quest_affect_load_live_characters_structure_only() {
     let conn = pg_conn();
-    let quests = QuestRepo::new(database::pool::new_pool(&conn, 4).expect("pool PG")).load(NINJA_ID).await.expect("QUEST_LOAD no falla");
+    let quests = QuestRepo::new(database::pool::new_pool(&conn, 4).expect("pool PG"))
+        .load(NINJA_ID)
+        .await
+        .expect("QUEST_LOAD no falla");
     for q in &quests {
         assert_eq!(q.dw_pid, NINJA_ID, "dwPID del row");
         assert!(!q.sz_name.is_empty(), "szName presente");
     }
-    let affects = AffectRepo::new(database::pool::new_pool(&conn, 4).expect("pool PG")).load(NINJA_ID).await.expect("AFFECT_LOAD no falla");
+    let affects = AffectRepo::new(database::pool::new_pool(&conn, 4).expect("pool PG"))
+        .load(NINJA_ID)
+        .await
+        .expect("AFFECT_LOAD no falla");
     for a in &affects {
         assert_eq!(a.dw_pid, NINJA_ID, "dwPID del row");
     }
     // Ids inexistentes -> vec vacio (sin error).
-    assert!(QuestRepo::new(database::pool::new_pool(&conn, 4).expect("pool PG")).load(999_999_999).await.expect("DB up").is_empty());
-    assert!(AffectRepo::new(database::pool::new_pool(&conn, 4).expect("pool PG")).load(999_999_999).await.expect("DB up").is_empty());
+    assert!(
+        QuestRepo::new(database::pool::new_pool(&conn, 4).expect("pool PG"))
+            .load(999_999_999)
+            .await
+            .expect("DB up")
+            .is_empty()
+    );
+    assert!(
+        AffectRepo::new(database::pool::new_pool(&conn, 4).expect("pool PG"))
+            .load(999_999_999)
+            .await
+            .expect("DB up")
+            .is_empty()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -114,8 +132,18 @@ async fn quest_save_upsert_roundtrip_throwaway() {
     let result = async {
         // Insert de 2 quests (semantica QUERY_QUEST_SAVE: lValue!=0 -> upsert).
         repo.save(&[
-            QuestRow { dw_pid: THROWAWAY_ID, sz_name: "q1".into(), sz_state: "s1".into(), l_value: 5 },
-            QuestRow { dw_pid: THROWAWAY_ID, sz_name: "q2".into(), sz_state: "s2".into(), l_value: 7 },
+            QuestRow {
+                dw_pid: THROWAWAY_ID,
+                sz_name: "q1".into(),
+                sz_state: "s1".into(),
+                l_value: 5,
+            },
+            QuestRow {
+                dw_pid: THROWAWAY_ID,
+                sz_name: "q2".into(),
+                sz_state: "s2".into(),
+                l_value: 7,
+            },
         ])
         .await
         .expect("save insert");
@@ -125,8 +153,18 @@ async fn quest_save_upsert_roundtrip_throwaway() {
 
         // Upsert (mismo PK, lValue nuevo) + delete (lValue 0).
         repo.save(&[
-            QuestRow { dw_pid: THROWAWAY_ID, sz_name: "q1".into(), sz_state: "s1".into(), l_value: 9 },
-            QuestRow { dw_pid: THROWAWAY_ID, sz_name: "q2".into(), sz_state: "s2".into(), l_value: 0 },
+            QuestRow {
+                dw_pid: THROWAWAY_ID,
+                sz_name: "q1".into(),
+                sz_state: "s1".into(),
+                l_value: 9,
+            },
+            QuestRow {
+                dw_pid: THROWAWAY_ID,
+                sz_name: "q2".into(),
+                sz_state: "s2".into(),
+                l_value: 0,
+            },
         ])
         .await
         .expect("save upsert+delete");
@@ -139,7 +177,10 @@ async fn quest_save_upsert_roundtrip_throwaway() {
 
     let client = raw_client(&conn).await;
     client
-        .execute("DELETE FROM player.quest WHERE dwPID = $1", &[&THROWAWAY_ID])
+        .execute(
+            "DELETE FROM player.quest WHERE dwPID = $1",
+            &[&THROWAWAY_ID],
+        )
         .await
         .expect("cleanup quest");
     result.expect("quest round-trip contra PG real");
@@ -175,14 +216,20 @@ async fn affect_save_upsert_remove_roundtrip_throwaway() {
 
         // Remove (QUERY_REMOVE_AFFECT).
         assert_eq!(repo.remove(THROWAWAY_ID, 1, 2).await.expect("remove"), 1);
-        assert!(repo.load(THROWAWAY_ID).await.expect("load").is_empty(), "afecto borrado");
+        assert!(
+            repo.load(THROWAWAY_ID).await.expect("load").is_empty(),
+            "afecto borrado"
+        );
         Ok::<(), String>(())
     }
     .await;
 
     let client = raw_client(&conn).await;
     client
-        .execute("DELETE FROM player.affect WHERE dwPID = $1", &[&THROWAWAY_ID])
+        .execute(
+            "DELETE FROM player.affect WHERE dwPID = $1",
+            &[&THROWAWAY_ID],
+        )
         .await
         .expect("cleanup affect");
     result.expect("affect round-trip contra PG real");
@@ -210,29 +257,56 @@ async fn safebox_set_size_roundtrip_throwaway() {
     let repo = SafeboxRepo::new(database::pool::new_pool(&conn, 4).expect("pool PG"));
 
     let result = async {
-        assert_eq!(repo.size(THROWAWAY_ID).await.expect("size"), None, "sin fila todavia");
+        assert_eq!(
+            repo.size(THROWAWAY_ID).await.expect("size"),
+            None,
+            "sin fila todavia"
+        );
         // size==1 -> INSERT (primera pagina del safebox, parity C++).
         assert_eq!(repo.set_size(THROWAWAY_ID, 1).await.expect("set_size 1"), 1);
-        assert_eq!(repo.size(THROWAWAY_ID).await.expect("size"), Some(1), "fila creada");
+        assert_eq!(
+            repo.size(THROWAWAY_ID).await.expect("size"),
+            Some(1),
+            "fila creada"
+        );
         // size!=1 -> UPDATE sobre la fila existente.
         assert_eq!(repo.set_size(THROWAWAY_ID, 4).await.expect("set_size 4"), 1);
-        let sb = repo.load(THROWAWAY_ID).await.expect("load").expect("existe");
+        let sb = repo
+            .load(THROWAWAY_ID)
+            .await
+            .expect("load")
+            .expect("existe");
         assert_eq!(sb.size, 4, "UPDATE aplicado");
         assert_eq!(sb.account_id, THROWAWAY_ID);
         // size==1 con la fila YA existente -> no-op idempotente (0 filas; el
         // INSERT plano del C++ daria 23505 en legacy) — el replay del WAL no
         // duplica la fila ni resetea el tamaño.
-        assert_eq!(repo.set_size(THROWAWAY_ID, 1).await.expect("set_size 1 no-op"), 0);
-        assert_eq!(repo.size(THROWAWAY_ID).await.expect("size"), Some(4), "el valor previo se conserva");
+        assert_eq!(
+            repo.set_size(THROWAWAY_ID, 1)
+                .await
+                .expect("set_size 1 no-op"),
+            0
+        );
+        assert_eq!(
+            repo.size(THROWAWAY_ID).await.expect("size"),
+            Some(4),
+            "el valor previo se conserva"
+        );
         // set_gold (QUERY_SAFEBOX_SAVE).
-        assert_eq!(repo.set_gold(THROWAWAY_ID, 12345).await.expect("set_gold"), 1);
+        assert_eq!(
+            repo.set_gold(THROWAWAY_ID, 12345).await.expect("set_gold"),
+            1
+        );
         Ok::<(), String>(())
     }
     .await;
 
     let client = raw_client(&conn).await;
     client
-        .execute("DELETE FROM player.safebox WHERE account_id = $1", &[&THROWAWAY_ID])
+        .execute(
+            "DELETE FROM player.safebox WHERE account_id = $1",
+            &[&THROWAWAY_ID],
+        )
         .await
         .expect("cleanup safebox");
     result.expect("safebox round-trip contra PG real");
@@ -249,11 +323,17 @@ async fn safebox_set_size_roundtrip_throwaway() {
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
 async fn item_load_ninja_inventory_structure_only() {
     let repo = ItemRepo::new(database::pool::new_pool(&pg_conn(), 4).expect("pool PG"));
-    let items = repo.load_by_owner(NINJA_ID).await.expect("ITEM_LOAD no falla");
+    let items = repo
+        .load_by_owner(NINJA_ID)
+        .await
+        .expect("ITEM_LOAD no falla");
     assert!(!items.is_empty(), "ninja tiene items (hoy 22)");
     for it in &items {
         assert!(
-            matches!(it.window.as_str(), "INVENTORY" | "EQUIPMENT" | "DRAGON_SOUL_INVENTORY" | "BELT_INVENTORY"),
+            matches!(
+                it.window.as_str(),
+                "INVENTORY" | "EQUIPMENT" | "DRAGON_SOUL_INVENTORY" | "BELT_INVENTORY"
+            ),
             "window del set QID_ITEM: {}",
             it.window
         );
@@ -262,7 +342,10 @@ async fn item_load_ninja_inventory_structure_only() {
     }
     // Probe del rango ITEM_ID_RANGE (E2E Q8): los ids vivos estan fuera del
     // rango 100M-200M (hoy max 50000005) — estructura-only.
-    let _ = repo.max_id_in_range(100_000_000, 200_000_000).await.expect("probe no falla");
+    let _ = repo
+        .max_id_in_range(100_000_000, 200_000_000)
+        .await
+        .expect("probe no falla");
 }
 
 /// Load de las tablas de attrs (lane 2026-08-16): 54 filas de item_attr +
@@ -277,18 +360,26 @@ async fn item_attr_tables_load_live_structure_only() {
     assert_eq!(t.normal.len(), 54, "item_attr — 54 filas");
     assert_eq!(t.rare.len(), 20, "item_attr_rare — 20 filas");
     for row in t.normal.iter().chain(t.rare.iter()) {
-        assert!(row.apply_index > 0, "apply_index EApplyTypes 1-based: {row:?}");
+        assert!(
+            row.apply_index > 0,
+            "apply_index EApplyTypes 1-based: {row:?}"
+        );
         assert!(row.prob >= 0, "prob no negativa");
         // Hay filas legítimas con TODOS los sets a 0 (los ATTBONUS_* del
         // item_attr — el C++ las salta en PutAttributeWithLevel porque
         // bMaxLevelBySet[set] == 0); las RARE siempre tienen set activo.
         assert!(
-            t.rare.iter().all(|r| r.max_level_by_set.iter().any(|m| *m > 0)),
+            t.rare
+                .iter()
+                .all(|r| r.max_level_by_set.iter().any(|m| *m > 0)),
             "item_attr_rare: todas las filas con set activo"
         );
     }
     // El MAX_HP del item_attr es el APPLY_MAX_HP=1 (parity apply+0 MySQL).
-    assert_eq!(t.normal[0].apply_index, 1, "primera fila ORDER BY apply = MAX_HP");
+    assert_eq!(
+        t.normal[0].apply_index, 1,
+        "primera fila ORDER BY apply = MAX_HP"
+    );
 }
 
 /// Upsert (id explicito del rango + DEFAULT) y delete — throwaway, cleanup SIEMPRE.
@@ -310,7 +401,10 @@ async fn item_upsert_delete_roundtrip_throwaway() {
             sockets: [0, 0, 0],
             attrs: [(0, 0); 7],
         };
-        assert_eq!(repo.upsert(&it, THROWAWAY_ID).await.expect("upsert insert"), explicit_id);
+        assert_eq!(
+            repo.upsert(&it, THROWAWAY_ID).await.expect("upsert insert"),
+            explicit_id
+        );
         // El owner es throwaway: el load lo ve (no hay FK a player).
         let items = repo.load_by_owner(THROWAWAY_ID).await.expect("load");
         assert_eq!(items.len(), 1, "1 item del owner throwaway");
@@ -322,7 +416,10 @@ async fn item_upsert_delete_roundtrip_throwaway() {
         it.count = 7;
         it.sockets[0] = 0xdead;
         it.attrs[0] = (1, 100);
-        assert_eq!(repo.upsert(&it, THROWAWAY_ID).await.expect("upsert update"), explicit_id);
+        assert_eq!(
+            repo.upsert(&it, THROWAWAY_ID).await.expect("upsert update"),
+            explicit_id
+        );
         let items = repo.load_by_owner(THROWAWAY_ID).await.expect("load");
         assert_eq!(items.len(), 1, "sigue siendo 1 (upsert)");
         assert_eq!(items[0].pos, 3);
@@ -340,21 +437,33 @@ async fn item_upsert_delete_roundtrip_throwaway() {
             sockets: [0, 0, 0],
             attrs: [(0, 0); 7],
         };
-        let gen_id = repo.upsert(&gen_item, THROWAWAY_ID).await.expect("upsert DEFAULT");
+        let gen_id = repo
+            .upsert(&gen_item, THROWAWAY_ID)
+            .await
+            .expect("upsert DEFAULT");
         assert!(gen_id > 0, "id generado: {gen_id}");
         assert_ne!(gen_id, explicit_id, "no colisiona con el explicito");
 
         // DELETE (QUERY_ITEM_DESTROY).
         assert_eq!(repo.delete(explicit_id).await.expect("delete"), 1);
         assert_eq!(repo.delete(gen_id).await.expect("delete 2"), 1);
-        assert!(repo.load_by_owner(THROWAWAY_ID).await.expect("load").is_empty(), "owner limpio");
+        assert!(
+            repo.load_by_owner(THROWAWAY_ID)
+                .await
+                .expect("load")
+                .is_empty(),
+            "owner limpio"
+        );
         Ok::<(), String>(())
     }
     .await;
 
     let client = raw_client(&conn).await;
     client
-        .execute("DELETE FROM player.item WHERE owner_id = $1", &[&THROWAWAY_ID])
+        .execute(
+            "DELETE FROM player.item WHERE owner_id = $1",
+            &[&THROWAWAY_ID],
+        )
         .await
         .expect("cleanup item por owner");
     client
@@ -392,12 +501,25 @@ async fn item_award_load_pending_and_take_throwaway() {
         let ours: Vec<_> = pending.iter().filter(|a| a.login == login).collect();
         assert_eq!(ours.len(), 2, "2 awards del login throwaway");
         assert!(ours.iter().all(|a| a.vnum == 27001 || a.vnum == 27002));
-        assert_eq!(ours[0].why.as_deref(), Some("e2e_rust_why"), "why round-trip");
+        assert_eq!(
+            ours[0].why.as_deref(),
+            Some("e2e_rust_why"),
+            "why round-trip"
+        );
 
         // take: marca taken_time + item_id; idempotente (AND taken_time IS NULL).
         let award_id = ours[0].id;
-        assert_eq!(repo.take_award(award_id, 100_000_001).await.expect("take"), 1);
-        assert_eq!(repo.take_award(award_id, 100_000_001).await.expect("take 2x"), 0, "idempotente");
+        assert_eq!(
+            repo.take_award(award_id, 100_000_001).await.expect("take"),
+            1
+        );
+        assert_eq!(
+            repo.take_award(award_id, 100_000_001)
+                .await
+                .expect("take 2x"),
+            0,
+            "idempotente"
+        );
         let pending = repo.load_pending_awards(0).await.expect("load pending");
         let ours: Vec<_> = pending.iter().filter(|a| a.login == login).collect();
         assert_eq!(ours.len(), 1, "solo queda el no tomado");
@@ -428,7 +550,10 @@ async fn messenger_add_list_remove_throwaway() {
     let companion = format!("m2e2c_{}", ts() % 1_000_000_000);
 
     let result = async {
-        assert!(repo.list(&account).await.expect("list vacio").is_empty(), "sin amigos");
+        assert!(
+            repo.list(&account).await.expect("list vacio").is_empty(),
+            "sin amigos"
+        );
         assert_eq!(repo.add(&account, &companion).await.expect("add"), 1);
         let list = repo.list(&account).await.expect("list");
         assert_eq!(list.len(), 1, "1 amigo");
@@ -438,17 +563,31 @@ async fn messenger_add_list_remove_throwaway() {
         // existente es un no-op — 0 filas y 1 sola fila en la tabla (el replay
         // del WAL no duplica). El game comprueba duplicados antes (parity C++),
         // asi que el caso legitimo nunca llega aqui.
-        assert_eq!(repo.add(&account, &companion).await.expect("add dup"), 0, "no-op idempotente");
-        assert_eq!(repo.list(&account).await.expect("list").len(), 1, "sigue 1 fila (no duplicado)");
+        assert_eq!(
+            repo.add(&account, &companion).await.expect("add dup"),
+            0,
+            "no-op idempotente"
+        );
+        assert_eq!(
+            repo.list(&account).await.expect("list").len(),
+            1,
+            "sigue 1 fila (no duplicado)"
+        );
         assert_eq!(repo.remove(&account, &companion).await.expect("remove"), 1);
-        assert!(repo.list(&account).await.expect("list").is_empty(), "borrado");
+        assert!(
+            repo.list(&account).await.expect("list").is_empty(),
+            "borrado"
+        );
         Ok::<(), String>(())
     }
     .await;
 
     let client = raw_client(&conn).await;
     client
-        .execute("DELETE FROM player.messenger_list WHERE account = $1", &[&account])
+        .execute(
+            "DELETE FROM player.messenger_list WHERE account = $1",
+            &[&account],
+        )
         .await
         .expect("cleanup messenger");
     result.expect("messenger contra PG real");
@@ -494,14 +633,28 @@ async fn player_save_mutated_via_batcher_applies_with_audit() {
             account_id: 1,
             name: name.clone(),
             level: 1,
-            st: 30, ht: 30, dx: 30, iq: 30,
-            job: 0, voice: 0, dir: 0,
-            x: 0, y: 0, z: 0,
+            st: 30,
+            ht: 30,
+            dx: 30,
+            iq: 30,
+            job: 0,
+            voice: 0,
+            dir: 0,
+            x: 0,
+            y: 0,
+            z: 0,
             map_index: 41,
-            hp: 100, mp: 100,
-            random_hp: 0, random_sp: 0, stat_point: 0, stamina: 100,
-            part_base: 0, part_main: 0, part_hair: 0,
-            gold: 0, playtime: 0,
+            hp: 100,
+            mp: 100,
+            random_hp: 0,
+            random_sp: 0,
+            stat_point: 0,
+            stamina: 100,
+            part_base: 0,
+            part_main: 0,
+            part_hair: 0,
+            gold: 0,
+            playtime: 0,
             skill_level: blobs.clone(),
             quickslot: blobs.clone(),
         };
@@ -511,7 +664,8 @@ async fn player_save_mutated_via_batcher_applies_with_audit() {
         let mut p = repo.load(id).await.expect("load").expect("existe");
         p.x = 969600;
         p.y = 278400;
-        let sink = PgMutationSink::new(database::pool::new_pool(&conn, 4).expect("pool")).with_audit_table(audit.clone());
+        let sink = PgMutationSink::new(database::pool::new_pool(&conn, 4).expect("pool"))
+            .with_audit_table(audit.clone());
         let batcher = Batcher::spawn(Duration::from_millis(100), 64, sink);
         repo.save_mutated(&batcher, &p);
         // Espera el flush: poll del audit (el sink abre conexion nueva).
@@ -559,21 +713,36 @@ async fn player_two_saves_same_batch_same_tx() {
             account_id: 1,
             name: name.clone(),
             level: 1,
-            st: 30, ht: 30, dx: 30, iq: 30,
-            job: 0, voice: 0, dir: 0,
-            x: 0, y: 0, z: 0,
+            st: 30,
+            ht: 30,
+            dx: 30,
+            iq: 30,
+            job: 0,
+            voice: 0,
+            dir: 0,
+            x: 0,
+            y: 0,
+            z: 0,
             map_index: 41,
-            hp: 100, mp: 100,
-            random_hp: 0, random_sp: 0, stat_point: 0, stamina: 100,
-            part_base: 0, part_main: 0, part_hair: 0,
-            gold: 0, playtime: 0,
+            hp: 100,
+            mp: 100,
+            random_hp: 0,
+            random_sp: 0,
+            stat_point: 0,
+            stamina: 100,
+            part_base: 0,
+            part_main: 0,
+            part_hair: 0,
+            gold: 0,
+            playtime: 0,
             skill_level: vec![0x01],
             quickslot: vec![0x01],
         };
         let id = repo.create(&c).await.expect("create");
         let p = repo.load(id).await.expect("load").expect("existe");
 
-        let sink = PgMutationSink::new(database::pool::new_pool(&conn, 4).expect("pool")).with_audit_table(audit.clone());
+        let sink = PgMutationSink::new(database::pool::new_pool(&conn, 4).expect("pool"))
+            .with_audit_table(audit.clone());
         let batcher = Batcher::spawn(Duration::from_millis(100), 64, sink);
         // Dos saves back-to-back: caen en la misma ventana de 100ms.
         let mut a = p.clone();
@@ -590,7 +759,10 @@ async fn player_two_saves_same_batch_same_tx() {
 
         // Audit: 2 filas, misma transaccion (mismo applied_at).
         let rows = client
-            .query(&format!("SELECT mutation_id, applied_at FROM {audit} ORDER BY mutation_id"), &[])
+            .query(
+                &format!("SELECT mutation_id, applied_at FROM {audit} ORDER BY mutation_id"),
+                &[],
+            )
             .await
             .expect("audit rows");
         assert_eq!(rows.len(), 2, "2 mutations auditadas");
@@ -650,15 +822,30 @@ async fn item_exchange_atomic_unit_against_real_pg() {
                 account_id: THROWAWAY_ID,
                 name: format!("xchg_{}", ts()),
                 level: 1,
-                st: 30, ht: 30, dx: 30, iq: 30,
-                job: 0, voice: 0, dir: 0,
-                x: 969600, y: 278400, z: 0,
+                st: 30,
+                ht: 30,
+                dx: 30,
+                iq: 30,
+                job: 0,
+                voice: 0,
+                dir: 0,
+                x: 969600,
+                y: 278400,
+                z: 0,
                 map_index: 41,
-                hp: 100, mp: 100, random_hp: 0, random_sp: 0,
-                stat_point: 0, stamina: 100,
-                part_base: 0, part_main: 0, part_hair: 0,
-                gold: 1_000, playtime: 0,
-                skill_level: vec![0x01], quickslot: vec![0x01],
+                hp: 100,
+                mp: 100,
+                random_hp: 0,
+                random_sp: 0,
+                stat_point: 0,
+                stamina: 100,
+                part_base: 0,
+                part_main: 0,
+                part_hair: 0,
+                gold: 1_000,
+                playtime: 0,
+                skill_level: vec![0x01],
+                quickslot: vec![0x01],
             })
             .await
             .expect("create player throwaway");
@@ -674,8 +861,20 @@ async fn item_exchange_atomic_unit_against_real_pg() {
             sockets: [0, 0, 0],
             attrs: [(0, 0); 7],
         };
-        assert_eq!(items.upsert(&mk(MAT_A, 0, 10, 5), pid).await.expect("mat A"), MAT_A);
-        assert_eq!(items.upsert(&mk(MAT_B, 1, 11, 3), pid).await.expect("mat B"), MAT_B);
+        assert_eq!(
+            items
+                .upsert(&mk(MAT_A, 0, 10, 5), pid)
+                .await
+                .expect("mat A"),
+            MAT_A
+        );
+        assert_eq!(
+            items
+                .upsert(&mk(MAT_B, 1, 11, 3), pid)
+                .await
+                .expect("mat B"),
+            MAT_B
+        );
 
         // Unidad: consume 3 de A (5→2), TODO B (3→0 DELETE), crea resultado
         // (id del rango) y sube el oro 1_000→1_200.
@@ -685,9 +884,13 @@ async fn item_exchange_atomic_unit_against_real_pg() {
             result: Some((mk(RESULT_ID, 2, 30001, 1), pid)),
             gold: Some((1_000, 1_200)),
         };
-        let sink = PgMutationSink::new(database::pool::new_pool(&conn, 4).expect("pool")).with_audit_table(audit.clone());
+        let sink = PgMutationSink::new(database::pool::new_pool(&conn, 4).expect("pool"))
+            .with_audit_table(audit.clone());
         let batcher = Batcher::spawn(Duration::from_millis(100), 64, sink);
-        items.exchange_mutated(&batcher, &ex).await.expect("unidad ACID commit");
+        items
+            .exchange_mutated(&batcher, &ex)
+            .await
+            .expect("unidad ACID commit");
 
         // Estado post-unidad: 4 mutations aplicadas (2 materiales + resultado + oro).
         let loaded = items.load_by_owner(pid).await.expect("load post-unidad");
@@ -699,12 +902,19 @@ async fn item_exchange_atomic_unit_against_real_pg() {
         );
         assert_eq!(get(RESULT_ID).count, 1, "resultado creado");
         assert_eq!(get(RESULT_ID).vnum, 30001);
-        let player = PlayerRepo::new(database::pool::new_pool(&conn, 4).expect("pool PG")).load(pid).await.expect("load").expect("player");
+        let player = PlayerRepo::new(database::pool::new_pool(&conn, 4).expect("pool PG"))
+            .load(pid)
+            .await
+            .expect("load")
+            .expect("player");
         assert_eq!(player.gold, 1_200, "oro 1_000→1_200 en la misma tx");
 
         // Audit: 4 filas con el MISMO applied_at (misma transaccion).
         let rows = client
-            .query(&format!("SELECT applied_at FROM {audit} ORDER BY mutation_id"), &[])
+            .query(
+                &format!("SELECT applied_at FROM {audit} ORDER BY mutation_id"),
+                &[],
+            )
             .await
             .expect("audit rows");
         assert_eq!(rows.len(), 4, "4 mutations auditadas (la unidad entera)");

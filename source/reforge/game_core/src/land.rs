@@ -22,14 +22,21 @@ pub struct Land {
 /// carga `dwID` de la tabla `land`; un AtomicU32 moría con el proceso y
 /// colisionaba con los ids del boot del mundo).
 pub fn create_land(id: u32, owner_id: u32, price: i64) -> Land {
-    Land { id, owner_id, price }
+    Land {
+        id,
+        owner_id,
+        price,
+    }
 }
 
 /// Transfiere el terreno a `new_owner` (parity `CLand::SetOwner`,
 /// building.cpp:603-610 — el C++ no persiste si el dueño no cambia). Función
 /// pura: la persistencia (`HEADER_GD_UPDATE_LAND`) entra en el slice real.
 pub fn transfer_land(land: Land, new_owner: u32) -> Land {
-    Land { owner_id: new_owner, ..land }
+    Land {
+        owner_id: new_owner,
+        ..land
+    }
 }
 
 #[cfg(test)]

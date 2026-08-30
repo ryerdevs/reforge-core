@@ -10,8 +10,8 @@
 //! - `source/server/game/src/packet.h`, `packet_info.cpp` (game server)
 //! - `source/server/common/tables.h`, `length.h` (TSimplePlayer, constantes)
 //! - `source/client/UserInterface/Packet.h` (cliente)
-//! y empíricamente compilando los structs C reales con gcc -m32 (toolchain del
-//! server) y MSVC 14.51 x86 (toolchain del cliente).
+//!   y empíricamente compilando los structs C reales con gcc -m32 (toolchain del
+//!   server) y MSVC 14.51 x86 (toolchain del cliente).
 //!
 //! # Nota sobre tamaños packed (ERRATA del spec, corregida 2026-08-10, spec §7)
 //!
@@ -206,7 +206,7 @@ pub mod header {
     /// Packet.h del cliente y libre en el packet_info del C++): comprar un
     /// terreno — 29 B (header + map_index/x/y/width/height, 5×i32 en células,
     /// + price i64). El id lo asigna el SERVIDOR (`nextval` de
-    /// `player.land_id_seq`), nunca el cliente.
+    ///   `player.land_id_seq`), nunca el cliente.
     pub const CG_LAND_BUY: u8 = 56;
     /// `CG_LAND_TRANSFER` (57 — aditivo del reforge; `//HEADER_BLANK57`):
     /// transferir el dueño (guild) de un terreno — 9 B (header + land_id u32
@@ -1783,6 +1783,9 @@ impl TPacketGCCharacterAdd {
     pub const SIZE: usize = 37;
     pub const HEADER: u8 = header::GC_CHARACTER_ADD;
 
+    // Constructor espejo del wire: los 11 campos son los del struct C — un
+    // builder no haría el contrato más claro.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         dw_vid: u32,
         angle: f32,
@@ -2653,7 +2656,7 @@ mod tests {
 
         // player 0 @ 1
         let p0 = 1;
-        exp[p0 + 0..p0 + 4].copy_from_slice(&0x1122_3344u32.to_le_bytes()); // dwID
+        exp[p0..p0 + 4].copy_from_slice(&0x1122_3344u32.to_le_bytes()); // dwID
         exp[p0 + 4..p0 + 4 + 8].copy_from_slice(b"Hercules"); // szName (resto a cero)
         exp[p0 + 29] = 0; // byJob
         exp[p0 + 30] = 42; // byLevel
@@ -2774,7 +2777,7 @@ mod tests {
         exp[0] = 0x88;
         exp[1..5].copy_from_slice(&0x1234u32.to_le_bytes()); // dwVID
         exp[5..5 + 10].copy_from_slice(b"NPC_Farmer"); // name (resto a cero)
-                                                       // awPart[5] @30..50 (ARMOR, WEAPON, HEAD, HAIR, ACCE)
+        // awPart[5] @30..50 (ARMOR, WEAPON, HEAD, HAIR, ACCE)
         exp[30..34].copy_from_slice(&0x1001u32.to_le_bytes());
         exp[34..38].copy_from_slice(&0x1002u32.to_le_bytes());
         exp[38..42].copy_from_slice(&0x1003u32.to_le_bytes());
@@ -2815,7 +2818,7 @@ mod tests {
         let mut exp = [0u8; 51];
         exp[0] = 0x13;
         exp[1..5].copy_from_slice(&0x4321u32.to_le_bytes()); // dwVID
-                                                             // awPart[5] @5..25 (ARMOR, WEAPON, HEAD, HAIR, ACCE)
+        // awPart[5] @5..25 (ARMOR, WEAPON, HEAD, HAIR, ACCE)
         exp[5..9].copy_from_slice(&0x2001u32.to_le_bytes());
         exp[9..13].copy_from_slice(&0x2002u32.to_le_bytes());
         exp[13..17].copy_from_slice(&0x2003u32.to_le_bytes());
@@ -2897,7 +2900,7 @@ mod tests {
         assert_eq!(cstr_bytes(&a).len(), 30);
         assert_eq!(from_cstr::<3>("es"), *b"es\0");
         assert_eq!(from_cstr::<3>("esp"), *b"es\0"); // truncado a 2 + NUL
-                                                     // N=0: antes hacía overflow en `N - 1` (panic); ahora buffer vacío.
+        // N=0: antes hacía overflow en `N - 1` (panic); ahora buffer vacío.
         assert_eq!(from_cstr::<0>("x"), [0u8; 0]);
         assert_eq!(from_cstr::<1>("abc"), [0u8; 1]); // 0 bytes + NUL implícito
     }

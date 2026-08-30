@@ -25,7 +25,11 @@ impl DragonSoulRepo {
     /// Registra un refine (`refine_type` = bSubType del wire 2..4) y
     /// devuelve el id ASIGNADO POR PG.
     pub async fn record(&self, player_id: i64, refine_type: i16) -> Result<i64, String> {
-        let client = self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))?;
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| format!("PG pool get: {e}"))?;
         let row = client
             .query_one(RECORD_SQL, &[&player_id, &refine_type])
             .await
@@ -43,11 +47,17 @@ mod tests {
     /// id fijo/AtomicU32 → rojo.
     #[test]
     fn record_identity_comes_from_pg() {
-        assert!(RECORD_SQL.starts_with("INSERT INTO player.dragon_soul"), "tabla del ledger");
+        assert!(
+            RECORD_SQL.starts_with("INSERT INTO player.dragon_soul"),
+            "tabla del ledger"
+        );
         assert!(
             RECORD_SQL.contains("dragon_soul (player_id, refine_type)"),
             "columnas exactas — un id explícito rompe el substring"
         );
-        assert!(RECORD_SQL.contains("RETURNING id"), "el server recibe el id de PG");
+        assert!(
+            RECORD_SQL.contains("RETURNING id"),
+            "el server recibe el id de PG"
+        );
     }
 }

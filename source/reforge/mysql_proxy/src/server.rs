@@ -15,14 +15,17 @@ use tokio::net::{TcpListener, TcpStream};
 
 use crate::config::Config;
 use crate::debug;
-use crate::session::{init_statements, PgError, PgSession};
+use crate::session::{PgError, PgSession, init_statements};
 use crate::translate::{self, InsertIdHint, Rewritten};
 use crate::wire::{self, ClientCommand};
 
 /// Sirve conexiones hasta que el proceso muera.
 pub async fn serve(config: Config) -> std::io::Result<()> {
     let listener = TcpListener::bind(&config.listen).await?;
-    eprintln!("mysql_proxy: escuchando en {} (→ PG: {})", config.listen, config.pg_conn);
+    eprintln!(
+        "mysql_proxy: escuchando en {} (→ PG: {})",
+        config.listen, config.pg_conn
+    );
     if debug::enabled() {
         eprintln!("mysql_proxy: debug ON (MYSQL_PROXY_DEBUG=1 / --debug)");
     }
@@ -74,26 +77,40 @@ async fn handle_connection(stream: TcpStream, config: Config, conn_id: u32) -> R
         return Ok(());
     };
     let resp = wire::decode_handshake_response(&payload).map_err(|e| e.to_string())?;
-    debug::log(format_args!("conn {conn_id}: handshake user={} db={:?} plugin={:?}", resp.username, resp.database, resp.plugin));
+    debug::log(format_args!(
+        "conn {conn_id}: handshake user={} db={:?} plugin={:?}",
+        resp.username, resp.database, resp.plugin
+    ));
 
     // 3) Auth mysql_native_password contra las credenciales del config.
     if resp.username != config.mysql_user
-        || !wire::validate_native_auth(config.mysql_password.as_bytes(), &scramble, &resp.auth_response)
+        || !wire::validate_native_auth(
+            config.mysql_password.as_bytes(),
+            &scramble,
+            &resp.auth_response,
+        )
     {
-        w.write_all(&wire::encode_err(2, wire::ER_ACCESS_DENIED, "28000", "Access denied for user"))
-            .await
-            .map_err(|e| e.to_string())?;
+        w.write_all(&wire::encode_err(
+            2,
+            wire::ER_ACCESS_DENIED,
+            "28000",
+            "Access denied for user",
+        ))
+        .await
+        .map_err(|e| e.to_string())?;
         return Ok(());
     }
 
     // 4) Slot: el nombre de db del handshake mapea el search_path (spec §8.2.1c).
-    let db = resp
-        .database
-        .ok_or_else(|| "cliente sin db: el proxy necesita el nombre de db para mapear el slot".to_string())?;
+    let db = resp.database.ok_or_else(|| {
+        "cliente sin db: el proxy necesita el nombre de db para mapear el slot".to_string()
+    })?;
     let search_path = config
         .search_path(&db)
         .ok_or_else(|| format!("db desconocida: {db} (revisar [slots] del config)"))?;
-    debug::log(format_args!("conn {conn_id}: slot db={db} search_path={search_path}"));
+    debug::log(format_args!(
+        "conn {conn_id}: slot db={db} search_path={search_path}"
+    ));
 
     // 5) Sesión PG: connect + init ANTES del OK de auth. Si el init falla
     // (p.ej. search_path inválido), se aborta con ERR visible — nunca se sirve
@@ -120,7 +137,8 @@ async fn handle_connection(stream: TcpStream, config: Config, conn_id: u32) -> R
 
     // 7) Bucle de comandos.
     loop {
-        let Some((_client_seq, payload)) = read_packet(&mut r).await.map_err(|e| e.to_string())? else {
+        let Some((_client_seq, payload)) = read_packet(&mut r).await.map_err(|e| e.to_string())?
+        else {
             break;
         };
         // La respuesta arranca en seq+1 (cada comando reinicia su contador).
@@ -132,11 +150,16 @@ async fn handle_connection(stream: TcpStream, config: Config, conn_id: u32) -> R
                     .map_err(|e| e.to_string())?;
             }
             Ok(ClientCommand::Query(sql)) => {
-                debug::log(format_args!("conn {conn_id}: query: {}", debug::truncate(&sql, 200)));
+                debug::log(format_args!(
+                    "conn {conn_id}: query: {}",
+                    debug::truncate(&sql, 200)
+                ));
                 handle_query(&mut pg, &mut w, &sql).await?;
             }
             Ok(ClientCommand::Unknown(cmd)) => {
-                debug::log(format_args!("conn {conn_id}: comando desconocido 0x{cmd:02x}"));
+                debug::log(format_args!(
+                    "conn {conn_id}: comando desconocido 0x{cmd:02x}"
+                ));
                 w.write_all(&wire::encode_err(
                     1,
                     wire::ER_UNKNOWN_COM,
@@ -147,9 +170,14 @@ async fn handle_connection(stream: TcpStream, config: Config, conn_id: u32) -> R
                 .map_err(|e| e.to_string())?;
             }
             Err(e) => {
-                w.write_all(&wire::encode_err(1, wire::ER_UNKNOWN, "HY000", &e.to_string()))
-                    .await
-                    .map_err(|e| e.to_string())?;
+                w.write_all(&wire::encode_err(
+                    1,
+                    wire::ER_UNKNOWN,
+                    "HY000",
+                    &e.to_string(),
+                ))
+                .await
+                .map_err(|e| e.to_string())?;
             }
         }
     }
@@ -180,15 +208,22 @@ async fn handle_query<W: AsyncWrite + Unpin>(
         let plan = match translate::rewrite(stmt, pg).await {
             Ok(Rewritten::NoOp) => {
                 debug::log(format_args!("  → no-op (SET de config MySQL)"));
-                w.write_all(&wire::encode_ok(1, 0, 0, status)).await.map_err(|e| e.to_string())?;
+                w.write_all(&wire::encode_ok(1, 0, 0, status))
+                    .await
+                    .map_err(|e| e.to_string())?;
                 continue;
             }
             Ok(Rewritten::Execute(plan)) => plan,
             Err(e) => {
                 debug::log(format_args!("  → translate error: {e}"));
-                w.write_all(&wire::encode_err(1, e.mysql_errno(), "42000", &e.to_string()))
-                    .await
-                    .map_err(|e| e.to_string())?;
+                w.write_all(&wire::encode_err(
+                    1,
+                    e.mysql_errno(),
+                    "42000",
+                    &e.to_string(),
+                ))
+                .await
+                .map_err(|e| e.to_string())?;
                 return Ok(()); // MySQL aborta el batch en el primer error
             }
         };
@@ -235,7 +270,10 @@ async fn handle_query<W: AsyncWrite + Unpin>(
             Err(PgError { sqlstate, message }) => {
                 let state = sqlstate.as_deref().unwrap_or("HY000");
                 let code = wire::map_pg_sqlstate(state);
-                debug::log(format_args!("  → PG error {state}: {message} | statement: {}", debug::truncate(&plan.sql, 160)));
+                debug::log(format_args!(
+                    "  → PG error {state}: {message} | statement: {}",
+                    debug::truncate(&plan.sql, 160)
+                ));
                 w.write_all(&wire::encode_err(1, code, state, &message))
                     .await
                     .map_err(|e| e.to_string())?;

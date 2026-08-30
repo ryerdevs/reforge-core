@@ -49,7 +49,8 @@ pub fn new_pool(pg_conn: &str, max_size: usize) -> Result<PgPool, String> {
         }),
         ..Config::default()
     };
-    cfg.create_pool(None, NoTls).map_err(|e| format!("PG pool: {e}"))
+    cfg.create_pool(None, NoTls)
+        .map_err(|e| format!("PG pool: {e}"))
 }
 
 #[cfg(test)]

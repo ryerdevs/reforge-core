@@ -8,7 +8,9 @@ use std::collections::{HashMap, HashSet};
 use bevy_ecs::prelude::*;
 
 use crate::combat::distance_approx;
-use crate::ecs::components::{Aggro, AttackPos, Hp, LastAttack, Map, Mob, Player, Position, SpawnRef, SpawnSeen, Vid};
+use crate::ecs::components::{
+    Aggro, AttackPos, Hp, LastAttack, Map, Mob, Player, Position, SpawnRef, SpawnSeen, Vid,
+};
 use crate::ecs::events::CombatEvent;
 use crate::ecs::events::NpcEvent;
 use crate::ecs::resources::{
@@ -16,7 +18,7 @@ use crate::ecs::resources::{
     WorldClock, WorldMetrics,
 };
 use crate::ecs::world::WorldSim;
-use crate::npc::{entry_spawns, SpawnEntry, SpawnKind};
+use crate::npc::{SpawnEntry, SpawnKind, entry_spawns};
 use database::npc::{MobRepo, MobRow};
 
 /// Rango de materialización del spawn dinámico (units). El C++ cargaba TODOS
@@ -66,7 +68,10 @@ pub(crate) fn spawn_despawn_system(
     // Jugadores por mapa: (vid, x, y) — una sola pasada para ambos pases.
     let mut players_by_map: HashMap<u32, Vec<(u32, i32, i32)>> = HashMap::new();
     for (p, map, pos) in &players {
-        players_by_map.entry(map.map_index).or_default().push((p.vid, pos.x, pos.y));
+        players_by_map
+            .entry(map.map_index)
+            .or_default()
+            .push((p.vid, pos.x, pos.y));
     }
 
     // --- SPAWN: materializar entradas sin entidad a ≤ SPAWN_VIEW de algún
@@ -89,9 +94,7 @@ pub(crate) fn spawn_despawn_system(
             let alive = alive_count.get(&(*map_index, index)).copied().unwrap_or(0);
             let near: Vec<u32> = viewers
                 .iter()
-                .filter(|(_, x, y)| {
-                    distance_approx(se.entry.x - x, se.entry.y - y) <= SPAWN_VIEW
-                })
+                .filter(|(_, x, y)| distance_approx(se.entry.x - x, se.entry.y - y) <= SPAWN_VIEW)
                 .map(|(pv, _, _)| *pv)
                 .collect();
             if near.is_empty() {
@@ -114,8 +117,8 @@ pub(crate) fn spawn_despawn_system(
                 None => {
                     if alive > 0 {
                         continue; // ya tiene copias — el ADD de nuevos
-                                  // espectadores lo emite el pase B
-                                  // (REGRESIÓN bench 2026-08-13)
+                        // espectadores lo emite el pase B
+                        // (REGRESIÓN bench 2026-08-13)
                     }
                     se.entry.count
                 }
@@ -134,8 +137,16 @@ pub(crate) fn spawn_despawn_system(
             for _ in 0..spawn_count {
                 let vid = vids.npc;
                 vids.npc += 1;
-                let jx = if se.entry.w_x > 0 { rng.roll(-se.entry.w_x, se.entry.w_x) * 100 } else { 0 };
-                let jy = if se.entry.w_y > 0 { rng.roll(-se.entry.w_y, se.entry.w_y) * 100 } else { 0 };
+                let jx = if se.entry.w_x > 0 {
+                    rng.roll(-se.entry.w_x, se.entry.w_x) * 100
+                } else {
+                    0
+                };
+                let jy = if se.entry.w_y > 0 {
+                    rng.roll(-se.entry.w_y, se.entry.w_y) * 100
+                } else {
+                    0
+                };
                 let mut copy = se.entry; // Copy
                 copy.x = se.entry.x + jx;
                 copy.y = se.entry.y + jy;
@@ -144,31 +155,51 @@ pub(crate) fn spawn_despawn_system(
                 let e = commands
                     .spawn((
                         Vid { vid },
-                        Map { map_index: *map_index },
-                        Position { x: copy.x, y: copy.y },
-                        Hp { hp: se.mob.max_hp as i32, max_hp: se.mob.max_hp as i32 },
+                        Map {
+                            map_index: *map_index,
+                        },
+                        Position {
+                            x: copy.x,
+                            y: copy.y,
+                        },
+                        Hp {
+                            hp: se.mob.max_hp as i32,
+                            max_hp: se.mob.max_hp as i32,
+                        },
                         Aggro { target: None },
                         LastAttack { at_ms: 0 },
-                        AttackPos { last_change_ms: 0, dest: None },
+                        AttackPos {
+                            last_change_ms: 0,
+                            dest: None,
+                        },
                         Mob::from_row(&copy, &se.mob),
-                        SpawnRef { map: *map_index, index },
+                        SpawnRef {
+                            map: *map_index,
+                            index,
+                        },
                     ))
                     .id();
                 // Los espectadores del materialize YA recibieron el ADD de
                 // esta copia — el pase B no la reemite (sin duplicados).
-                commands.entity(e).insert(SpawnSeen(near.iter().copied().collect()));
+                commands
+                    .entity(e)
+                    .insert(SpawnSeen(near.iter().copied().collect()));
                 npc_index.0.insert(vid, e);
             }
             metrics.mobs_spawned += u64::from(spawn_count);
             // ADD(+INFO) por copia — parity byte-exacta del wire del entry
             // (cada copia con SU posición jittereada y su vid).
-            let entries: Vec<(SpawnEntry, MobRow)> = copies
-                .iter()
-                .map(|(c, _)| (*c, se.mob.clone()))
-                .collect();
+            let entries: Vec<(SpawnEntry, MobRow)> =
+                copies.iter().map(|(c, _)| (*c, se.mob.clone())).collect();
             let packets = entry_spawns(*map_index, &entries, base);
             for pv in near {
-                outbox.0.push(CombatEvent::Spawned { player_vid: pv, packets: packets.clone() }.into());
+                outbox.0.push(
+                    CombatEvent::Spawned {
+                        player_vid: pv,
+                        packets: packets.clone(),
+                    }
+                    .into(),
+                );
             }
         }
     }
@@ -190,11 +221,19 @@ pub(crate) fn spawn_despawn_system(
         // Los que salieron de la vista: olvidar el envío (re-ADD al volver —
         // parity del re-entry al sectree del C++).
         seen.0.retain(|pv| in_view.contains(pv));
-        let fresh: Vec<u32> = in_view.iter().filter(|pv| !seen.0.contains(pv)).copied().collect();
+        let fresh: Vec<u32> = in_view
+            .iter()
+            .filter(|pv| !seen.0.contains(pv))
+            .copied()
+            .collect();
         if fresh.is_empty() {
             continue;
         }
-        let Some(se) = table.maps.get(&map.map_index).and_then(|es| es.get(spawn_ref.index)) else {
+        let Some(se) = table
+            .maps
+            .get(&map.map_index)
+            .and_then(|es| es.get(spawn_ref.index))
+        else {
             continue; // defensivo: entrada sin tabla — el despawn la limpia
         };
         let mut single = se.entry; // Copy (npc.rs:301 usa el mismo patrón)
@@ -204,7 +243,13 @@ pub(crate) fn spawn_despawn_system(
         let packets = entry_spawns(map.map_index, &[(single, se.mob.clone())], vid.vid);
         for pv in &fresh {
             seen.0.insert(*pv);
-            outbox.0.push(CombatEvent::Spawned { player_vid: *pv, packets: packets.clone() }.into());
+            outbox.0.push(
+                CombatEvent::Spawned {
+                    player_vid: *pv,
+                    packets: packets.clone(),
+                }
+                .into(),
+            );
         }
     }
 
@@ -236,7 +281,13 @@ pub(crate) fn spawn_despawn_system(
         metrics.mobs_despawned += 1;
         if let Some(ps) = map_players {
             for (pv, _, _) in ps {
-                outbox.0.push(CombatEvent::Despawned { player_vid: *pv, vid: vid.vid }.into());
+                outbox.0.push(
+                    CombatEvent::Despawned {
+                        player_vid: *pv,
+                        vid: vid.vid,
+                    }
+                    .into(),
+                );
             }
         }
     }
@@ -282,7 +333,10 @@ impl WorldSim {
             let mut table = self.world.resource_mut::<SpawnTable>();
             let entries = table.maps.entry(map_index).or_default();
             let index = entries.len();
-            entries.push(SpawnTableEntry { entry: base_entry, mob: row.clone() });
+            entries.push(SpawnTableEntry {
+                entry: base_entry,
+                mob: row.clone(),
+            });
             index
         };
         // Copias con vids frescos + jitter parity SpawnMobRange (a/b/c/d =
@@ -312,13 +366,25 @@ impl WorldSim {
                 .spawn((
                     Vid { vid: *vid },
                     Map { map_index },
-                    Position { x: copy.x, y: copy.y },
-                    Hp { hp: row.max_hp as i32, max_hp: row.max_hp as i32 },
+                    Position {
+                        x: copy.x,
+                        y: copy.y,
+                    },
+                    Hp {
+                        hp: row.max_hp as i32,
+                        max_hp: row.max_hp as i32,
+                    },
                     Aggro { target: None },
                     LastAttack { at_ms: 0 },
-                    AttackPos { last_change_ms: 0, dest: None },
+                    AttackPos {
+                        last_change_ms: 0,
+                        dest: None,
+                    },
                     Mob::from_row(copy, &row),
-                    SpawnRef { map: map_index, index },
+                    SpawnRef {
+                        map: map_index,
+                        index,
+                    },
                     SpawnSeen(HashSet::from([player_vid])),
                 ))
                 .id();
@@ -336,7 +402,13 @@ impl WorldSim {
             })
             .collect();
         let packets = entry_spawns(map_index, &entries, base);
-        vec![CombatEvent::Spawned { player_vid, packets }.into()]
+        vec![
+            CombatEvent::Spawned {
+                player_vid,
+                packets,
+            }
+            .into(),
+        ]
     }
 
     /// Resuelve los spawns con la CACHÉ COMPARTIDA + UNA query batch por los
@@ -365,10 +437,13 @@ mod tests {
         let mut w = world_with(42);
         let mut far = mob_row(2101);
         far.ai_flag = Some("NOMOVE".into()); // determinista
-        load(&mut w, vec![
-            (entry(101, 0, 0, 1), mob_row(101)),
-            (entry(2101, 260_000, 0, 1), far), // lejos del spawn pero en el mapa
-        ]);
+        load(
+            &mut w,
+            vec![
+                (entry(101, 0, 0, 1), mob_row(101)),
+                (entry(2101, 260_000, 0, 1), far), // lejos del spawn pero en el mapa
+            ],
+        );
         let events = join(&mut w);
         let spawned = spawn_events(&events);
         assert_eq!(spawned.len(), 2, "todos los del mapa: {events:?}");
@@ -385,12 +460,25 @@ mod tests {
         assert_eq!(distance_approx(312_197, 0), SPAWN_VIEW + 1);
 
         let mut at_boundary = world_with(42);
-        load(&mut at_boundary, vec![(entry(101, 312_196, 0, 1), mob_row(101))]);
-        assert_eq!(spawn_events(&join(&mut at_boundary)).len(), 1, "el borde de spawn es inclusivo");
+        load(
+            &mut at_boundary,
+            vec![(entry(101, 312_196, 0, 1), mob_row(101))],
+        );
+        assert_eq!(
+            spawn_events(&join(&mut at_boundary)).len(),
+            1,
+            "el borde de spawn es inclusivo"
+        );
 
         let mut outside = world_with(42);
-        load(&mut outside, vec![(entry(101, 312_197, 0, 1), mob_row(101))]);
-        assert!(spawn_events(&join(&mut outside)).is_empty(), "fuera de SPAWN_VIEW no se materializa");
+        load(
+            &mut outside,
+            vec![(entry(101, 312_197, 0, 1), mob_row(101))],
+        );
+        assert!(
+            spawn_events(&join(&mut outside)).is_empty(),
+            "fuera de SPAWN_VIEW no se materializa"
+        );
     }
 
     /// El despawn: un mob intacto a > DESPAWN_RADIUS de TODOS los jugadores
@@ -407,11 +495,28 @@ mod tests {
         // 400k y no 320k: `distance_approx` (DISTANCE_APPROX del C++)
         // SUBESTIMA ~4% — 320000×246/256 ≈ 307.5k quedaba DENTRO del radio
         // 310k y nunca desmaterializaba. 400k → aprox ≈ 384k, margen holgado.
-        w.process_intent(MoveIntent::Move { player_vid: 2, x: 400_000, y: 0 }.into(), 1_000);
+        w.process_intent(
+            MoveIntent::Move {
+                player_vid: 2,
+                x: 400_000,
+                y: 0,
+            }
+            .into(),
+            1_000,
+        );
         let events = w.update(500);
-        assert!(events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Despawned { vid: 10_000, .. }))), "{events:?}");
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                NpcEvent::Combat(CombatEvent::Despawned { vid: 10_000, .. })
+            )),
+            "{events:?}"
+        );
         assert_eq!(w.npc_count(), 0);
-        assert!(w.update(500).is_empty(), "desmaterializado: sin más eventos");
+        assert!(
+            w.update(500).is_empty(),
+            "desmaterializado: sin más eventos"
+        );
     }
 
     /// VERIFIER (mutation): la histéresis mantiene el mob en el radio exacto y
@@ -430,19 +535,54 @@ mod tests {
         load(&mut w, vec![(entry(101, 0, 0, 1), row)]);
         join(&mut w);
 
-        w.process_intent(MoveIntent::Move { player_vid: 2, x: 317_399, y: 0 }.into(), 1_000);
+        w.process_intent(
+            MoveIntent::Move {
+                player_vid: 2,
+                x: 317_399,
+                y: 0,
+            }
+            .into(),
+            1_000,
+        );
         let events = w.update(500);
-        assert!(!events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Despawned { .. }))));
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Despawned { .. })))
+        );
         assert_eq!(w.npc_count(), 1, "la franja de histéresis conserva el mob");
 
-        w.process_intent(MoveIntent::Move { player_vid: 2, x: 322_602, y: 0 }.into(), 1_000);
+        w.process_intent(
+            MoveIntent::Move {
+                player_vid: 2,
+                x: 322_602,
+                y: 0,
+            }
+            .into(),
+            1_000,
+        );
         let events = w.update(500);
-        assert!(!events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Despawned { .. }))));
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Despawned { .. })))
+        );
         assert_eq!(w.npc_count(), 1, "el borde de despawn se conserva");
 
-        w.process_intent(MoveIntent::Move { player_vid: 2, x: 322_603, y: 0 }.into(), 2_000);
+        w.process_intent(
+            MoveIntent::Move {
+                player_vid: 2,
+                x: 322_603,
+                y: 0,
+            }
+            .into(),
+            2_000,
+        );
         let events = w.update(500);
-        assert!(events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Despawned { vid: 10_000, .. }))));
+        assert!(events.iter().any(|e| matches!(
+            e,
+            NpcEvent::Combat(CombatEvent::Despawned { vid: 10_000, .. })
+        )));
         assert_eq!(w.npc_count(), 0, "más allá del radio se desmaterializa");
     }
 
@@ -457,12 +597,31 @@ mod tests {
         join(&mut w);
         // Un golpe del jugador: daño + aggro (OnDamage).
         w.process_intent(
-            CombatIntent::Attack { player_vid: 2, victim_vid: 10_000, b_type: 0, weapon: None }.into(),
+            CombatIntent::Attack {
+                player_vid: 2,
+                victim_vid: 10_000,
+                b_type: 0,
+                weapon: None,
+            }
+            .into(),
             1_000,
         );
-        w.process_intent(MoveIntent::Move { player_vid: 2, x: 10_800, y: 0 }.into(), 2_000);
+        w.process_intent(
+            MoveIntent::Move {
+                player_vid: 2,
+                x: 10_800,
+                y: 0,
+            }
+            .into(),
+            2_000,
+        );
         let events = w.update(500);
-        assert!(!events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Despawned { .. }))), "{events:?}");
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Despawned { .. }))),
+            "{events:?}"
+        );
         assert_eq!(w.npc_count(), 1, "dañado: se queda en el mundo");
     }
 
@@ -520,13 +679,22 @@ mod tests {
         let mut row = mob_row(101);
         row.max_hp = 10; // un golpe (46+) mata
         row.ai_flag = Some("NOMOVE".into()); // las hermanas no se mueven (determinista)
-        let e = SpawnEntry { time: 2, ..entry(101, 0, 0, 3) }; // 3 copias, intervalo 2 s
+        let e = SpawnEntry {
+            time: 2,
+            ..entry(101, 0, 0, 3)
+        }; // 3 copias, intervalo 2 s
         load(&mut w, vec![(e, row)]);
         join(&mut w);
         assert_eq!(w.npc_count(), 3);
         // Matar UNA copia (la 10_000): quedan 2 hermanas vivas.
         w.process_intent(
-            CombatIntent::Attack { player_vid: 2, victim_vid: 10_000, b_type: 0, weapon: None }.into(),
+            CombatIntent::Attack {
+                player_vid: 2,
+                victim_vid: 10_000,
+                b_type: 0,
+                weapon: None,
+            }
+            .into(),
             1_000,
         );
         assert_eq!(w.npc_count(), 2, "2 hermanas vivas");
@@ -534,7 +702,9 @@ mod tests {
         for _ in 0..3 {
             let events = w.update(500);
             assert!(
-                !events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))),
+                !events
+                    .iter()
+                    .any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))),
                 "aún pendiente: {events:?}"
             );
         }
@@ -542,9 +712,17 @@ mod tests {
         // t+2.0 s: vence el deadline → top-up: la copia muerta reaparece
         // con vid FRESCO aunque la entrada siga materializada (2 hermanas).
         let events = w.update(500);
-        assert!(events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))), "respawn parcial: {events:?}");
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))),
+            "respawn parcial: {events:?}"
+        );
         assert_eq!(w.npc_count(), 3, "las 3 copias de vuelta");
-        assert!(w.npc_view(10_003).is_some(), "vid fresco 10_003 (la 10_000 murió)");
+        assert!(
+            w.npc_view(10_003).is_some(),
+            "vid fresco 10_003 (la 10_000 murió)"
+        );
     }
 
     /// REGRESIÓN (bench 2026-08-13 — "solo el primer jugador veía los mobs"):
@@ -555,14 +733,21 @@ mod tests {
     #[test]
     fn spawn_adds_reach_every_player_in_view() {
         let mut w = world_with(42);
-        load(&mut w, vec![
-            (entry(101, 0, 0, 2), mob_row(101)),
-            (entry(2101, 1_000, 0, 1), mob_row(2101)),
-        ]);
+        load(
+            &mut w,
+            vec![
+                (entry(101, 0, 0, 2), mob_row(101)),
+                (entry(2101, 1_000, 0, 1), mob_row(2101)),
+            ],
+        );
         // Jugador 1: materializa (2 copias del 101 + 1 del 2101) y recibe
         // sus ADDs en el tick del join (un evento por entrada).
         let events1 = join_at(&mut w, 1, 0, 0);
-        assert_eq!(spawn_events(&events1).len(), 2, "un evento por entrada: {events1:?}");
+        assert_eq!(
+            spawn_events(&events1).len(),
+            2,
+            "un evento por entrada: {events1:?}"
+        );
         assert_eq!(w.npc_count(), 3);
         // Jugador 2 en el MISMO punto: las entradas YA están materializadas
         // — `materialized` las salta, pero la emisión es por vista → recibe
@@ -570,13 +755,22 @@ mod tests {
         let events2 = join_at(&mut w, 2, 0, 0);
         let vids: Vec<u32> = spawn_events(&events2)
             .iter()
-            .flat_map(|pkts| pkts.iter().map(|p| u32::from_le_bytes(p[1..5].try_into().unwrap())))
+            .flat_map(|pkts| {
+                pkts.iter()
+                    .map(|p| u32::from_le_bytes(p[1..5].try_into().unwrap()))
+            })
             .collect();
-        assert_eq!(vids, vec![10_000, 10_001, 10_002], "mismos vids que las entidades");
+        assert_eq!(
+            vids,
+            vec![10_000, 10_001, 10_002],
+            "mismos vids que las entidades"
+        );
         // Sin re-emisión para los jugadores que YA recibieron el ADD.
         let events3 = w.update(500);
         assert!(
-            !events3.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))),
+            !events3
+                .iter()
+                .any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))),
             "sin duplicados: {events3:?}"
         );
     }
@@ -589,10 +783,13 @@ mod tests {
         let mut w = world_with(42);
         let mut far = mob_row(2101);
         far.ai_flag = Some("NOMOVE".into()); // determinista: no patrulla hacia el P2
-        load(&mut w, vec![
-            (entry(101, 0, 0, 1), mob_row(101)),
-            (entry(2101, 260_000, 0, 1), far),
-        ]);
+        load(
+            &mut w,
+            vec![
+                (entry(101, 0, 0, 1), mob_row(101)),
+                (entry(2101, 260_000, 0, 1), far),
+            ],
+        );
         // P1 en el spawn: materializa ambas y recibe sus ADDs.
         let events1 = join_at(&mut w, 1, 0, 0);
         assert_eq!(spawn_events(&events1).len(), 2, "P1 ve ambas entradas");
@@ -602,14 +799,23 @@ mod tests {
         let events2 = join_at(&mut w, 2, 260_000, 0);
         let mut vids: Vec<u32> = spawn_events(&events2)
             .iter()
-            .flat_map(|pkts| pkts.iter().map(|p| u32::from_le_bytes(p[1..5].try_into().unwrap())))
+            .flat_map(|pkts| {
+                pkts.iter()
+                    .map(|p| u32::from_le_bytes(p[1..5].try_into().unwrap()))
+            })
             .collect();
         vids.sort_unstable();
-        assert_eq!(vids, vec![10_000, 10_001], "ambas entradas para P2: {vids:?}");
+        assert_eq!(
+            vids,
+            vec![10_000, 10_001],
+            "ambas entradas para P2: {vids:?}"
+        );
         // Sin re-emisión para los jugadores que YA recibieron el ADD.
         let events3 = w.update(500);
         assert!(
-            !events3.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))),
+            !events3
+                .iter()
+                .any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))),
             "sin duplicados: {events3:?}"
         );
     }
@@ -619,10 +825,16 @@ mod tests {
     #[test]
     fn group_kinds_never_materialize() {
         let mut w = world_with(42);
-        load(&mut w, vec![(
-            SpawnEntry { kind: SpawnKind::Group, ..entry(318, 0, 0, 1) },
-            mob_row(318),
-        )]);
+        load(
+            &mut w,
+            vec![(
+                SpawnEntry {
+                    kind: SpawnKind::Group,
+                    ..entry(318, 0, 0, 1)
+                },
+                mob_row(318),
+            )],
+        );
         let events = join(&mut w);
         assert!(spawn_events(&events).is_empty());
         assert_eq!(w.npc_count(), 0);
@@ -659,7 +871,11 @@ mod tests {
             1_000,
         );
         let spawned = spawn_events(&events);
-        assert_eq!(spawned.len(), 1, "un evento Spawned con los 3 adds: {events:?}");
+        assert_eq!(
+            spawned.len(),
+            1,
+            "un evento Spawned con los 3 adds: {events:?}"
+        );
         assert_eq!(spawned[0].len(), 3, "3 copias → 3 paquetes");
         assert_eq!(&spawned[0][0][1..5], &10_000u32.to_le_bytes());
         assert_eq!(&spawned[0][1][1..5], &10_001u32.to_le_bytes());
@@ -668,15 +884,27 @@ mod tests {
         // Jitter parity SpawnMobRange: cada copia cae a ≤ 750 del GM.
         for vid in 10_000..10_003 {
             let v = w.npc_view(vid).expect("mob del GM");
-            assert!(v.state.x.abs() <= 750 && v.state.y.abs() <= 750, "vid {vid}: {v:?}");
+            assert!(
+                v.state.x.abs() <= 750 && v.state.y.abs() <= 750,
+                "vid {vid}: {v:?}"
+            );
         }
         // La entrada sintética NO re-materializa (kind Group — el spawn
         // dinámico la salta) y el mob del GM no respawnea al morir (time 0).
-        w.process_intent(CombatIntent::GmKill { player_vid: 2, target_vid: 10_000 }.into(), 2_000);
+        w.process_intent(
+            CombatIntent::GmKill {
+                player_vid: 2,
+                target_vid: 10_000,
+            }
+            .into(),
+            2_000,
+        );
         assert_eq!(w.npc_count(), 2);
         let events = w.update(1_000);
         assert!(
-            !events.iter().any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))),
+            !events
+                .iter()
+                .any(|e| matches!(e, NpcEvent::Combat(CombatEvent::Spawned { .. }))),
             "sin re-materialización ni respawn: {events:?}"
         );
         assert_eq!(w.npc_count(), 2);

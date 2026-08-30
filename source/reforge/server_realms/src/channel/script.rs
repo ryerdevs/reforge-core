@@ -16,8 +16,8 @@
 use game_core::ecs::{CombatIntent, Intent, QuestIntent};
 use game_core::packets;
 
-use crate::channel::session::{Outcome, Session};
 use crate::channel::parse_listen;
+use crate::channel::session::{Outcome, Session};
 
 /// DEATH PENALTY: `aiExpLossPercents` (constants.cpp:768-789) — el % del
 /// next_exp que se pierde al morir, por nivel (índice 0 = lvl 0 → 0).
@@ -162,7 +162,9 @@ pub async fn revive(session: &mut Session, answer: u8) -> Result<(), String> {
             "server_realms: channel conn {}: {} revivió EN LA CIUDAD \
              (answer {answer}) — GC_WARP {wx},{wy} (village mapa 41) → \
              {}:{port}, reconexión",
-            session.conn_id, session.row().name, ip
+            session.conn_id,
+            session.row().name,
+            ip
         );
     } else {
         // RestartAtSamePos: remove + insert del personaje (el cliente
@@ -183,18 +185,23 @@ pub async fn revive(session: &mut Session, answer: u8) -> Result<(), String> {
             .map(|i| session.inventory[i].count as u32)
             .unwrap_or(0);
         session
-            .send(&packets::character_additional_info_with_parts(
-                session.row(),
-                session.empire,
-                &parts,
-                arrows,
+            .send(
+                &packets::character_additional_info_with_parts(
+                    session.row(),
+                    session.empire,
+                    &parts,
+                    arrows,
+                )
+                .to_bytes(),
             )
-            .to_bytes())
             .await
             .map_err(|e| format!("enviando GC_CHARACTER_ADDITIONAL_INFO: {e}"))?;
         // GC_POINTS con hp/mp restaurados.
         session
-            .send(&packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
+            .send(
+                &packets::points_packet(session.row(), session.next_exp, &session.battle)
+                    .to_bytes(),
+            )
             .await
             .map_err(|e| format!("enviando GC_POINTS: {e}"))?;
         eprintln!(
@@ -354,7 +361,9 @@ mod tests {
         sock.read_exact(&mut hdr).await.expect("paquete del server");
         let size = u16::from_le_bytes([hdr[1], hdr[2]]) as usize;
         let mut body = vec![0u8; size - 3];
-        sock.read_exact(&mut body).await.expect("cuerpo del paquete");
+        sock.read_exact(&mut body)
+            .await
+            .expect("cuerpo del paquete");
         let mut pkt = hdr.to_vec();
         pkt.extend_from_slice(&body);
         pkt
@@ -403,8 +412,16 @@ mod tests {
         // debe persistir el destino, no la muerte).
         assert_eq!(s.row().x, 969_600, "row.x persistido = village c1");
         assert_eq!(s.row().y, 278_400, "row.y persistido = village c1");
-        assert_eq!(s.motion().x, 969_600, "motion.x = village (el save copia del motion)");
-        assert_eq!(s.motion().y, 278_400, "motion.y = village (el save copia del motion)");
+        assert_eq!(
+            s.motion().x,
+            969_600,
+            "motion.x = village (el save copia del motion)"
+        );
+        assert_eq!(
+            s.motion().y,
+            278_400,
+            "motion.y = village (el save copia del motion)"
+        );
     }
 
     /// BUG 1 (answer 0 — RestartAtSamePos): el GC_CHAT "CloseRestartWindow"
@@ -455,4 +472,3 @@ mod tests {
         assert_eq!(&cmd[9..], b"CloseRestartWindow");
     }
 }
-

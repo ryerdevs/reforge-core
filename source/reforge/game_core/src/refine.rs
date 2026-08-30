@@ -53,15 +53,26 @@ mod tests {
     use super::*;
 
     fn recipe(prob: i32) -> RefineRecipe {
-        RefineRecipe { cost: 1000, prob, materials: [(71055, 3), (0, 0), (0, 0), (0, 0), (0, 0)] }
+        RefineRecipe {
+            cost: 1000,
+            prob,
+            materials: [(71055, 3), (0, 0), (0, 0), (0, 0), (0, 0)],
+        }
     }
 
     /// VERIFIER: falla si vuelve el stub — prob real de refine_proto (no 70
     /// fijo) y borde `<=` (char_item.cpp:1152) son el contrato del C++.
     #[test]
     fn verifier_real_prob_not_stub() {
-        assert_eq!(effective_prob(&recipe(30), scroll::CHUKBOK, 0), 30, "prob real, no 70");
-        assert!(is_success(&recipe(70), scroll::CHUKBOK, 0, 70), "70<=70 = éxito");
+        assert_eq!(
+            effective_prob(&recipe(30), scroll::CHUKBOK, 0),
+            30,
+            "prob real, no 70"
+        );
+        assert!(
+            is_success(&recipe(70), scroll::CHUKBOK, 0, 70),
+            "70<=70 = éxito"
+        );
     }
 
     #[test]

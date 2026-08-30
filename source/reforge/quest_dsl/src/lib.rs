@@ -48,8 +48,10 @@ pub mod parser;
 pub mod render;
 
 pub use ast::*;
-pub use family::{detect_similar_groups, expand_families, quest_similarity, QuestSimilarity, SimilarGroup};
-pub use parser::{parse, ParseError};
+pub use family::{
+    QuestSimilarity, SimilarGroup, detect_similar_groups, expand_families, quest_similarity,
+};
+pub use parser::{ParseError, parse};
 
 /// Result of a parsed quest file (the unit the runtime will consume).
 pub type QuestFile = Vec<ast::Quest>;

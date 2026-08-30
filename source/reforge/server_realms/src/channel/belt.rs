@@ -79,8 +79,7 @@ pub fn is_available_cell(cell: u16, grade: i32) -> bool {
 /// `CanMoveIntoBeltInventory` (belt_inventory_helper.h:70-87): solo
 /// ITEM_USE con subtipo POTION / POTION_NODELAY / ABILITY_UP.
 pub fn can_move_into_belt(b_type: i16, b_sub_type: i16) -> bool {
-    b_type == ITEM_USE
-        && matches!(b_sub_type, USE_POTION | USE_POTION_NODELAY | USE_ABILITY_UP)
+    b_type == ITEM_USE && matches!(b_sub_type, USE_POTION | USE_POTION_NODELAY | USE_ABILITY_UP)
 }
 
 /// `GetWear(WEAR_BELT)` (char_item.cpp:470-482): el cinturón EQUIPADO
@@ -123,11 +122,20 @@ mod tests {
         assert!(!is_available_cell(cell(1), 1), "grade 1: celda 1 NO");
         assert!(is_available_cell(cell(0), 2), "grade 2: celda 0");
         assert!(is_available_cell(cell(1), 2), "grade 2: celda 1");
-        assert!(!is_available_cell(cell(4), 2), "grade 2: celda 4 NO (requiere 3)");
-        assert!(!is_available_cell(cell(2), 2), "grade 2: celda 2 NO (requiere 4)");
+        assert!(
+            !is_available_cell(cell(4), 2),
+            "grade 2: celda 4 NO (requiere 3)"
+        );
+        assert!(
+            !is_available_cell(cell(2), 2),
+            "grade 2: celda 2 NO (requiere 4)"
+        );
         assert!(is_available_cell(cell(4), 3), "grade 3: celda 4");
         assert!(!is_available_cell(cell(0), 0), "grade 0: ninguna");
-        assert!((0..16).all(|i| is_available_cell(cell(i), 7)), "grade 7: las 16");
+        assert!(
+            (0..16).all(|i| is_available_cell(cell(i), 7)),
+            "grade 7: las 16"
+        );
         assert!(!is_available_cell(cell(16), 7), "fuera del rango");
     }
 
@@ -158,7 +166,10 @@ mod tests {
         assert!(is_belt_cell(p(1, 242)), "primera celda");
         assert!(is_belt_cell(p(1, 257)), "última celda");
         assert!(!is_belt_cell(p(1, 258)));
-        assert!(!is_belt_cell(p(TItemPos::WINDOW_BELT, 0)), "window 6 no (parity GetItem)");
+        assert!(
+            !is_belt_cell(p(TItemPos::WINDOW_BELT, 0)),
+            "window 6 no (parity GetItem)"
+        );
         assert!(!is_belt_cell(p(2, 242)), "EQUIPMENT no");
     }
 
@@ -202,12 +213,16 @@ mod tests {
         let belt_vnum: i64 = 2_000_000 + i64::from(std::process::id() % 900_000);
         let item_id: i64 = 990_000_001;
         let pc = pool.get().await.expect("client PG");
-        pc.batch_execute(&format!("DELETE FROM player.item_proto WHERE vnum = {belt_vnum}"))
-            .await
-            .expect("cleanup proto previo");
-        pc.batch_execute(&format!("DELETE FROM player.item WHERE id IN ({item_id}, {item_id} + 1)"))
-            .await
-            .expect("cleanup items previo");
+        pc.batch_execute(&format!(
+            "DELETE FROM player.item_proto WHERE vnum = {belt_vnum}"
+        ))
+        .await
+        .expect("cleanup proto previo");
+        pc.batch_execute(&format!(
+            "DELETE FROM player.item WHERE id IN ({item_id}, {item_id} + 1)"
+        ))
+        .await
+        .expect("cleanup items previo");
         pc.batch_execute(&format!(
             "INSERT INTO player.item_proto (vnum, name, locale_name, type, subtype, immuneflag, shop_buy_price, refined_vnum, refine_set, refine_set2, magic_pct, specular, socket_pct, addon_type, value0) VALUES ({belt_vnum}, ''::bytea, ''::bytea, 32, 0, '', 0, 0, 0, 0, 0, 0, 0, 0, 1) ON CONFLICT (vnum) DO UPDATE SET type = 32, subtype = 0, value0 = 1"
         ))
@@ -243,13 +258,20 @@ mod tests {
         crate::channel::items::handle_move(&mut s, &mv(0, 242).to_bytes())
             .await
             .expect("move a belt OK");
-        assert_eq!(s.inventory[0].window, "BELT_INVENTORY", "window PG (persistencia)");
+        assert_eq!(
+            s.inventory[0].window, "BELT_INVENTORY",
+            "window PG (persistencia)"
+        );
         assert_eq!(s.inventory[0].pos, 0, "pos 0..15 del PG");
         let del = read_n(&mut sock, 42).await;
         assert_eq!(del[0], 20, "GC_ITEM_DEL del origen");
         let set = read_n(&mut sock, 51).await;
         assert_eq!(set[0], 21, "GC_ITEM_SET");
-        assert_eq!(&set[1..4], &[1, 242, 0], "SET en INVENTORY 242 (wire del belt)");
+        assert_eq!(
+            &set[1..4],
+            &[1, 242, 0],
+            "SET en INVENTORY 242 (wire del belt)"
+        );
         assert_eq!(u32::from_le_bytes(set[4..8].try_into().unwrap()), 27001);
         // Grade 1 NO abre la celda 243 (rule[1]=2): rechazo silencioso.
         crate::channel::items::handle_move(&mut s, &mv(242, 243).to_bytes())
@@ -267,7 +289,10 @@ mod tests {
         crate::channel::items::handle_move(&mut s, &mv(242, 5).to_bytes())
             .await
             .expect("move belt→inv OK");
-        assert_eq!((s.inventory[0].window.as_str(), s.inventory[0].pos), ("INVENTORY", 5));
+        assert_eq!(
+            (s.inventory[0].window.as_str(), s.inventory[0].pos),
+            ("INVENTORY", 5)
+        );
         let _ = read_n(&mut sock, 42).await;
         let set = read_n(&mut sock, 51).await;
         assert_eq!(&set[1..4], &[1, 5, 0], "SET en INVENTORY 5");
@@ -323,7 +348,9 @@ mod tests {
         pool.get()
             .await
             .expect("client")
-            .batch_execute(&format!("DELETE FROM player.item_proto WHERE vnum = {belt_vnum}"))
+            .batch_execute(&format!(
+                "DELETE FROM player.item_proto WHERE vnum = {belt_vnum}"
+            ))
             .await
             .expect("cleanup proto belt");
     }
@@ -397,8 +424,10 @@ mod tests {
             64,
             database::wal::WalSink::new(database::wal::PgMutationSink::new(pool.clone()), wal_dir),
         ));
-        let mut cfg = crate::config::Config::default();
-        cfg.timeout = Duration::from_secs(5);
+        let cfg = crate::config::Config {
+            timeout: Duration::from_secs(5),
+            ..Default::default()
+        };
         let (intent_tx, _intent_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut s = Session::new(
             server_side,

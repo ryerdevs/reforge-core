@@ -90,7 +90,7 @@ mod splitter;
 use std::path::Path;
 use std::time::Duration;
 
-use bot::{run_bot, BotConfig};
+use bot::{BotConfig, run_bot};
 use report::{render_json, render_summary_line, render_table, summarize};
 
 const DEFAULT_AUTH: &str = "127.0.0.1:30001";
@@ -189,10 +189,15 @@ fn parse_u64(arg: &str, v: &str, what: &str) -> Result<u64, String> {
 /// Valida la lista de clases de `--expect-failures` (los labels de `Status`;
 /// `ok` no es un fallo y no se acepta).
 fn parse_expect_failures(arg: &str, v: &str) -> Result<Vec<String>, String> {
-    let labels: Vec<String> =
-        v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+    let labels: Vec<String> = v
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
     if labels.is_empty() {
-        return Err(format!("{arg}: lista vacía (p.ej. --expect-failures login_fail,timeout)"));
+        return Err(format!(
+            "{arg}: lista vacía (p.ej. --expect-failures login_fail,timeout)"
+        ));
     }
     for l in &labels {
         if !EXPECTABLE_FAILURES.contains(&l.as_str()) {
@@ -207,7 +212,10 @@ fn parse_expect_failures(arg: &str, v: &str) -> Result<Vec<String>, String> {
 
 /// Fallos observados cuya clase NO está en `expected` (assertion del modo
 /// `--expect-failures`). Vacío = la aserción pasa.
-fn unexpected_failures(reports: &[report::BotReport], expected: &[String]) -> Vec<(usize, String, String)> {
+fn unexpected_failures(
+    reports: &[report::BotReport],
+    expected: &[String],
+) -> Vec<(usize, String, String)> {
     reports
         .iter()
         .filter(|r| r.failed())
@@ -221,7 +229,9 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         let mut next_val = |what: &str| -> Result<String, String> {
-            it.next().cloned().ok_or_else(|| format!("{arg}: falta el valor de {what}"))
+            it.next()
+                .cloned()
+                .ok_or_else(|| format!("{arg}: falta el valor de {what}"))
         };
         match arg.as_str() {
             "--help" | "-h" => return Err("HELP".into()),
@@ -233,21 +243,29 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             "--auth" => a.auth = next_val("--auth")?,
             "--channel" => a.channel = next_val("--channel")?,
             "--move-interval-ms" => {
-                a.move_interval_ms = parse_u64(arg, &next_val("--move-interval-ms")?, "--move-interval-ms")?
+                a.move_interval_ms =
+                    parse_u64(arg, &next_val("--move-interval-ms")?, "--move-interval-ms")?
             }
             "--walk-speed" => {
                 a.walk_speed = parse_u64(arg, &next_val("--walk-speed")?, "--walk-speed")? as u32
             }
-            "--timeout-s" => a.timeout_s = parse_u64(arg, &next_val("--timeout-s")?, "--timeout-s")?,
+            "--timeout-s" => {
+                a.timeout_s = parse_u64(arg, &next_val("--timeout-s")?, "--timeout-s")?
+            }
             "--expect-failures" => {
                 a.expect_failures = parse_expect_failures(arg, &next_val("--expect-failures")?)?
             }
             "--summary" => a.summary = true,
             "--mobs-density" => {
-                a.mobs_density = parse_u64(arg, &next_val("--mobs-density")?, "--mobs-density")? as u32
+                a.mobs_density =
+                    parse_u64(arg, &next_val("--mobs-density")?, "--mobs-density")? as u32
             }
             "--create-accounts" => {
-                a.create_accounts = Some(parse_u64(arg, &next_val("--create-accounts")?, "--create-accounts")? as usize)
+                a.create_accounts = Some(parse_u64(
+                    arg,
+                    &next_val("--create-accounts")?,
+                    "--create-accounts",
+                )? as usize)
             }
             "--cleanup-accounts" => a.cleanup_accounts = true,
             "--pg" => a.pg = Some(next_val("--pg")?),
@@ -269,7 +287,10 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         ));
     }
     if a.timeout_s > 600 {
-        return Err(format!("--timeout-s: {} excede el límite de 600 s", a.timeout_s));
+        return Err(format!(
+            "--timeout-s: {} excede el límite de 600 s",
+            a.timeout_s
+        ));
     }
     accounts::validate_prefix(&a.login_prefix)?;
     Ok(a)
@@ -289,12 +310,18 @@ async fn main() -> std::process::ExitCode {
         }
         Ok(a) => a,
     };
-    let pg = args.pg.clone().unwrap_or_else(|| accounts::DEFAULT_PG.into());
+    let pg = args
+        .pg
+        .clone()
+        .unwrap_or_else(|| accounts::DEFAULT_PG.into());
 
     // Provisionar / limpiar cuentas desechables (PG; antes de correr los bots).
     if args.cleanup_accounts {
         match accounts::cleanup_accounts(&pg, &args.login_prefix).await {
-            Ok(n) => println!("bench_bot: cleanup: {n} cuentas '{}*' borradas", args.login_prefix),
+            Ok(n) => println!(
+                "bench_bot: cleanup: {n} cuentas '{}*' borradas",
+                args.login_prefix
+            ),
             Err(e) => {
                 eprintln!("bench_bot: cleanup falló: {e}");
                 return std::process::ExitCode::from(1);
@@ -354,7 +381,9 @@ async fn main() -> std::process::ExitCode {
     );
 
     // Correr todos los bots en paralelo (una tarea por bot).
-    let tasks: Vec<_> = (0..args.bots).map(|i| tokio::spawn(run_bot(cfg(i), i))).collect();
+    let tasks: Vec<_> = (0..args.bots)
+        .map(|i| tokio::spawn(run_bot(cfg(i), i)))
+        .collect();
     let mut reports = Vec::with_capacity(args.bots);
     let grace = Duration::from_secs(args.duration_s + 120);
     for t in tasks {
@@ -471,11 +500,33 @@ mod tests {
     #[test]
     fn parses_all_flags() {
         let a = parse(&[
-            "--bots", "8", "--duration", "60", "--login-prefix", "bm", "--password", "pw9",
-            "--auth", "127.0.0.1:39999", "--channel", "127.0.0.1:39998", "--move-interval-ms",
-            "250", "--walk-speed", "250", "--timeout-s", "8", "--expect-failures",
-            "login_fail,timeout", "--summary", "--mobs-density", "42", "--create-accounts", "8",
-            "--json", "r.json",
+            "--bots",
+            "8",
+            "--duration",
+            "60",
+            "--login-prefix",
+            "bm",
+            "--password",
+            "pw9",
+            "--auth",
+            "127.0.0.1:39999",
+            "--channel",
+            "127.0.0.1:39998",
+            "--move-interval-ms",
+            "250",
+            "--walk-speed",
+            "250",
+            "--timeout-s",
+            "8",
+            "--expect-failures",
+            "login_fail,timeout",
+            "--summary",
+            "--mobs-density",
+            "42",
+            "--create-accounts",
+            "8",
+            "--json",
+            "r.json",
         ])
         .unwrap();
         assert_eq!(a.bots, 8);
@@ -487,7 +538,10 @@ mod tests {
         assert_eq!(a.move_interval_ms, 250);
         assert_eq!(a.walk_speed, 250);
         assert_eq!(a.timeout_s, 8);
-        assert_eq!(a.expect_failures, vec!["login_fail".to_string(), "timeout".to_string()]);
+        assert_eq!(
+            a.expect_failures,
+            vec!["login_fail".to_string(), "timeout".to_string()]
+        );
         assert!(a.summary);
         assert_eq!(a.mobs_density, 42);
         assert_eq!(a.create_accounts, Some(8));
@@ -508,7 +562,10 @@ mod tests {
         assert!(parse(&["--bots", "0"]).is_err(), "cero");
         assert!(parse(&["--bots", "abc"]).is_err(), "no entero");
         assert!(parse(&["--duration", "0"]).is_err());
-        assert!(parse(&["--bots", "999999999999"]).is_err(), "fuera de rango");
+        assert!(
+            parse(&["--bots", "999999999999"]).is_err(),
+            "fuera de rango"
+        );
         assert!(parse(&["--cleanup-accounts", "--create-accounts", "3"]).is_ok());
         // Prefijo demasiado largo → error de validación.
         assert!(parse(&["--login-prefix", "abcdefghijklmnopqrst"]).is_err());
@@ -517,17 +574,35 @@ mod tests {
     #[test]
     fn rejects_bad_new_knobs() {
         assert!(parse(&["--walk-speed", "0"]).is_err(), "cero");
-        assert!(parse(&["--walk-speed", "1001"]).is_err(), "por encima del límite");
+        assert!(
+            parse(&["--walk-speed", "1001"]).is_err(),
+            "por encima del límite"
+        );
         assert!(parse(&["--walk-speed", "abc"]).is_err(), "no entero");
         assert!(parse(&["--timeout-s", "0"]).is_err(), "cero");
-        assert!(parse(&["--timeout-s", "601"]).is_err(), "por encima del límite");
-        assert!(parse(&["--expect-failures", "bogus"]).is_err(), "clase inválida");
-        assert!(parse(&["--expect-failures", "ok"]).is_err(), "ok no es un fallo");
+        assert!(
+            parse(&["--timeout-s", "601"]).is_err(),
+            "por encima del límite"
+        );
+        assert!(
+            parse(&["--expect-failures", "bogus"]).is_err(),
+            "clase inválida"
+        );
+        assert!(
+            parse(&["--expect-failures", "ok"]).is_err(),
+            "ok no es un fallo"
+        );
         assert!(parse(&["--expect-failures", ""]).is_err(), "lista vacía");
         assert!(parse(&["--expect-failures", "timeout,desync"]).is_ok());
         assert!(parse(&["--summary"]).is_ok());
-        assert!(parse(&["--summary", "--bots", "2"]).is_ok(), "--summary no consume valor");
-        assert!(parse(&["--summary", "x"]).is_err(), "'x' es un argumento desconocido");
+        assert!(
+            parse(&["--summary", "--bots", "2"]).is_ok(),
+            "--summary no consume valor"
+        );
+        assert!(
+            parse(&["--summary", "x"]).is_err(),
+            "'x' es un argumento desconocido"
+        );
     }
 
     #[test]

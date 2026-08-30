@@ -18,7 +18,7 @@ use protocol::world::{
 };
 
 use crate::channel::session::{Outcome, Session};
-use crate::channel::{parse_listen, ITEM_COUNT_LIMIT, INVENTORY_MAX_NUM};
+use crate::channel::{INVENTORY_MAX_NUM, ITEM_COUNT_LIMIT, parse_listen};
 
 /// CG_SCRIPT_BUTTON (66, 5 B: header + idx DWORD — Packet.h:665-669): el
 /// índice del botón del diálogo/ventana de quest (lane D). Parity
@@ -123,19 +123,31 @@ pub async fn handle_confirm(session: &mut Session, pkt: &[u8]) -> Result<Outcome
 /// tarea del canal.
 pub(super) async fn emit(session: &mut Session, q: QuestEvent) -> Result<(), String> {
     match q {
-        QuestEvent::Run { script, effects, dirty, suspended, .. } => {
+        QuestEvent::Run {
+            script,
+            effects,
+            dirty,
+            suspended,
+            ..
+        } => {
             if let Some(text) = script {
                 send_script(session, &text).await?;
             }
             for eff in effects {
                 match eff {
-                    QuestEffect::GiveItem { vnum, count } => give_item(session, vnum, count).await?,
-                    QuestEffect::RemoveItem { vnum, count } => remove_item(session, vnum, count).await?,
+                    QuestEffect::GiveItem { vnum, count } => {
+                        give_item(session, vnum, count).await?
+                    }
+                    QuestEffect::RemoveItem { vnum, count } => {
+                        remove_item(session, vnum, count).await?
+                    }
                     QuestEffect::Warp { x, y } => warp(session, x, y).await?,
                     QuestEffect::Notice(text) => notice(session, &text).await?,
                     QuestEffect::SendLetter(text) => notice(session, &text).await?,
-                    QuestEffect::TargetVid { .. } | QuestEffect::TargetDelete { .. }
-                    | QuestEffect::AffectAdd { .. } | QuestEffect::AffectRemove { .. } => {
+                    QuestEffect::TargetVid { .. }
+                    | QuestEffect::TargetDelete { .. }
+                    | QuestEffect::AffectAdd { .. }
+                    | QuestEffect::AffectRemove { .. } => {
                         eprintln!(
                             "server_realms: channel conn {}: quest effect no-op \
                              (pendiente: flecha de quest / buffs)",
@@ -185,7 +197,10 @@ async fn send_script(session: &mut Session, text: &str) -> Result<(), String> {
         "server_realms: channel conn {}: quest dialog ({} B): {}",
         session.conn_id,
         pkt.len(),
-        String::from_utf8_lossy(text.as_bytes()).chars().take(120).collect::<String>()
+        String::from_utf8_lossy(text.as_bytes())
+            .chars()
+            .take(120)
+            .collect::<String>()
     );
     Ok(())
 }
@@ -196,14 +211,20 @@ async fn send_script(session: &mut Session, text: &str) -> Result<(), String> {
 async fn give_item(session: &mut Session, vnum: u32, count: u32) -> Result<(), String> {
     let mut remaining = i64::from(count);
     while let Some(idx) = session.inventory.iter().position(|i| {
-        i.window == "INVENTORY" && i.vnum == i64::from(vnum) && i.sockets == [0; 3] && i.count < ITEM_COUNT_LIMIT
+        i.window == "INVENTORY"
+            && i.vnum == i64::from(vnum)
+            && i.sockets == [0; 3]
+            && i.count < ITEM_COUNT_LIMIT
     }) {
         let add = (ITEM_COUNT_LIMIT - session.inventory[idx].count).min(remaining);
         session.inventory[idx].count += add;
         remaining -= add;
         let up = TPacketGCItemUpdate {
             header: TPacketGCItemUpdate::HEADER,
-            cell: TItemPos { window: TItemPos::WINDOW_INVENTORY, cell: session.inventory[idx].pos as u16 },
+            cell: TItemPos {
+                window: TItemPos::WINDOW_INVENTORY,
+                cell: session.inventory[idx].pos as u16,
+            },
             count: session.inventory[idx].count as u8,
             sockets: session.inventory[idx].sockets,
             attrs: session.inventory[idx].attrs,
@@ -250,8 +271,9 @@ async fn give_item(session: &mut Session, vnum: u32, count: u32) -> Result<(), S
     // (`socket_pct` abiertos; sin attrs mágicos). Fail-open: proto sin fila
     // o tablas vacías → item plano.
     let (mut sockets, mut attrs) = ([0i64; 3], [(0i16, 0i16); 7]);
-    if let Ok(Some(proto)) =
-        ItemRepo::new(session.pool.clone()).load_proto_use_values(i64::from(vnum)).await
+    if let Ok(Some(proto)) = ItemRepo::new(session.pool.clone())
+        .load_proto_use_values(i64::from(vnum))
+        .await
     {
         let mut rng = crate::channel::rand32;
         database::attr::roll_attrs(
@@ -276,7 +298,10 @@ async fn give_item(session: &mut Session, vnum: u32, count: u32) -> Result<(), S
     };
     let set = TPacketGCItemSet {
         header: TPacketGCItemSet::HEADER,
-        cell: TItemPos { window: TItemPos::WINDOW_INVENTORY, cell: slot },
+        cell: TItemPos {
+            window: TItemPos::WINDOW_INVENTORY,
+            cell: slot,
+        },
         vnum,
         count: remaining as u8,
         flags: 0,
@@ -306,7 +331,9 @@ async fn remove_item(session: &mut Session, vnum: u32, count: u32) -> Result<(),
     let mut remaining = i64::from(count);
     let mut idx = 0;
     while remaining > 0 && idx < session.inventory.len() {
-        if session.inventory[idx].window != "INVENTORY" || session.inventory[idx].vnum != i64::from(vnum) {
+        if session.inventory[idx].window != "INVENTORY"
+            || session.inventory[idx].vnum != i64::from(vnum)
+        {
             idx += 1;
             continue;
         }
@@ -317,7 +344,10 @@ async fn remove_item(session: &mut Session, vnum: u32, count: u32) -> Result<(),
         if consumed.count == 0 {
             // Stack agotado: GC_ITEM_DEL (20, 42 B deprecated) + delete fila.
             let del = TPacketGCItemDelDeprecated::new(
-                TItemPos { window: TItemPos::WINDOW_INVENTORY, cell: consumed.pos as u16 },
+                TItemPos {
+                    window: TItemPos::WINDOW_INVENTORY,
+                    cell: consumed.pos as u16,
+                },
                 0,
                 0,
             );
@@ -325,12 +355,17 @@ async fn remove_item(session: &mut Session, vnum: u32, count: u32) -> Result<(),
                 .send(&del.to_bytes())
                 .await
                 .map_err(|e| format!("enviando GC_ITEM_DEL (quest): {e}"))?;
-            ItemRepo::new(session.pool.clone()).delete(consumed.id).await?;
+            ItemRepo::new(session.pool.clone())
+                .delete(consumed.id)
+                .await?;
             session.inventory.remove(idx);
         } else {
             let up = TPacketGCItemUpdate {
                 header: TPacketGCItemUpdate::HEADER,
-                cell: TItemPos { window: TItemPos::WINDOW_INVENTORY, cell: consumed.pos as u16 },
+                cell: TItemPos {
+                    window: TItemPos::WINDOW_INVENTORY,
+                    cell: consumed.pos as u16,
+                },
                 count: consumed.count as u8,
                 sockets: consumed.sockets,
                 attrs: consumed.attrs,
@@ -388,7 +423,10 @@ async fn notice(session: &mut Session, text: &str) -> Result<(), String> {
     eprintln!(
         "server_realms: channel conn {}: quest notice: {}",
         session.conn_id,
-        String::from_utf8_lossy(text.as_bytes()).chars().take(120).collect::<String>()
+        String::from_utf8_lossy(text.as_bytes())
+            .chars()
+            .take(120)
+            .collect::<String>()
     );
     Ok(())
 }
@@ -452,10 +490,24 @@ mod tests {
         let mut rt = game_core::quest::QuestRuntime::default();
         let items = std::collections::HashMap::new();
         let mut rng = |_, _| 0i64;
-        let out = e.run(&mut rt, game_core::quest::QuestTrigger::Letter, 5, 41, 0, &items, &mut rng);
+        let out = e.run(
+            &mut rt,
+            game_core::quest::QuestTrigger::Letter,
+            5,
+            41,
+            0,
+            &items,
+            &mut rng,
+        );
         let script = out.script.expect("diálogo");
-        assert!(script.starts_with("Este es el titulo del warp.[ENTER]"), "{script}");
-        assert!(script.contains("sin_texto[ENTER]"), "fallback a la clave: {script}");
+        assert!(
+            script.starts_with("Este es el titulo del warp.[ENTER]"),
+            "{script}"
+        );
+        assert!(
+            script.contains("sin_texto[ENTER]"),
+            "fallback a la clave: {script}"
+        );
     }
 
     /// El markup del event-set del cliente: texto + [ENTER], [NEXT] y
@@ -469,12 +521,25 @@ mod tests {
         let mut rt = game_core::quest::QuestRuntime::default();
         let items = std::collections::HashMap::new();
         let mut rng = |_, _| 0i64;
-        let out = e.run(&mut rt, game_core::quest::QuestTrigger::Letter, 5, 41, 0, &items, &mut rng);
+        let out = e.run(
+            &mut rt,
+            game_core::quest::QuestTrigger::Letter,
+            5,
+            41,
+            0,
+            &items,
+            &mut rng,
+        );
         let script = out.script.expect("diálogo");
         assert!(script.starts_with("texto[ENTER][NEXT]"), "{script}");
         assert!(out.suspended);
         let out = e.answer(&mut rt, 0, 5, 41, 0, &items, &mut rng);
-        assert_eq!(out.script.as_deref(), Some("mas[ENTER]"), "{:?}", out.script);
+        assert_eq!(
+            out.script.as_deref(),
+            Some("mas[ENTER]"),
+            "{:?}",
+            out.script
+        );
     }
 
     /// El parseo del texto del CG_QUEST_INPUT_STRING (30): C-string de 65 B

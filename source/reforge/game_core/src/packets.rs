@@ -22,13 +22,13 @@ use database::item::{ItemRow, ProtoItem};
 use database::land::LandRow;
 use database::player::{PlayerRow, PlayerSummary};
 use protocol::world::{
-    land_list_bytes as wire_land_list, TLandPacketElement, TPacketGCAffectAdd, TPacketGCItemSet,
+    TItemPos, TLandPacketElement, TPacketAffectElement, TPacketGCAffectAdd, TPacketGCItemSet,
     TPacketGCMainCharacter, TPacketGCPoints, TPacketGCQuickSlotAdd, TPacketGCSkillLevel,
-    TPacketAffectElement, TItemPos, TPlayerSkill, TQuickslot,
+    TPlayerSkill, TQuickslot, land_list_bytes as wire_land_list,
 };
 use protocol::{
-    from_cstr, TPacketGCCharacterAdd, TPacketGCCharacterAdditionalInfo, TPacketGCCharacterUpdate,
-    TPacketGCLoginSuccess, TSimplePlayer, PLAYER_PER_ACCOUNT,
+    PLAYER_PER_ACCOUNT, TPacketGCCharacterAdd, TPacketGCCharacterAdditionalInfo,
+    TPacketGCCharacterUpdate, TPacketGCLoginSuccess, TSimplePlayer, from_cstr,
 };
 
 /// `CHAR_TYPE_PC` — `length.h:330` (enum ECharType: MONSTER=0, NPC=1, STONE=2,
@@ -42,7 +42,8 @@ const EQUIPPART_ARMOR: usize = 0;
 const EQUIPPART_WEAPON: usize = 1;
 const EQUIPPART_HEAD: usize = 2;
 const EQUIPPART_HAIR: usize = 3;
-const EQUIPPART_ACCE: usize = 4;
+// El slot 4 (ACCE) no tiene constante: el reforge no consume acce (GAP —
+// `equipped_parts` deja ese awPart a 0).
 
 /// Cell base del window EQUIPMENT en el wire (`INVENTORY_MAX_NUM` con
 /// `ENABLE_EXTEND_INVEN_SYSTEM` — length.h:29 + CommonDefines.h:32):
@@ -155,8 +156,8 @@ pub fn find_equip_cell(proto: &database::item::ProtoItem) -> Option<u16> {
 ///   con `inet_addr(g_stProxyIP)`, `desc.cpp:970-971` ENABLE_NEWSTUFF).
 /// - `w_port`: el puerto del canal en HOST order (el cliente hace `htons`,
 ///   `NetAddress.cpp:79-82`).
-/// Con 0/0 el DirectEnter conecta a `0.0.0.0:0` → `OnConnectFailure` →
-/// ClosePhase → vuelta al login en silencio (evidencia del slice 3.5).
+///   Con 0/0 el DirectEnter conecta a `0.0.0.0:0` → `OnConnectFailure` →
+///   ClosePhase → vuelta al login en silencio (evidencia del slice 3.5).
 pub fn summary_to_simple_player(s: &PlayerSummary, l_addr: u32, w_port: u16) -> TSimplePlayer {
     TSimplePlayer {
         dw_id: s.id as u32,
@@ -290,7 +291,9 @@ pub fn mov_speed_for_boots(boots: Option<&ProtoItem>) -> u8 {
             b.applies
                 .iter()
                 .filter(|(t, _)| *t == APPLY_MOV_SPEED)
-                .fold(0_i64, |sum, (_, value)| sum.saturating_add(i64::from(*value)))
+                .fold(0_i64, |sum, (_, value)| {
+                    sum.saturating_add(i64::from(*value))
+                })
         })
         .unwrap_or(0);
     clamp_mov_speed(100_i64.saturating_add(bonus))
@@ -327,9 +330,9 @@ pub fn character_add(row: &PlayerRow, mov_speed: u8) -> TPacketGCCharacterAdd {
         CHAR_TYPE_PC,
         row.job as u32,
         clamp_mov_speed(i64::from(mov_speed)), // GetLimitPoint(POINT_MOV_SPEED) — parity char.cpp:2245 + botas
-        100, // attack speed (parity char.cpp:2246)
-        0, // state flag (runtime)
-        [0, 0], // affect flags (runtime)
+        100,                                   // attack speed (parity char.cpp:2246)
+        0,                                     // state flag (runtime)
+        [0, 0],                                // affect flags (runtime)
     )
 }
 
@@ -418,7 +421,9 @@ pub fn chat_command(empire: u8, payload: &str) -> Vec<u8> {
 /// `SendHorseInfo` char_horse.cpp:309-345; grades 0-3 — el cliente pinta
 /// `SetHorseState`, game.py:1895-1977).
 pub fn horse_state_command(row: &PlayerRow, empire: u8) -> Vec<u8> {
-    let lvl = row.horse_level.clamp(0, crate::horse::HORSE_MAX_LEVEL as i16) as u8;
+    let lvl = row
+        .horse_level
+        .clamp(0, crate::horse::HORSE_MAX_LEVEL as i16) as u8;
     let (mh, ms) = (
         i32::from(crate::horse::max_health(lvl)),
         i32::from(crate::horse::max_stamina(lvl)),
@@ -429,8 +434,24 @@ pub fn horse_state_command(row: &PlayerRow, empire: u8) -> Vec<u8> {
     );
     // Grades 0-3 (parity char_horse.cpp:313-332): la primera cota difiere —
     // salud 0 → 0; stamina st*10 <= max → 0.
-    let hg = if hp == 0 { 0 } else if hp * 10 <= mh * 3 { 1 } else if hp * 10 <= mh * 7 { 2 } else { 3 };
-    let sg = if st * 10 <= ms { 0 } else if st * 10 <= ms * 3 { 1 } else if st * 10 <= ms * 7 { 2 } else { 3 };
+    let hg = if hp == 0 {
+        0
+    } else if hp * 10 <= mh * 3 {
+        1
+    } else if hp * 10 <= mh * 7 {
+        2
+    } else {
+        3
+    };
+    let sg = if st * 10 <= ms {
+        0
+    } else if st * 10 <= ms * 3 {
+        1
+    } else if st * 10 <= ms * 7 {
+        2
+    } else {
+        3
+    };
     chat_command(empire, &format!("horse_state {lvl} {hg} {sg}"))
 }
 
@@ -497,26 +518,26 @@ const POINT_IQ: usize = 15;
 const POINT_ATT_SPEED: usize = 17;
 const POINT_MOV_SPEED: usize = 19;
 const POINT_CASTING_SPEED: usize = 21;
-    const POINT_LEVEL_STEP: usize = 25;
-    const POINT_STAT: usize = 26;
-    const POINT_SUB_SKILL: usize = 27;
-    const POINT_SKILL: usize = 28;
-    const POINT_PLAYTIME: usize = 31;
+const POINT_LEVEL_STEP: usize = 25;
+const POINT_STAT: usize = 26;
+const POINT_SUB_SKILL: usize = 27;
+const POINT_SKILL: usize = 28;
+const POINT_PLAYTIME: usize = 31;
 
-    // Battle points — índices del enum del SERVIDOR C++ (`char.h:152-166`).
-    // El CLIENTE S3ll lee por sus propios índices: su DEF_GRADE (20) = el
-    // CLIENT_DEF_GRADE del server (el "show def" — INTERNATIONAL_VERSION,
-    // char.cpp:2147 — la ventana del personaje muestra level+HT+armor) y su
-    // ataque = ATT_MIN/ATT_MAX (29/30 = WEAPON_MIN/MAX del server — el daño
-    // del arma; el C++ NUNCA los llena — la ventana mostraba 0 — el rewrite
-    // sí los llena). Los grades 16/18 alimentan el combate.
-    const POINT_DEF_GRADE: usize = 16; // char.h:152 (el DEF real — combate)
-    const POINT_ATT_GRADE: usize = 18; // char.h:154 (el ATK base — combate)
-    const POINT_CLIENT_DEF_GRADE: usize = 20; // char.h:156 (el show def — ventana)
-    const POINT_MAGIC_ATT_GRADE: usize = 22; // char.h:158
-    const POINT_MAGIC_DEF_GRADE: usize = 23; // char.h:159
-    const POINT_WEAPON_MIN: usize = 29; // char.h:165 (daño min del arma — ventana)
-    const POINT_WEAPON_MAX: usize = 30; // char.h:166 (daño max del arma — ventana)
+// Battle points — índices del enum del SERVIDOR C++ (`char.h:152-166`).
+// El CLIENTE S3ll lee por sus propios índices: su DEF_GRADE (20) = el
+// CLIENT_DEF_GRADE del server (el "show def" — INTERNATIONAL_VERSION,
+// char.cpp:2147 — la ventana del personaje muestra level+HT+armor) y su
+// ataque = ATT_MIN/ATT_MAX (29/30 = WEAPON_MIN/MAX del server — el daño
+// del arma; el C++ NUNCA los llena — la ventana mostraba 0 — el rewrite
+// sí los llena). Los grades 16/18 alimentan el combate.
+const POINT_DEF_GRADE: usize = 16; // char.h:152 (el DEF real — combate)
+const POINT_ATT_GRADE: usize = 18; // char.h:154 (el ATK base — combate)
+const POINT_CLIENT_DEF_GRADE: usize = 20; // char.h:156 (el show def — ventana)
+const POINT_MAGIC_ATT_GRADE: usize = 22; // char.h:158
+const POINT_MAGIC_DEF_GRADE: usize = 23; // char.h:159
+const POINT_WEAPON_MIN: usize = 29; // char.h:165 (daño min del arma — ventana)
+const POINT_WEAPON_MAX: usize = 30; // char.h:166 (daño max del arma — ventana)
 
 /// Tabla `JobInitialPoints[JOB_MAX_NUM]` del C++ (`constants.cpp:18-24` —
 /// por JOB: st, ht, dx, iq, max_hp, max_sp, hp_per_ht, sp_per_iq, ...,
@@ -532,13 +553,41 @@ struct JobPoints {
 
 const JOB_POINTS: [JobPoints; 4] = [
     // JOB_WARRIOR (0)
-    JobPoints { max_hp: 600, hp_per_ht: 40, max_sp: 200, sp_per_iq: 20, max_stamina: 800, stamina_per_con: 5 },
+    JobPoints {
+        max_hp: 600,
+        hp_per_ht: 40,
+        max_sp: 200,
+        sp_per_iq: 20,
+        max_stamina: 800,
+        stamina_per_con: 5,
+    },
     // JOB_ASSASSIN (1)
-    JobPoints { max_hp: 650, hp_per_ht: 40, max_sp: 200, sp_per_iq: 20, max_stamina: 800, stamina_per_con: 5 },
+    JobPoints {
+        max_hp: 650,
+        hp_per_ht: 40,
+        max_sp: 200,
+        sp_per_iq: 20,
+        max_stamina: 800,
+        stamina_per_con: 5,
+    },
     // JOB_SURA (2)
-    JobPoints { max_hp: 650, hp_per_ht: 40, max_sp: 200, sp_per_iq: 20, max_stamina: 800, stamina_per_con: 5 },
+    JobPoints {
+        max_hp: 650,
+        hp_per_ht: 40,
+        max_sp: 200,
+        sp_per_iq: 20,
+        max_stamina: 800,
+        stamina_per_con: 5,
+    },
     // JOB_SHAMAN (3)
-    JobPoints { max_hp: 700, hp_per_ht: 40, max_sp: 200, sp_per_iq: 20, max_stamina: 800, stamina_per_con: 5 },
+    JobPoints {
+        max_hp: 700,
+        hp_per_ht: 40,
+        max_sp: 200,
+        sp_per_iq: 20,
+        max_stamina: 800,
+        stamina_per_con: 5,
+    },
 ];
 
 /// `RaceToJob` (`input_login.cpp:356-405` + `char.h:48-62`: MAIN_RACE_WARRIOR_M
@@ -661,7 +710,10 @@ pub fn compute_battle_points(
 /// (ComputeBattlePoints — la sesión los cachea al entry/equip/unequip; el
 /// resto de derivados — regens/resistencias/bonos — siguen a 0, F5).
 pub fn points_packet(row: &PlayerRow, next_exp: i64, battle: &BattlePoints) -> TPacketGCPoints {
-    let mut p = TPacketGCPoints { header: TPacketGCPoints::HEADER, points: [0; 255] };
+    let mut p = TPacketGCPoints {
+        header: TPacketGCPoints::HEADER,
+        points: [0; 255],
+    };
     p.points[POINT_LEVEL] = i32::from(row.level);
     p.points[POINT_VOICE] = i32::from(row.voice);
     p.points[POINT_EXP] = row.exp;
@@ -710,17 +762,22 @@ pub fn points_packet(row: &PlayerRow, next_exp: i64, battle: &BattlePoints) -> T
 pub fn skill_level_packet(skill_level: Option<&Vec<u8>>) -> TPacketGCSkillLevel {
     let mut p = TPacketGCSkillLevel {
         header: TPacketGCSkillLevel::HEADER,
-        skills: [TPlayerSkill { b_master_type: 0, b_level: 0, t_next_read: 0 }; 255],
+        skills: [TPlayerSkill {
+            b_master_type: 0,
+            b_level: 0,
+            t_next_read: 0,
+        }; 255],
     };
     if let Some(blob) = skill_level
-        && blob.len() == 255 * TPlayerSkill::SIZE {
-            for (i, s) in p.skills.iter_mut().enumerate() {
-                let Ok(skill) = TPlayerSkill::from_bytes(&blob[i * 6..(i + 1) * 6]) else {
-                    break;
-                };
-                *s = skill;
-            }
+        && blob.len() == 255 * TPlayerSkill::SIZE
+    {
+        for (i, s) in p.skills.iter_mut().enumerate() {
+            let Ok(skill) = TPlayerSkill::from_bytes(&blob[i * 6..(i + 1) * 6]) else {
+                break;
+            };
+            *s = skill;
         }
+    }
     p
 }
 
@@ -783,7 +840,10 @@ pub fn land_list(lands: &[LandRow]) -> Vec<u8> {
 pub fn quickslot_packets(quickslot: Option<&Vec<u8>>) -> Vec<Vec<u8>> {
     let slots: [TQuickslot; TPacketGCQuickSlotAdd::QUICKSLOT_MAX_NUM] = match quickslot {
         Some(blob) if blob.len() == 36 * TQuickslot::SIZE => {
-            let mut out = [TQuickslot { slot_type: 0, pos: 0 }; 36];
+            let mut out = [TQuickslot {
+                slot_type: 0,
+                pos: 0,
+            }; 36];
             for (i, s) in out.iter_mut().enumerate() {
                 if let Ok(q) = TQuickslot::from_bytes(&blob[i * 2..(i + 1) * 2]) {
                     *s = q;
@@ -791,7 +851,12 @@ pub fn quickslot_packets(quickslot: Option<&Vec<u8>>) -> Vec<Vec<u8>> {
             }
             out
         }
-        _ => [TQuickslot { slot_type: 0, pos: 0 }; 36],
+        _ => {
+            [TQuickslot {
+                slot_type: 0,
+                pos: 0,
+            }; 36]
+        }
     };
     slots
         .iter()
@@ -973,7 +1038,10 @@ mod tests {
     #[test]
     fn summary_to_simple_player_fields_and_size() {
         let ip = ip_to_inet_addr("172.25.104.175").expect("ip");
-        assert_eq!(ip, 0xAF_68_19_AC, "inet_addr('172.25.104.175') — network byte order");
+        assert_eq!(
+            ip, 0xAF_68_19_AC,
+            "inet_addr('172.25.104.175') — network byte order"
+        );
         let p = summary_to_simple_player(&summary(), ip, 30003);
         let b = p.to_bytes();
         assert_eq!(b.len(), TSimplePlayer::SIZE, "71 B packed");
@@ -992,8 +1060,16 @@ mod tests {
         // dirección (PythonNetworkStream.cpp:458-469). Bytes EXACTOS: el
         // cliente decodifica el IP desde el byte bajo (NetStream.cpp:467-473)
         // y el puerto en host order (NetAddress.cpp:79-82 hace htons).
-        assert_eq!(&b[64..68], &[172, 25, 104, 175], "lAddr = inet_addr network order (bytes LE)");
-        assert_eq!(&b[68..70], &30003u16.to_le_bytes(), "wPort host order (30003 = 0x7533)");
+        assert_eq!(
+            &b[64..68],
+            &[172, 25, 104, 175],
+            "lAddr = inet_addr network order (bytes LE)"
+        );
+        assert_eq!(
+            &b[68..70],
+            &30003u16.to_le_bytes(),
+            "wPort host order (30003 = 0x7533)"
+        );
         // Bytes spot en el wire (LE): dwID@0, name@4, byJob@29, x@56.
         assert_eq!(&b[0..4], &[2, 0, 0, 0]);
         assert_eq!(&b[4..10], b"ninja\0");
@@ -1006,7 +1082,11 @@ mod tests {
     /// memoria LE tiene los bytes [a, b, c, d]).
     #[test]
     fn ip_to_inet_addr_format_and_errors() {
-        assert_eq!(ip_to_inet_addr("127.0.0.1").unwrap(), 0x0100_007F, "memoria LE: [127, 0, 0, 1]");
+        assert_eq!(
+            ip_to_inet_addr("127.0.0.1").unwrap(),
+            0x0100_007F,
+            "memoria LE: [127, 0, 0, 1]"
+        );
         assert_eq!(ip_to_inet_addr("172.25.104.175").unwrap(), 0xAF68_19AC);
         assert_eq!(ip_to_inet_addr("0.0.0.0").unwrap(), 0);
         assert!(ip_to_inet_addr("172.25.104").is_err(), "3 octetos");
@@ -1056,7 +1136,11 @@ mod tests {
         assert_eq!((p.x, p.y, p.z), (969600, 278400, 0), "units");
         assert_eq!(p.b_type, CHAR_TYPE_PC, "CHAR_TYPE_PC = 6");
         assert_eq!(p.w_race_num, 1, "GetRaceNum() = job para PC");
-        assert_eq!((p.b_moving_speed, p.b_attack_speed, p.b_state_flag), (100, 100, 0), "parity char.cpp:2245-2246; state flag runtime GAP");
+        assert_eq!(
+            (p.b_moving_speed, p.b_attack_speed, p.b_state_flag),
+            (100, 100, 0),
+            "parity char.cpp:2245-2246; state flag runtime GAP"
+        );
         assert_eq!(p.dw_affect_flag, [0, 0], "runtime GAP");
         // wRaceNum@22 (LE) en el wire.
         assert_eq!(&b[22..26], &[1, 0, 0, 0]);
@@ -1085,27 +1169,57 @@ mod tests {
         assert_eq!(mov_speed_for_boots(None), 100);
         assert_eq!(mov_speed_for_boots(Some(&boots([(0, 0); 3]))), 100);
         // Bota con APPLY_MOV_SPEED (8): 100 + valor (porcentaje).
-        assert_eq!(mov_speed_for_boots(Some(&boots([(8, 5), (0, 0), (0, 0)]))), 105);
+        assert_eq!(
+            mov_speed_for_boots(Some(&boots([(8, 5), (0, 0), (0, 0)]))),
+            105
+        );
         // Varios applies de velocidad se SUMAN (el C++ aplica todos).
-        assert_eq!(mov_speed_for_boots(Some(&boots([(8, 5), (8, 5), (3, 20)]))), 110);
+        assert_eq!(
+            mov_speed_for_boots(Some(&boots([(8, 5), (8, 5), (3, 20)]))),
+            110
+        );
         // Otros applies NO afectan (p.ej. APPLY_CON = 3).
-        assert_eq!(mov_speed_for_boots(Some(&boots([(3, 20), (0, 0), (0, 0)]))), 100);
+        assert_eq!(
+            mov_speed_for_boots(Some(&boots([(3, 20), (0, 0), (0, 0)]))),
+            100
+        );
         // Los límites son inclusivos: 199 es válido y 200 es el techo del PC.
-        assert_eq!(mov_speed_for_boots(Some(&boots([(8, 99), (0, 0), (0, 0)]))), 199);
-        assert_eq!(mov_speed_for_boots(Some(&boots([(8, 100), (0, 0), (0, 0)]))), 200);
-        assert_eq!(mov_speed_for_boots(Some(&boots([(8, 101), (0, 0), (0, 0)]))), 200);
+        assert_eq!(
+            mov_speed_for_boots(Some(&boots([(8, 99), (0, 0), (0, 0)]))),
+            199
+        );
+        assert_eq!(
+            mov_speed_for_boots(Some(&boots([(8, 100), (0, 0), (0, 0)]))),
+            200
+        );
+        assert_eq!(
+            mov_speed_for_boots(Some(&boots([(8, 101), (0, 0), (0, 0)]))),
+            200
+        );
         // GetLimitPoint también tiene mínimo 0; valores negativos no cruzan el
         // límite inferior.
-        assert_eq!(mov_speed_for_boots(Some(&boots([(8, -100), (0, 0), (0, 0)]))), 0);
-        assert_eq!(mov_speed_for_boots(Some(&boots([(8, -101), (0, 0), (0, 0)]))), 0);
+        assert_eq!(
+            mov_speed_for_boots(Some(&boots([(8, -100), (0, 0), (0, 0)]))),
+            0
+        );
+        assert_eq!(
+            mov_speed_for_boots(Some(&boots([(8, -101), (0, 0), (0, 0)]))),
+            0
+        );
         // Los valores del proto son i32: sumarlos no debe desbordar antes del
         // clamp ni producir un valor que luego se envuelva al byte.
         assert_eq!(mov_speed_for_boots(Some(&boots([(8, i32::MAX); 3]))), 200);
         assert_eq!(mov_speed_for_boots(Some(&boots([(8, i32::MIN); 3]))), 0);
         // Techo del GetLimitPoint PC (200) + byte del wire.
-        assert_eq!(mov_speed_for_boots(Some(&boots([(8, 500), (0, 0), (0, 0)]))), 200);
+        assert_eq!(
+            mov_speed_for_boots(Some(&boots([(8, 500), (0, 0), (0, 0)]))),
+            200
+        );
         // El ADD lleva la velocidad computada (el wire b[26] — mov speed).
-        let p = character_add(&row(), mov_speed_for_boots(Some(&boots([(8, 5), (0, 0), (0, 0)]))));
+        let p = character_add(
+            &row(),
+            mov_speed_for_boots(Some(&boots([(8, 5), (0, 0), (0, 0)]))),
+        );
         let b = p.to_bytes();
         assert_eq!(b[26], 105, "b_moving_speed@26 del ADD");
     }
@@ -1125,7 +1239,11 @@ mod tests {
             assert_eq!(add.b_moving_speed, expected, "ADD field for {speed}");
             assert_eq!(add.to_bytes()[26], expected, "ADD wire byte for {speed}");
             assert_eq!(update.b_moving_speed, expected, "UPDATE field for {speed}");
-            assert_eq!(update.to_bytes()[25], expected, "UPDATE wire byte for {speed}");
+            assert_eq!(
+                update.to_bytes()[25],
+                expected,
+                "UPDATE wire byte for {speed}"
+            );
         }
     }
 
@@ -1141,8 +1259,14 @@ mod tests {
         assert_eq!(b[0], TPacketGCCharacterAdditionalInfo::HEADER, "header 136");
         assert_eq!(p.dw_vid, 2);
         assert_eq!(p.name(), "ninja");
-        assert_eq!(p.aw_part[EQUIPPART_ARMOR], 0, "PART_MAIN = 0 sin items (se setea al equipar)");
-        assert_eq!(p.aw_part[EQUIPPART_HAIR], 0xAABB_CCDD, "PART_HAIR persistido");
+        assert_eq!(
+            p.aw_part[EQUIPPART_ARMOR], 0,
+            "PART_MAIN = 0 sin items (se setea al equipar)"
+        );
+        assert_eq!(
+            p.aw_part[EQUIPPART_HAIR], 0xAABB_CCDD,
+            "PART_HAIR persistido"
+        );
         assert_eq!(p.aw_part[EQUIPPART_WEAPON], 0, "GAP items runtime");
         assert_eq!(p.aw_part[EQUIPPART_HEAD], 0, "GAP items runtime");
         assert_eq!(p.aw_part[EQUIPPART_ACCE], 0, "GAP items runtime");
@@ -1178,7 +1302,7 @@ mod tests {
             ItemRow {
                 id: 10,
                 window: "EQUIPMENT".into(),
-                pos: EQUIP_CELL_BASE as i32 + 0, // WEAR_BODY
+                pos: EQUIP_CELL_BASE as i32, // WEAR_BODY
                 count: 1,
                 vnum: 101_001, // armadura
                 sockets: [0; 3],
@@ -1242,13 +1366,29 @@ mod tests {
         assert_eq!(find_equip_cell(&p(wearable::HEAD)), Some(1), "WEAR_HEAD");
         assert_eq!(find_equip_cell(&p(wearable::FOOTS)), Some(2), "WEAR_FOOTS");
         assert_eq!(find_equip_cell(&p(wearable::WRIST)), Some(3), "WEAR_WRIST");
-        assert_eq!(find_equip_cell(&p(wearable::WEAPON)), Some(4), "WEAR_WEAPON");
-        assert_eq!(find_equip_cell(&p(wearable::SHIELD)), Some(10), "WEAR_SHIELD");
+        assert_eq!(
+            find_equip_cell(&p(wearable::WEAPON)),
+            Some(4),
+            "WEAR_WEAPON"
+        );
+        assert_eq!(
+            find_equip_cell(&p(wearable::SHIELD)),
+            Some(10),
+            "WEAR_SHIELD"
+        );
         assert_eq!(find_equip_cell(&p(wearable::NECK)), Some(5), "WEAR_NECK");
         assert_eq!(find_equip_cell(&p(wearable::EAR)), Some(6), "WEAR_EAR");
         assert_eq!(find_equip_cell(&p(wearable::ARROW)), Some(9), "WEAR_ARROW");
-        assert_eq!(find_equip_cell(&p(wearable::UNIQUE)), Some(7), "WEAR_UNIQUE1");
-        assert_eq!(find_equip_cell(&p(wearable::ABILITY)), Some(11), "WEAR_ABILITY1");
+        assert_eq!(
+            find_equip_cell(&p(wearable::UNIQUE)),
+            Some(7),
+            "WEAR_UNIQUE1"
+        );
+        assert_eq!(
+            find_equip_cell(&p(wearable::ABILITY)),
+            Some(11),
+            "WEAR_ABILITY1"
+        );
         // Sin wearflag -> None (item.cpp:511-519 — no equipable).
         assert_eq!(find_equip_cell(&p(0)), None);
         // ITEM_BELT (item.cpp:558-559): el cinturón equivale a WEAR_BELT
@@ -1265,8 +1405,16 @@ mod tests {
         // gestiona por otros paths).
         assert_eq!(find_equip_cell(&p(wearable::HAIR)), None);
         // Varios bits: gana el PRIMERO del orden del C++ (item.cpp:568-592).
-        assert_eq!(find_equip_cell(&p(wearable::WEAPON | wearable::BODY)), Some(0), "BODY antes que WEAPON");
-        assert_eq!(find_equip_cell(&p(wearable::SHIELD | wearable::NECK)), Some(10), "SHIELD antes que NECK");
+        assert_eq!(
+            find_equip_cell(&p(wearable::WEAPON | wearable::BODY)),
+            Some(0),
+            "BODY antes que WEAPON"
+        );
+        assert_eq!(
+            find_equip_cell(&p(wearable::SHIELD | wearable::NECK)),
+            Some(10),
+            "SHIELD antes que NECK"
+        );
     }
 
     /// Los 5 slots con datos -> 5×71 B ocupados (tamaño total 449).
@@ -1296,11 +1444,27 @@ mod tests {
         assert_eq!(p.points[POINT_SP], 100, "mp -> POINT_SP");
         assert_eq!(p.points[POINT_STAMINA], 100);
         assert_eq!(p.points[POINT_GOLD], 0);
-        assert_eq!((p.points[POINT_ST], p.points[POINT_HT], p.points[POINT_DX], p.points[POINT_IQ]), (30, 30, 30, 30));
+        assert_eq!(
+            (
+                p.points[POINT_ST],
+                p.points[POINT_HT],
+                p.points[POINT_DX],
+                p.points[POINT_IQ]
+            ),
+            (30, 30, 30, 30)
+        );
         assert_eq!(p.points[POINT_EXP], 0);
         assert_eq!(p.points[POINT_NEXT_EXP], 300, "exp_table[level] del caller");
         assert_eq!(p.points[POINT_PLAYTIME], 0);
-        assert_eq!((p.points[POINT_MOV_SPEED], p.points[POINT_ATT_SPEED], p.points[POINT_CASTING_SPEED]), (100, 100, 100), "parity char.cpp:2245-2248");
+        assert_eq!(
+            (
+                p.points[POINT_MOV_SPEED],
+                p.points[POINT_ATT_SPEED],
+                p.points[POINT_CASTING_SPEED]
+            ),
+            (100, 100, 100),
+            "parity char.cpp:2245-2248"
+        );
         // El dummy row es job=1 (ASSASSIN_W -> ASSASSIN): ht=30, iq=30,
         // random_hp/sp=0 -> 650+1200=1850 / 200+600=800 / 800+150=950.
         assert_eq!(p.points[POINT_MAX_HP], 1850, "650 + 30×40");
@@ -1376,7 +1540,11 @@ mod tests {
         assert_eq!(b[0], TPacketGCCharacterUpdate::HEADER, "header 19");
         assert_eq!(p.dw_vid, r.id as u32);
         assert_eq!(p.aw_part, parts, "parts del equipo (el arma en WEAPON)");
-        assert_eq!((p.b_moving_speed, p.b_attack_speed), (110, 100), "mov_speed con botas +10 — GetLimitPoint char.cpp:1025-1026");
+        assert_eq!(
+            (p.b_moving_speed, p.b_attack_speed),
+            (110, 100),
+            "mov_speed con botas +10 — GetLimitPoint char.cpp:1025-1026"
+        );
         assert_eq!(b[25], 110, "b_moving_speed@25 del UPDATE (5 + 5×4)");
         assert_eq!(p.b_state_flag, 0);
         assert_eq!(p.dw_affect_flag, [0, 0], "sin affects (F5)");
@@ -1398,18 +1566,32 @@ mod tests {
     /// char_horse.cpp:313-332). Revertir el vnum a 0 o los thresholds rompe.
     #[test]
     fn horse_wire_mount_vnum_and_state_command() {
-        let mut r = PlayerRow::default();
-        r.id = 7;
-        r.horse_level = 5;
-        r.horse_hp = 3;
-        r.horse_stamina = 4;
+        let mut r = PlayerRow {
+            id: 7,
+            horse_level: 5,
+            horse_hp: 3,
+            horse_stamina: 4,
+            ..PlayerRow::default()
+        };
         // desmontado → vnum 0 en ambos paquetes
-        assert_eq!(character_update_with_parts(&r, &[0; 5], 0, 100).dw_mount_vnum, 0);
-        assert_eq!(character_additional_info_with_parts(&r, 1, &[0; 5], 0).dw_mount_vnum, 0);
+        assert_eq!(
+            character_update_with_parts(&r, &[0; 5], 0, 100).dw_mount_vnum,
+            0
+        );
+        assert_eq!(
+            character_additional_info_with_parts(&r, 1, &[0; 5], 0).dw_mount_vnum,
+            0
+        );
         // montado → raza del tier (nivel 5 → 20101)
         r.horse_riding = 1;
-        assert_eq!(character_update_with_parts(&r, &[0; 5], 0, 100).dw_mount_vnum, 20101);
-        assert_eq!(character_additional_info_with_parts(&r, 1, &[0; 5], 0).dw_mount_vnum, 20101);
+        assert_eq!(
+            character_update_with_parts(&r, &[0; 5], 0, 100).dw_mount_vnum,
+            20101
+        );
+        assert_eq!(
+            character_additional_info_with_parts(&r, 1, &[0; 5], 0).dw_mount_vnum,
+            20101
+        );
         // horse_state: nivel 5 (max hp 8 / max st 6) — hp 3 → 30 ≤ 8×3=24?
         // no → 30 ≤ 56 → grade 2; st 4 → 40 ≤ 6? no → ≤ 18? no → ≤ 42 → 2.
         let cmd = horse_state_command(&r, 1);
@@ -1450,8 +1632,16 @@ mod tests {
         a.iq = 3;
         a.random_hp = 0;
         a.random_sp = 0;
-        assert_eq!(race_to_job(5).unwrap(), 1, "RaceToJob: ASSASSIN_M -> JOB_ASSASSIN");
-        assert_eq!(compute_max_points(&a).unwrap(), [770, 260, 815], "= hp/mp/stamina reales del row (650+3×40 / 200+3×20 / 800+3×5)");
+        assert_eq!(
+            race_to_job(5).unwrap(),
+            1,
+            "RaceToJob: ASSASSIN_M -> JOB_ASSASSIN"
+        );
+        assert_eq!(
+            compute_max_points(&a).unwrap(),
+            [770, 260, 815],
+            "= hp/mp/stamina reales del row (650+3×40 / 200+3×20 / 800+3×5)"
+        );
         // ninja: job=1 (ASSASSIN_W), lvl 12, ht=8, iq=3, random_hp=430, random_sp=214.
         let mut n = row();
         n.job = 1;
@@ -1459,22 +1649,41 @@ mod tests {
         n.iq = 3;
         n.random_hp = 430;
         n.random_sp = 214;
-        assert_eq!(compute_max_points(&n).unwrap(), [1400, 474, 840], "650+430+8×40 / 200+214+3×20 / 800+8×5");
+        assert_eq!(
+            compute_max_points(&n).unwrap(),
+            [1400, 474, 840],
+            "650+430+8×40 / 200+214+3×20 / 800+8×5"
+        );
         // Chaman: job=7 (SHAMAN_M -> SHAMAN), ht=4, iq=6.
         let mut c = row();
         c.job = 7;
         c.ht = 4;
         c.iq = 6;
-        assert_eq!(compute_max_points(&c).unwrap(), [860, 320, 820], "700+4×40 / 200+6×20 / 800+4×5");
+        assert_eq!(
+            compute_max_points(&c).unwrap(),
+            [860, 320, 820],
+            "700+4×40 / 200+6×20 / 800+4×5"
+        );
         // hol: job=6 (SURA_W -> SURA), ht=3, iq=5.
         let mut h = row();
         h.job = 6;
         h.ht = 3;
         h.iq = 5;
-        assert_eq!(compute_max_points(&h).unwrap(), [770, 300, 815], "650+3×40 / 200+5×20 / 800+3×5");
+        assert_eq!(
+            compute_max_points(&h).unwrap(),
+            [770, 300, 815],
+            "650+3×40 / 200+5×20 / 800+3×5"
+        );
         // Race fuera del subset -> Err (defensivo).
         assert!(race_to_job(9).is_err());
-        assert!(compute_max_points(&{ let mut r = row(); r.job = 9; r }).is_err());
+        assert!(
+            compute_max_points(&{
+                let mut r = row();
+                r.job = 9;
+                r
+            })
+            .is_err()
+        );
     }
 
     /// skill_level_packet: el bytea 1530 B -> 255 skills (bMasterType/bLevel/
@@ -1499,7 +1708,12 @@ mod tests {
         assert_eq!(&b[1..7], &blob[0..6]);
         // None y bytea corto -> zeroed.
         let p = skill_level_packet(None);
-        assert!(p.skills.iter().all(|s| *s == TPlayerSkill { b_master_type: 0, b_level: 0, t_next_read: 0 }));
+        assert!(p.skills.iter().all(|s| *s
+            == TPlayerSkill {
+                b_master_type: 0,
+                b_level: 0,
+                t_next_read: 0
+            }));
         let p = skill_level_packet(Some(&vec![1, 2, 3]));
         assert_eq!(p.skills[0].b_level, 0, "bytea corto -> zeroed (defensivo)");
     }
@@ -1510,8 +1724,16 @@ mod tests {
     fn main_character_fields_and_size() {
         let p = main_character(&row());
         let b = p.to_bytes();
-        assert_eq!(b.len(), TPacketGCMainCharacter::SIZE, "47 B (layout del cliente)");
-        assert_eq!(b[0], TPacketGCMainCharacter::HEADER, "header 15 (MAIN_CHARACTER sin BGM — Packet.h:160)");
+        assert_eq!(
+            b.len(),
+            TPacketGCMainCharacter::SIZE,
+            "47 B (layout del cliente)"
+        );
+        assert_eq!(
+            b[0],
+            TPacketGCMainCharacter::HEADER,
+            "header 15 (MAIN_CHARACTER sin BGM — Packet.h:160)"
+        );
         assert_eq!(p.dw_vid, 2);
         assert_eq!(p.w_race_num, 1, "GetRaceNum() = job");
         assert_eq!(p.name(), "ninja");
@@ -1543,9 +1765,19 @@ mod tests {
         assert_eq!(bytes[0], 130, "header GC_LAND_LIST");
         assert_eq!(u16::from_le_bytes([bytes[1], bytes[2]]), 435, "size WORD");
         // Elemento 0: dwID@3 = 201, x@7 = 66100 (cells crudas).
-        assert_eq!(u32::from_le_bytes([bytes[3], bytes[4], bytes[5], bytes[6]]), 201);
-        assert_eq!(i32::from_le_bytes([bytes[7], bytes[8], bytes[9], bytes[10]]), 66100);
-        assert_eq!(u32::from_le_bytes([bytes[27], bytes[28], bytes[29], bytes[30]]), 202, "2º dwID @27");
+        assert_eq!(
+            u32::from_le_bytes([bytes[3], bytes[4], bytes[5], bytes[6]]),
+            201
+        );
+        assert_eq!(
+            i32::from_le_bytes([bytes[7], bytes[8], bytes[9], bytes[10]]),
+            66100
+        );
+        assert_eq!(
+            u32::from_le_bytes([bytes[27], bytes[28], bytes[29], bytes[30]]),
+            202,
+            "2º dwID @27"
+        );
         // Vacío -> solo el header (el caller decide no mandarlo).
         assert_eq!(land_list(&[]), [130, 3, 0]);
     }
@@ -1618,7 +1850,11 @@ mod tests {
         assert_eq!(&pkts[1][1..4], &[2, 1, 0], "window EQUIPMENT=2, cell=1");
         assert_eq!(
             &pkts[2][1..4],
-            &[1, (BELT_INVENTORY_SLOT_START + 5).to_le_bytes()[0], (BELT_INVENTORY_SLOT_START + 5).to_le_bytes()[1]],
+            &[
+                1,
+                (BELT_INVENTORY_SLOT_START + 5).to_le_bytes()[0],
+                (BELT_INVENTORY_SLOT_START + 5).to_le_bytes()[1]
+            ],
             "BELT_INVENTORY pos 5 → window INVENTORY cell 247 (parity input_db.cpp:1490-1495)"
         );
         // Window fuera del load -> paquete vacío (defensivo).
@@ -1631,7 +1867,10 @@ mod tests {
             sockets: [0, 0, 0],
             attrs: [(0, 0); 7],
         };
-        assert!(item_set_packets(&[bad]).iter().all(|p| p.is_empty()), "SAFEBOX fuera del load");
+        assert!(
+            item_set_packets(&[bad]).iter().all(|p| p.is_empty()),
+            "SAFEBOX fuera del load"
+        );
     }
 
     /// VERIFIER (mutation): un count mayor que el límite efectivo no puede
@@ -1652,11 +1891,17 @@ mod tests {
         };
 
         let valid = item_set_packets(&[item(200)]);
-        assert_eq!(valid[0][8], 200, "200 sigue siendo el último count efectivo");
+        assert_eq!(
+            valid[0][8], 200,
+            "200 sigue siendo el último count efectivo"
+        );
 
         for count in [201, 2000] {
             let packets = item_set_packets(&[item(count)]);
-            assert!(packets[0].is_empty(), "count {count} no debe truncarse al BYTE");
+            assert!(
+                packets[0].is_empty(),
+                "count {count} no debe truncarse al BYTE"
+            );
         }
     }
 
@@ -1677,7 +1922,11 @@ mod tests {
         let pkts = affect_add_packets(&affects);
         assert_eq!(pkts.len(), 1);
         assert_eq!(pkts[0].len(), 22, "TPacketGCAffectAdd::SIZE");
-        assert_eq!(pkts[0][0], TPacketGCAffectAdd::HEADER, "header GC_AFFECT_ADD");
+        assert_eq!(
+            pkts[0][0],
+            TPacketGCAffectAdd::HEADER,
+            "header GC_AFFECT_ADD"
+        );
         assert_eq!(&pkts[0][1..5], &5u32.to_le_bytes(), "dwType = b_type");
         assert_eq!(pkts[0][5], 2, "bApplyOn");
         assert_eq!(&pkts[0][6..10], &100i32.to_le_bytes(), "lApplyValue");

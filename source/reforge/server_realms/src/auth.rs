@@ -50,15 +50,17 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use network::framer::{ConnectionRole, Framer};
-use network::{handshake, Connection};
+use network::{Connection, handshake};
 use protocol::legacy;
-use protocol::locale::{encode_chunks, encode_payload, CgLocaleRequest};
-use protocol::{header, phase, TPacketCGLogin3, TPacketGCAuthSuccess, TPacketGCLoginFailure, TPacketGCPhase};
+use protocol::locale::{CgLocaleRequest, encode_chunks, encode_payload};
+use protocol::{
+    TPacketCGLogin3, TPacketGCAuthSuccess, TPacketGCLoginFailure, TPacketGCPhase, header, phase,
+};
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::config::{ChannelCfg, Config};
 // F3 (ADR-0008): consolidación — el SQL inline vive en el crate database.
-use database::account::{hex16, AccountRepo};
+use database::account::{AccountRepo, hex16};
 // F1 (ADR-0009): el locale server-side se lee de PG con fallback EN.
 use database::locale::LocaleRepo;
 
@@ -113,7 +115,12 @@ pub const GC_CHANNEL_LIST_SIZE: usize = 1 + 1 + 6 + GC_CHANNEL_LIST_MAX_CHANNELS
 
 /// Serializa el `GC_CHANNEL_LIST` (152 B). `channels` se trunca a 4; los
 /// strings a 15 bytes + NUL (parity de los buffers `char[16]` del cliente).
-pub fn encode_channel_list(channels: &[ChannelCfg], exp_rate: u16, gold_rate: u16, drop_rate: u16) -> [u8; GC_CHANNEL_LIST_SIZE] {
+pub fn encode_channel_list(
+    channels: &[ChannelCfg],
+    exp_rate: u16,
+    gold_rate: u16,
+    drop_rate: u16,
+) -> [u8; GC_CHANNEL_LIST_SIZE] {
     let mut b = [0u8; GC_CHANNEL_LIST_SIZE];
     let count = channels.len().min(GC_CHANNEL_LIST_MAX_CHANNELS);
     b[0] = GC_CHANNEL_LIST;
@@ -166,7 +173,10 @@ async fn send_channel_list<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unp
 pub async fn run(config: Config) -> std::io::Result<()> {
     let listener = TcpListener::bind(&config.listen).await?;
     // El puerto real (relevante con `listen = "127.0.0.1:0"` en tests).
-    println!("server_realms: auth escuchando en {}", listener.local_addr()?);
+    println!(
+        "server_realms: auth escuchando en {}",
+        listener.local_addr()?
+    );
     // Pool COMPARTIDO de conexiones PG (fix del cuello del entry 2026-08-13):
     // los repos del crate database ya no abren conexion por llamada.
     let pool = database::pool::new_pool(&config.pg_conn, config.pool_max_size)
@@ -203,7 +213,12 @@ async fn handle_connection(
     pool: database::pool::PgPool,
     conn_id: u32,
 ) -> Result<(), String> {
-    match tokio::time::timeout(config.timeout, connection_inner(stream, &config, &legacy, pool)).await {
+    match tokio::time::timeout(
+        config.timeout,
+        connection_inner(stream, &config, &legacy, pool),
+    )
+    .await
+    {
         Err(_) => Err(format!(
             "auth conn {conn_id}: timeout global de {} ms — conexión cerrada",
             config.timeout.as_millis()
@@ -248,7 +263,7 @@ async fn connection_inner(
         match pkt[0] {
             header::CG_TIME_SYNC | header::CG_PONG => continue, // keepalives (F1.4)
             header::CG_LOGIN3 => {
-                break TPacketCGLogin3::from_bytes(&pkt).map_err(|e| format!("LOGIN3: {e}"))?
+                break TPacketCGLogin3::from_bytes(&pkt).map_err(|e| format!("LOGIN3: {e}"))?;
             }
             header::CG_LOCALE_REQUEST => {
                 handle_locale_request(&mut conn, pool.clone(), &pkt).await?;
@@ -257,7 +272,7 @@ async fn connection_inner(
             other => {
                 return Err(format!(
                     "auth: header inesperado 0x{other:02x} tras el handshake (parity input_auth.cpp:251-253)"
-                ))
+                ));
             }
         }
     };
@@ -276,13 +291,14 @@ async fn connection_inner(
     //     no hay status legacy para versión mala y un status arbitrario
     //     confundiría al cliente; el cliente nuevo maneja el EOF).
     if let Some(v) = login3.version
-        && v != config.expected_version {
-            eprintln!(
-                "server_realms: auth: VERSION MISMATCH login={login} got={v} expected={} — cierre limpio",
-                config.expected_version
-            );
-            return Ok(());
-        }
+        && v != config.expected_version
+    {
+        eprintln!(
+            "server_realms: auth: VERSION MISMATCH login={login} got={v} expected={} — cierre limpio",
+            config.expected_version
+        );
+        return Ok(());
+    }
 
     // 3. Validaciones (parity input_auth.cpp:66-152).
     if !is_valid_login_string(&login) {
@@ -321,7 +337,9 @@ async fn connection_inner(
             if let Some(lang) = extract_lang(&login3.sz_language)
                 && let Err(e) = AccountRepo::new(pool.clone()).set_lang(&login, &lang).await
             {
-                eprintln!("server_realms: auth: LOGIN_BY_KEY set_lang falló para {login}: {e} — login sigue");
+                eprintln!(
+                    "server_realms: auth: LOGIN_BY_KEY set_lang falló para {login}: {e} — login sigue"
+                );
             }
         }
         LoginKeyOutcome::Rejected => {
@@ -366,9 +384,13 @@ async fn connection_inner(
         ^ login3.adw_client_key[2]
         ^ login3.adw_client_key[3];
     if ok {
-        eprintln!("server_realms: auth: login OK {login} key {login_key} panama 0x{panama_key:08x}");
+        eprintln!(
+            "server_realms: auth: login OK {login} key {login_key} panama 0x{panama_key:08x}"
+        );
     } else {
-        eprintln!("server_realms: auth: login FALLIDO {login} (bResult=0, parity input_db.cpp:1719-1726)");
+        eprintln!(
+            "server_realms: auth: login FALLIDO {login} (bResult=0, parity input_db.cpp:1719-1726)"
+        );
     }
 
     // 6. Respuesta: el C++ SIEMPRE responde GC_AUTH_SUCCESS (bResult 0/1) para
@@ -426,9 +448,13 @@ async fn send_legacy_packets<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + U
     panama_key: u32,
 ) -> Result<(), String> {
     for entry in &legacy.panama {
-        conn.send(&legacy::PanamaPack::encode(&entry.name, entry.iv, panama_key))
-            .await
-            .map_err(|e| format!("enviando 151 (panama): {e}"))?;
+        conn.send(&legacy::PanamaPack::encode(
+            &entry.name,
+            entry.iv,
+            panama_key,
+        ))
+        .await
+        .map_err(|e| format!("enviando 151 (panama): {e}"))?;
     }
     if !legacy.hybrid.keys_stream.is_empty() {
         conn.send(&legacy::HybridCryptKeys::new(legacy.hybrid.keys_stream.clone()).to_bytes())
@@ -524,9 +550,13 @@ async fn account_login(
             Ok(_) => {}
             Err(e) => {
                 if e.contains("42703") {
-                    eprintln!("server_realms: auth: columna hwid aún no existe (42703, la crea otro lane) — login sigue");
+                    eprintln!(
+                        "server_realms: auth: columna hwid aún no existe (42703, la crea otro lane) — login sigue"
+                    );
                 } else {
-                    eprintln!("server_realms: auth: UPDATE hwid falló para {login}: {e} — login sigue");
+                    eprintln!(
+                        "server_realms: auth: UPDATE hwid falló para {login}: {e} — login sigue"
+                    );
                 }
             }
         }
@@ -616,7 +646,9 @@ impl ActiveLoginGuard {
             return None;
         }
         set.insert(login.to_string());
-        Some(Self { login: login.to_string() })
+        Some(Self {
+            login: login.to_string(),
+        })
     }
 }
 
@@ -736,7 +768,9 @@ pub fn parse_login_key(passwd: &[u8; 17]) -> Option<u32> {
     if s.is_empty() || s.len() > 10 || !s.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
-    s.parse::<u32>().ok().filter(|k| (1..=i32::MAX as u32).contains(k))
+    s.parse::<u32>()
+        .ok()
+        .filter(|k| (1..=i32::MAX as u32).contains(k))
 }
 
 /// Decisión del camino de login del LOGIN3 (F2a).
@@ -755,7 +789,11 @@ pub enum LoginKeyOutcome {
 /// REGISTRADA para esa login con esa client key. Cualquier password normal
 /// (o una key no registrada) cae a `Fallback` — el path password queda 100%
 /// intacto para el cliente actual (que manda la password en claro).
-pub fn resolve_login_key(login: &str, passwd: &[u8; 17], adw_client_key: [u32; 4]) -> LoginKeyOutcome {
+pub fn resolve_login_key(
+    login: &str,
+    passwd: &[u8; 17],
+    adw_client_key: [u32; 4],
+) -> LoginKeyOutcome {
     let Some(presented) = parse_login_key(passwd) else {
         return LoginKeyOutcome::Fallback;
     };
@@ -835,7 +873,10 @@ mod tests {
     fn key_issued_on_password_login() {
         let _s = empty_key_store();
         let k = issue_login_key("test", [1, 2, 3, 4]);
-        assert!(k != 0 && k <= i32::MAX as u32, "1..INT_MAX (parity CreateLoginKey)");
+        assert!(
+            k != 0 && k <= i32::MAX as u32,
+            "1..INT_MAX (parity CreateLoginKey)"
+        );
         assert_eq!(check_login_key("test", k, [1, 2, 3, 4]), KeyCheck::Valid);
         // El registry guarda login + client key (parity QUERY_AUTH_LOGIN).
         let map = login_keys().lock().unwrap();
@@ -910,7 +951,11 @@ mod tests {
         let k1 = issue_login_key("test", [1, 2, 3, 4]);
         let k2 = issue_login_key("test", [1, 2, 3, 4]);
         assert_ne!(k1, k2, "refresh: key nueva por password-login");
-        assert_eq!(check_login_key("test", k1, [1, 2, 3, 4]), KeyCheck::NotFound, "key vieja muerta");
+        assert_eq!(
+            check_login_key("test", k1, [1, 2, 3, 4]),
+            KeyCheck::NotFound,
+            "key vieja muerta"
+        );
         assert_eq!(check_login_key("test", k2, [1, 2, 3, 4]), KeyCheck::Valid);
     }
 
@@ -920,15 +965,26 @@ mod tests {
     fn parse_login_key_edges() {
         assert_eq!(parse_login_key(&pwd_field("1234")), Some(1234));
         assert_eq!(parse_login_key(&pwd_field("00001234")), Some(1234));
-        assert_eq!(parse_login_key(&pwd_field("2147483647")), Some(i32::MAX as u32));
+        assert_eq!(
+            parse_login_key(&pwd_field("2147483647")),
+            Some(i32::MAX as u32)
+        );
         assert_eq!(parse_login_key(&pwd_field("2147483648")), None, "> INT_MAX");
-        assert_eq!(parse_login_key(&pwd_field("4294967296")), None, "overflow u32");
+        assert_eq!(
+            parse_login_key(&pwd_field("4294967296")),
+            None,
+            "overflow u32"
+        );
         assert_eq!(parse_login_key(&pwd_field("0")), None, "la key 0 no existe");
         assert_eq!(parse_login_key(&pwd_field("")), None);
         assert_eq!(parse_login_key(&pwd_field("123a")), None);
         assert_eq!(parse_login_key(&pwd_field("12 34")), None);
         assert_eq!(parse_login_key(&[0u8; 17]), None, "todo NUL");
-        assert_eq!(parse_login_key(&pwd_field("12345678901")), None, "11 dígitos");
+        assert_eq!(
+            parse_login_key(&pwd_field("12345678901")),
+            None,
+            "11 dígitos"
+        );
     }
 
     /// F2a: keys emitidas para logins distintos viven a la vez y son únicas.
@@ -939,7 +995,10 @@ mod tests {
         let k2 = issue_login_key("bob", [1; 4]);
         assert_ne!(k1, 0);
         assert_ne!(k1, k2);
-        assert!(k1 <= i32::MAX as u32 && k2 <= i32::MAX as u32, "1..INT_MAX (parity CreateLoginKey)");
+        assert!(
+            k1 <= i32::MAX as u32 && k2 <= i32::MAX as u32,
+            "1..INT_MAX (parity CreateLoginKey)"
+        );
         assert_eq!(check_login_key("alice", k1, [1; 4]), KeyCheck::Valid);
         assert_eq!(check_login_key("bob", k2, [1; 4]), KeyCheck::Valid);
     }
@@ -972,8 +1031,13 @@ mod tests {
         let cfg = Config::parse("listen = \"127.0.0.1:30001\"\ntimeout_ms = 15000\n").unwrap();
         assert_eq!(cfg.timeout, Duration::from_secs(15));
         assert_eq!(cfg.legacy_dir, "", "default: sin legacy");
-        let cfg = Config::parse("legacy_dir = \"/home/m2/source/metin2_svfiles/main/srv1/auth1\"\n").unwrap();
-        assert_eq!(cfg.legacy_dir, "/home/m2/source/metin2_svfiles/main/srv1/auth1");
+        let cfg =
+            Config::parse("legacy_dir = \"/home/m2/source/metin2_svfiles/main/srv1/auth1\"\n")
+                .unwrap();
+        assert_eq!(
+            cfg.legacy_dir,
+            "/home/m2/source/metin2_svfiles/main/srv1/auth1"
+        );
     }
 
     /// Orden del login exitoso (parity input_db.cpp:1710-1716): 151 panama →
@@ -983,7 +1047,10 @@ mod tests {
         use tokio::io::AsyncReadExt;
         let (mut server, mut client) = tokio::io::duplex(4096);
         let legacy = LegacyData {
-            panama: vec![legacy::PanamaEntry { name: "test.epk".into(), iv: [0xAA; 32] }],
+            panama: vec![legacy::PanamaEntry {
+                name: "test.epk".into(),
+                iv: [0xAA; 32],
+            }],
             hybrid: legacy::HybridData {
                 keys_stream: vec![1, 2, 3],
                 sdb: [("none".to_string(), vec![0xBB])].into_iter().collect(),
@@ -991,8 +1058,12 @@ mod tests {
         };
         let handle = tokio::spawn(async move {
             let mut conn = Connection::new(&mut server);
-            send_legacy_packets(&mut conn, &legacy, 0x1234).await.unwrap();
-            conn.send(&TPacketGCAuthSuccess::new(7, 1).to_bytes()).await.unwrap();
+            send_legacy_packets(&mut conn, &legacy, 0x1234)
+                .await
+                .unwrap();
+            conn.send(&TPacketGCAuthSuccess::new(7, 1).to_bytes())
+                .await
+                .unwrap();
         });
         // 151: 289 B (header + name + IV XOR-eado).
         let mut buf = [0u8; 289];
@@ -1023,7 +1094,9 @@ mod tests {
         let handle = tokio::spawn(async move {
             let mut conn = Connection::new(&mut server);
             send_legacy_packets(&mut conn, &legacy, 0).await.unwrap();
-            conn.send(&TPacketGCAuthSuccess::new(0, 1).to_bytes()).await.unwrap();
+            conn.send(&TPacketGCAuthSuccess::new(0, 1).to_bytes())
+                .await
+                .unwrap();
         });
         let mut buf = [0u8; 6];
         client.read_exact(&mut buf).await.unwrap();
@@ -1046,7 +1119,11 @@ mod tests {
             players: 7,
         }];
         let b = encode_channel_list(&channels, 100, 200, 300);
-        assert_eq!(b.len(), 152, "tamaño fijo (parity TPacketGCChannelList C++)");
+        assert_eq!(
+            b.len(),
+            152,
+            "tamaño fijo (parity TPacketGCChannelList C++)"
+        );
         assert_eq!(b[0], GC_CHANNEL_LIST, "header 164");
         assert_eq!(b[1], 1, "count");
         assert_eq!(u16::from_le_bytes([b[2], b[3]]), 100, "exp_rate");
@@ -1054,11 +1131,18 @@ mod tests {
         assert_eq!(u16::from_le_bytes([b[6], b[7]]), 300, "drop_rate");
         // Canal 0 en base 8: name[16] + ip[16] + port u16 + players u16.
         assert_eq!(&b[8..13], b"CH-1\0", "name NUL-padded");
-        assert_eq!(&b[8 + 16..8 + 16 + 15], b"172.25.104.175\0", "ip NUL-padded");
+        assert_eq!(
+            &b[8 + 16..8 + 16 + 15],
+            b"172.25.104.175\0",
+            "ip NUL-padded"
+        );
         assert_eq!(u16::from_le_bytes([b[8 + 32], b[8 + 33]]), 30003, "port LE");
         assert_eq!(u16::from_le_bytes([b[8 + 34], b[8 + 35]]), 7, "players LE");
         // Slots 1..4 a cero.
-        assert!(b[8 + 36..].iter().all(|&x| x == 0), "slots no usados a cero");
+        assert!(
+            b[8 + 36..].iter().all(|&x| x == 0),
+            "slots no usados a cero"
+        );
     }
 
     /// Truncamientos: count capado a 4, strings a 15 bytes.
@@ -1076,7 +1160,11 @@ mod tests {
         assert_eq!(b[1], 4, "count capado a 4");
         assert_eq!(&b[8..23], b"channel-number-", "name truncado a 15");
         // Canal 3 (último válido) presente, canal 4 a cero.
-        assert_eq!(&b[8 + 3 * 36..8 + 3 * 36 + 7], b"channel", "canal 3 truncado");
+        assert_eq!(
+            &b[8 + 3 * 36..8 + 3 * 36 + 7],
+            b"channel",
+            "canal 3 truncado"
+        );
         assert!(b[8 + 4 * 36..].iter().all(|&x| x == 0), "canal 4+ a cero");
     }
 
@@ -1088,7 +1176,10 @@ mod tests {
         assert_eq!(b[0], GC_CHANNEL_LIST);
         assert_eq!(b[1], 0);
         assert_eq!(u16::from_le_bytes([b[2], b[3]]), 100, "rates presentes");
-        assert!(b[8..].iter().all(|&x| x == 0), "sin canales → zona de canales a cero");
+        assert!(
+            b[8..].iter().all(|&x| x == 0),
+            "sin canales → zona de canales a cero"
+        );
     }
 
     /// F5: el 164 se envía ANTES del 150 en login exitoso (el cliente legacy
@@ -1098,27 +1189,35 @@ mod tests {
     async fn channel_list_sent_before_auth_success() {
         use tokio::io::AsyncReadExt;
         let (mut server, mut client) = tokio::io::duplex(1024);
-        let mut cfg = Config::default();
-        cfg.channels = vec![ChannelCfg {
-            name: "CH-1".into(),
-            ip: "172.25.104.175".into(),
-            port: 30003,
-            players: 0,
-        }];
-        cfg.exp_rate = 100;
-        cfg.gold_rate = 100;
-        cfg.drop_rate = 100;
+        let cfg = Config {
+            channels: vec![ChannelCfg {
+                name: "CH-1".into(),
+                ip: "172.25.104.175".into(),
+                port: 30003,
+                players: 0,
+            }],
+            exp_rate: 100,
+            gold_rate: 100,
+            drop_rate: 100,
+            ..Config::default()
+        };
         let handle = tokio::spawn(async move {
             let mut conn = Connection::new(&mut server);
             send_channel_list(&mut conn, &cfg).await.unwrap();
-            conn.send(&TPacketGCAuthSuccess::new(7, 1).to_bytes()).await.unwrap();
+            conn.send(&TPacketGCAuthSuccess::new(7, 1).to_bytes())
+                .await
+                .unwrap();
         });
         let mut buf = [0u8; GC_CHANNEL_LIST_SIZE];
         client.read_exact(&mut buf).await.unwrap();
         assert_eq!(buf[0], GC_CHANNEL_LIST, "164 primero");
         let mut buf = [0u8; 6];
         client.read_exact(&mut buf).await.unwrap();
-        assert_eq!(buf, TPacketGCAuthSuccess::new(7, 1).to_bytes(), "150 después");
+        assert_eq!(
+            buf,
+            TPacketGCAuthSuccess::new(7, 1).to_bytes(),
+            "150 después"
+        );
         handle.await.unwrap();
     }
 
@@ -1131,11 +1230,17 @@ mod tests {
         let handle = tokio::spawn(async move {
             let mut conn = Connection::new(&mut server);
             send_channel_list(&mut conn, &cfg).await.unwrap();
-            conn.send(&TPacketGCAuthSuccess::new(0, 1).to_bytes()).await.unwrap();
+            conn.send(&TPacketGCAuthSuccess::new(0, 1).to_bytes())
+                .await
+                .unwrap();
         });
         let mut buf = [0u8; 6];
         client.read_exact(&mut buf).await.unwrap();
-        assert_eq!(buf, TPacketGCAuthSuccess::new(0, 1).to_bytes(), "solo el 150");
+        assert_eq!(
+            buf,
+            TPacketGCAuthSuccess::new(0, 1).to_bytes(),
+            "solo el 150"
+        );
         handle.await.unwrap();
     }
 }

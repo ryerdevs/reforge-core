@@ -11,8 +11,8 @@
 //! wire del GC_LOCALE — los ids numéricos viajan como texto ASCII, spec F1).
 //! `message_texts` e `item_icons` NO se leen (server-side / panel — ADR-0009).
 
-use protocol::locale::LocaleBundle;
 use crate::pool::{Client, PgPool};
+use protocol::locale::LocaleBundle;
 use tokio_postgres::Row;
 
 use crate::account::pg_err;
@@ -21,8 +21,7 @@ use crate::account::pg_err;
 /// numéricas castean su id a texto (`::text`) — el wire usa claves ASCII.
 const MOB_SQL: &str = "SELECT vnum::text, name FROM common.mob_names WHERE lang = $1";
 const ITEM_SQL: &str = "SELECT vnum::text, name FROM common.item_names WHERE lang = $1";
-const ITEM_DESC_SQL: &str =
-    "SELECT vnum::text, text FROM common.item_descriptions WHERE lang = $1";
+const ITEM_DESC_SQL: &str = "SELECT vnum::text, text FROM common.item_descriptions WHERE lang = $1";
 const SKILL_SQL: &str = "SELECT skill_id::text, name FROM common.skill_names WHERE lang = $1";
 const MAP_SQL: &str = "SELECT map_id::text, name FROM common.map_names WHERE lang = $1";
 const UI_SQL: &str = "SELECT key, value FROM common.ui_texts WHERE lang = $1";
@@ -39,7 +38,10 @@ impl LocaleRepo {
 
     /// Conexión nueva por llamada (patrón `npc.rs` — coste local ~ms).
     async fn connect(&self) -> Result<Client, String> {
-        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
+        self.pool
+            .get()
+            .await
+            .map_err(|e| format!("PG pool get: {e}"))
     }
 
     /// Lee las 6 secciones del locale para `lang` con el fallback EN
@@ -163,19 +165,32 @@ mod tests {
         ];
         let merged = merge_en("zz", &[], &en);
         assert_eq!(merged, en, "idioma inexistente → bundle EN puro");
-        let merged = merge_en("es", &[("101".to_string(), "Perro Salvaje".to_string())], &en);
-        assert_eq!(merged, vec![
-            ("101".to_string(), "Perro Salvaje".to_string()),
-            ("102".to_string(), "Wolf".to_string()),
-        ]);
+        let merged = merge_en(
+            "es",
+            &[("101".to_string(), "Perro Salvaje".to_string())],
+            &en,
+        );
+        assert_eq!(
+            merged,
+            vec![
+                ("101".to_string(), "Perro Salvaje".to_string()),
+                ("102".to_string(), "Wolf".to_string()),
+            ]
+        );
     }
 
     /// Contrato del SQL: el orden de columnas del mapeo (id texto + valor) —
     /// si alguien lo toca, `row_pair` se desalinea.
     #[test]
     fn sql_column_order() {
-        assert_eq!(MOB_SQL, "SELECT vnum::text, name FROM common.mob_names WHERE lang = $1");
-        assert_eq!(ITEM_SQL, "SELECT vnum::text, name FROM common.item_names WHERE lang = $1");
+        assert_eq!(
+            MOB_SQL,
+            "SELECT vnum::text, name FROM common.mob_names WHERE lang = $1"
+        );
+        assert_eq!(
+            ITEM_SQL,
+            "SELECT vnum::text, name FROM common.item_names WHERE lang = $1"
+        );
         assert_eq!(
             ITEM_DESC_SQL,
             "SELECT vnum::text, text FROM common.item_descriptions WHERE lang = $1"
@@ -184,8 +199,14 @@ mod tests {
             SKILL_SQL,
             "SELECT skill_id::text, name FROM common.skill_names WHERE lang = $1"
         );
-        assert_eq!(MAP_SQL, "SELECT map_id::text, name FROM common.map_names WHERE lang = $1");
-        assert_eq!(UI_SQL, "SELECT key, value FROM common.ui_texts WHERE lang = $1");
+        assert_eq!(
+            MAP_SQL,
+            "SELECT map_id::text, name FROM common.map_names WHERE lang = $1"
+        );
+        assert_eq!(
+            UI_SQL,
+            "SELECT key, value FROM common.ui_texts WHERE lang = $1"
+        );
     }
 
     /// Live-PG (gated, patrón account_pg.rs): `load_for_lang` contra los datos
@@ -201,17 +222,37 @@ mod tests {
         let es = repo.load_for_lang("es").await.expect("load es");
         assert_eq!(es.mob.len(), 2_876, "mob ES (dump 2026-08-12)");
         assert_eq!(es.item.len(), 11_427, "item ES");
-        assert_eq!(es.item_desc.len(), 7_499, "7.496 ES + 3 EN-only (merge ADR-0009)");
-        assert!(es.item_desc.iter().any(|(k, _)| k == "31084"), "31084 (EN-only) presente");
-        assert!(es.item_desc.iter().any(|(k, _)| k == "53526"), "53526 (EN-only) presente");
-        assert!(es.item_desc.iter().any(|(k, _)| k == "71219"), "71219 (EN-only) presente");
+        assert_eq!(
+            es.item_desc.len(),
+            7_499,
+            "7.496 ES + 3 EN-only (merge ADR-0009)"
+        );
+        assert!(
+            es.item_desc.iter().any(|(k, _)| k == "31084"),
+            "31084 (EN-only) presente"
+        );
+        assert!(
+            es.item_desc.iter().any(|(k, _)| k == "53526"),
+            "53526 (EN-only) presente"
+        );
+        assert!(
+            es.item_desc.iter().any(|(k, _)| k == "71219"),
+            "71219 (EN-only) presente"
+        );
         assert_eq!(es.skill.len(), 134, "skill ES");
         assert_eq!(es.ui.len(), 1_301, "ui ES");
-        assert!(es.map.is_empty(), "map_names sin fuente en el runtime (gap documentado)");
+        assert!(
+            es.map.is_empty(),
+            "map_names sin fuente en el runtime (gap documentado)"
+        );
         let zz = repo.load_for_lang("zz").await.expect("load zz");
         assert_eq!(zz.mob.len(), 2_876, "idioma inexistente → fallback EN puro");
         assert_eq!(zz.item.len(), 11_427);
-        assert_eq!(zz.item_desc.len(), 7_499, "las EN-only también en el fallback");
+        assert_eq!(
+            zz.item_desc.len(),
+            7_499,
+            "las EN-only también en el fallback"
+        );
         let en = repo.load_for_lang("en").await.expect("load en");
         assert_eq!(en.mob.len(), 2_876, "EN sin merge (una sola consulta)");
     }

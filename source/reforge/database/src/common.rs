@@ -20,7 +20,10 @@ impl CommonRepo {
     }
 
     async fn connect(&self) -> Result<Client, String> {
-        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
+        self.pool
+            .get()
+            .await
+            .map_err(|e| format!("PG pool get: {e}"))
     }
 
     /// `exp_table[level]` — la exp necesaria para subir de nivel (parity
@@ -83,8 +86,11 @@ impl CommonRepo {
             )
             .await
             .map_err(|e| pg_err("GM_AUTHORITY_BY_NAME", &e))?;
-        row.map(|r| r.try_get(0).map_err(|e| format!("GM_AUTHORITY_BY_NAME col0: {e}")))
-            .transpose()
+        row.map(|r| {
+            r.try_get(0)
+                .map_err(|e| format!("GM_AUTHORITY_BY_NAME col0: {e}"))
+        })
+        .transpose()
     }
 }
 
@@ -98,7 +104,10 @@ mod tests {
     fn next_exp_sql_shape() {
         // El SQL es inline en next_exp(); el contrato se verifica en el gated
         // contra la tabla real (common.exp_table — level 1 -> 300).
-        let repo = CommonRepo::new(crate::pool::new_pool("host=127.0.0.1 port=1 user=x password=x dbname=x", 2).expect("pool"));
+        let repo = CommonRepo::new(
+            crate::pool::new_pool("host=127.0.0.1 port=1 user=x password=x dbname=x", 2)
+                .expect("pool"),
+        );
         let _ = repo;
     }
 
@@ -107,7 +116,10 @@ mod tests {
     /// (common.gmlist — 0 filas hoy; el test no puede crear filas).
     #[test]
     fn gm_authority_sql_shape() {
-        let repo = CommonRepo::new(crate::pool::new_pool("host=127.0.0.1 port=1 user=x password=x dbname=x", 2).expect("pool"));
+        let repo = CommonRepo::new(
+            crate::pool::new_pool("host=127.0.0.1 port=1 user=x password=x dbname=x", 2)
+                .expect("pool"),
+        );
         let _ = repo;
     }
 }

@@ -13,10 +13,11 @@ fn rd32(b: &[u8], o: usize) -> i32 {
 
 /// CG_LAND_BUY (56, 29 B: header + map_index/x/y/width/height i32 en células
 /// + price i64). Compra: insert con id de la sequence; el terreno nace SIN
-/// dueño (guild_id 0 — la propiedad entra por CG_LAND_TRANSFER).
+///   dueño (guild_id 0 — la propiedad entra por CG_LAND_TRANSFER).
 pub async fn handle_buy(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String> {
     let b: &[u8; 29] = pkt.try_into().map_err(|_| "CG_LAND_BUY: 29 B")?;
-    let (map_index, x, y, width, height) = (rd32(b, 1), rd32(b, 5), rd32(b, 9), rd32(b, 13), rd32(b, 17));
+    let (map_index, x, y, width, height) =
+        (rd32(b, 1), rd32(b, 5), rd32(b, 9), rd32(b, 13), rd32(b, 17));
     let price = i64::from_le_bytes(b[21..29].try_into().expect("29 B"));
     if !(price > 0 && width > 0 && height > 0) {
         eprintln!(
@@ -26,7 +27,14 @@ pub async fn handle_buy(session: &mut Session, pkt: &[u8]) -> Result<Outcome, St
         return Ok(Outcome::Continue);
     }
     let id = LandRepo::new(session.pool.clone())
-        .buy(map_index as i64, x as i64, y as i64, width as i64, height as i64, price)
+        .buy(
+            map_index as i64,
+            x as i64,
+            y as i64,
+            width as i64,
+            height as i64,
+            price,
+        )
         .await?;
     eprintln!(
         "server_realms: channel conn {}: land comprado id {id} (mapa {map_index} {width}×{height}, price {price})",

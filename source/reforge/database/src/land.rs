@@ -63,7 +63,10 @@ impl LandRepo {
     }
 
     async fn connect(&self) -> Result<Client, String> {
-        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
+        self.pool
+            .get()
+            .await
+            .map_err(|e| format!("PG pool get: {e}"))
     }
 
     /// Lands del mapa (orden por id — parity del boot). Vec vacío = el mapa
@@ -143,7 +146,10 @@ mod tests {
             .split(',')
             .map(|c| c.trim())
             .collect();
-        assert_eq!(cols, ["id", "map_index", "x", "y", "width", "height", "guild_id"]);
+        assert_eq!(
+            cols,
+            ["id", "map_index", "x", "y", "width", "height", "guild_id"]
+        );
         assert!(
             LOAD_SQL.contains("WHERE enable = 'YES' AND map_index = $1"),
             "parity InitializeLandTable + filtro por mapa"
@@ -170,6 +176,9 @@ mod tests {
             TRANSFER_SQL.starts_with("UPDATE player.land SET guild_id"),
             "solo cambia el dueño"
         );
-        assert!(!TRANSFER_SQL.contains("map_index"), "la geometría no cambia");
+        assert!(
+            !TRANSFER_SQL.contains("map_index"),
+            "la geometría no cambia"
+        );
     }
 }

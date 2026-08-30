@@ -16,16 +16,15 @@
 //! errores PG/socket → Err (fatal).
 
 use database::affect::{AffectRepo, AffectRow};
-use database::economy::{checked_gold_delta, checked_gold_sub, GOLD_MAX};
+use database::economy::{GOLD_MAX, checked_gold_delta, checked_gold_sub};
 use database::item::ItemRepo;
-use protocol::world::{
-    RefineMaterial, TPacketAffectElement, TPacketCGItemDrop, TPacketCGItemDrop2,
-    TPacketCGItemUse, TPacketCGItemUseToItem, TPacketCGRefine,
-    TPacketGCAffectAdd, TPacketGCItemDelDeprecated, TPacketGCItemSet,
-    TPacketGCRefineInformation, TItemPos,
-};
 use game_core::ecs::{CombatIntent, Intent, ItemIntent};
 use game_core::packets;
+use protocol::world::{
+    RefineMaterial, TItemPos, TPacketAffectElement, TPacketCGItemDrop, TPacketCGItemDrop2,
+    TPacketCGItemUse, TPacketCGItemUseToItem, TPacketCGRefine, TPacketGCAffectAdd,
+    TPacketGCItemDelDeprecated, TPacketGCItemSet, TPacketGCRefineInformation,
+};
 
 use crate::channel::session::{Outcome, Session};
 
@@ -113,8 +112,16 @@ fn ability_up_apply(apply: i32) -> Option<(u32, u8, u32)> {
         APPLY_CON => Some((AFFECT_CON, POINT_HT, 0)),
         APPLY_INT => Some((AFFECT_INT, POINT_IQ, 0)),
         APPLY_CAST_SPEED => Some((AFFECT_CAST_SPEED, game_core::skill::point::CASTING_SPEED, 0)),
-        APPLY_ATT_GRADE_BONUS => Some((AFFECT_ATT_GRADE, game_core::skill::point::ATT_GRADE_BONUS, 0)),
-        APPLY_DEF_GRADE_BONUS => Some((AFFECT_DEF_GRADE, game_core::skill::point::DEF_GRADE_BONUS, 0)),
+        APPLY_ATT_GRADE_BONUS => Some((
+            AFFECT_ATT_GRADE,
+            game_core::skill::point::ATT_GRADE_BONUS,
+            0,
+        )),
+        APPLY_DEF_GRADE_BONUS => Some((
+            AFFECT_DEF_GRADE,
+            game_core::skill::point::DEF_GRADE_BONUS,
+            0,
+        )),
         _ => None,
     }
 }
@@ -132,7 +139,7 @@ fn is_consumable(b_type: i16) -> bool {
     b_type == ITEM_TYPE_USE || b_type == ITEM_TYPE_AUTOUSE
 }
 use crate::channel::{
-    belt, equipped_armor, quickslot, ITEM_COUNT_LIMIT, INVENTORY_MAX_NUM, WEAR_MAX_NUM,
+    INVENTORY_MAX_NUM, ITEM_COUNT_LIMIT, WEAR_MAX_NUM, belt, equipped_armor, quickslot,
 };
 
 /// `ITEM_GOLD_VNUM = 1` — el oro del suelo es el item vnum 1 (parity
@@ -228,8 +235,8 @@ async fn drop_gold(session: &mut Session, gold: u32) -> Result<Outcome, String> 
         attrs: [(0, 0); 7],
     }))?;
     {
-        session.row_mut().gold = i32::try_from(new_gold)
-            .map_err(|e| format!("convirtiendo gold de DropGold: {e}"))?;
+        session.row_mut().gold =
+            i32::try_from(new_gold).map_err(|e| format!("convirtiendo gold de DropGold: {e}"))?;
     }
     session
         .send(&packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
@@ -239,7 +246,8 @@ async fn drop_gold(session: &mut Session, gold: u32) -> Result<Outcome, String> 
     eprintln!(
         "server_realms: channel conn {}: {} soltó {gold} oro en el suelo \
          (vnum {ITEM_GOLD_VNUM}, {x},{y})",
-        session.conn_id, session.row().name
+        session.conn_id,
+        session.row().name
     );
     Ok(Outcome::Continue)
 }
@@ -252,16 +260,13 @@ async fn drop_gold(session: &mut Session, gold: u32) -> Result<Outcome, String> 
 /// GC_ITEM_GROUND_ADD + ownership — events.rs). Subset documentado: sin
 /// gate de antiflag (ITEM_ANTIFLAG_DROP — el C++ chequea; el cliente ya
 /// bloquea items protegidos en su UI), sin cheque/ENABLE_CHEQUE_SYSTEM.
-async fn drop_item(
-    session: &mut Session,
-    cell: TItemPos,
-    count: u8,
-) -> Result<Outcome, String> {
+async fn drop_item(session: &mut Session, cell: TItemPos, count: u8) -> Result<Outcome, String> {
     if session.row().hp <= 0 {
         eprintln!(
             "server_realms: channel conn {}: {} — drop con hp 0 \
              (muerto) — rechazado (parity IsDead)",
-            session.conn_id, session.row().name
+            session.conn_id,
+            session.row().name
         );
         return Ok(Outcome::Continue);
     }
@@ -321,15 +326,17 @@ async fn drop_item(
     if session.inventory[idx].count <= 0 {
         let id = session.inventory[idx].id;
         session
-            .send(&TPacketGCItemDelDeprecated::new(
-                TItemPos {
-                    window: TItemPos::WINDOW_INVENTORY,
-                    cell: cell.cell,
-                },
-                0,
-                0,
+            .send(
+                &TPacketGCItemDelDeprecated::new(
+                    TItemPos {
+                        window: TItemPos::WINDOW_INVENTORY,
+                        cell: cell.cell,
+                    },
+                    0,
+                    0,
+                )
+                .to_bytes(),
             )
-            .to_bytes())
             .await
             .map_err(|e| format!("enviando GC_ITEM_DEL: {e}"))?;
         ItemRepo::new(session.pool.clone()).delete(id).await?;
@@ -357,7 +364,9 @@ async fn drop_item(
     eprintln!(
         "server_realms: channel conn {}: {} soltó item vnum {vnum} \
          (×{want}, celda {}) en {x},{y}",
-        session.conn_id, session.row().name, cell.cell
+        session.conn_id,
+        session.row().name,
+        cell.cell
     );
     Ok(Outcome::Continue)
 }
@@ -495,9 +504,10 @@ pub async fn handle_use(session: &mut Session, pkt: &[u8]) -> Result<Outcome, St
                 window: TItemPos::WINDOW_INVENTORY,
                 cell: (0..INVENTORY_MAX_NUM)
                     .find(|c| {
-                        !session.inventory.iter().any(|i| {
-                            i.window == "INVENTORY" && i.pos as u16 == *c
-                        })
+                        !session
+                            .inventory
+                            .iter()
+                            .any(|i| i.window == "INVENTORY" && i.pos as u16 == *c)
                     })
                     .unwrap_or(0),
             },
@@ -628,7 +638,8 @@ async fn consume_one_use(session: &mut Session, idx: usize) -> Result<(), String
         eprintln!(
             "server_realms: channel conn {}: {} usó item vnum {vnum} \
              (agotado — slot borrado)",
-            session.conn_id, session.row().name
+            session.conn_id,
+            session.row().name
         );
     } else {
         // GC_ITEM_UPDATE (38 B) con el count nuevo + upsert.
@@ -753,8 +764,7 @@ async fn use_ability_up(
                 .map(|a| a.l_apply_value)
                 .sum::<i32>();
         let dur = game_core::ai::calculate_duration(total, 10_000);
-        session.motion_mut().speed =
-            (300u32.saturating_mul(10_000) / dur.max(1) as u32).max(1);
+        session.motion_mut().speed = (300u32.saturating_mul(10_000) / dur.max(1) as u32).max(1);
     }
     // El buff entra al MUNDO (componente `Affects` del jugador — el combate
     // lee los numéricos de ahí; el affects_system lo expira).
@@ -770,7 +780,11 @@ async fn use_ability_up(
     eprintln!(
         "server_realms: channel conn {}: {} se buffeó con item vnum {} \
          (apply {}, point {}, +{amount} durante {duration}s, flag {flag})",
-        session.conn_id, session.row().name, session.inventory[idx].vnum, proto.values[0], point
+        session.conn_id,
+        session.row().name,
+        session.inventory[idx].vnum,
+        proto.values[0],
+        point
     );
     Ok(Outcome::Continue)
 }
@@ -906,8 +920,7 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
     // char_item.cpp:5675-5680); `num` debe ser 0 (todo el stack — el split
     // al equipar es pendiente).
     if equipping {
-        let Some(wear) = mv.change_pos.cell.checked_sub(INVENTORY_MAX_NUM)
-        else {
+        let Some(wear) = mv.change_pos.cell.checked_sub(INVENTORY_MAX_NUM) else {
             eprintln!(
                 "server_realms: channel conn {}: equip a cell {} \
                  fuera del rango (debe ser INVENTORY_MAX_NUM + wear)",
@@ -1035,13 +1048,15 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
         let boots = super::equipped_boots_proto(&session.pool, &session.inventory).await?;
         session.mov_speed = packets::mov_speed_for_boots(boots.as_ref());
         session
-            .send(&packets::character_update_with_parts(
-                session.row(),
-                &parts,
-                arrows,
-                session.mov_speed,
+            .send(
+                &packets::character_update_with_parts(
+                    session.row(),
+                    &parts,
+                    arrows,
+                    session.mov_speed,
+                )
+                .to_bytes(),
             )
-            .to_bytes())
             .await
             .map_err(|e| format!("enviando GC_CHARACTER_UPDATE (equip): {e}"))?;
         // El iArmor del mundo COMPARTIDO (el ataque del mob usa
@@ -1060,13 +1075,18 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
         session.battle =
             packets::compute_battle_points(session.row(), weapon_proto.as_ref(), armor);
         session
-            .send(&packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
+            .send(
+                &packets::points_packet(session.row(), session.next_exp, &session.battle)
+                    .to_bytes(),
+            )
             .await
             .map_err(|e| format!("enviando GC_POINTS (equip): {e}"))?;
         eprintln!(
             "server_realms: channel conn {}: {} EQUIPÓ item vnum {vnum} \
              (wear {wear}, cell {})",
-            session.conn_id, session.row().name, mv.change_pos.cell
+            session.conn_id,
+            session.row().name,
+            mv.change_pos.cell
         );
         return Ok(Outcome::Continue);
     }
@@ -1131,13 +1151,15 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
         let boots = super::equipped_boots_proto(&session.pool, &session.inventory).await?;
         session.mov_speed = packets::mov_speed_for_boots(boots.as_ref());
         session
-            .send(&packets::character_update_with_parts(
-                session.row(),
-                &parts,
-                arrows,
-                session.mov_speed,
+            .send(
+                &packets::character_update_with_parts(
+                    session.row(),
+                    &parts,
+                    arrows,
+                    session.mov_speed,
+                )
+                .to_bytes(),
             )
-            .to_bytes())
             .await
             .map_err(|e| format!("enviando GC_CHARACTER_UPDATE (desequip): {e}"))?;
         // El iArmor del mundo COMPARTIDO baja con el item quitado.
@@ -1153,13 +1175,18 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
         session.battle =
             packets::compute_battle_points(session.row(), weapon_proto.as_ref(), armor);
         session
-            .send(&packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
+            .send(
+                &packets::points_packet(session.row(), session.next_exp, &session.battle)
+                    .to_bytes(),
+            )
             .await
             .map_err(|e| format!("enviando GC_POINTS (desequip): {e}"))?;
         eprintln!(
             "server_realms: channel conn {}: {} DESEQUIPÓ item vnum {vnum} \
              → celda {}",
-            session.conn_id, session.row().name, mv.change_pos.cell
+            session.conn_id,
+            session.row().name,
+            mv.change_pos.cell
         );
         return Ok(Outcome::Continue);
     }
@@ -1235,8 +1262,11 @@ pub async fn handle_move(session: &mut Session, pkt: &[u8]) -> Result<Outcome, S
         if session.inventory[src].vnum == session.inventory[dst].vnum
             && session.inventory[src].sockets == session.inventory[dst].sockets
         {
-            let add = (ITEM_COUNT_LIMIT - session.inventory[dst].count)
-                .min(if want == 0 { session.inventory[src].count } else { want });
+            let add = (ITEM_COUNT_LIMIT - session.inventory[dst].count).min(if want == 0 {
+                session.inventory[src].count
+            } else {
+                want
+            });
             if add <= 0 {
                 eprintln!(
                     "server_realms: channel conn {}: stack de celda {} \
@@ -1499,7 +1529,11 @@ fn count_material(inventory: &[database::item::ItemRow], vnum: i64, skip: &[usiz
 /// Computes a refine fee without allowing arithmetic to wrap. Normal refine
 /// fees are multiplied by five; scroll fees use the recipe cost unchanged.
 fn checked_refine_fee(cost: i64, with_scroll: bool) -> Option<i64> {
-    if with_scroll { Some(cost) } else { cost.checked_mul(5) }
+    if with_scroll {
+        Some(cost)
+    } else {
+        cost.checked_mul(5)
+    }
 }
 
 /// Cobra la fee del refine (parity `PayRefineFee` char.cpp:6616 sin guild →
@@ -1509,10 +1543,12 @@ fn checked_refine_fee(cost: i64, with_scroll: bool) -> Option<i64> {
 /// parity literal del C++).
 async fn pay_refine_fee(session: &mut Session, fee: i64) -> Result<(), String> {
     let Some(new_gold) = checked_gold_sub(i64::from(session.row().gold), fee) else {
-        return Err(format!("refine fee {fee} deja el oro fuera de 0..={GOLD_MAX}"));
+        return Err(format!(
+            "refine fee {fee} deja el oro fuera de 0..={GOLD_MAX}"
+        ));
     };
-    session.row_mut().gold = i32::try_from(new_gold)
-        .map_err(|e| format!("convirtiendo gold de refine: {e}"))?;
+    session.row_mut().gold =
+        i32::try_from(new_gold).map_err(|e| format!("convirtiendo gold de refine: {e}"))?;
     session
         .send(&packets::points_packet(session.row(), session.next_exp, &session.battle).to_bytes())
         .await
@@ -1582,7 +1618,8 @@ async fn remove_materials(
                     .send(&up.to_bytes())
                     .await
                     .map_err(|e| format!("enviando GC_ITEM_UPDATE (material): {e}"))?;
-                repo.upsert(&session.inventory[idx], session.row().id).await?;
+                repo.upsert(&session.inventory[idx], session.row().id)
+                    .await?;
             }
         }
     }
@@ -1622,7 +1659,8 @@ async fn consume_scroll(session: &mut Session, scroll_idx: usize) -> Result<(), 
             .send(&up.to_bytes())
             .await
             .map_err(|e| format!("enviando GC_ITEM_UPDATE (scroll): {e}"))?;
-        repo.upsert(&session.inventory[scroll_idx], session.row().id).await?;
+        repo.upsert(&session.inventory[scroll_idx], session.row().id)
+            .await?;
     }
     Ok(())
 }
@@ -1663,7 +1701,8 @@ async fn replace_item(session: &mut Session, idx: usize, new_vnum: i64) -> Resul
         .send(&set.to_bytes())
         .await
         .map_err(|e| format!("enviando GC_ITEM_SET (refine OK): {e}"))?;
-    repo.upsert(&session.inventory[idx], session.row().id).await?;
+    repo.upsert(&session.inventory[idx], session.row().id)
+        .await?;
     Ok(())
 }
 
@@ -1727,7 +1766,9 @@ async fn refine_execute(
         eprintln!(
             "server_realms: channel conn {}: refine de vnum {target_vnum} — \
              fee fuera de rango o insuficiente ({}/{} fee)",
-            session.conn_id, session.row().gold, fee
+            session.conn_id,
+            session.row().gold,
+            fee
         );
         return Ok(false);
     }
@@ -1768,7 +1809,9 @@ async fn refine_execute(
         eprintln!(
             "server_realms: channel conn {}: {} refine OK vnum {target_vnum} \
              → {refined_vnum} (celda {})",
-            session.conn_id, session.row().name, cell
+            session.conn_id,
+            session.row().name,
+            cell
         );
     } else if let Some(_si) = scroll_idx {
         // FAIL con scroll: baja al vnum ANTERIOR si existe (parity
@@ -1782,7 +1825,8 @@ async fn refine_execute(
                 eprintln!(
                     "server_realms: channel conn {}: {} refine FAIL (scroll) vnum \
                      {cur_vnum} → {fail_vnum}",
-                    session.conn_id, session.row().name
+                    session.conn_id,
+                    session.row().name
                 );
             }
             None => {
@@ -1790,7 +1834,8 @@ async fn refine_execute(
                 eprintln!(
                     "server_realms: channel conn {}: {} refine FAIL (scroll) vnum \
                      {cur_vnum} sin nivel anterior — sin cambios",
-                    session.conn_id, session.row().name
+                    session.conn_id,
+                    session.row().name
                 );
             }
         }
@@ -1802,7 +1847,9 @@ async fn refine_execute(
         eprintln!(
             "server_realms: channel conn {}: {} refine FAIL vnum {target_vnum} \
              — item destruido (celda {})",
-            session.conn_id, session.row().name, cell
+            session.conn_id,
+            session.row().name,
+            cell
         );
     }
     Ok(true)
@@ -1830,7 +1877,9 @@ pub async fn handle_use_to_item(session: &mut Session, pkt: &[u8]) -> Result<Out
         }
     };
     let Some(scroll_idx) = session.inventory.iter().position(|i| {
-        i.window == "INVENTORY" && i.pos as u16 == d.cell.cell && d.cell.window == TItemPos::WINDOW_INVENTORY
+        i.window == "INVENTORY"
+            && i.pos as u16 == d.cell.cell
+            && d.cell.window == TItemPos::WINDOW_INVENTORY
     }) else {
         eprintln!(
             "server_realms: channel conn {}: use-to-item — celda {} sin item",
@@ -1868,10 +1917,7 @@ pub async fn handle_use_to_item(session: &mut Session, pkt: &[u8]) -> Result<Out
         eprintln!(
             "server_realms: channel conn {}: use-to-item — item vnum {} no es \
              scroll de refine (type {} sub {})",
-            session.conn_id,
-            session.inventory[scroll_idx].vnum,
-            proto.b_type,
-            proto.b_sub_type
+            session.conn_id, session.inventory[scroll_idx].vnum, proto.b_type, proto.b_sub_type
         );
         return Ok(Outcome::Continue);
     }
@@ -1921,12 +1967,15 @@ pub async fn handle_use_to_item(session: &mut Session, pkt: &[u8]) -> Result<Out
     let mut material_count = 0u8;
     for (i, &(v, c)) in recipe.materials.iter().enumerate() {
         if v != 0 && c > 0 {
-            materials[i] = RefineMaterial { vnum: v as u32, count: c };
+            materials[i] = RefineMaterial {
+                vnum: v as u32,
+                count: c,
+            };
             material_count = i as u8 + 1;
         }
     }
-    let Some(display_cost) = checked_refine_fee(i64::from(recipe.cost), false)
-        .and_then(|fee| i32::try_from(fee).ok())
+    let Some(display_cost) =
+        checked_refine_fee(i64::from(recipe.cost), false).and_then(|fee| i32::try_from(fee).ok())
     else {
         eprintln!(
             "server_realms: channel conn {}: refine de vnum {target_vnum} — fee fuera del wire i32",
@@ -2018,9 +2067,7 @@ pub async fn handle_refine(session: &mut Session, pkt: &[u8]) -> Result<Outcome,
                 );
                 return Ok(Outcome::Continue);
             };
-            if si >= session.inventory.len()
-                || session.inventory[si].window != "INVENTORY"
-            {
+            if si >= session.inventory.len() || session.inventory[si].window != "INVENTORY" {
                 eprintln!(
                     "server_realms: channel conn {}: CG_REFINE SCROLL — scroll \
                      inválido (slot cambiado)",
@@ -2073,14 +2120,26 @@ mod tests {
         let inv = TItemPos::WINDOW_INVENTORY;
         let eqp = TItemPos::WINDOW_EQUIPMENT;
         // Drag-equip: INVENTORY con cell = 180 + wear (ej. wear 4 → 184).
-        assert!(is_equip_position(p(inv, INVENTORY_MAX_NUM + 4)), "drag (INV 184)");
+        assert!(
+            is_equip_position(p(inv, INVENTORY_MAX_NUM + 4)),
+            "drag (INV 184)"
+        );
         // Doble-click: EQUIPMENT con el mismo cell.
-        assert!(is_equip_position(p(eqp, INVENTORY_MAX_NUM + 4)), "doble-click (EQP 184)");
+        assert!(
+            is_equip_position(p(eqp, INVENTORY_MAX_NUM + 4)),
+            "doble-click (EQP 184)"
+        );
         // Último slot de wear válido (212-1).
-        assert!(is_equip_position(p(inv, INVENTORY_MAX_NUM + WEAR_MAX_NUM - 1)), "wear 31");
+        assert!(
+            is_equip_position(p(inv, INVENTORY_MAX_NUM + WEAR_MAX_NUM - 1)),
+            "wear 31"
+        );
         // Fuera de rango: celda de inventario normal, y celda > 180+32.
         assert!(!is_equip_position(p(inv, 7)), "inv normal 7");
-        assert!(!is_equip_position(p(inv, INVENTORY_MAX_NUM + WEAR_MAX_NUM)), "cell 212");
+        assert!(
+            !is_equip_position(p(inv, INVENTORY_MAX_NUM + WEAR_MAX_NUM)),
+            "cell 212"
+        );
         // Otras ventanas (p. ej. SAFEBOX) nunca son equip.
         assert!(!is_equip_position(p(5, INVENTORY_MAX_NUM + 4)), "safebox");
     }
@@ -2093,7 +2152,11 @@ mod tests {
         assert_eq!(drop_want(3, 5), 3, "count válido");
         assert_eq!(drop_want(9, 5), 5, "count > stack → todo");
         assert_eq!(drop_want(0, 1), 1);
-        assert_eq!(drop_want(200, 0), 0, "stack vacío → 0 (el gate de arriba ya rechazó)");
+        assert_eq!(
+            drop_want(200, 0),
+            0,
+            "stack vacío → 0 (el gate de arriba ya rechazó)"
+        );
     }
 
     /// El oro del suelo es el item vnum 1 (parity `DropGold`
@@ -2191,15 +2254,35 @@ mod tests {
         use game_core::skill::point;
         // (apply, affect_type, point, flag) — el orden de char_item.cpp:4332.
         let cases = [
-            (APPLY_MOV_SPEED, AFFECT_MOV_SPEED, point::MOV_SPEED, AFF_MOV_SPEED_POTION),
-            (APPLY_ATT_SPEED, AFFECT_ATT_SPEED, point::ATT_SPEED, AFF_ATT_SPEED_POTION),
+            (
+                APPLY_MOV_SPEED,
+                AFFECT_MOV_SPEED,
+                point::MOV_SPEED,
+                AFF_MOV_SPEED_POTION,
+            ),
+            (
+                APPLY_ATT_SPEED,
+                AFFECT_ATT_SPEED,
+                point::ATT_SPEED,
+                AFF_ATT_SPEED_POTION,
+            ),
             (APPLY_STR, AFFECT_STR, POINT_ST, 0),
             (APPLY_DEX, AFFECT_DEX, POINT_DX, 0),
             (APPLY_CON, AFFECT_CON, POINT_HT, 0),
             (APPLY_INT, AFFECT_INT, POINT_IQ, 0),
             (APPLY_CAST_SPEED, AFFECT_CAST_SPEED, point::CASTING_SPEED, 0),
-            (APPLY_ATT_GRADE_BONUS, AFFECT_ATT_GRADE, point::ATT_GRADE_BONUS, 0),
-            (APPLY_DEF_GRADE_BONUS, AFFECT_DEF_GRADE, point::DEF_GRADE_BONUS, 0),
+            (
+                APPLY_ATT_GRADE_BONUS,
+                AFFECT_ATT_GRADE,
+                point::ATT_GRADE_BONUS,
+                0,
+            ),
+            (
+                APPLY_DEF_GRADE_BONUS,
+                AFFECT_DEF_GRADE,
+                point::DEF_GRADE_BONUS,
+                0,
+            ),
         ];
         for (apply, dw_type, point, flag) in cases {
             assert_eq!(
@@ -2244,8 +2327,16 @@ mod tests {
     fn autouse_gold_caps_at_gold_max() {
         assert_eq!(gold_after_add(100, 50), Some(150), "suma normal");
         assert_eq!(gold_after_add(0, 5000), Some(5000));
-        assert_eq!(gold_after_add(1_999_999_900, 100), Some(GOLD_MAX as i32), "límite inclusivo");
-        assert_eq!(gold_after_add(GOLD_MAX as i32, 1), None, "overflow rechazado");
+        assert_eq!(
+            gold_after_add(1_999_999_900, 100),
+            Some(GOLD_MAX as i32),
+            "límite inclusivo"
+        );
+        assert_eq!(
+            gold_after_add(GOLD_MAX as i32, 1),
+            None,
+            "overflow rechazado"
+        );
         // El gate del handler rechaza amount <= 0 antes (no consume), pero
         // el helper conserva los deltas negativos legítimos.
         assert_eq!(gold_after_add(100, 0), Some(100));

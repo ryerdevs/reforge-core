@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use database::player::{PlayerCreate, PlayerRepo, PlayerRow, PlayerSummary};
 use database::pool::PgPool;
-use database::wal::{replay_wal, Batcher};
+use database::wal::{Batcher, replay_wal};
 
 /// Directorio del WAL local: env `REALM_WAL_DIR` o `./wal` (documentado —
 /// el CWD dual Windows/WSL enraíza distinto; los tests gated usan dir
@@ -65,7 +65,11 @@ impl WorldStore {
     /// arranque del canal.
     pub fn new(pool: PgPool, batcher: Arc<Batcher>) -> Self {
         let player = PlayerRepo::new(pool.clone());
-        Self { pool, player, batcher }
+        Self {
+            pool,
+            player,
+            batcher,
+        }
     }
 
     /// Lista de personajes de la cuenta (Q3 — `PlayerRepo::list_for_account`).
@@ -95,7 +99,11 @@ impl WorldStore {
     /// - Sin fila de índice o `pid = 0` -> `Ok(None)` (slot vacío — el C++
     ///   corta con "player index not found", `input_login.cpp:266-271`).
     /// - `pid > 0` pero el player no existe -> `Ok(None)` (carga Q2 sin fila).
-    pub async fn select_player(&self, account_id: i64, slot: u8) -> Result<Option<PlayerRow>, String> {
+    pub async fn select_player(
+        &self,
+        account_id: i64,
+        slot: u8,
+    ) -> Result<Option<PlayerRow>, String> {
         let Some(pid) = self.player.player_index_pid(account_id, slot).await? else {
             return Ok(None);
         };
@@ -148,7 +156,12 @@ impl WorldStore {
     /// Borrado del personaje (parity `__RESULT_PLAYER_DELETE`
     /// `ClientManagerPlayer.cpp:1055-1130`): slot a 0 + DELETE del player y
     /// sus items/quests/afectos.
-    pub async fn delete_character(&self, account_id: i64, slot: u8, player_id: i64) -> Result<(), String> {
+    pub async fn delete_character(
+        &self,
+        account_id: i64,
+        slot: u8,
+        player_id: i64,
+    ) -> Result<(), String> {
         self.player.delete(account_id, slot, player_id).await
     }
 
@@ -159,7 +172,9 @@ impl WorldStore {
     /// personajes van a la aldea de Shinsoo (mapa 41, UNITS 969600/278400 =
     /// `g_start_position[3]`); el C++ mueve por imperio (mapas 1/21/41).
     pub async fn set_empire(&self, account_id: i64, empire: u8) -> Result<(), String> {
-        self.player.set_empire(account_id, i16::from(empire)).await?;
+        self.player
+            .set_empire(account_id, i16::from(empire))
+            .await?;
         let client = self
             .pool
             .get()

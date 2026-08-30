@@ -57,7 +57,10 @@ impl EconomyRepo {
     }
 
     async fn connect(&self) -> Result<Client, String> {
-        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
+        self.pool
+            .get()
+            .await
+            .map_err(|e| format!("PG pool get: {e}"))
     }
 
     /// Money log append-only (`log.cpp:114-122`): una fila por evento, escrita
@@ -154,7 +157,11 @@ mod tests {
             .split(',')
             .map(|c| c.trim())
             .collect();
-        assert_eq!(cols, ["time", "type", "vnum", "gold"], "orden del INSERT legacy");
+        assert_eq!(
+            cols,
+            ["time", "type", "vnum", "gold"],
+            "orden del INSERT legacy"
+        );
         assert!(MONEY_LOG_SQL.contains("NOW()"), "time = NOW()");
         assert!(MONEY_LOG_SQL.contains("log.money_log"), "schema log");
     }
@@ -164,8 +171,14 @@ mod tests {
     fn money_log_type_bounds() {
         assert!(validate_money_log_type(MONEY_LOG_MONSTER).is_ok());
         assert!(validate_money_log_type(MONEY_LOG_DROP).is_ok());
-        assert!(validate_money_log_type(MONEY_LOG_RESERVED).is_err(), "RESERVED es error");
-        assert!(validate_money_log_type(MONEY_LOG_TYPE_MAX_NUM).is_err(), ">= MAX es error");
+        assert!(
+            validate_money_log_type(MONEY_LOG_RESERVED).is_err(),
+            "RESERVED es error"
+        );
+        assert!(
+            validate_money_log_type(MONEY_LOG_TYPE_MAX_NUM).is_err(),
+            ">= MAX es error"
+        );
         assert!(validate_money_log_type(-1).is_err(), "negativo es error");
         // Constantes del enum (length.h:697-706).
         assert_eq!(MONEY_LOG_TYPE_MAX_NUM, 9);
@@ -183,15 +196,17 @@ mod tests {
     /// idempotente (SET gold = $2 WHERE id = $1).
     #[test]
     fn checked_gold_mutation_rejects_negative() {
-        assert!(checked_gold_mutation(1, -5).is_err(), "gold negativo rechazado");
+        assert!(
+            checked_gold_mutation(1, -5).is_err(),
+            "gold negativo rechazado"
+        );
         assert!(
             checked_gold_mutation(1, 2_000_000_001).is_err(),
             "gold por encima de GOLD_MAX rechazado"
         );
         let m = checked_gold_mutation(1, 0).expect("0 ok");
         assert_eq!(
-            m.sql,
-            "UPDATE player.player SET gold = $2 WHERE id = $1",
+            m.sql, "UPDATE player.player SET gold = $2 WHERE id = $1",
             "UPDATE absoluto"
         );
         assert_eq!(m.params, vec![Param::Int(1), Param::Int(0)]);
@@ -214,15 +229,7 @@ mod tests {
             i64::MIN,
             i64::MAX,
         ];
-        let deltas = [
-            i64::MIN,
-            -GOLD_MAX,
-            -1,
-            0,
-            1,
-            GOLD_MAX,
-            i64::MAX,
-        ];
+        let deltas = [i64::MIN, -GOLD_MAX, -1, 0, 1, GOLD_MAX, i64::MAX];
         for current in current_values {
             for delta in deltas {
                 match checked_gold_delta(current, delta) {

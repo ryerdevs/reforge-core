@@ -31,7 +31,11 @@ const HWID: [u8; 16] = [
 
 #[test]
 fn golden_fixture_is_88_bytes() {
-    assert_eq!(FIXTURE.len(), TPacketCGLogin3::SIZE_AUTH_FULL, "88 B auth + version + hwid");
+    assert_eq!(
+        FIXTURE.len(),
+        TPacketCGLogin3::SIZE_AUTH_FULL,
+        "88 B auth + version + hwid"
+    );
 }
 
 #[test]
@@ -40,7 +44,10 @@ fn golden_login3_40999_parses() {
     assert_eq!(p.header, protocol::header::CG_LOGIN3, "header 0x6f");
     assert_eq!(p.login, protocol::from_cstr::<31>("test"), "login test");
     assert_eq!(p.passwd, protocol::from_cstr::<17>("1234"), "password 1234");
-    assert_eq!(p.adw_client_key, [0; 4], "keys del peer (f16_peer envía [0;4])");
+    assert_eq!(
+        p.adw_client_key, [0; 4],
+        "keys del peer (f16_peer envía [0;4])"
+    );
     assert_eq!(p.sz_language, *b"es\0", "lang es");
     assert_eq!(p.version, Some(40999), "version del cliente");
     assert_eq!(p.hwid, Some(HWID), "hwid aabbccddeeff00112233445566778899");
@@ -52,5 +59,8 @@ fn golden_login3_40999_reserializes_byte_identical() {
     let p = TPacketCGLogin3::from_bytes(FIXTURE).expect("el LOGIN3 real debe parsear");
     let re = p.to_bytes_auth_with(p.version, p.hwid);
     assert_eq!(re.len(), TPacketCGLogin3::SIZE_AUTH_FULL);
-    assert_eq!(re, FIXTURE, "re-serialización byte-por-byte idéntica al wire capturado");
+    assert_eq!(
+        re, FIXTURE,
+        "re-serialización byte-por-byte idéntica al wire capturado"
+    );
 }

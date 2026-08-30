@@ -15,8 +15,8 @@ use std::time::Duration;
 
 use tokio::net::TcpListener;
 
-use network::handshake::{perform_with, HandshakeConfig};
-use network::{read_exact_size, Connection, Framer, ConnectionRole};
+use network::handshake::{HandshakeConfig, perform_with};
+use network::{Connection, ConnectionRole, Framer, read_exact_size};
 use protocol::{TPacketCGLogin3, TPacketGCLoginFailure, header};
 
 /// Ruta del binario del example (compilado por `cargo test` antes de los tests).
@@ -26,7 +26,11 @@ fn f16_peer_bin() -> PathBuf {
     path.push("target");
     path.push("debug");
     path.push("examples");
-    path.push(if cfg!(windows) { "f16_peer.exe" } else { "f16_peer" });
+    path.push(if cfg!(windows) {
+        "f16_peer.exe"
+    } else {
+        "f16_peer"
+    });
     path
 }
 
@@ -55,19 +59,31 @@ async fn fake_auth_with_login3() -> std::io::Result<()> {
         let h = perform_with(&mut conn, &mut framer, 1_000_000, &fake_cfg())
             .await
             .expect("handshake server-side valida el eco del peer");
-        assert!(h.delta.unsigned_abs() <= 80, "eco del peer alineado, delta={}", h.delta);
+        assert!(
+            h.delta.unsigned_abs() <= 80,
+            "eco del peer alineado, delta={}",
+            h.delta
+        );
         // LOGIN3 al auth = 68 B (65 + szLanguage[3], packet_info.cpp:157).
-        let login3 = read_exact_size(&mut conn, TPacketCGLogin3::SIZE_AUTH).await.expect("peer envía LOGIN3");
+        let login3 = read_exact_size(&mut conn, TPacketCGLogin3::SIZE_AUTH)
+            .await
+            .expect("peer envía LOGIN3");
         assert_eq!(login3[0], header::CG_LOGIN3);
         // Respuesta: GC_LOGIN_FAILURE "WRONGPWD" (10 B).
-        conn.send(&TPacketGCLoginFailure::new("WRONGPWD").to_bytes()).await.expect("envía failure");
+        conn.send(&TPacketGCLoginFailure::new("WRONGPWD").to_bytes())
+            .await
+            .expect("envía failure");
     });
 
     // El peer se ejecuta como subproceso real (el binario del example).
     let bin = f16_peer_bin();
     let out = tokio::task::spawn_blocking(move || {
         std::process::Command::new(&bin)
-            .args([addr.ip().to_string(), addr.port().to_string(), "--login3".to_string()])
+            .args([
+                addr.ip().to_string(),
+                addr.port().to_string(),
+                "--login3".to_string(),
+            ])
             .output()
             .expect("ejecutar f16_peer")
     })
@@ -81,11 +97,21 @@ async fn fake_auth_with_login3() -> std::io::Result<()> {
     if !stderr.is_empty() {
         eprintln!("F16 smoke stderr:\n{stderr}");
     }
-    assert!(out.status.success(), "exit 0 (handshake sin timeout), status={:?}", out.status);
+    assert!(
+        out.status.success(),
+        "exit 0 (handshake sin timeout), status={:?}",
+        out.status
+    );
     assert!(stdout.contains("GC_HANDSHAKE"), "reporta GC_HANDSHAKE");
-    assert!(stdout.contains("handshake completado"), "handshake completado");
+    assert!(
+        stdout.contains("handshake completado"),
+        "handshake completado"
+    );
     assert!(stdout.contains("CG_LOGIN3"), "envía LOGIN3");
-    assert!(stdout.contains("GC_LOGIN_FAILURE"), "reporta GC_LOGIN_FAILURE");
+    assert!(
+        stdout.contains("GC_LOGIN_FAILURE"),
+        "reporta GC_LOGIN_FAILURE"
+    );
     assert!(stdout.contains("WRONGPWD"), "status del failure");
     Ok(())
 }
@@ -143,5 +169,7 @@ async fn f16_peer_handshake_and_login3_against_fake_auth() {
 
 #[tokio::test]
 async fn f16_peer_handshake_only_against_fake_auth() {
-    fake_auth_handshake_only().await.expect("smoke handshake-only");
+    fake_auth_handshake_only()
+        .await
+        .expect("smoke handshake-only");
 }

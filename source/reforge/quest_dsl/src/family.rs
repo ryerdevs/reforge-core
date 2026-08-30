@@ -27,9 +27,9 @@ pub fn expand_families(file: &QuestFile) -> Result<Vec<QuestDef>, String> {
     let mut out = Vec::new();
     for q in &file.quests {
         if let Quest::Instance(inst) = q {
-            let family = families
-                .get(inst.base.as_str())
-                .ok_or_else(|| format!("familia no encontrada: {} (para {})", inst.base, inst.name))?;
+            let family = families.get(inst.base.as_str()).ok_or_else(|| {
+                format!("familia no encontrada: {} (para {})", inst.base, inst.name)
+            })?;
             let Quest::Family { params, states, .. } = family else {
                 unreachable!("families map solo contiene familias");
             };
@@ -42,7 +42,10 @@ pub fn expand_families(file: &QuestFile) -> Result<Vec<QuestDef>, String> {
                     .find(|(n, _)| n == &p.name)
                     .map(|(_, v)| v.clone())
                     .ok_or_else(|| {
-                        format!("instancia {} sin argumento `{}` (familia {})", inst.name, p.name, inst.base)
+                        format!(
+                            "instancia {} sin argumento `{}` (familia {})",
+                            inst.name, p.name, inst.base
+                        )
                     })?;
                 if let Some(ty) = &p.ty {
                     validate_type(ty, &value, &inst.name, &p.name)?;
@@ -50,7 +53,10 @@ pub fn expand_families(file: &QuestFile) -> Result<Vec<QuestDef>, String> {
                 map.insert(p.name.clone(), value);
             }
             let states = states.iter().map(|s| substitute_state(s, &map)).collect();
-            out.push(QuestDef { name: inst.name.clone(), states });
+            out.push(QuestDef {
+                name: inst.name.clone(),
+                states,
+            });
         }
     }
     Ok(out)
@@ -68,7 +74,9 @@ fn validate_type(ty: &ParamType, v: &Value, quest: &str, param: &str) -> Result<
     if ok {
         Ok(())
     } else {
-        Err(format!("quest {quest}: el arg `{param}` ({v:?}) no coincide con el tipo {ty:?}"))
+        Err(format!(
+            "quest {quest}: el arg `{param}` ({v:?}) no coincide con el tipo {ty:?}"
+        ))
     }
 }
 
@@ -89,15 +97,24 @@ fn substitute_state(s: &State, map: &std::collections::HashMap<String, Value>) -
 
 fn subst_trigger(t: &Trigger, map: &std::collections::HashMap<String, Value>) -> Trigger {
     let kind = match &t.kind {
-        TriggerKind::Chat { target } => TriggerKind::Chat { target: subst_target(target, map) },
-        TriggerKind::Kill { target } => TriggerKind::Kill { target: subst_target(target, map) },
-        TriggerKind::Use { target } => TriggerKind::Use { target: subst_target(target, map) },
+        TriggerKind::Chat { target } => TriggerKind::Chat {
+            target: subst_target(target, map),
+        },
+        TriggerKind::Kill { target } => TriggerKind::Kill {
+            target: subst_target(target, map),
+        },
+        TriggerKind::Use { target } => TriggerKind::Use {
+            target: subst_target(target, map),
+        },
         other => other.clone(),
     };
     Trigger { kind }
 }
 
-fn subst_target(t: &TriggerTarget, map: &std::collections::HashMap<String, Value>) -> TriggerTarget {
+fn subst_target(
+    t: &TriggerTarget,
+    map: &std::collections::HashMap<String, Value>,
+) -> TriggerTarget {
     match t {
         TriggerTarget::Param(name) => match map.get(name) {
             Some(Value::Num(n)) if *n >= 0 && *n <= u32::MAX as i64 => {
@@ -132,10 +149,16 @@ fn subst_stmt(st: &Stmt, map: &std::collections::HashMap<String, Value>) -> Stmt
 
 fn subst_expr(e: &Expr, map: &std::collections::HashMap<String, Value>) -> Expr {
     match e {
-        Expr::Between(a, b, c) => {
-            Expr::Between(Box::new(subst_expr(a, map)), Box::new(subst_expr(b, map)), Box::new(subst_expr(c, map)))
-        }
-        Expr::Compare(a, op, b) => Expr::Compare(Box::new(subst_expr(a, map)), *op, Box::new(subst_expr(b, map))),
+        Expr::Between(a, b, c) => Expr::Between(
+            Box::new(subst_expr(a, map)),
+            Box::new(subst_expr(b, map)),
+            Box::new(subst_expr(c, map)),
+        ),
+        Expr::Compare(a, op, b) => Expr::Compare(
+            Box::new(subst_expr(a, map)),
+            *op,
+            Box::new(subst_expr(b, map)),
+        ),
         Expr::Add(a, b) => Expr::Add(Box::new(subst_expr(a, map)), Box::new(subst_expr(b, map))),
         Expr::Sub(a, b) => Expr::Sub(Box::new(subst_expr(a, map)), Box::new(subst_expr(b, map))),
         Expr::Mul(a, b) => Expr::Mul(Box::new(subst_expr(a, map)), Box::new(subst_expr(b, map))),
@@ -145,7 +168,9 @@ fn subst_expr(e: &Expr, map: &std::collections::HashMap<String, Value>) -> Expr 
         Expr::Not(a) => Expr::Not(Box::new(subst_expr(a, map))),
         Expr::Value(v) => Expr::Value(subst_value(v, map)),
         Expr::Capture(c) => Expr::Capture(c.clone()),
-        Expr::Func(f, args) => Expr::Func(f.clone(), args.iter().map(|a| subst_expr(a, map)).collect()),
+        Expr::Func(f, args) => {
+            Expr::Func(f.clone(), args.iter().map(|a| subst_expr(a, map)).collect())
+        }
     }
 }
 
@@ -207,7 +232,10 @@ pub fn extract_family_params(
         if paths == base_paths {
             usable.push(i);
         } else {
-            excluded.push((members[i].name.clone(), "estructura distinta al resto del grupo".into()));
+            excluded.push((
+                members[i].name.clone(),
+                "estructura distinta al resto del grupo".into(),
+            ));
         }
     }
     if usable.len() < 2 {
@@ -234,9 +262,15 @@ pub fn extract_family_params(
             Some((n, _)) => n.clone(),
             None => {
                 let is_suffix = suffix_vals.as_ref().is_some_and(|sv| {
-                    vals.iter().enumerate().all(|(i, v)| matches!(v, Value::Num(n) if *n == sv[i]))
+                    vals.iter()
+                        .enumerate()
+                        .all(|(i, v)| matches!(v, Value::Num(n) if *n == sv[i]))
                 });
-                let n = if is_suffix { suffix_param.to_string() } else { format!("p{}", params.len() + 1) };
+                let n = if is_suffix {
+                    suffix_param.to_string()
+                } else {
+                    format!("p{}", params.len() + 1)
+                };
                 if is_suffix {
                     params.insert(0, (n.clone(), vals));
                 } else {
@@ -254,7 +288,13 @@ pub fn extract_family_params(
         .map(|(path, name)| (path.clone(), Value::Param(name.clone())))
         .collect();
     let template = rewrite_slots(&members[usable[0]], &slot_repl);
-    let param_defs: Vec<Param> = params.iter().map(|(n, _)| Param { name: n.clone(), ty: None }).collect();
+    let param_defs: Vec<Param> = params
+        .iter()
+        .map(|(n, _)| Param {
+            name: n.clone(),
+            ty: None,
+        })
+        .collect();
     let instances: Vec<InstanceDef> = usable
         .iter()
         .map(|&i| {
@@ -269,12 +309,20 @@ pub fn extract_family_params(
                     (n.clone(), slots[i][&path].clone())
                 })
                 .collect();
-            InstanceDef { name: members[i].name.clone(), base: family_name.to_string(), args }
+            InstanceDef {
+                name: members[i].name.clone(),
+                base: family_name.to_string(),
+                args,
+            }
         })
         .collect();
 
     Ok(FamilyExtraction {
-        family: Quest::Family { name: family_name.to_string(), params: param_defs, states: template.states },
+        family: Quest::Family {
+            name: family_name.to_string(),
+            params: param_defs,
+            states: template.states,
+        },
         instances,
         excluded,
     })
@@ -283,7 +331,10 @@ pub fn extract_family_params(
 /// Numeric name suffix of a member: `collect_quest_lv30` → 30, `subquest_01` → 1.
 fn name_suffix(family: &str, name: &str) -> Option<i64> {
     let rest = name.strip_prefix(family)?;
-    rest.strip_prefix("_lv").or_else(|| rest.strip_prefix('_'))?.parse::<i64>().ok()
+    rest.strip_prefix("_lv")
+        .or_else(|| rest.strip_prefix('_'))?
+        .parse::<i64>()
+        .ok()
 }
 
 /// Slot paths of a quest: a deterministic path per literal VALUE position
@@ -308,7 +359,10 @@ fn collect_slots(q: &QuestDef) -> BTreeMap<String, Value> {
             }
             for (ti, t) in e.triggers.iter().enumerate() {
                 let tp = format!("{ep}t:{ti}/");
-                out.insert(format!("{tp}__kind"), Value::Str(trigger_kind_name(&t.kind).into()));
+                out.insert(
+                    format!("{tp}__kind"),
+                    Value::Str(trigger_kind_name(&t.kind).into()),
+                );
                 match &t.kind {
                     TriggerKind::Chat { target }
                     | TriggerKind::Kill { target }
@@ -436,7 +490,10 @@ fn func_name(f: &FuncName) -> &'static str {
 fn collect_stmt(s: &Stmt, path: &str, out: &mut BTreeMap<String, Value>) {
     match s {
         Stmt::Action { action, .. } => {
-            out.insert(format!("{path}/__act"), Value::Str(action_name(&action.name).into()));
+            out.insert(
+                format!("{path}/__act"),
+                Value::Str(action_name(&action.name).into()),
+            );
             for (i, a) in action.args.iter().enumerate() {
                 out.insert(format!("{path}/a:{i}"), a.clone());
             }
@@ -511,7 +568,9 @@ fn rewrite_slots(q: &QuestDef, repl: &BTreeMap<String, Value>) -> QuestDef {
                                     .triggers
                                     .iter()
                                     .enumerate()
-                                    .map(|(ti, t)| rewrite_trigger(t, &format!("{ep}t:{ti}/target"), repl))
+                                    .map(|(ti, t)| {
+                                        rewrite_trigger(t, &format!("{ep}t:{ti}/target"), repl)
+                                    })
                                     .collect(),
                                 condition: e
                                     .condition
@@ -534,9 +593,15 @@ fn rewrite_slots(q: &QuestDef, repl: &BTreeMap<String, Value>) -> QuestDef {
 
 fn rewrite_trigger(t: &Trigger, path: &str, repl: &BTreeMap<String, Value>) -> Trigger {
     let kind = match &t.kind {
-        TriggerKind::Chat { target } => TriggerKind::Chat { target: rewrite_target(target, path, repl) },
-        TriggerKind::Kill { target } => TriggerKind::Kill { target: rewrite_target(target, path, repl) },
-        TriggerKind::Use { target } => TriggerKind::Use { target: rewrite_target(target, path, repl) },
+        TriggerKind::Chat { target } => TriggerKind::Chat {
+            target: rewrite_target(target, path, repl),
+        },
+        TriggerKind::Kill { target } => TriggerKind::Kill {
+            target: rewrite_target(target, path, repl),
+        },
+        TriggerKind::Use { target } => TriggerKind::Use {
+            target: rewrite_target(target, path, repl),
+        },
         other => other.clone(),
     };
     Trigger { kind }
@@ -560,20 +625,43 @@ fn rewrite_expr(e: &Expr, path: &str, repl: &BTreeMap<String, Value>) -> Expr {
             Box::new(rewrite_expr(b, &format!("{path}/lo"), repl)),
             Box::new(rewrite_expr(c, &format!("{path}/hi"), repl)),
         ),
-        Expr::Compare(a, op, b) => {
-            Expr::Compare(Box::new(rewrite_expr(a, &format!("{path}/l"), repl)), *op, Box::new(rewrite_expr(b, &format!("{path}/r"), repl)))
-        }
-        Expr::Add(a, b) => Expr::Add(Box::new(rewrite_expr(a, &format!("{path}/l"), repl)), Box::new(rewrite_expr(b, &format!("{path}/r"), repl))),
-        Expr::Sub(a, b) => Expr::Sub(Box::new(rewrite_expr(a, &format!("{path}/l"), repl)), Box::new(rewrite_expr(b, &format!("{path}/r"), repl))),
-        Expr::Mul(a, b) => Expr::Mul(Box::new(rewrite_expr(a, &format!("{path}/l"), repl)), Box::new(rewrite_expr(b, &format!("{path}/r"), repl))),
-        Expr::Div(a, b) => Expr::Div(Box::new(rewrite_expr(a, &format!("{path}/l"), repl)), Box::new(rewrite_expr(b, &format!("{path}/r"), repl))),
-        Expr::And(a, b) => Expr::And(Box::new(rewrite_expr(a, &format!("{path}/l"), repl)), Box::new(rewrite_expr(b, &format!("{path}/r"), repl))),
-        Expr::Or(a, b) => Expr::Or(Box::new(rewrite_expr(a, &format!("{path}/l"), repl)), Box::new(rewrite_expr(b, &format!("{path}/r"), repl))),
+        Expr::Compare(a, op, b) => Expr::Compare(
+            Box::new(rewrite_expr(a, &format!("{path}/l"), repl)),
+            *op,
+            Box::new(rewrite_expr(b, &format!("{path}/r"), repl)),
+        ),
+        Expr::Add(a, b) => Expr::Add(
+            Box::new(rewrite_expr(a, &format!("{path}/l"), repl)),
+            Box::new(rewrite_expr(b, &format!("{path}/r"), repl)),
+        ),
+        Expr::Sub(a, b) => Expr::Sub(
+            Box::new(rewrite_expr(a, &format!("{path}/l"), repl)),
+            Box::new(rewrite_expr(b, &format!("{path}/r"), repl)),
+        ),
+        Expr::Mul(a, b) => Expr::Mul(
+            Box::new(rewrite_expr(a, &format!("{path}/l"), repl)),
+            Box::new(rewrite_expr(b, &format!("{path}/r"), repl)),
+        ),
+        Expr::Div(a, b) => Expr::Div(
+            Box::new(rewrite_expr(a, &format!("{path}/l"), repl)),
+            Box::new(rewrite_expr(b, &format!("{path}/r"), repl)),
+        ),
+        Expr::And(a, b) => Expr::And(
+            Box::new(rewrite_expr(a, &format!("{path}/l"), repl)),
+            Box::new(rewrite_expr(b, &format!("{path}/r"), repl)),
+        ),
+        Expr::Or(a, b) => Expr::Or(
+            Box::new(rewrite_expr(a, &format!("{path}/l"), repl)),
+            Box::new(rewrite_expr(b, &format!("{path}/r"), repl)),
+        ),
         Expr::Not(a) => Expr::Not(Box::new(rewrite_expr(a, &format!("{path}/x"), repl))),
         Expr::Capture(c) => Expr::Capture(c.clone()),
         Expr::Func(f, args) => Expr::Func(
             f.clone(),
-            args.iter().enumerate().map(|(i, a)| rewrite_expr(a, &format!("{path}/f:{i}"), repl)).collect(),
+            args.iter()
+                .enumerate()
+                .map(|(i, a)| rewrite_expr(a, &format!("{path}/f:{i}"), repl))
+                .collect(),
         ),
     }
 }
@@ -587,13 +675,20 @@ fn rewrite_stmt(s: &Stmt, path: &str, repl: &BTreeMap<String, Value>) -> Stmt {
                     .args
                     .iter()
                     .enumerate()
-                    .map(|(i, a)| repl.get(&format!("{path}/a:{i}")).cloned().unwrap_or_else(|| a.clone()))
+                    .map(|(i, a)| {
+                        repl.get(&format!("{path}/a:{i}"))
+                            .cloned()
+                            .unwrap_or_else(|| a.clone())
+                    })
                     .collect(),
             },
             capture: capture.clone(),
         },
         Stmt::Branch(b) => Stmt::Branch(Branch {
-            condition: b.condition.as_ref().map(|c| rewrite_expr(c, &format!("{path}/cond"), repl)),
+            condition: b
+                .condition
+                .as_ref()
+                .map(|c| rewrite_expr(c, &format!("{path}/cond"), repl)),
             body: b
                 .body
                 .iter()
@@ -606,7 +701,11 @@ fn rewrite_stmt(s: &Stmt, path: &str, repl: &BTreeMap<String, Value>) -> Stmt {
             args: args
                 .iter()
                 .enumerate()
-                .map(|(i, a)| repl.get(&format!("{path}/a:{i}")).cloned().unwrap_or_else(|| a.clone()))
+                .map(|(i, a)| {
+                    repl.get(&format!("{path}/a:{i}"))
+                        .cloned()
+                        .unwrap_or_else(|| a.clone())
+                })
                 .collect(),
         },
     }
@@ -681,13 +780,37 @@ pub fn quest_similarity(a: &QuestDef, b: &QuestDef) -> QuestSimilarity {
             None => a_only.push(p.clone()),
         }
     }
-    let b_only: Vec<String> = sb.keys().filter(|p| !sa.contains_key(*p)).cloned().collect();
+    let b_only: Vec<String> = sb
+        .keys()
+        .filter(|p| !sa.contains_key(*p))
+        .cloned()
+        .collect();
     let union = sa.len() + sb.len() - inter;
-    let structural = if union == 0 { 1.0 } else { inter as f64 / union as f64 };
-    let marker_ok = if marker_shared == 0 { 1.0 } else { marker_equal as f64 / marker_shared as f64 };
-    let literal_ok = if literal_shared == 0 { 1.0 } else { literal_equal as f64 / literal_shared as f64 };
+    let structural = if union == 0 {
+        1.0
+    } else {
+        inter as f64 / union as f64
+    };
+    let marker_ok = if marker_shared == 0 {
+        1.0
+    } else {
+        marker_equal as f64 / marker_shared as f64
+    };
+    let literal_ok = if literal_shared == 0 {
+        1.0
+    } else {
+        literal_equal as f64 / literal_shared as f64
+    };
     let score = structural * (0.9 * marker_ok + 0.1 * literal_ok);
-    QuestSimilarity { score, structural, marker_ok, literal_ok, params, a_only, b_only }
+    QuestSimilarity {
+        score,
+        structural,
+        marker_ok,
+        literal_ok,
+        params,
+        a_only,
+        b_only,
+    }
 }
 
 /// A literal slot is a path whose LAST segment is not a `__` marker
@@ -784,9 +907,19 @@ pub fn detect_similar_groups(quests: &[QuestDef], threshold: f64) -> Vec<Similar
                 params.push((p.clone(), vals));
             }
         }
-        out.push(SimilarGroup { members: names, mean, min, common_paths, params });
+        out.push(SimilarGroup {
+            members: names,
+            mean,
+            min,
+            common_paths,
+            params,
+        });
     }
-    out.sort_by(|a, b| b.mean.partial_cmp(&a.mean).unwrap_or(std::cmp::Ordering::Equal));
+    out.sort_by(|a, b| {
+        b.mean
+            .partial_cmp(&a.mean)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     out
 }
 
@@ -809,7 +942,9 @@ mod tests {
         let e = &out[0].states[1].events[0];
         assert!(matches!(
             e.triggers[0].kind,
-            crate::ast::TriggerKind::Kill { target: crate::ast::TriggerTarget::Num(601) }
+            crate::ast::TriggerKind::Kill {
+                target: crate::ast::TriggerTarget::Num(601)
+            }
         ));
         // La condición pc.level >= (level) → >= 30 vive en el evento login
         // del state start (states[0]); el evento kill lleva
@@ -821,7 +956,9 @@ mod tests {
         ));
         assert!(matches!(e.condition, Some(Expr::Compare(_, CmpOp::Le, _))));
         // El arg (herb) → 30006.
-        let Stmt::Action { action, .. } = &e.body[0] else { panic!("action") };
+        let Stmt::Action { action, .. } = &e.body[0] else {
+            panic!("action")
+        };
         assert_eq!(action.args[0], Value::Num(30006));
     }
 
@@ -836,14 +973,27 @@ mod tests {
         .unwrap();
         let out = expand_families(&file).unwrap();
         assert_eq!(out.len(), 2);
-        let Stmt::Action { action, .. } = &out[0].states[0].events[0].body[0] else { panic!("action") };
-        let Value::Expr(e) = &action.args[1] else { panic!("expr arg: {:?}", action.args) };
-        assert!(matches!(
-            e.as_ref(),
-            Expr::Add(_, rhs) if matches!(rhs.as_ref(), Expr::Mul(l, r) if matches!(l.as_ref(), Expr::Value(Value::Num(1))) && matches!(r.as_ref(), Expr::Value(Value::Num(3600))))
-        ), "{e:?}");
-        let Stmt::Action { action, .. } = &out[1].states[0].events[0].body[0] else { panic!() };
-        assert!(matches!(&action.args[1], Value::Expr(e) if format!("{e:?}").contains("3")), "{:?}", action.args);
+        let Stmt::Action { action, .. } = &out[0].states[0].events[0].body[0] else {
+            panic!("action")
+        };
+        let Value::Expr(e) = &action.args[1] else {
+            panic!("expr arg: {:?}", action.args)
+        };
+        assert!(
+            matches!(
+                e.as_ref(),
+                Expr::Add(_, rhs) if matches!(rhs.as_ref(), Expr::Mul(l, r) if matches!(l.as_ref(), Expr::Value(Value::Num(1))) && matches!(r.as_ref(), Expr::Value(Value::Num(3600))))
+            ),
+            "{e:?}"
+        );
+        let Stmt::Action { action, .. } = &out[1].states[0].events[0].body[0] else {
+            panic!()
+        };
+        assert!(
+            matches!(&action.args[1], Value::Expr(e) if format!("{e:?}").contains("3")),
+            "{:?}",
+            action.args
+        );
     }
 
     #[test]
@@ -889,7 +1039,14 @@ mod tests {
         let (a, b) = group();
         let ext = extract_family_params("collect_quest", "level", &[a.clone(), b.clone()]).unwrap();
         assert!(ext.excluded.is_empty());
-        let Quest::Family { name, params, states } = &ext.family else { panic!("family") };
+        let Quest::Family {
+            name,
+            params,
+            states,
+        } = &ext.family
+        else {
+            panic!("family")
+        };
         assert_eq!(name, "collect_quest");
         // level first (suffix match), then p1..p4 in slot order.
         let names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
@@ -903,7 +1060,10 @@ mod tests {
         let text = crate::render::render(&QuestFile {
             imports: vec![],
             blocks: vec![],
-            quests: vec![ext.family.clone(), Quest::Instance(ext.instances[0].clone())],
+            quests: vec![
+                ext.family.clone(),
+                Quest::Instance(ext.instances[0].clone()),
+            ],
         });
         assert!(text.contains("pc.level >= (level)"), "{text}");
         assert!(text.contains("(p3).kill"), "{text}");
@@ -919,7 +1079,10 @@ mod tests {
             crate::ast::QuestFile {
                 imports: vec![],
                 blocks: vec![],
-                quests: vec![ext.family.clone(), Quest::Instance(ext.instances[0].clone())]
+                quests: vec![
+                    ext.family.clone(),
+                    Quest::Instance(ext.instances[0].clone())
+                ]
             }
         );
         // Parity: expansion of the instances reproduces the original quests.
@@ -953,7 +1116,9 @@ mod tests {
             })
             .collect();
         let ext = extract_family_params("q", "level", &defs).unwrap();
-        let Quest::Family { params, .. } = &ext.family else { panic!() };
+        let Quest::Family { params, .. } = &ext.family else {
+            panic!()
+        };
         assert_eq!(params.len(), 1, "{:?}", params);
         assert_eq!(params[0].name, "p1");
     }
@@ -977,14 +1142,18 @@ mod tests {
         assert_eq!(ext.excluded[0].0, "c");
         assert_eq!(ext.instances.len(), 2);
         assert!(ext.instances[0].args.is_empty());
-        let Quest::Family { states, .. } = &ext.family else { panic!("family") };
+        let Quest::Family { states, .. } = &ext.family else {
+            panic!("family")
+        };
         assert_eq!(states.len(), 1);
     }
 
     #[test]
     fn extraction_single_member_is_error() {
         let file = parse("quest a\n  state start\n    on login\n      -> wait()\n").unwrap();
-        let Quest::Concrete(d) = &file.quests[0] else { panic!() };
+        let Quest::Concrete(d) = &file.quests[0] else {
+            panic!()
+        };
         assert!(extract_family_params("a", "level", std::slice::from_ref(d)).is_err());
     }
 
@@ -1066,9 +1235,16 @@ mod tests {
         assert_eq!(groups[0].members, vec!["a", "b"]);
         assert!(groups[0].mean > 0.85, "{:?}", groups[0]);
         assert_eq!(groups[0].params.len(), 1);
-        assert_eq!(groups[0].params[0].1, vec![Value::Num(100), Value::Num(200)]);
+        assert_eq!(
+            groups[0].params[0].1,
+            vec![Value::Num(100), Value::Num(200)]
+        );
         // The common signature contains the shared structural markers.
-        assert!(groups[0].common_paths.iter().any(|p| p.ends_with("__act")), "{:?}", groups[0].common_paths);
+        assert!(
+            groups[0].common_paths.iter().any(|p| p.ends_with("__act")),
+            "{:?}",
+            groups[0].common_paths
+        );
         // Threshold above the pair score → no groups.
         assert!(detect_similar_groups(&v, 0.99).is_empty());
     }

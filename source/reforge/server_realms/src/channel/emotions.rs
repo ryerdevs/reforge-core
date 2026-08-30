@@ -27,7 +27,7 @@
 //! GAPs documentados:
 //! - OTHER_SEX_ONLY (kiss/french_kiss): check implementado vía `OTHER_SEX_ONLY`
 //!   + `other_sex_ok`/`sex_of`; `sex_of` es stub `None` hasta que `player.player`
-//!   tenga columna `sex` (TODO player.sex) — fail-open sin dato.
+//!     tenga columna `sex` (TODO player.sex) — fail-open sin dato.
 //! - CHARACTER_CanEmotion gate (:79-94): omitido (parity g_bDisableEmotionMask=true).
 //! - Matrimonio como alternativa al permiso (:158-168): stub `is_married_to` (siempre
 //!   false hasta wirear `player.marriage`).
@@ -56,10 +56,17 @@ const OTHER_SEX_ONLY: u32 = 1 << 3; // cmd_emotion.cpp:14 — kiss/french_kiss
 // TODO(player.sex): `player.player` no tiene columna `sex` en esta variante
 // (42 cols legacy — PlayerRow tampoco la trae). Cuando exista, cablear
 // `sex_of` a `PlayerRow.sex` / `SELECT sex WHERE id=$1`.
-fn sex_of(_vid: u32) -> Option<u8> { None }
-fn is_married_to(_a: u32, _b: u32) -> bool { false } // TODO(matrimonio): stub — wire a `player.marriage`
+fn sex_of(_vid: u32) -> Option<u8> {
+    None
+}
+fn is_married_to(_a: u32, _b: u32) -> bool {
+    false
+} // TODO(matrimonio): stub — wire a `player.marriage`
 fn other_sex_ok(a: Option<u8>, b: Option<u8>) -> bool {
-    match (a, b) { (Some(x), Some(y)) => x != y, _ => true } // sin dato → allow (fail-open hasta tener sex)
+    match (a, b) {
+        (Some(x), Some(y)) => x != y,
+        _ => true,
+    } // sin dato → allow (fail-open hasta tener sex)
 }
 
 /// Fila de emotion_types (cmd_emotion.cpp:20-40) — solo los campos usados.
@@ -72,29 +79,92 @@ struct Emotion {
 /// Tabla completa hasta END_OF_DANCE (21 filas inglesas; las delays del C++
 /// no viajan por el wire — el cliente pone su propia animación).
 const TABLE: &[Emotion] = &[
-    Emotion { to_client: "french_kiss", flags: NEED_PC | OTHER_SEX_ONLY },
-    Emotion { to_client: "kiss", flags: NEED_PC | OTHER_SEX_ONLY },
-    Emotion { to_client: "slap", flags: NEED_PC },
-    Emotion { to_client: "clap", flags: 0 },
-    Emotion { to_client: "cheer1", flags: 0 },
-    Emotion { to_client: "cheer2", flags: 0 },
+    Emotion {
+        to_client: "french_kiss",
+        flags: NEED_PC | OTHER_SEX_ONLY,
+    },
+    Emotion {
+        to_client: "kiss",
+        flags: NEED_PC | OTHER_SEX_ONLY,
+    },
+    Emotion {
+        to_client: "slap",
+        flags: NEED_PC,
+    },
+    Emotion {
+        to_client: "clap",
+        flags: 0,
+    },
+    Emotion {
+        to_client: "cheer1",
+        flags: 0,
+    },
+    Emotion {
+        to_client: "cheer2",
+        flags: 0,
+    },
     // DANCE
-    Emotion { to_client: "dance1", flags: 0 },
-    Emotion { to_client: "dance2", flags: 0 },
-    Emotion { to_client: "dance3", flags: 0 },
-    Emotion { to_client: "dance4", flags: 0 },
-    Emotion { to_client: "dance5", flags: 0 },
-    Emotion { to_client: "dance6", flags: 0 },
+    Emotion {
+        to_client: "dance1",
+        flags: 0,
+    },
+    Emotion {
+        to_client: "dance2",
+        flags: 0,
+    },
+    Emotion {
+        to_client: "dance3",
+        flags: 0,
+    },
+    Emotion {
+        to_client: "dance4",
+        flags: 0,
+    },
+    Emotion {
+        to_client: "dance5",
+        flags: 0,
+    },
+    Emotion {
+        to_client: "dance6",
+        flags: 0,
+    },
     // END_OF_DANCE
-    Emotion { to_client: "congratulation", flags: 0 },
-    Emotion { to_client: "forgive", flags: 0 },
-    Emotion { to_client: "angry", flags: 0 },
-    Emotion { to_client: "attractive", flags: 0 },
-    Emotion { to_client: "sad", flags: 0 },
-    Emotion { to_client: "shy", flags: 0 },
-    Emotion { to_client: "cheerup", flags: 0 },
-    Emotion { to_client: "banter", flags: 0 },
-    Emotion { to_client: "joy", flags: 0 },
+    Emotion {
+        to_client: "congratulation",
+        flags: 0,
+    },
+    Emotion {
+        to_client: "forgive",
+        flags: 0,
+    },
+    Emotion {
+        to_client: "angry",
+        flags: 0,
+    },
+    Emotion {
+        to_client: "attractive",
+        flags: 0,
+    },
+    Emotion {
+        to_client: "sad",
+        flags: 0,
+    },
+    Emotion {
+        to_client: "shy",
+        flags: 0,
+    },
+    Emotion {
+        to_client: "cheerup",
+        flags: 0,
+    },
+    Emotion {
+        to_client: "banter",
+        flags: 0,
+    },
+    Emotion {
+        to_client: "joy",
+        flags: 0,
+    },
 ];
 
 /// Permisos de emoción (parity `s_emotion_set`, cmd_emotion.cpp:42):
@@ -121,7 +191,10 @@ fn gc_chat(chat_type: u8, empire: u8, payload: &[u8]) -> Vec<u8> {
 
 async fn info(session: &mut Session, text: &str) -> Result<(), String> {
     let pkt = gc_chat(CHAT_TYPE_INFO, session.empire, text.as_bytes());
-    session.send(&pkt).await.map_err(|e| format!("enviando GC_CHAT (emoción info): {e}"))
+    session
+        .send(&pkt)
+        .await
+        .map_err(|e| format!("enviando GC_CHAT (emoción info): {e}"))
 }
 
 /// Punto de entrada desde el hook de comandos de chat.rs: `emotion_allow` +
@@ -139,7 +212,10 @@ pub async fn try_handle_command(
     if name == "emotion_allow" {
         return Ok(Some(do_emotion_allow(session, args).await?));
     }
-    let Some(e) = TABLE.iter().find(|e| e.to_client.eq_ignore_ascii_case(name)) else {
+    let Some(e) = TABLE
+        .iter()
+        .find(|e| e.to_client.eq_ignore_ascii_case(name))
+    else {
         return Ok(None);
     };
     do_emotion(session, e.to_client, e.flags, args).await?;
@@ -168,11 +244,7 @@ async fn do_emotion(
 ) -> Result<(), String> {
     // Montado → rechazo (parity :98-106 — IsRiding; el flag del row).
     if session.row().horse_riding != 0 {
-        info(
-            session,
-            "You cannot express emotions while riding.",
-        )
-        .await?;
+        info(session, "You cannot express emotions while riding.").await?;
         return Ok(());
     }
     let need_pc = flags & NEED_PC != 0;
@@ -230,17 +302,27 @@ async fn do_emotion(
                 return Ok(());
             }
             if (flags & OTHER_SEX_ONLY) != 0 && !other_sex_ok(sex_of(my_vid), sex_of(vid)) {
-                info(session, "You can only do this with someone of the opposite sex.").await?;
+                info(
+                    session,
+                    "You can only do this with someone of the opposite sex.",
+                )
+                .await?;
                 return Ok(());
             }
             if need_pc {
-                let allowed = allows().lock().expect("emotion allow lock").contains(&(vid, my_vid));
+                let allowed = allows()
+                    .lock()
+                    .expect("emotion allow lock")
+                    .contains(&(vid, my_vid));
                 let married = is_married_to(my_vid, vid); // stub matrimonio (parity :157-169)
                 if !allowed && !married {
                     info(session, "This action requires mutual consent.").await?;
                     return Ok(());
                 }
-                allows().lock().expect("emotion allow lock").insert((my_vid, vid));
+                allows()
+                    .lock()
+                    .expect("emotion allow lock")
+                    .insert((my_vid, vid));
             }
             vid
         }
@@ -252,7 +334,10 @@ async fn do_emotion(
     // el rango del view 5500 (misma divergencia C-03 del broadcast TALKING).
     let payload = format!("{to_client} {my_vid} {victim_vid}");
     let pkt = gc_chat(CHAT_TYPE_COMMAND, session.empire, payload.as_bytes());
-    session.send(&pkt).await.map_err(|e| format!("enviando GC_CHAT (emoción): {e}"))?;
+    session
+        .send(&pkt)
+        .await
+        .map_err(|e| format!("enviando GC_CHAT (emoción): {e}"))?;
     let sent = crate::channel::chat::broadcast_in_range(my_vid, my_map, my_x, my_y, &pkt);
     eprintln!(
         "server_realms: channel conn {}: emoción {to_client} de {} (víctima {args:?}) — echo + {sent} en rango",
@@ -263,6 +348,9 @@ async fn do_emotion(
 }
 
 #[cfg(test)]
+// TEST_LOCK serializa tests que comparten statics de canal: el guard de
+// std::Mutex viaja a través de los .await de los tests A PROPÓSITO.
+#[allow(clippy::await_holding_lock)]
 mod tests {
     use super::*;
     use std::time::Duration;
@@ -402,7 +490,10 @@ mod tests {
     async fn riding_rejects_emotions() {
         let _g = TEST_LOCK.lock().unwrap();
         let (mut a, mut a_sock) = test_session(601, "Rider", 70, 0, 0, 1).await;
-        try_handle_command(&mut a, "clap").await.unwrap().expect("comando social");
+        try_handle_command(&mut a, "clap")
+            .await
+            .unwrap()
+            .expect("comando social");
         let pkt = read_packet(&mut a_sock).await;
         assert_eq!(pkt[0], header::GC_CHAT);
         assert_eq!(pkt[3], CHAT_TYPE_INFO, "INFO de rechazo");
@@ -416,13 +507,19 @@ mod tests {
         let _g = TEST_LOCK.lock().unwrap();
         let (mut a, mut a_sock) = test_session(611, "Kisser", 71, 0, 0, 0).await;
         // Sin argumento.
-        try_handle_command(&mut a, "kiss").await.unwrap().expect("social");
+        try_handle_command(&mut a, "kiss")
+            .await
+            .unwrap()
+            .expect("social");
         let pkt = read_packet(&mut a_sock).await;
         assert_eq!(pkt[3], CHAT_TYPE_INFO);
         assert_eq!(&pkt[9..], b"There is no such person.");
         // Con argumento de alguien FUERA del view (9000,9000).
         let (_far, _f_sock) = test_session(612, "FarAway", 71, 9000, 9000, 0).await;
-        try_handle_command(&mut a, "kiss FarAway").await.unwrap().expect("social");
+        try_handle_command(&mut a, "kiss FarAway")
+            .await
+            .unwrap()
+            .expect("social");
         let pkt = read_packet(&mut a_sock).await;
         assert_eq!(pkt[3], CHAT_TYPE_INFO);
         assert_eq!(&pkt[9..], b"There is no such person.");
@@ -437,18 +534,31 @@ mod tests {
         let (mut a, mut a_sock) = test_session(621, "Alice", 72, 0, 0, 0).await;
         let (mut b, _b_sock) = test_session(622, "Bob", 72, 300, 400, 0).await; // d=500 (borde inclusivo — parity >500 rechaza)
         // Sin permiso → INFO.
-        try_handle_command(&mut a, "kiss Bob").await.unwrap().expect("social");
+        try_handle_command(&mut a, "kiss Bob")
+            .await
+            .unwrap()
+            .expect("social");
         let pkt = read_packet(&mut a_sock).await;
         assert_eq!(pkt[3], CHAT_TYPE_INFO);
         assert_eq!(&pkt[9..], b"This action requires mutual consent.");
         // Bob permite a Alice: /emotion_allow <vid_de_Alice>.
-        try_handle_command(&mut b, "emotion_allow 621").await.unwrap().expect("allow");
+        try_handle_command(&mut b, "emotion_allow 621")
+            .await
+            .unwrap()
+            .expect("allow");
         // Ahora el kiss sale: echo COMMAND al actor + broadcast a Bob.
-        try_handle_command(&mut a, "kiss Bob").await.unwrap().expect("social");
+        try_handle_command(&mut a, "kiss Bob")
+            .await
+            .unwrap()
+            .expect("social");
         let echo = read_packet(&mut a_sock).await;
         assert_eq!(echo[0], header::GC_CHAT);
         assert_eq!(echo[3], CHAT_TYPE_COMMAND, "CHAT_TYPE_COMMAND");
-        assert_eq!(&echo[9..], format!("kiss 621 622").as_bytes(), "payload '<cmd> <vid> <vid_victima>'");
+        assert_eq!(
+            &echo[9..],
+            "kiss 621 622".to_string().as_bytes(),
+            "payload '<cmd> <vid> <vid_victima>'"
+        );
         let to_bob = tokio::time::timeout(Duration::from_secs(2), b.chat_rx.recv())
             .await
             .expect("Bob recibe el broadcast")
@@ -467,7 +577,10 @@ mod tests {
         let (mut a, mut a_sock) = test_session(631, "NearA", 73, 0, 0, 0).await;
         let (_near, _n_sock) = test_session(632, "TooClose", 73, 3, 4, 0).await;
         allows().lock().unwrap().insert((632, 631)); // TooClose permite a NearA
-        try_handle_command(&mut a, "kiss TooClose").await.unwrap().expect("social");
+        try_handle_command(&mut a, "kiss TooClose")
+            .await
+            .unwrap()
+            .expect("social");
         let pkt = read_packet(&mut a_sock).await;
         assert_eq!(pkt[3], CHAT_TYPE_INFO);
         assert_eq!(&pkt[9..], b"You are too close.");
@@ -476,14 +589,23 @@ mod tests {
         let (mut c, mut c_sock) = test_session(633, "FarA", 74, 0, 0, 0).await;
         let (_far, _f_sock) = test_session(634, "TooFar", 74, 500, 0, 0).await;
         allows().lock().unwrap().insert((634, 633)); // TooFar permite a FarA
-        try_handle_command(&mut c, "kiss TooFar").await.unwrap().expect("d=500 pasa");
+        try_handle_command(&mut c, "kiss TooFar")
+            .await
+            .unwrap()
+            .expect("d=500 pasa");
         let pkt = read_packet(&mut c_sock).await;
-        assert_eq!(pkt[3], CHAT_TYPE_COMMAND, "d=500 (borde) PASA (parity: >500 rechaza)");
+        assert_eq!(
+            pkt[3], CHAT_TYPE_COMMAND,
+            "d=500 (borde) PASA (parity: >500 rechaza)"
+        );
         assert_eq!(&pkt[9..], b"kiss 633 634");
 
         // d=501 → demasiado lejos.
         let (_f2, _f2_sock) = test_session(635, "TooFar2", 74, 501, 0, 0).await;
-        try_handle_command(&mut c, "kiss TooFar2").await.unwrap().expect("social");
+        try_handle_command(&mut c, "kiss TooFar2")
+            .await
+            .unwrap()
+            .expect("social");
         let pkt = read_packet(&mut c_sock).await;
         assert_eq!(pkt[3], CHAT_TYPE_INFO);
         assert_eq!(&pkt[9..], b"You are too far away.", "d=501 > 500 rechaza");
@@ -495,13 +617,19 @@ mod tests {
     async fn solo_emotion_broadcasts_with_zero_victim_and_unknown_returns_none() {
         let _g = TEST_LOCK.lock().unwrap();
         let (mut a, mut a_sock) = test_session(641, "Dancer", 75, 0, 0, 0).await;
-        try_handle_command(&mut a, "dance1").await.unwrap().expect("social");
+        try_handle_command(&mut a, "dance1")
+            .await
+            .unwrap()
+            .expect("social");
         let echo = read_packet(&mut a_sock).await;
         assert_eq!(echo[3], CHAT_TYPE_COMMAND);
         assert_eq!(&echo[9..], b"dance1 641 0");
         // Comando ajeno → None (el hook de chat.rs caerá al dispatch GM).
         assert!(
-            try_handle_command(&mut a, "warp 100 200").await.unwrap().is_none(),
+            try_handle_command(&mut a, "warp 100 200")
+                .await
+                .unwrap()
+                .is_none(),
             "'warp' no es un comando social"
         );
         // Alias coreano NO registrado (EUC-KR no tipeable en este cliente).
@@ -512,11 +640,22 @@ mod tests {
     #[test]
     fn verifier_other_sex_only_flag_and_logic() {
         assert!(TABLE.iter().find(|e| e.to_client == "kiss").unwrap().flags & OTHER_SEX_ONLY != 0);
-        assert!(TABLE.iter().find(|e| e.to_client == "french_kiss").unwrap().flags & OTHER_SEX_ONLY != 0);
+        assert!(
+            TABLE
+                .iter()
+                .find(|e| e.to_client == "french_kiss")
+                .unwrap()
+                .flags
+                & OTHER_SEX_ONLY
+                != 0
+        );
         assert!(!other_sex_ok(Some(0), Some(0)), "mismo sexo → rechaza");
         assert!(!other_sex_ok(Some(1), Some(1)));
         assert!(other_sex_ok(Some(0), Some(1)));
-        assert!(other_sex_ok(None, Some(0)), "sin sex (TODO) → allow fail-open");
+        assert!(
+            other_sex_ok(None, Some(0)),
+            "sin sex (TODO) → allow fail-open"
+        );
         assert!(!is_married_to(1, 2) || true, "stub existe");
     }
     #[test]

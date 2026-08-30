@@ -122,7 +122,11 @@ pub async fn create_accounts(
             )
             .await
             .map_err(|e| pg_err(&format!("PLAYER_INDEX upsert {login}"), &e))?;
-        out.push(BenchAccount { login, account_id, player_id });
+        out.push(BenchAccount {
+            login,
+            account_id,
+            player_id,
+        });
     }
     Ok(out)
 }
@@ -167,7 +171,9 @@ async fn upsert_character(
         .await
         .map_err(|e| pg_err(&format!("PLAYER find {login}"), &e))?;
     if let Some(row) = existing.first() {
-        return row.try_get(0).map_err(|e| format!("PLAYER find {login}: {e}"));
+        return row
+            .try_get(0)
+            .map_err(|e| format!("PLAYER find {login}: {e}"));
     }
     let c = PlayerCreate {
         account_id,
@@ -233,7 +239,10 @@ pub async fn cleanup_accounts(pg: &str, prefix: &str) -> Result<usize, String> {
         let _ = connection.await;
     });
     let pattern = format!("{prefix}%");
-    let tx = client.transaction().await.map_err(|e| pg_err("cleanup tx begin", &e))?;
+    let tx = client
+        .transaction()
+        .await
+        .map_err(|e| pg_err("cleanup tx begin", &e))?;
     tx.execute(
         "DELETE FROM player.player WHERE account_id IN \
          (SELECT id FROM account.account WHERE login LIKE $1)",
@@ -249,10 +258,15 @@ pub async fn cleanup_accounts(pg: &str, prefix: &str) -> Result<usize, String> {
     .await
     .map_err(|e| pg_err("cleanup index", &e))?;
     let rows = tx
-        .execute("DELETE FROM account.account WHERE login LIKE $1", &[&pattern])
+        .execute(
+            "DELETE FROM account.account WHERE login LIKE $1",
+            &[&pattern],
+        )
         .await
         .map_err(|e| pg_err("cleanup account", &e))?;
-    tx.commit().await.map_err(|e| pg_err("cleanup tx commit", &e))?;
+    tx.commit()
+        .await
+        .map_err(|e| pg_err("cleanup tx commit", &e))?;
     Ok(rows as usize)
 }
 
@@ -285,9 +299,15 @@ mod tests {
         // 13 chars → "abcdefghijklm9999" = 17 > 16 → error.
         assert!(validate_prefix("abcdefghijklm").is_err(), "login excede 16");
         // No alfanuméricos → el auth los rechaza (input_auth.cpp:13-53).
-        assert!(validate_prefix("bench_").is_err(), "underscore no alfanumérico");
+        assert!(
+            validate_prefix("bench_").is_err(),
+            "underscore no alfanumérico"
+        );
         // 20 chars → nombre "abcdefghijklmnopqrst9999c" = 25 > 24 → error.
-        assert!(validate_prefix("abcdefghijklmnopqrst").is_err(), "nombre excede 24");
+        assert!(
+            validate_prefix("abcdefghijklmnopqrst").is_err(),
+            "nombre excede 24"
+        );
     }
 
     /// Plantilla: los blobs del personaje tienen el tamaño REAL del wire
@@ -306,7 +326,10 @@ mod tests {
         // con el shape del SQL del índice (constante del flujo).
         let sql = "INSERT INTO player.player_index (id, pid1, empire) VALUES ($1, $2, 1) \
                    ON CONFLICT (id) DO UPDATE SET pid1 = EXCLUDED.pid1, empire = EXCLUDED.empire";
-        assert!(sql.contains("ON CONFLICT (id) DO UPDATE SET pid1"), "índice idempotente");
+        assert!(
+            sql.contains("ON CONFLICT (id) DO UPDATE SET pid1"),
+            "índice idempotente"
+        );
     }
 
     /// Live-DB gated: requiere el PostgreSQL nativo (127.0.0.1:5432, mt2/mt2,
@@ -316,14 +339,17 @@ mod tests {
     async fn create_login_cleanup_roundtrip_live_pg() {
         let prefix = format!("bt{}", std::process::id()); // ≤ 11 chars (validación)
         let pg = DEFAULT_PG;
-        let accs = create_accounts(pg, &prefix, 2, "1234").await.expect("create");
+        let accs = create_accounts(pg, &prefix, 2, "1234")
+            .await
+            .expect("create");
         assert_eq!(accs.len(), 2);
         // El login del canal acepta las credenciales (AccountRepo::login).
         for a in &accs {
-            let ok = database::account::AccountRepo::new(database::pool::new_pool(pg, 2).expect("pool"))
-                .login(&a.login, "1234")
-                .await
-                .expect("login query");
+            let ok =
+                database::account::AccountRepo::new(database::pool::new_pool(pg, 2).expect("pool"))
+                    .login(&a.login, "1234")
+                    .await
+                    .expect("login query");
             assert!(ok.is_some(), "{} debe loguear con 1234", a.login);
         }
         let n = cleanup_accounts(pg, &prefix).await.expect("cleanup");

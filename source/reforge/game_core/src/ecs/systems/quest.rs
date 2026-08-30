@@ -260,7 +260,7 @@ quest branch
     fn world_login_event_produces_script() {
         let mut w = world_with(42);
         join(&mut w); // vid 2, nivel 5 (harness)
-                      // Carga de quests + runtime del jugador.
+        // Carga de quests + runtime del jugador.
         w.process_intent(
             QuestIntent::Load {
                 text: QUEST.into(),
@@ -335,10 +335,12 @@ quest branch
         let QuestEvent::Run {
             script, suspended, ..
         } = q;
-        assert!(script
-            .as_deref()
-            .unwrap_or("")
-            .contains("[QUESTION 1;_20_say|2;_30_say]"));
+        assert!(
+            script
+                .as_deref()
+                .unwrap_or("")
+                .contains("[QUESTION 1;_20_say|2;_30_say]")
+        );
         assert!(suspended);
         // La respuesta 1 → la rama warp.
         let events = w.process_intent(

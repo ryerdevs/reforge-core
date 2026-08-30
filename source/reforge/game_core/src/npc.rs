@@ -48,8 +48,8 @@
 
 use database::npc::MobRow;
 use protocol::{
-    TPacketGCCharacterAdd, TPacketGCCharacterAdditionalInfo, CHARACTER_NAME_MAX_LEN,
-    CHR_EQUIPPART_NUM,
+    CHARACTER_NAME_MAX_LEN, CHR_EQUIPPART_NUM, TPacketGCCharacterAdd,
+    TPacketGCCharacterAdditionalInfo,
 };
 
 /// `CHAR_TYPE_NPC` — `length.h:330` (enum ECharType: MONSTER=0, **NPC=1**,
@@ -164,8 +164,8 @@ pub fn load_map_spawns(map_id: u32, map_path: &str) -> Result<Vec<SpawnEntry>, S
         .ok_or_else(|| format!("map {map_id} no está en {map_path}/index"))?;
 
     let dir = format!("{map_path}/{map_name}");
-    let setting = read_lossy(&format!("{dir}/Setting.txt"))
-        .map_err(|e| format!("{dir}/Setting.txt: {e}"))?;
+    let setting =
+        read_lossy(&format!("{dir}/Setting.txt")).map_err(|e| format!("{dir}/Setting.txt: {e}"))?;
     let base = setting
         .lines()
         .find_map(|l| {
@@ -223,15 +223,17 @@ pub fn load_map_spawns(map_id: u32, map_path: &str) -> Result<Vec<SpawnEntry>, S
             // resuelven a sus miembros (cada aparición = un mob, agregado
             // en count dentro de esta entrada).
             let (members, kind) = match raw.kind {
-                SpawnKind::Mob | SpawnKind::Anywhere => (
-                    vec![(raw.vnum as u32, raw.max_count as u32)],
-                    raw.kind,
-                ),
+                SpawnKind::Mob | SpawnKind::Anywhere => {
+                    (vec![(raw.vnum as u32, raw.max_count as u32)], raw.kind)
+                }
                 SpawnKind::Group => {
                     let Some(g) = groups.get(&(raw.vnum as u32)) else {
                         continue; // parity NOT_EXIST_GROUP_VNUM (sin spawn)
                     };
-                    (aggregate_members(&g.members, raw.max_count as u32), SpawnKind::Mob)
+                    (
+                        aggregate_members(&g.members, raw.max_count as u32),
+                        SpawnKind::Mob,
+                    )
                 }
                 SpawnKind::GroupGroup => {
                     let Some(gg) = ggs.get(&(raw.vnum as u32)) else {
@@ -248,7 +250,16 @@ pub fn load_map_spawns(map_id: u32, map_path: &str) -> Result<Vec<SpawnEntry>, S
                 }
             };
             for (vnum, count) in members {
-                out.push(SpawnEntry { vnum, x, y, count, kind, w_x: raw.w_x, w_y: raw.w_y, time: raw.time });
+                out.push(SpawnEntry {
+                    vnum,
+                    x,
+                    y,
+                    count,
+                    kind,
+                    w_x: raw.w_x,
+                    w_y: raw.w_y,
+                    time: raw.time,
+                });
             }
         }
     }
@@ -311,14 +322,21 @@ impl MobCache {
         Ok(spawns
             .iter()
             .filter(|e| matches!(e.kind, SpawnKind::Mob | SpawnKind::Anywhere))
-            .filter_map(|e| self.rows.get(&i64::from(e.vnum)).map(|row| (*e, row.clone())))
+            .filter_map(|e| {
+                self.rows
+                    .get(&i64::from(e.vnum))
+                    .map(|row| (*e, row.clone()))
+            })
             .collect())
     }
 }
 
 /// Vnums DISTINTOS de las entradas spawnables que NO están en la caché
 /// (los que la resolución debe cargar en el batch).
-fn missing_vnums(spawns: &[SpawnEntry], cache: &std::collections::HashMap<i64, MobRow>) -> Vec<i64> {
+fn missing_vnums(
+    spawns: &[SpawnEntry],
+    cache: &std::collections::HashMap<i64, MobRow>,
+) -> Vec<i64> {
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
     for e in spawns {
@@ -357,12 +375,22 @@ struct MobGroupGroup {
 ///
 /// Formato (parity `CTextFileLoader::LoadGroup`, text_file_loader.cpp:56-148
 /// + `SplitLine`, file_loader.cpp): nodos `Group <name>` con cuerpo
-/// `{ key valor... }`; claves en minúscula (stl_lowers); tokens entre
-/// comillas `"..."`; `#` al inicio de línea = comentario; líneas en blanco
-/// ignoradas. `group.txt`: `leader <name> <vnum>` + `vnum <id>` + `k <name>
-/// <vnum>`; `group_group.txt`: `vnum <id>` + `k <grupo> <prob>`.
-/// Archivos ausentes -> `Err` (parity: `thecore_shutdown()` si Load falla).
-fn load_groups(map_path: &str) -> Result<(std::collections::HashMap<u32, MobGroup>, std::collections::HashMap<u32, MobGroupGroup>), String> {
+///   `{ key valor... }`; claves en minúscula (stl_lowers); tokens entre
+///   comillas `"..."`; `#` al inicio de línea = comentario; líneas en blanco
+///   ignoradas. `group.txt`: `leader <name> <vnum>` + `vnum <id>` + `k <name>
+///   <vnum>`; `group_group.txt`: `vnum <id>` + `k <grupo> <prob>`.
+///   Archivos ausentes -> `Err` (parity: `thecore_shutdown()` si Load falla).
+// Par de tablas de grupos (group.txt, group_group.txt) — una sola llamada.
+#[allow(clippy::type_complexity)]
+fn load_groups(
+    map_path: &str,
+) -> Result<
+    (
+        std::collections::HashMap<u32, MobGroup>,
+        std::collections::HashMap<u32, MobGroupGroup>,
+    ),
+    String,
+> {
     let mut groups = std::collections::HashMap::new();
     let mut ggs = std::collections::HashMap::new();
 
@@ -372,7 +400,9 @@ fn load_groups(map_path: &str) -> Result<(std::collections::HashMap<u32, MobGrou
         let Some(vnum) = kv.get("vnum").and_then(|t| t.first()) else {
             continue; // parity: sys_err "no vnum, node" y sigue
         };
-        let Ok(vnum) = vnum.parse::<u32>() else { continue };
+        let Ok(vnum) = vnum.parse::<u32>() else {
+            continue;
+        };
         let Some(leader) = kv.get("leader") else {
             continue; // parity: sys_err "no leader" y sigue
         };
@@ -397,16 +427,22 @@ fn load_groups(map_path: &str) -> Result<(std::collections::HashMap<u32, MobGrou
         let Some(vnum) = kv.get("vnum").and_then(|t| t.first()) else {
             continue; // parity: sys_err "no vnum" y sigue
         };
-        let Ok(vnum) = vnum.parse::<u32>() else { continue };
-        let mut gg = MobGroupGroup { vnum, groups: Vec::new() };
+        let Ok(vnum) = vnum.parse::<u32>() else {
+            continue;
+        };
+        let mut gg = MobGroupGroup {
+            vnum,
+            groups: Vec::new(),
+        };
         let mut k = 1;
         while let Some(toks) = kv.get(&k.to_string()) {
             let gv = toks.first().and_then(|t| t.parse::<u32>().ok());
             let prob = toks.get(1).and_then(|t| t.parse::<u32>().ok()).unwrap_or(1);
             if let Some(gv) = gv
-                && prob != 0 {
-                    gg.groups.push((gv, prob)); // parity AddMember prob==0 skip
-                }
+                && prob != 0
+            {
+                gg.groups.push((gv, prob)); // parity AddMember prob==0 skip
+            }
             k += 1;
         }
         ggs.insert(vnum, gg);
@@ -423,7 +459,9 @@ fn parse_loader_nodes(text: &str) -> Vec<(String, std::collections::HashMap<Stri
     let mut nodes = Vec::new();
     let mut cur: Option<(String, std::collections::HashMap<String, Vec<String>>)> = None;
     for line in text.lines() {
-        let Some(toks) = loader_line_tokens(line) else { continue };
+        let Some(toks) = loader_line_tokens(line) else {
+            continue;
+        };
         match toks[0].to_ascii_lowercase().as_str() {
             "{" => continue,
             "}" => {
@@ -435,13 +473,17 @@ fn parse_loader_nodes(text: &str) -> Vec<(String, std::collections::HashMap<Stri
                 if let Some(node) = cur.take() {
                     nodes.push(node);
                 }
-                cur = Some((toks.get(1).cloned().unwrap_or_default(), std::collections::HashMap::new()));
+                cur = Some((
+                    toks.get(1).cloned().unwrap_or_default(),
+                    std::collections::HashMap::new(),
+                ));
             }
             key => {
                 if let Some((_, kv)) = cur.as_mut()
-                    && toks.len() > 1 {
-                        kv.insert(key.to_string(), toks[1..].to_vec());
-                    }
+                    && toks.len() > 1
+                {
+                    kv.insert(key.to_string(), toks[1..].to_vec());
+                }
             }
         }
     }
@@ -549,9 +591,7 @@ fn parse_regen_record(tokens: &[&str], i: &mut usize) -> Result<Option<RegenRaw>
                     b'r' => SpawnKind::GroupGroup,
                     b's' => SpawnKind::Anywhere,
                     other => {
-                        return Err(format!(
-                            "regen: tipo desconocido '{other}' (token '{w}')"
-                        ))
+                        return Err(format!("regen: tipo desconocido '{other}' (token '{w}')"));
                     }
                 };
                 mode += 1;
@@ -659,13 +699,16 @@ fn regen_tokens(text: &str) -> Vec<&str> {
         out.push(&text[start..i]);
     }
     out
-}/// Parseo decimal estricto de un token del regen (parity `str_to_number`).
+}
+/// Parseo decimal estricto de un token del regen (parity `str_to_number`).
 fn parse_i32(w: &str, what: &str) -> Result<i32, String> {
-    w.parse().map_err(|_| format!("regen: {what} '{w}' no es un entero"))
+    w.parse()
+        .map_err(|_| format!("regen: {what} '{w}' no es un entero"))
 }
 
 fn parse_u8(w: &str, what: &str) -> Result<u8, String> {
-    w.parse().map_err(|_| format!("regen: {what} '{w}' no es un byte"))
+    w.parse()
+        .map_err(|_| format!("regen: {what} '{w}' no es un byte"))
 }
 
 /// Tiempo del regen (parity regen.cpp:184-217): dígitos acumulados y
@@ -683,15 +726,21 @@ fn parse_time(w: &str) -> Result<u32, String> {
                     .ok_or_else(|| format!("regen: time '{w}' desborda"))?;
             }
             b'h' => {
-                total = total.checked_add(acc * 3600).ok_or_else(|| format!("regen: time '{w}' desborda"))?;
+                total = total
+                    .checked_add(acc * 3600)
+                    .ok_or_else(|| format!("regen: time '{w}' desborda"))?;
                 acc = 0;
             }
             b'm' => {
-                total = total.checked_add(acc * 60).ok_or_else(|| format!("regen: time '{w}' desborda"))?;
+                total = total
+                    .checked_add(acc * 60)
+                    .ok_or_else(|| format!("regen: time '{w}' desborda"))?;
                 acc = 0;
             }
             b's' => {
-                total = total.checked_add(acc).ok_or_else(|| format!("regen: time '{w}' desborda"))?;
+                total = total
+                    .checked_add(acc)
+                    .ok_or_else(|| format!("regen: time '{w}' desborda"))?;
                 acc = 0;
             }
             other => return Err(format!("regen: time '{w}': carácter '{other}' inválido")),
@@ -738,11 +787,7 @@ fn parse_time(w: &str) -> Result<u32, String> {
 /// `map_id` no participa en el wire (parity: `EncodeInsertPacket` no lo
 /// lleva); se mantiene en la firma por el contrato del lane (estado por
 /// mapa del runtime F5).
-pub fn entry_spawns(
-    map_id: u32,
-    mobs: &[(SpawnEntry, MobRow)],
-    vid_base: u32,
-) -> Vec<Vec<u8>> {
+pub fn entry_spawns(map_id: u32, mobs: &[(SpawnEntry, MobRow)], vid_base: u32) -> Vec<Vec<u8>> {
     let _ = map_id; // no participa en el wire (ver doc)
     let mut out = Vec::new();
     let mut vid = vid_base;
@@ -784,7 +829,7 @@ fn character_add_packets(entry: &SpawnEntry, mob: &MobRow, vid: u32, b_type: u8)
             // el cliente lo usa para la animación del golpe). Era 0 fijo
             // (GAP cerrado con la selección de la columna).
             mob.attack_speed as u8,
-            0, // b_state_flag (runtime F5)
+            0,      // b_state_flag (runtime F5)
             [0, 0], // dw_affect_flag (runtime F5)
         )
         .to_bytes()
@@ -924,22 +969,32 @@ Group\tdeposito
     /// ARRIBA de `map/` — `LocaleService_GetBasePath()`, mob_manager.cpp:92-95).
     /// El tag evita colisiones entre tests paralelos (mismo proceso).
     fn fixture_dir(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("m2_f5_spawn_test_{}_{tag}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("m2_f5_spawn_test_{}_{tag}", std::process::id()));
         let map = dir.join("map").join("metin2_map_c1");
         std::fs::create_dir_all(&map).expect("tmp dir");
-        std::fs::write(dir.join("map").join("index"), "1 metin2_map_a1\n41 metin2_map_c1\n43 metin2_map_c3\n")
-            .expect("index");
+        std::fs::write(
+            dir.join("map").join("index"),
+            "1 metin2_map_a1\n41 metin2_map_c1\n43 metin2_map_c3\n",
+        )
+        .expect("index");
         std::fs::write(
             map.join("Setting.txt"),
             "ScriptType\tMapSetting\n\nCellScale\t200\n\nMapSize\t4\t5\nBasePosition\t921600\t204800\n",
         )
         .expect("setting");
-        std::fs::write(map.join("Town.txt"), "480 736\n125 1113\n125 1113\n480 736\n")
-            .expect("town");
+        std::fs::write(
+            map.join("Town.txt"),
+            "480 736\n125 1113\n125 1113\n480 736\n",
+        )
+        .expect("town");
         std::fs::write(map.join("regen.txt"), REGEN_LINE).expect("regen");
         std::fs::write(map.join("npc.txt"), NPC_LINES).expect("npc");
-        std::fs::write(map.join("boss.txt"), "g\t374\t1111\t100\t100\t0\t0\t1000s\t100\t1\t12007\n")
-            .expect("boss");
+        std::fs::write(
+            map.join("boss.txt"),
+            "g\t374\t1111\t100\t100\t0\t0\t1000s\t100\t1\t12007\n",
+        )
+        .expect("boss");
         std::fs::write(dir.join("group.txt"), GROUP_TXT).expect("group");
         std::fs::write(dir.join("group_group.txt"), GROUP_GROUP_TXT).expect("group_group");
         dir
@@ -963,16 +1018,43 @@ Group\tdeposito
         let e0 = entries[0];
         assert_eq!(
             e0,
-            SpawnEntry { vnum: 101, x: 957600, y: 247300, count: 3, kind: SpawnKind::Mob, w_x: 10, w_y: 10, time: 5 },
+            SpawnEntry {
+                vnum: 101,
+                x: 957600,
+                y: 247300,
+                count: 3,
+                kind: SpawnKind::Mob,
+                w_x: 10,
+                w_y: 10,
+                time: 5
+            },
             "Perro Salvaje 101: líder + 2 apariciones (líder + líneas 1..n); rect del regen + intervalo 5s"
         );
         assert_eq!(
             entries[1],
-            SpawnEntry { vnum: 2101, x: 957600, y: 247300, count: 1, kind: SpawnKind::Mob, w_x: 10, w_y: 10, time: 5 }
+            SpawnEntry {
+                vnum: 2101,
+                x: 957600,
+                y: 247300,
+                count: 1,
+                kind: SpawnKind::Mob,
+                w_x: 10,
+                w_y: 10,
+                time: 5
+            }
         );
         assert_eq!(
             entries[2],
-            SpawnEntry { vnum: 171, x: 957600, y: 247300, count: 1, kind: SpawnKind::Mob, w_x: 10, w_y: 10, time: 5 },
+            SpawnEntry {
+                vnum: 171,
+                x: 957600,
+                y: 247300,
+                count: 1,
+                kind: SpawnKind::Mob,
+                w_x: 10,
+                w_y: 10,
+                time: 5
+            },
             "segundo grupo del gg (todos los grupos — fauna completa)"
         );
         // m 444 623 -> NPC 20340 en el centro del punto (sin rect ni time).
@@ -1023,16 +1105,36 @@ Group\tdeposito
         // + intervalo 1000s del grupo).
         assert_eq!(
             entries[7],
-            SpawnEntry { vnum: 191, x: 959000, y: 315900, count: 1, kind: SpawnKind::Mob, w_x: 100, w_y: 100, time: 1000 }
+            SpawnEntry {
+                vnum: 191,
+                x: 959000,
+                y: 315900,
+                count: 1,
+                kind: SpawnKind::Mob,
+                w_x: 100,
+                w_y: 100,
+                time: 1000
+            }
         );
         assert_eq!(
             entries[8],
-            SpawnEntry { vnum: 20029, x: 959000, y: 315900, count: 2, kind: SpawnKind::Mob, w_x: 100, w_y: 100, time: 1000 },
+            SpawnEntry {
+                vnum: 20029,
+                x: 959000,
+                y: 315900,
+                count: 2,
+                kind: SpawnKind::Mob,
+                w_x: 100,
+                w_y: 100,
+                time: 1000
+            },
             "2 apariciones de Pony en el grupo"
         );
         // El resultado NO contiene kinds de grupo (colisión resuelta).
         assert!(
-            entries.iter().all(|e| matches!(e.kind, SpawnKind::Mob | SpawnKind::Anywhere)),
+            entries
+                .iter()
+                .all(|e| matches!(e.kind, SpawnKind::Mob | SpawnKind::Anywhere)),
             "solo Mob/Anywhere: {entries:#?}"
         );
     }
@@ -1076,7 +1178,11 @@ Group\tdeposito
     fn loader_line_tokens_quotes_and_comments() {
         assert_eq!(
             loader_line_tokens("Leader\t\"Hungriger Wildhund\"\t171"),
-            Some(vec!["Leader".into(), "Hungriger Wildhund".into(), "171".into()]),
+            Some(vec![
+                "Leader".into(),
+                "Hungriger Wildhund".into(),
+                "171".into()
+            ]),
             "token entre comillas sin las comillas (parity SplitLine)"
         );
         assert_eq!(loader_line_tokens("# comentario"), None);
@@ -1094,11 +1200,19 @@ Group\tdeposito
         let tokens = regen_tokens(text);
         assert_eq!(tokens.len(), 22, "{tokens:?}");
         let mut i = 0;
-        let a = parse_regen_record(&tokens, &mut i).expect("a").expect("some");
+        let a = parse_regen_record(&tokens, &mut i)
+            .expect("a")
+            .expect("some");
         assert_eq!((a.c_x, a.c_y, a.vnum), (1, 2, 3));
-        let b = parse_regen_record(&tokens, &mut i).expect("b").expect("some");
+        let b = parse_regen_record(&tokens, &mut i)
+            .expect("b")
+            .expect("some");
         assert_eq!((b.c_x, b.c_y, b.vnum, b.max_count), (4, 5, 6, 2));
-        assert_eq!(parse_regen_record(&tokens, &mut i).expect("eof"), None, "EOF");
+        assert_eq!(
+            parse_regen_record(&tokens, &mut i).expect("eof"),
+            None,
+            "EOF"
+        );
     }
 
     /// Tipos del regen + time (parity read_line / regen_load:682-693).
@@ -1116,7 +1230,9 @@ Group\tdeposito
             let text = format!("{tok}\t1\t2\t0\t0\t0\t0\t1m\t100\t1\t9\n");
             let tokens = regen_tokens(&text);
             let mut i = 0;
-            let rec = parse_regen_record(&tokens, &mut i).expect("rec").expect("some");
+            let rec = parse_regen_record(&tokens, &mut i)
+                .expect("rec")
+                .expect("some");
             assert_eq!(rec.kind, kind, "tipo '{tok}'");
         }
         // e -> exception: no es un spawn (Ok(None)).
@@ -1142,16 +1258,42 @@ Group\tdeposito
     #[test]
     fn entry_spawns_npc_vs_monster() {
         // NPC real del mapa 41: 20340 "Maestro Fuerza Corporal" (type=1).
-        let npc = SpawnEntry { vnum: 20340, x: 966000, y: 267100, count: 1, kind: SpawnKind::Mob, w_x: 0, w_y: 0, time: 0 };
+        let npc = SpawnEntry {
+            vnum: 20340,
+            x: 966000,
+            y: 267100,
+            count: 1,
+            kind: SpawnKind::Mob,
+            w_x: 0,
+            w_y: 0,
+            time: 0,
+        };
         let row = mob_row(20340, 1, &[0xB9, 0xD6, 0xBC, 0xBC]);
         let pkts = entry_spawns(41, &[(npc, row)], 10);
         assert_eq!(pkts.len(), 2, "NPC -> add + addInfo");
         assert_eq!(pkts[0].len(), TPacketGCCharacterAdd::SIZE, "37 B");
         assert_eq!(pkts[0][0], TPacketGCCharacterAdd::HEADER, "header 1");
-        assert_eq!(pkts[1].len(), TPacketGCCharacterAdditionalInfo::SIZE, "70 B");
-        assert_eq!(pkts[1][0], TPacketGCCharacterAdditionalInfo::HEADER, "header 136");
+        assert_eq!(
+            pkts[1].len(),
+            TPacketGCCharacterAdditionalInfo::SIZE,
+            "70 B"
+        );
+        assert_eq!(
+            pkts[1][0],
+            TPacketGCCharacterAdditionalInfo::HEADER,
+            "header 136"
+        );
         // Monster real del mapa 41: 5001 "Pirata Tanaka" (type=0).
-        let mon = SpawnEntry { vnum: 5001, x: 969600, y: 278400, count: 1, kind: SpawnKind::Mob, w_x: 0, w_y: 0, time: 0 };
+        let mon = SpawnEntry {
+            vnum: 5001,
+            x: 969600,
+            y: 278400,
+            count: 1,
+            kind: SpawnKind::Mob,
+            w_x: 0,
+            w_y: 0,
+            time: 0,
+        };
         let mon_row = mob_row(5001, 0, b"Pirata Tanaka");
         let pkts = entry_spawns(41, &[(mon, mon_row)], 10);
         assert_eq!(pkts.len(), 1, "monster -> solo add");
@@ -1163,15 +1305,32 @@ Group\tdeposito
     /// s_kNetActorData (slot único) y los suelta con el addInfo del VID.
     #[test]
     fn entry_spawns_count_and_vid_order() {
-        let npc = SpawnEntry { vnum: 20001, x: 950800, y: 286000, count: 3, kind: SpawnKind::Mob, w_x: 0, w_y: 0, time: 0 };
+        let npc = SpawnEntry {
+            vnum: 20001,
+            x: 950800,
+            y: 286000,
+            count: 3,
+            kind: SpawnKind::Mob,
+            w_x: 0,
+            w_y: 0,
+            time: 0,
+        };
         let row = mob_row(20001, 1, b"Alquimista");
         let pkts = entry_spawns(41, &[(npc, row)], 100);
         assert_eq!(pkts.len(), 6, "3 copias x 2 paquetes");
         for (i, pair) in pkts.chunks(2).enumerate() {
             let add = &pair[0];
             let info = &pair[1];
-            assert_eq!(&add[1..5], &(100u32 + i as u32).to_le_bytes(), "VID add {i}");
-            assert_eq!(&info[1..5], &(100u32 + i as u32).to_le_bytes(), "VID addInfo {i}");
+            assert_eq!(
+                &add[1..5],
+                &(100u32 + i as u32).to_le_bytes(),
+                "VID add {i}"
+            );
+            assert_eq!(
+                &info[1..5],
+                &(100u32 + i as u32).to_le_bytes(),
+                "VID addInfo {i}"
+            );
             assert_eq!(add[21], CHAR_TYPE_NPC, "bType@21");
             assert_eq!(&add[22..26], &20001u32.to_le_bytes(), "wRaceNum@22 = vnum");
             // x/y UNITS crudos en el wire (long@9/@13).
@@ -1185,11 +1344,24 @@ Group\tdeposito
     /// — parity GetName() = szLocaleName (strlcpy de 25 bytes).
     #[test]
     fn entry_spawns_add_info_name_bytes() {
-        let npc = SpawnEntry { vnum: 20340, x: 966000, y: 267100, count: 1, kind: SpawnKind::Mob, w_x: 0, w_y: 0, time: 0 };
+        let npc = SpawnEntry {
+            vnum: 20340,
+            x: 966000,
+            y: 267100,
+            count: 1,
+            kind: SpawnKind::Mob,
+            w_x: 0,
+            w_y: 0,
+            time: 0,
+        };
         // "Maestro..." CP949 simulado: 3 bytes + resto del nombre corto.
         let row = mob_row(20340, 1, &[0xB9, 0xD6, 0xBC, 0xBC, 0x00]);
         let pkts = entry_spawns(41, &[(npc, row)], 1);
-        assert_eq!(&pkts[1][5..9], &[0xB9, 0xD6, 0xBC, 0xBC], "name@5 bytes crudos");
+        assert_eq!(
+            &pkts[1][5..9],
+            &[0xB9, 0xD6, 0xBC, 0xBC],
+            "name@5 bytes crudos"
+        );
         assert_eq!(pkts[1][9], 0, "NUL tras el nombre");
         // locale_name vacío -> name zeroed (defensivo).
         let row = mob_row(20340, 1, &[]);
@@ -1199,7 +1371,10 @@ Group\tdeposito
         let long = vec![0xAA; 40];
         let row = mob_row(20340, 1, &long);
         let pkts = entry_spawns(41, &[(npc, row)], 1);
-        assert!(pkts[1][5..29].iter().all(|&b| b == 0xAA), "24 bytes copiados");
+        assert!(
+            pkts[1][5..29].iter().all(|&b| b == 0xAA),
+            "24 bytes copiados"
+        );
         assert_eq!(pkts[1][29], 0, "NUL en el byte 24");
         assert_eq!(pkts[1][30], 0, "el resto a cero");
     }
@@ -1209,12 +1384,45 @@ Group\tdeposito
     /// Perro Salvaje); Anywhere SÍ emite (es un mob directo).
     #[test]
     fn entry_spawns_skips_group_kinds() {
-        let gg = SpawnEntry { vnum: 101, x: 957600, y: 247300, count: 1, kind: SpawnKind::GroupGroup, w_x: 0, w_y: 0, time: 0 };
+        let gg = SpawnEntry {
+            vnum: 101,
+            x: 957600,
+            y: 247300,
+            count: 1,
+            kind: SpawnKind::GroupGroup,
+            w_x: 0,
+            w_y: 0,
+            time: 0,
+        };
         let row = mob_row(101, 0, b"Perro Salvaje");
-        assert!(entry_spawns(41, &[(gg, row.clone())], 1).is_empty(), "GroupGroup omitido");
-        let g = SpawnEntry { vnum: 318, x: 959000, y: 315900, count: 1, kind: SpawnKind::Group, w_x: 0, w_y: 0, time: 0 };
-        assert!(entry_spawns(41, &[(g, row.clone())], 1).is_empty(), "Group omitido");
-        let any = SpawnEntry { vnum: 5001, x: 969600, y: 278400, count: 1, kind: SpawnKind::Anywhere, w_x: 0, w_y: 0, time: 0 };
+        assert!(
+            entry_spawns(41, &[(gg, row.clone())], 1).is_empty(),
+            "GroupGroup omitido"
+        );
+        let g = SpawnEntry {
+            vnum: 318,
+            x: 959000,
+            y: 315900,
+            count: 1,
+            kind: SpawnKind::Group,
+            w_x: 0,
+            w_y: 0,
+            time: 0,
+        };
+        assert!(
+            entry_spawns(41, &[(g, row.clone())], 1).is_empty(),
+            "Group omitido"
+        );
+        let any = SpawnEntry {
+            vnum: 5001,
+            x: 969600,
+            y: 278400,
+            count: 1,
+            kind: SpawnKind::Anywhere,
+            w_x: 0,
+            w_y: 0,
+            time: 0,
+        };
         let pkts = entry_spawns(41, &[(any, row)], 1);
         assert_eq!(pkts.len(), 1, "Anywhere SÍ emite (mob directo)");
         assert_eq!(&pkts[0][22..26], &5001u32.to_le_bytes());
@@ -1225,17 +1433,30 @@ Group\tdeposito
     #[test]
     fn cache_missing_vnums_dedup_and_filter() {
         use std::collections::HashMap;
-        let e = |vnum: u32, kind: SpawnKind| SpawnEntry { vnum, x: 0, y: 0, count: 1, kind, w_x: 0, w_y: 0, time: 0 };
+        let e = |vnum: u32, kind: SpawnKind| SpawnEntry {
+            vnum,
+            x: 0,
+            y: 0,
+            count: 1,
+            kind,
+            w_x: 0,
+            w_y: 0,
+            time: 0,
+        };
         let spawns = [
             e(101, SpawnKind::Mob),
             e(101, SpawnKind::Mob), // duplicado
             e(102, SpawnKind::Mob),
             e(5004, SpawnKind::Anywhere),
-            e(318, SpawnKind::Group), // no spawnable
+            e(318, SpawnKind::Group),        // no spawnable
             e(12007, SpawnKind::GroupGroup), // no spawnable
         ];
         let cache: HashMap<i64, MobRow> = [(101, mob_row(101, 0, b"x"))].into_iter().collect();
-        assert_eq!(missing_vnums(&spawns, &cache), vec![102, 5004], "101 en caché, dup colapsado, grupos fuera");
+        assert_eq!(
+            missing_vnums(&spawns, &cache),
+            vec![102, 5004],
+            "101 en caché, dup colapsado, grupos fuera"
+        );
         assert!(missing_vnums(&spawns, &HashMap::new()).contains(&101));
         // Caché vacía -> todos los spawnables, sin duplicados.
         let all = missing_vnums(&spawns, &HashMap::new());

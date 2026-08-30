@@ -19,7 +19,7 @@
 //!
 //! SOLO lectura del runtime (regla del lane F5 — WSL read-only).
 
-use game_core::npc::{load_map_spawns, SpawnKind};
+use game_core::npc::{SpawnKind, load_map_spawns};
 use std::collections::HashMap;
 
 /// La ruta del runtime: se prueba la vista UNC de Windows primero y la
@@ -87,7 +87,11 @@ fn map41_spawns_against_real_runtime() {
     assert_eq!(by_vnum.get(&151), Some(&3), "Cung-Mok (boss.txt m ×3)");
     assert_eq!(by_vnum.get(&8001), Some(&2), "Metin de Dolor (stone ×2)");
     assert_eq!(by_vnum.get(&5001), Some(&1), "Pirata Tanaka (Anywhere)");
-    assert_eq!(by_vnum.get(&5004), Some(&10), "Pirata Tanaka ×10 (Anywhere)");
+    assert_eq!(
+        by_vnum.get(&5004),
+        Some(&10),
+        "Pirata Tanaka ×10 (Anywhere)"
+    );
     // El grupo 12007 del npc.txt (Pony/Caballo + líder "." 20025).
     assert_eq!(by_vnum.get(&20025), Some(&1), "líder '.' del grupo 12007");
     assert_eq!(by_vnum.get(&20029), Some(&2), "Pony ×2");
@@ -109,7 +113,10 @@ fn map41_spawns_against_real_runtime() {
     assert_eq!((npc.x, npc.y), (966000, 267100), "20340 en UNITS");
     // Los miembros del group-group 101 (a1_01) en el centro del regen
     // (360, 425) = (957600, 247300) — Perro Salvaje 101 está AHÍ.
-    let dog = entries.iter().find(|e| e.vnum == 101).expect("101 expandido");
+    let dog = entries
+        .iter()
+        .find(|e| e.vnum == 101)
+        .expect("101 expandido");
     assert_eq!((dog.x, dog.y), (957600, 247300), "manada a1_01 en UNITS");
     assert_eq!(dog.count, 3, "3 Perro Salvaje por manada (líder + 2)");
     // Anywhere 5004 anclado en el Town spawn del mapa 41 (480, 736).
@@ -117,7 +124,11 @@ fn map41_spawns_against_real_runtime() {
         .iter()
         .find(|e| e.vnum == 5004 && e.kind == SpawnKind::Anywhere)
         .expect("5004 Anywhere");
-    assert_eq!((any.x, any.y), (969600, 278400), "Town spawn (parity LoadMapRegion)");
+    assert_eq!(
+        (any.x, any.y),
+        (969600, 278400),
+        "Town spawn (parity LoadMapRegion)"
+    );
 }
 
 /// Inventario expandido — TODAS las entradas son mobs directos (la colisión

@@ -58,7 +58,10 @@ impl AffectRepo {
     }
 
     async fn connect(&self) -> Result<Client, String> {
-        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
+        self.pool
+            .get()
+            .await
+            .map_err(|e| format!("PG pool get: {e}"))
     }
 
     /// Load del QID_AFFECT (world entry).
@@ -90,8 +93,13 @@ impl AffectRepo {
             .execute(
                 UPSERT_SQL,
                 &[
-                    &row.dw_pid, &row.b_type, &row.b_apply_on, &row.l_apply_value, //
-                    &row.dw_flag, &row.l_duration, &row.l_sp_cost,
+                    &row.dw_pid,
+                    &row.b_type,
+                    &row.b_apply_on,
+                    &row.l_apply_value, //
+                    &row.dw_flag,
+                    &row.l_duration,
+                    &row.l_sp_cost,
                 ],
             )
             .await
@@ -126,7 +134,15 @@ mod tests {
             .collect();
         assert_eq!(
             cols,
-            ["dwPID", "bType", "bApplyOn", "lApplyValue", "dwFlag", "lDuration", "lSPCost"]
+            [
+                "dwPID",
+                "bType",
+                "bApplyOn",
+                "lApplyValue",
+                "dwFlag",
+                "lDuration",
+                "lSPCost"
+            ]
         );
         assert!(LOAD_SQL.contains("FROM player.affect WHERE dwPID = $1"));
     }

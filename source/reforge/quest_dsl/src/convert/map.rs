@@ -8,8 +8,8 @@
 //! unmapped call (spec §9.2: equivalence tables + discrepancy report).
 
 use crate::ast::*;
-use crate::convert::qc::{split_args, LegacyStmt};
 use crate::convert::Unmapped;
+use crate::convert::qc::{LegacyStmt, split_args};
 
 // ---------------------------------------------------------------------------
 // Actions (spec §5)
@@ -43,7 +43,10 @@ pub const ACTION_TABLE: &[(&str, ActionName)] = &[
 ];
 
 pub fn map_action_name(name: &str) -> Option<ActionName> {
-    ACTION_TABLE.iter().find(|(n, _)| *n == name).map(|(_, a)| a.clone())
+    ACTION_TABLE
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, a)| a.clone())
 }
 
 // ---------------------------------------------------------------------------
@@ -66,14 +69,24 @@ pub fn map_trigger(text: &str) -> Result<Trigger, String> {
         "logout" => TriggerKind::Logout,
         "timer" => TriggerKind::Timer,
         "__TARGET__.target.click" => TriggerKind::TargetClick,
-        "kill" => return Err("kill (cualquier mob) no existe en el DSL — requiere Rust hook".into()),
+        "kill" => {
+            return Err("kill (cualquier mob) no existe en el DSL — requiere Rust hook".into());
+        }
         _ => {
-            let (vnum, rest) = t.split_once('.').ok_or_else(|| format!("trigger desconocido: {t}"))?;
+            let (vnum, rest) = t
+                .split_once('.')
+                .ok_or_else(|| format!("trigger desconocido: {t}"))?;
             let v: u32 = vnum.parse().map_err(|_| format!("trigger sin vnum: {t}"))?;
             match rest.split('.').next().unwrap_or("") {
-                "kill" => TriggerKind::Kill { target: TriggerTarget::Num(v) },
-                "use" => TriggerKind::Use { target: TriggerTarget::Num(v) },
-                "chat" => TriggerKind::Chat { target: TriggerTarget::Num(v) },
+                "kill" => TriggerKind::Kill {
+                    target: TriggerTarget::Num(v),
+                },
+                "use" => TriggerKind::Use {
+                    target: TriggerTarget::Num(v),
+                },
+                "chat" => TriggerKind::Chat {
+                    target: TriggerTarget::Num(v),
+                },
                 other => return Err(format!("trigger desconocido: {t} ({other})")),
             }
         }
@@ -159,10 +172,17 @@ fn map_bare(t: &str) -> Option<FuncName> {
 /// (reported, not fatal).
 pub fn map_expr(text: &str, scope: &Scope) -> Result<Expr, String> {
     let toks = lex_expr(text)?;
-    let mut p = ExprMapper { toks, pos: 0, scope };
+    let mut p = ExprMapper {
+        toks,
+        pos: 0,
+        scope,
+    };
     let e = p.parse_or()?;
     if p.pos != p.toks.len() {
-        return Err(format!("expresión malformada cerca de {:?}", &p.toks[p.pos..]));
+        return Err(format!(
+            "expresión malformada cerca de {:?}",
+            &p.toks[p.pos..]
+        ));
     }
     Ok(e)
 }
@@ -207,7 +227,9 @@ impl ExprMapper<'_> {
 
     fn parse_cmp(&mut self) -> Result<Expr, String> {
         let lhs = self.parse_add()?;
-        let Some(op) = self.peek_cmp() else { return Ok(lhs) };
+        let Some(op) = self.peek_cmp() else {
+            return Ok(lhs);
+        };
         self.pos += 1;
         let rhs = self.parse_add()?;
         // Corpus idiom `true == pet.is_summon(...)` → `pet.is_summon(...)`.
@@ -231,9 +253,8 @@ impl ExprMapper<'_> {
 
     fn peek_cmp(&self) -> Option<String> {
         match self.peek() {
-            Some("==") | Some("!=") | Some("~=") | Some("<") | Some(">") | Some("<=") | Some(">=") => {
-                self.peek().map(str::to_string)
-            }
+            Some("==") | Some("!=") | Some("~=") | Some("<") | Some(">") | Some("<=")
+            | Some(">=") => self.peek().map(str::to_string),
             _ => None,
         }
     }
@@ -283,7 +304,12 @@ impl ExprMapper<'_> {
             return Ok(Expr::Value(Value::Str(t[1..t.len() - 1].to_string())));
         }
         // Function call: `name(args)`.
-        if self.toks.get(self.pos + 1).map(|s| s == "(").unwrap_or(false) {
+        if self
+            .toks
+            .get(self.pos + 1)
+            .map(|s| s == "(")
+            .unwrap_or(false)
+        {
             self.pos += 2;
             let mut args = Vec::new();
             if !self.eat(")") {
@@ -320,7 +346,8 @@ fn is_true(e: &Expr) -> bool {
 }
 
 fn is_quoted(t: &str) -> bool {
-    t.len() >= 2 && ((t.starts_with('"') && t.ends_with('"')) || (t.starts_with('\'') && t.ends_with('\'')))
+    t.len() >= 2
+        && ((t.starts_with('"') && t.ends_with('"')) || (t.starts_with('\'') && t.ends_with('\'')))
 }
 
 /// Legacy expression lexer: dotted names are single tokens (`pc.getqf`,
@@ -362,7 +389,9 @@ fn lex_expr(text: &str) -> Result<Vec<String>, String> {
             }
             c if c.is_ascii_alphanumeric()
                 || c == '_'
-                || (c == '.' && !cur.is_empty() && matches!(cs.peek(), Some(p) if p.is_ascii_alphanumeric() || *p == '_')) =>
+                || (c == '.'
+                    && !cur.is_empty()
+                    && matches!(cs.peek(), Some(p) if p.is_ascii_alphanumeric() || *p == '_')) =>
             {
                 cur.push(c);
             }
@@ -445,7 +474,12 @@ pub fn map_stmts(stmts: &[LegacyStmt], file: &str, report: &mut Vec<Unmapped>) -
     map_stmts_inner(stmts, &mut scope, file, report)
 }
 
-fn map_stmts_inner(stmts: &[LegacyStmt], scope: &mut Scope, file: &str, report: &mut Vec<Unmapped>) -> Vec<Stmt> {
+fn map_stmts_inner(
+    stmts: &[LegacyStmt],
+    scope: &mut Scope,
+    file: &str,
+    report: &mut Vec<Unmapped>,
+) -> Vec<Stmt> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < stmts.len() {
@@ -481,21 +515,42 @@ fn map_stmts_inner(stmts: &[LegacyStmt], scope: &mut Scope, file: &str, report: 
                     report.push(Unmapped::new(file, format!("call:{name}")));
                 }
             }
-            LegacyStmt::Local { name, value: Some(v) } => bind_local(name, v, scope, &mut out, file, report),
-            LegacyStmt::Assign { name, value } => bind_local(name, value, scope, &mut out, file, report),
+            LegacyStmt::Local {
+                name,
+                value: Some(v),
+            } => bind_local(name, v, scope, &mut out, file, report),
+            LegacyStmt::Assign { name, value } => {
+                bind_local(name, value, scope, &mut out, file, report)
+            }
             LegacyStmt::Local { name, value: None } => scope.insert(name, Binding::Unmapped),
-            LegacyStmt::Return { value: _ } => out.push(action_stmt(ActionName::Return, Vec::new())),
-            LegacyStmt::If { cond, then, elseif_, els } => {
+            LegacyStmt::Return { value: _ } => {
+                out.push(action_stmt(ActionName::Return, Vec::new()))
+            }
+            LegacyStmt::If {
+                cond,
+                then,
+                elseif_,
+                els,
+            } => {
                 if !elseif_.is_empty() {
-                    report.push(Unmapped::new(file, "if:elseif (anidado no permitido en el DSL)"));
+                    report.push(Unmapped::new(
+                        file,
+                        "if:elseif (anidado no permitido en el DSL)",
+                    ));
                 } else {
                     match map_expr(cond, scope) {
                         Ok(c) => {
                             let tbody = map_stmts_inner(then, scope, file, report);
-                            let mut branches = vec![Stmt::Branch(Branch { condition: Some(c), body: tbody })];
+                            let mut branches = vec![Stmt::Branch(Branch {
+                                condition: Some(c),
+                                body: tbody,
+                            })];
                             if !els.is_empty() {
                                 let ebody = map_stmts_inner(els, scope, file, report);
-                                branches.push(Stmt::Branch(Branch { condition: None, body: ebody }));
+                                branches.push(Stmt::Branch(Branch {
+                                    condition: None,
+                                    body: ebody,
+                                }));
                             }
                             out.extend(branches);
                         }
@@ -504,13 +559,22 @@ fn map_stmts_inner(stmts: &[LegacyStmt], scope: &mut Scope, file: &str, report: 
                 }
             }
             LegacyStmt::For { head, .. } => {
-                report.push(Unmapped::new(file, format!("for:{head} (no hay loops en el DSL)")));
+                report.push(Unmapped::new(
+                    file,
+                    format!("for:{head} (no hay loops en el DSL)"),
+                ));
             }
             LegacyStmt::While { head, .. } => {
-                report.push(Unmapped::new(file, format!("while:{head} (no hay loops en el DSL)")));
+                report.push(Unmapped::new(
+                    file,
+                    format!("while:{head} (no hay loops en el DSL)"),
+                ));
             }
             LegacyStmt::Repeat { until, .. } => {
-                report.push(Unmapped::new(file, format!("repeat:until {until} (no hay loops en el DSL)")));
+                report.push(Unmapped::new(
+                    file,
+                    format!("repeat:until {until} (no hay loops en el DSL)"),
+                ));
             }
             LegacyStmt::Raw(r) => report.push(Unmapped::new(file, format!("raw:{r}"))),
         }
@@ -546,8 +610,15 @@ fn bind_local(
                 }
             }
             if ok {
-                let aname = if prefix.starts_with("select") { ActionName::Select } else { ActionName::InputNumber };
-                out.push(Stmt::Action { action: Action { name: aname, args }, capture: Some(name.to_string()) });
+                let aname = if prefix.starts_with("select") {
+                    ActionName::Select
+                } else {
+                    ActionName::InputNumber
+                };
+                out.push(Stmt::Action {
+                    action: Action { name: aname, args },
+                    capture: Some(name.to_string()),
+                });
                 scope.insert(name, Binding::Capture);
                 return;
             }
@@ -566,13 +637,14 @@ fn bind_local(
 }
 
 /// The `find_npc_by_vnum` → `target_vid` corpus idiom (see above).
-fn try_map_target_vid(
-    stmts: &[LegacyStmt],
-    i: usize,
-    scope: &Scope,
-    file: &str,
-) -> Option<Stmt> {
-    let LegacyStmt::Local { name, value: Some(v) } = &stmts[i] else { return None };
+fn try_map_target_vid(stmts: &[LegacyStmt], i: usize, scope: &Scope, file: &str) -> Option<Stmt> {
+    let LegacyStmt::Local {
+        name,
+        value: Some(v),
+    } = &stmts[i]
+    else {
+        return None;
+    };
     let num = v
         .trim()
         .strip_prefix("find_npc_by_vnum(")?
@@ -580,16 +652,28 @@ fn try_map_target_vid(
         .trim()
         .parse::<i64>()
         .ok()?;
-    let LegacyStmt::If { cond, then, elseif_, els } = stmts.get(i + 1)? else { return None };
+    let LegacyStmt::If {
+        cond,
+        then,
+        elseif_,
+        els,
+    } = stmts.get(i + 1)?
+    else {
+        return None;
+    };
     if !elseif_.is_empty() || !els.is_empty() || then.len() != 1 {
         return None;
     }
     let guard = cond.trim();
-    let guard_ok = guard == format!("{name} != 0") || guard == format!("{name} ~= 0") || guard == format!("0 != {name}");
+    let guard_ok = guard == format!("{name} != 0")
+        || guard == format!("{name} ~= 0")
+        || guard == format!("0 != {name}");
     if !guard_ok {
         return None;
     }
-    let LegacyStmt::Call { name: cname, args } = &then[0] else { return None };
+    let LegacyStmt::Call { name: cname, args } = &then[0] else {
+        return None;
+    };
     if cname != "target.vid" || args.len() != 3 || args[1].trim() != name {
         return None;
     }
@@ -597,13 +681,19 @@ fn try_map_target_vid(
     let key = map_value(args[2].trim(), scope).ok()?;
     let _ = file;
     Some(Stmt::Action {
-        action: Action { name: ActionName::TargetVid, args: vec![tname, Value::Num(num), key] },
+        action: Action {
+            name: ActionName::TargetVid,
+            args: vec![tname, Value::Num(num), key],
+        },
         capture: None,
     })
 }
 
 fn action_stmt(name: ActionName, args: Vec<Value>) -> Stmt {
-    Stmt::Action { action: Action { name, args }, capture: None }
+    Stmt::Action {
+        action: Action { name, args },
+        capture: None,
+    }
 }
 
 #[cfg(test)]
@@ -623,20 +713,42 @@ mod tests {
 
     #[test]
     fn maps_triggers() {
-        assert!(matches!(map_trigger("login"), Ok(Trigger { kind: TriggerKind::Login })));
+        assert!(matches!(
+            map_trigger("login"),
+            Ok(Trigger {
+                kind: TriggerKind::Login
+            })
+        ));
         assert!(matches!(
             map_trigger("601.kill"),
-            Ok(Trigger { kind: TriggerKind::Kill { target: TriggerTarget::Num(601) } })
+            Ok(Trigger {
+                kind: TriggerKind::Kill {
+                    target: TriggerTarget::Num(601)
+                }
+            })
         ));
         assert!(matches!(
             map_trigger("71035.use"),
-            Ok(Trigger { kind: TriggerKind::Use { target: TriggerTarget::Num(71035) } })
+            Ok(Trigger {
+                kind: TriggerKind::Use {
+                    target: TriggerTarget::Num(71035)
+                }
+            })
         ));
         assert!(matches!(
             map_trigger("20084.chat.gameforge.collect_quest_lv30._30_npcChat"),
-            Ok(Trigger { kind: TriggerKind::Chat { target: TriggerTarget::Num(20084) } })
+            Ok(Trigger {
+                kind: TriggerKind::Chat {
+                    target: TriggerTarget::Num(20084)
+                }
+            })
         ));
-        assert!(matches!(map_trigger("__TARGET__.target.click"), Ok(Trigger { kind: TriggerKind::TargetClick })));
+        assert!(matches!(
+            map_trigger("__TARGET__.target.click"),
+            Ok(Trigger {
+                kind: TriggerKind::TargetClick
+            })
+        ));
         assert!(map_trigger("kill").is_err());
         assert!(map_trigger("dungeon.foo").is_err());
     }
@@ -669,12 +781,19 @@ mod tests {
         let e = map_expr("pc.get_level() >= 30", &s).unwrap();
         assert!(matches!(e, Expr::Compare(_, CmpOp::Ge, _)));
         // number(1, 100) <= 5
-        assert!(matches!(map_expr("number(1, 100) <= 5", &s).unwrap(), Expr::Compare(_, CmpOp::Le, _)));
+        assert!(matches!(
+            map_expr("number(1, 100) <= 5", &s).unwrap(),
+            Expr::Compare(_, CmpOp::Le, _)
+        ));
         // pc.count_item(30006) == 0
         let e = map_expr("pc.count_item(30006) == 0", &s).unwrap();
         assert!(matches!(e, Expr::Compare(_, CmpOp::Eq, _)));
         // true == pet.is_summon(34003) or true == pet.is_summon(34001)
-        let e = map_expr("true == pet.is_summon(34003) or true == pet.is_summon(34001)", &s).unwrap();
+        let e = map_expr(
+            "true == pet.is_summon(34003) or true == pet.is_summon(34001)",
+            &s,
+        )
+        .unwrap();
         let Expr::Or(a, b) = e else { panic!("or") };
         assert!(matches!(*a, Expr::Func(FuncName::PetIsSummon, _)));
         assert!(matches!(*b, Expr::Func(FuncName::PetIsSummon, _)));
@@ -719,7 +838,10 @@ mod tests {
         let s = scope_with(&[("pass_percent", "60")]);
         assert_eq!(map_value("30006", &s).unwrap(), Value::Num(30006));
         assert_eq!(map_value("1", &s).unwrap(), Value::Num(1));
-        assert_eq!(map_value("\"duration\"", &s).unwrap(), Value::Str("duration".into()));
+        assert_eq!(
+            map_value("\"duration\"", &s).unwrap(),
+            Value::Str("duration".into())
+        );
         assert_eq!(map_value("'x'", &s).unwrap(), Value::Str("x".into()));
         // full locale key → verbatim string (exact parity)
         assert_eq!(
@@ -727,7 +849,10 @@ mod tests {
             Value::Str("gameforge.collect_quest_lv30._10_sendLetter".into())
         );
         // apply.MOV_SPEED stays a string
-        assert_eq!(map_value("apply.MOV_SPEED", &s).unwrap(), Value::Str("apply.MOV_SPEED".into()));
+        assert_eq!(
+            map_value("apply.MOV_SPEED", &s).unwrap(),
+            Value::Str("apply.MOV_SPEED".into())
+        );
         // local substitution
         assert_eq!(map_value("pass_percent", &s).unwrap(), Value::Num(60));
         // full expressions map to Value::Expr (runtime-evaluated)
@@ -741,43 +866,72 @@ mod tests {
     fn maps_expr_args_in_set_qf_and_affect() {
         let mut rep = Vec::new();
         let stmts = vec![
-            LegacyStmt::Call { name: "pc.setqf".into(), args: vec!["\"duration\"".into(), "get_time()+60*60*22".into()] },
+            LegacyStmt::Call {
+                name: "pc.setqf".into(),
+                args: vec!["\"duration\"".into(), "get_time()+60*60*22".into()],
+            },
             LegacyStmt::Call {
                 name: "affect.add_collect".into(),
-                args: vec!["apply.MOV_SPEED".into(), "10".into(), "60*60*24*365*60".into()],
+                args: vec![
+                    "apply.MOV_SPEED".into(),
+                    "10".into(),
+                    "60*60*24*365*60".into(),
+                ],
             },
         ];
         let out = map_stmts(&stmts, "t.quest", &mut rep);
         assert!(rep.is_empty(), "{rep:?}");
         assert_eq!(out.len(), 2);
-        let Stmt::Action { action, .. } = &out[0] else { panic!() };
+        let Stmt::Action { action, .. } = &out[0] else {
+            panic!()
+        };
         assert_eq!(action.name, ActionName::SetQf);
         assert_eq!(action.args[0], Value::Str("duration".into()));
-        assert!(matches!(&action.args[1], Value::Expr(e) if matches!(e.as_ref(), Expr::Add(_, _))), "{:?}", action.args[1]);
-        let Stmt::Action { action, .. } = &out[1] else { panic!() };
+        assert!(
+            matches!(&action.args[1], Value::Expr(e) if matches!(e.as_ref(), Expr::Add(_, _))),
+            "{:?}",
+            action.args[1]
+        );
+        let Stmt::Action { action, .. } = &out[1] else {
+            panic!()
+        };
         assert_eq!(action.name, ActionName::AffectAdd);
         assert_eq!(action.args[0], Value::Str("apply.MOV_SPEED".into()));
         assert_eq!(action.args[1], Value::Num(10));
-        assert!(matches!(&action.args[2], Value::Expr(_)), "{:?}", action.args[2]);
+        assert!(
+            matches!(&action.args[2], Value::Expr(_)),
+            "{:?}",
+            action.args[2]
+        );
     }
 
     #[test]
     fn maps_statements_with_locals_and_if() {
         let mut rep = Vec::new();
         let stmts = vec![
-            LegacyStmt::Local { name: "s".into(), value: Some("number(1, 100)".into()) },
+            LegacyStmt::Local {
+                name: "s".into(),
+                value: Some("number(1, 100)".into()),
+            },
             LegacyStmt::If {
                 cond: "s <= 5".into(),
-                then: vec![LegacyStmt::Call { name: "pc.give_item2".into(), args: vec!["30006".into(), "1".into()] }],
+                then: vec![LegacyStmt::Call {
+                    name: "pc.give_item2".into(),
+                    args: vec!["30006".into(), "1".into()],
+                }],
                 elseif_: vec![],
                 els: vec![],
             },
         ];
         let out = map_stmts(&stmts, "t.quest", &mut rep);
         assert_eq!(out.len(), 1);
-        let Stmt::Branch(b) = &out[0] else { panic!("if") };
+        let Stmt::Branch(b) = &out[0] else {
+            panic!("if")
+        };
         assert!(matches!(b.condition, Some(Expr::Compare(_, CmpOp::Le, _))));
-        let Stmt::Action { action, .. } = &b.body[0] else { panic!() };
+        let Stmt::Action { action, .. } = &b.body[0] else {
+            panic!()
+        };
         assert_eq!(action.name, ActionName::GiveItem2);
         assert_eq!(action.args, vec![Value::Num(30006), Value::Num(1)]);
         assert!(rep.is_empty());
@@ -787,9 +941,18 @@ mod tests {
     fn reports_unmapped_and_skips() {
         let mut rep = Vec::new();
         let stmts = vec![
-            LegacyStmt::Call { name: "pc.job".into(), args: vec![] },
-            LegacyStmt::Call { name: "pc.setqf".into(), args: vec!["\"a\"".into(), "\"x\" .. y".into()] },
-            LegacyStmt::For { head: "i = 1, 10".into(), body: vec![] },
+            LegacyStmt::Call {
+                name: "pc.job".into(),
+                args: vec![],
+            },
+            LegacyStmt::Call {
+                name: "pc.setqf".into(),
+                args: vec!["\"a\"".into(), "\"x\" .. y".into()],
+            },
+            LegacyStmt::For {
+                head: "i = 1, 10".into(),
+                body: vec![],
+            },
             LegacyStmt::Raw("mystery()".into()),
         ];
         let out = map_stmts(&stmts, "t.quest", &mut rep);
@@ -805,22 +968,34 @@ mod tests {
     fn maps_find_npc_target_vid_idiom() {
         let mut rep = Vec::new();
         let stmts = vec![
-            LegacyStmt::Local { name: "v".into(), value: Some("find_npc_by_vnum(20084)".into()) },
+            LegacyStmt::Local {
+                name: "v".into(),
+                value: Some("find_npc_by_vnum(20084)".into()),
+            },
             LegacyStmt::If {
                 cond: "v != 0".into(),
                 then: vec![LegacyStmt::Call {
                     name: "target.vid".into(),
-                    args: vec!["\"__TARGET__\"".into(), "v".into(), "gameforge.collect_herb_lv10._150_sayTitle".into()],
+                    args: vec![
+                        "\"__TARGET__\"".into(),
+                        "v".into(),
+                        "gameforge.collect_herb_lv10._150_sayTitle".into(),
+                    ],
                 }],
                 elseif_: vec![],
                 els: vec![],
             },
-            LegacyStmt::Call { name: "send_letter".into(), args: vec!["gameforge.collect_quest_lv30._10_sendLetter".into()] },
+            LegacyStmt::Call {
+                name: "send_letter".into(),
+                args: vec!["gameforge.collect_quest_lv30._10_sendLetter".into()],
+            },
         ];
         let out = map_stmts(&stmts, "t.quest", &mut rep);
         assert!(rep.is_empty());
         assert_eq!(out.len(), 2);
-        let Stmt::Action { action, .. } = &out[0] else { panic!() };
+        let Stmt::Action { action, .. } = &out[0] else {
+            panic!()
+        };
         assert_eq!(action.name, ActionName::TargetVid);
         assert_eq!(
             action.args,
@@ -836,10 +1011,16 @@ mod tests {
     fn maps_select_capture() {
         let mut rep = Vec::new();
         let stmts = vec![
-            LegacyStmt::Local { name: "sel".into(), value: Some("select(gameforge.locale.confirm)".into()) },
+            LegacyStmt::Local {
+                name: "sel".into(),
+                value: Some("select(gameforge.locale.confirm)".into()),
+            },
             LegacyStmt::If {
                 cond: "sel == 1".into(),
-                then: vec![LegacyStmt::Call { name: "set_state".into(), args: vec!["go".into()] }],
+                then: vec![LegacyStmt::Call {
+                    name: "set_state".into(),
+                    args: vec!["go".into()],
+                }],
                 elseif_: vec![],
                 els: vec![],
             },
@@ -847,7 +1028,9 @@ mod tests {
         let out = map_stmts(&stmts, "t.quest", &mut rep);
         assert!(rep.is_empty());
         assert_eq!(out.len(), 2);
-        let Stmt::Action { action, capture } = &out[0] else { panic!() };
+        let Stmt::Action { action, capture } = &out[0] else {
+            panic!()
+        };
         assert_eq!(action.name, ActionName::Select);
         assert_eq!(capture.as_deref(), Some("sel"));
         let Stmt::Branch(b) = &out[1] else { panic!() };

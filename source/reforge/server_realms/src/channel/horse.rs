@@ -17,7 +17,13 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
     let ride = pkt.get(1).is_some_and(|&b| b != 0);
     let (level, hp, st, riding, empire) = {
         let r = session.row();
-        (r.horse_level as u8, r.horse_hp as u16, r.horse_stamina as u16, r.horse_riding != 0, session.empire)
+        (
+            r.horse_level as u8,
+            r.horse_hp as u16,
+            r.horse_stamina as u16,
+            r.horse_riding != 0,
+            session.empire,
+        )
     };
     let Some(vnum) = horse::toggle_ride(level, hp, st, riding, ride) else {
         return Ok(Outcome::Continue); // gates silenciosos (parity)
@@ -37,7 +43,8 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
     let arrows = super::equipped_arrow_index(&session.inventory)
         .map(|i| session.inventory[i].vnum as u32)
         .unwrap_or(0);
-    let upd = packets::character_update_with_parts(session.row(), &parts, arrows, session.mov_speed);
+    let upd =
+        packets::character_update_with_parts(session.row(), &parts, arrows, session.mov_speed);
     let msg = if vnum == 0 {
         packets::chat_command(empire, "hide_horse_state")
     } else {

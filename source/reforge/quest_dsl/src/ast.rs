@@ -22,7 +22,11 @@ pub enum Quest {
     /// `quest <name>` — concrete.
     Concrete(QuestDef),
     /// `quest <name> family (<params>)` — parameterized template (spec §6).
-    Family { name: String, params: Vec<Param>, states: Vec<State> },
+    Family {
+        name: String,
+        params: Vec<Param>,
+        states: Vec<State>,
+    },
     /// `quest <name> = <base>(<param>: <value>, ...)` — instance (spec §6).
     Instance(InstanceDef),
 }
@@ -79,9 +83,15 @@ pub enum TriggerKind {
     Enter,
     Logout,
     Timer,
-    Chat { target: TriggerTarget },
-    Kill { target: TriggerTarget },
-    Use { target: TriggerTarget },
+    Chat {
+        target: TriggerTarget,
+    },
+    Kill {
+        target: TriggerTarget,
+    },
+    Use {
+        target: TriggerTarget,
+    },
     TargetClick,
     /// `arena.*`, `oxevent.*`, `d.*`, `wedding.*` → Rust modules (spec §8).
     Rust(String),
@@ -91,7 +101,10 @@ pub enum TriggerKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
     /// `-> action(args)` with optional `as capture`.
-    Action { action: Action, capture: Option<String> },
+    Action {
+        action: Action,
+        capture: Option<String>,
+    },
     /// `if expr` / `else` — 1 level + else (spec §10, decision §11.2).
     Branch(Branch),
     /// `use block(args)` (spec §7).

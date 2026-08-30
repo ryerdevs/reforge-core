@@ -19,7 +19,13 @@ pub fn digest(data: &[u8]) -> [u8; 20] {
     }
     msg.extend_from_slice(&bit_len.to_be_bytes());
 
-    let mut h = [0x6745_2301u32, 0xEFCD_AB89, 0x98BA_DCFE, 0x1032_5476, 0xC3D2_E1F0];
+    let mut h = [
+        0x6745_2301u32,
+        0xEFCD_AB89,
+        0x98BA_DCFE,
+        0x1032_5476,
+        0xC3D2_E1F0,
+    ];
 
     for chunk in msg.chunks_exact(64) {
         let mut w = [0u32; 80];
@@ -76,7 +82,10 @@ mod tests {
     /// Vectores FIPS 180-1 (test cases 1-3).
     #[test]
     fn fips_vectors() {
-        assert_eq!(hex(&digest(b"")), "da39a3ee5e6b4b0d3255bfef95601890afd80709");
+        assert_eq!(
+            hex(&digest(b"")),
+            "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+        );
         assert_eq!(
             hex(&digest(b"abc")),
             "a9993e364706816aba3e25717850c26c9cd0d89d"

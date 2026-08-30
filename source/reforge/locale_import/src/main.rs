@@ -31,12 +31,12 @@ mod parse;
 
 use std::fs;
 
-use game_core::npc::{load_map_spawns, SpawnEntry, SpawnKind};
-use tokio_postgres::{types::ToSql, Client, NoTls};
+use game_core::npc::{SpawnEntry, SpawnKind, load_map_spawns};
+use tokio_postgres::{Client, NoTls, types::ToSql};
 
 use parse::{
-    decode_key, decode_lang, parse_interface, parse_itemdesc, parse_locale_string,
-    parse_map_index, parse_names_dump, parse_setting_base, parse_skilldesc, parse_town_spawn,
+    decode_key, decode_lang, parse_interface, parse_itemdesc, parse_locale_string, parse_map_index,
+    parse_names_dump, parse_setting_base, parse_skilldesc, parse_town_spawn,
 };
 
 const DEFAULT_PG: &str = "host=127.0.0.1 port=5432 user=mt2 password=mt2 dbname=metin2";
@@ -50,8 +50,7 @@ const DEFAULT_MAP_PATH: &str =
 /// Los 16 idiomas del Language System (locale_service.cpp:20-24) â€” los
 /// archivos del runtime son `locale_string_XX.txt` con XX en MAYÃšSCULAS.
 const MESSAGE_LANGS: [&str; 16] = [
-    "AE", "CZ", "DE", "DK", "EN", "ES", "FR", "GR", "HU", "IT", "NL", "PL", "PT", "RO", "RU",
-    "TR",
+    "AE", "CZ", "DE", "DK", "EN", "ES", "FR", "GR", "HU", "IT", "NL", "PL", "PT", "RO", "RU", "TR",
 ];
 
 struct Opts {
@@ -148,9 +147,15 @@ type SqlVal = Box<dyn ToSql + Sync>;
 
 /// Valores TIPEADOS para los parámetros (el prepared statement infiere el
 /// tipo de la columna: bigint/int NO aceptan texto — error de serialización).
-fn val_i64(v: i64) -> SqlVal { Box::new(v) }
-fn val_i32(v: i32) -> SqlVal { Box::new(v) }
-fn val_str(v: &str) -> SqlVal { Box::new(v.to_string()) }
+fn val_i64(v: i64) -> SqlVal {
+    Box::new(v)
+}
+fn val_i32(v: i32) -> SqlVal {
+    Box::new(v)
+}
+fn val_str(v: &str) -> SqlVal {
+    Box::new(v.to_string())
+}
 
 /// Inserta filas en lotes multi-row (chunks de <= 30.000 parÃ¡metros â€” el
 /// lÃ­mite prÃ¡ctico del protocolo PG). Valores como texto: PG coacciona los
@@ -242,7 +247,8 @@ async fn import_mobs(client: &Client, lang: &str, proto_dir: &str) -> Result<Str
         .iter()
         .map(|(v, n)| vec![val_i64(*v), val_str(lang), val_str(n)])
         .collect();
-    let inserted = insert_rows(client, "common.mob_names", &["vnum", "lang", "name"], &data).await?;
+    let inserted =
+        insert_rows(client, "common.mob_names", &["vnum", "lang", "name"], &data).await?;
     Ok(format!(
         "import-mobs {lang}: {inserted} nombres en common.mob_names (fuente: {path})"
     ))
@@ -268,14 +274,24 @@ async fn import_items(
         .iter()
         .map(|(v, n)| vec![val_i64(*v), val_str(lang), val_str(n)])
         .collect();
-    let n_names =
-        insert_rows(client, "common.item_names", &["vnum", "lang", "name"], &data).await?;
+    let n_names = insert_rows(
+        client,
+        "common.item_names",
+        &["vnum", "lang", "name"],
+        &data,
+    )
+    .await?;
     let data: Vec<Vec<SqlVal>> = descs
         .iter()
         .map(|(v, d)| vec![val_i64(*v), val_str(lang), val_str(d)])
         .collect();
-    let n_desc =
-        insert_rows(client, "common.item_descriptions", &["vnum", "lang", "text"], &data).await?;
+    let n_desc = insert_rows(
+        client,
+        "common.item_descriptions",
+        &["vnum", "lang", "text"],
+        &data,
+    )
+    .await?;
     Ok(format!(
         "import-items {lang}: {n_names} nombres (common.item_names) + {n_desc} descripciones (common.item_descriptions)"
     ))
@@ -294,8 +310,13 @@ async fn import_skills(
         .iter()
         .map(|(id, n)| vec![val_i32(*id), val_str(lang), val_str(n)])
         .collect();
-    let inserted =
-        insert_rows(client, "common.skill_names", &["skill_id", "lang", "name"], &data).await?;
+    let inserted = insert_rows(
+        client,
+        "common.skill_names",
+        &["skill_id", "lang", "name"],
+        &data,
+    )
+    .await?;
     Ok(format!(
         "import-skills {lang}: {inserted} habilidades en common.skill_names (fuente: {path})"
     ))
@@ -330,10 +351,20 @@ async fn import_messages(client: &Client, locale_strings_dir: &str) -> Result<St
         };
         let lang = xx.to_ascii_lowercase();
         for (key, value) in parse_locale_string(&bytes) {
-            data.push(vec![val_str(&decode_key(&key)), val_str(&lang), val_str(&decode_lang(&value, &lang))]);
+            data.push(vec![
+                val_str(&decode_key(&key)),
+                val_str(&lang),
+                val_str(&decode_lang(&value, &lang)),
+            ]);
         }
     }
-    let inserted = insert_rows(client, "common.message_texts", &["key", "lang", "value"], &data).await?;
+    let inserted = insert_rows(
+        client,
+        "common.message_texts",
+        &["key", "lang", "value"],
+        &data,
+    )
+    .await?;
     let note = if missing.is_empty() {
         String::new()
     } else {
@@ -360,12 +391,23 @@ async fn import_maps(client: &Client, map_path: &str) -> Result<String, String> 
         };
         let town = read(&format!("{dir}/Town.txt")).ok();
         let spawn = parse_town_spawn(town.as_deref(), base);
-        data.push(vec![val_i32(*map_id), val_str(name), val_i32(base.0), val_i32(base.1), val_i32(spawn.0), val_i32(spawn.1)]);
+        data.push(vec![
+            val_i32(*map_id),
+            val_str(name),
+            val_i32(base.0),
+            val_i32(base.1),
+            val_i32(spawn.0),
+            val_i32(spawn.1),
+        ]);
     }
     truncate(client, "world.maps").await?;
-    let inserted =
-        insert_rows(client, "world.maps", &["map_id", "name", "base_x", "base_y", "spawn_x", "spawn_y"], &data)
-            .await?;
+    let inserted = insert_rows(
+        client,
+        "world.maps",
+        &["map_id", "name", "base_x", "base_y", "spawn_x", "spawn_y"],
+        &data,
+    )
+    .await?;
     Ok(format!(
         "import-maps: {inserted} mapas en world.maps (index: {}; omitidos: {skipped})",
         index.len()
@@ -395,9 +437,13 @@ async fn import_spawns(client: &Client, map_path: &str) -> Result<String, String
         }
     }
     truncate(client, "world.spawns").await?;
-    let inserted =
-        insert_rows(client, "world.spawns", &["map_id", "vnum", "x", "y", "count", "kind"], &data)
-            .await?;
+    let inserted = insert_rows(
+        client,
+        "world.spawns",
+        &["map_id", "vnum", "x", "y", "count", "kind"],
+        &data,
+    )
+    .await?;
     let note = if skipped.is_empty() {
         String::new()
     } else {
@@ -428,50 +474,6 @@ fn spawn_row(map_id: i32, e: &SpawnEntry) -> Vec<SqlVal> {
     ]
 }
 
-#[cfg(test)]
-mod pg_tests {
-    use super::*;
-
-    /// La cadena PG se puede sobreescribir con DATABASE_TEST_PG (patrón
-    /// channel_pg.rs).
-    fn pg_conn() -> String {
-        std::env::var("DATABASE_TEST_PG").unwrap_or_else(|_| DEFAULT_PG.to_string())
-    }
-
-    /// Integración contra la PG REAL de WSL — gated con `#[ignore]` (patrón
-    /// channel_pg.rs): import-mobs es re-importa el dominio y verifica el
-    /// conteo real del dump ES (2876 filas, verificado 2026-08-12).
-    #[tokio::test]
-    #[ignore = "requiere la PG de WSL (host=127.0.0.1:5432, bd metin2)"]
-    async fn import_mobs_es_live_pg() {
-        let client = connect(&pg_conn()).await.expect("connect");
-        let summary = import_mobs(&client, "es", DEFAULT_PROTO_DIR).await.expect("import");
-        eprintln!("{summary}");
-        let n: i64 = client
-            .query_one("SELECT count(*) FROM common.mob_names WHERE lang = 'es'", &[])
-            .await
-            .expect("count")
-            .get(0);
-        assert_eq!(n, 2876, "dump ES completo (2876 mobs, verificado 2026-08-12)");
-    }
-
-    /// Parity del spawn del mapa 41 contra el runtime: Σ count = 23.033 —
-    /// el MISMO número del test F5 map41_spawns.rs (23033 mobs individuales).
-    #[tokio::test]
-    #[ignore = "requiere la PG de WSL + el runtime WSL (share/locale/spain/map)"]
-    async fn spawns_map41_live_pg() {
-        let client = connect(&pg_conn()).await.expect("connect");
-        let summary = import_spawns(&client, DEFAULT_MAP_PATH).await.expect("import");
-        eprintln!("{summary}");
-        let n: i64 = client
-            .query_one("SELECT sum(count) FROM world.spawns WHERE map_id = 41", &[])
-            .await
-            .expect("sum")
-            .get(0);
-        assert_eq!(n, 23_033, "fauna expandida del mapa 41 (parity F5, map41_spawns.rs)");
-    }
-}
-
 #[tokio::main]
 async fn main() {
     let opts = parse_opts();
@@ -485,7 +487,9 @@ async fn main() {
     let lang = || opts.lang.clone().unwrap_or_else(|| usage());
     let result = match opts.sub.as_str() {
         "import-mobs" => import_mobs(&client, &lang(), &opts.proto_dir).await,
-        "import-items" => import_items(&client, &lang(), &opts.proto_dir, &opts.pack_locale_dir).await,
+        "import-items" => {
+            import_items(&client, &lang(), &opts.proto_dir, &opts.pack_locale_dir).await
+        }
         "import-skills" => import_skills(&client, &lang(), &opts.pack_locale_dir).await,
         "import-ui" => import_ui(&client, &lang(), &opts.pack_locale_dir).await,
         "import-messages" => import_messages(&client, &opts.locale_strings_dir).await,
@@ -505,3 +509,59 @@ async fn main() {
     }
 }
 
+#[cfg(test)]
+mod pg_tests {
+    use super::*;
+
+    /// La cadena PG se puede sobreescribir con DATABASE_TEST_PG (patrón
+    /// channel_pg.rs).
+    fn pg_conn() -> String {
+        std::env::var("DATABASE_TEST_PG").unwrap_or_else(|_| DEFAULT_PG.to_string())
+    }
+
+    /// Integración contra la PG REAL de WSL — gated con `#[ignore]` (patrón
+    /// channel_pg.rs): import-mobs es re-importa el dominio y verifica el
+    /// conteo real del dump ES (2876 filas, verificado 2026-08-12).
+    #[tokio::test]
+    #[ignore = "requiere la PG de WSL (host=127.0.0.1:5432, bd metin2)"]
+    async fn import_mobs_es_live_pg() {
+        let client = connect(&pg_conn()).await.expect("connect");
+        let summary = import_mobs(&client, "es", DEFAULT_PROTO_DIR)
+            .await
+            .expect("import");
+        eprintln!("{summary}");
+        let n: i64 = client
+            .query_one(
+                "SELECT count(*) FROM common.mob_names WHERE lang = 'es'",
+                &[],
+            )
+            .await
+            .expect("count")
+            .get(0);
+        assert_eq!(
+            n, 2876,
+            "dump ES completo (2876 mobs, verificado 2026-08-12)"
+        );
+    }
+
+    /// Parity del spawn del mapa 41 contra el runtime: Σ count = 23.033 —
+    /// el MISMO número del test F5 map41_spawns.rs (23033 mobs individuales).
+    #[tokio::test]
+    #[ignore = "requiere la PG de WSL + el runtime WSL (share/locale/spain/map)"]
+    async fn spawns_map41_live_pg() {
+        let client = connect(&pg_conn()).await.expect("connect");
+        let summary = import_spawns(&client, DEFAULT_MAP_PATH)
+            .await
+            .expect("import");
+        eprintln!("{summary}");
+        let n: i64 = client
+            .query_one("SELECT sum(count) FROM world.spawns WHERE map_id = 41", &[])
+            .await
+            .expect("sum")
+            .get(0);
+        assert_eq!(
+            n, 23_033,
+            "fauna expandida del mapa 41 (parity F5, map41_spawns.rs)"
+        );
+    }
+}

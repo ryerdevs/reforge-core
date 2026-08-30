@@ -147,7 +147,14 @@ pub fn register_peer(
 ) -> ChatPeerGuard {
     peers().lock().expect("chat peers lock").insert(
         vid,
-        ChatPeer { name, map_index, x, y, empire, out },
+        ChatPeer {
+            name,
+            map_index,
+            x,
+            y,
+            empire,
+            out,
+        },
     );
     ChatPeerGuard(vid)
 }
@@ -187,7 +194,12 @@ pub(crate) fn peer_name(vid: u32) -> Option<String> {
 /// Imperio de la sesión con el vid dado (`d->GetEmpire()` — bEmpire del
 /// GC_CHAT dirigido; 0 si el peer no existe). Messenger.
 pub(crate) fn peer_empire(vid: u32) -> u8 {
-    peers().lock().expect("chat peers lock").get(&vid).map(|p| p.empire).unwrap_or(0)
+    peers()
+        .lock()
+        .expect("chat peers lock")
+        .get(&vid)
+        .map(|p| p.empire)
+        .unwrap_or(0)
 }
 
 /// Entrega bytes al outbox del peer `vid` (true si el peer existe y su cola
@@ -304,14 +316,11 @@ pub async fn handle(session: &mut Session, pkt: &[u8]) -> Result<Outcome, String
         // do_emotion/do_emotion_allow). Los nombres NO colisionan con el
         // subset GM → dispatch ANTES de gm::handle (la misma tabla en el C++;
         // aquí el orden equivalente). None = comando social ajeno → cae al GM.
-        if let Some(outcome) = crate::channel::messenger::try_handle_command(session, &text)
-            .await?
+        if let Some(outcome) = crate::channel::messenger::try_handle_command(session, &text).await?
         {
             return Ok(outcome);
         }
-        if let Some(outcome) = crate::channel::emotions::try_handle_command(session, &text)
-            .await?
-        {
+        if let Some(outcome) = crate::channel::emotions::try_handle_command(session, &text).await? {
             return Ok(outcome);
         }
         return crate::channel::gm::handle(session, &text).await;
@@ -466,7 +475,8 @@ pub async fn handle_whisper(session: &mut Session, pkt: &[u8]) -> Result<Outcome
             .map_err(|e| format!("enviando GC_WHISPER (NOT_EXIST): {e}"))?;
         eprintln!(
             "server_realms: channel conn {}: whisper de {} a {target}: destino inexistente",
-            session.conn_id, session.row().name
+            session.conn_id,
+            session.row().name
         );
         return Ok(Outcome::Continue);
     };
@@ -477,8 +487,7 @@ pub async fn handle_whisper(session: &mut Session, pkt: &[u8]) -> Result<Outcome
     // GC_WHISPER: header(34) + wSize(WORD, incluye 29 B) + bType + szNameFrom[25]
     // + msg (TPacketGCWhisper Packet.h:1346-1351 — sin NUL al final).
     let mut to_recipient = vec![header::GC_WHISPER];
-    to_recipient
-        .extend_from_slice(&((pchat::GC_WHISPER_FIXED + msg.len()) as u16).to_le_bytes());
+    to_recipient.extend_from_slice(&((pchat::GC_WHISPER_FIXED + msg.len()) as u16).to_le_bytes());
     to_recipient.push(pchat::WHISPER_CHAT);
     let sender = session.row().name.clone();
     let mut from_name = [0u8; pchat::NAME_BYTES];
@@ -513,6 +522,9 @@ pub async fn handle_whisper(session: &mut Session, pkt: &[u8]) -> Result<Outcome
 }
 
 #[cfg(test)]
+// TEST_LOCK serializa tests que comparten statics de canal: el guard de
+// std::Mutex viaja a través de los .await de los tests A PROPÓSITO.
+#[allow(clippy::await_holding_lock)]
 mod tests {
     use super::*;
     use std::time::Duration;
@@ -605,8 +617,10 @@ mod tests {
             64,
             database::wal::WalSink::new(database::wal::PgMutationSink::new(pool.clone()), wal_dir),
         ));
-        let mut cfg = crate::config::Config::default();
-        cfg.timeout = Duration::from_secs(5);
+        let cfg = crate::config::Config {
+            timeout: Duration::from_secs(5),
+            ..Default::default()
+        };
         let (intent_tx, _intent_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut s = Session::new(
             server_side,
@@ -640,7 +654,9 @@ mod tests {
         sock.read_exact(&mut hdr).await.expect("paquete del server");
         let size = u16::from_le_bytes([hdr[1], hdr[2]]) as usize;
         let mut body = vec![0u8; size - 3];
-        sock.read_exact(&mut body).await.expect("cuerpo del paquete");
+        sock.read_exact(&mut body)
+            .await
+            .expect("cuerpo del paquete");
         let mut pkt = hdr.to_vec();
         pkt.extend_from_slice(&body);
         pkt
@@ -677,7 +693,10 @@ mod tests {
             .await
             .expect("Bob recibe el broadcast en 2 s")
             .expect("outbox de Bob abierto");
-        assert_eq!(to_bob, echo, "mismos bytes que el echo (vid/empire del emisor)");
+        assert_eq!(
+            to_bob, echo,
+            "mismos bytes que el echo (vid/empire del emisor)"
+        );
         // Dave (~4101: fuera del viejo rango 1000, dentro del view 5500)
         // TAMBIÉN lo recibe — C-03: el broadcast cubre el rango del view.
         let to_dave = tokio::time::timeout(Duration::from_secs(2), d.chat_rx.recv())
@@ -754,7 +773,11 @@ mod tests {
         let mut resp = [0u8; 6];
         a_sock.read_exact(&mut resp).await.expect("GC_WALK_MODE");
         assert_eq!(resp[0], 111, "GC_WALK_MODE (packet.h:212)");
-        assert_eq!(u32::from_le_bytes(resp[1..5].try_into().unwrap()), 1, "vid = row.id");
+        assert_eq!(
+            u32::from_le_bytes(resp[1..5].try_into().unwrap()),
+            1,
+            "vid = row.id"
+        );
         assert_eq!(resp[5], 1, "WALKMODE_WALK (packet.h:1880-1882)");
     }
 
@@ -807,7 +830,11 @@ mod tests {
             .expect("TargetLong recibe en 2 s")
             .expect("outbox abierto");
         assert_eq!(to_b[0], header::GC_WHISPER);
-        assert_eq!(to_b.len(), pchat::GC_WHISPER_FIXED + 512, "msg truncado a 512");
+        assert_eq!(
+            to_b.len(),
+            pchat::GC_WHISPER_FIXED + 512,
+            "msg truncado a 512"
+        );
         assert!(to_b[29..].iter().all(|&b| b == b'y'), "solo el mensaje");
     }
 
@@ -900,7 +927,11 @@ mod tests {
         assert_eq!(find_player("nadie"), None, "desconectado → None");
         drop(a);
         drop(b);
-        assert_eq!(find_player("target"), None, "el guard desregistra al soltar");
+        assert_eq!(
+            find_player("target"),
+            None,
+            "el guard desregistra al soltar"
+        );
     }
 
     /// Whisper entre 2: el destinatario recibe GC_WHISPER (bType CHAT) con el
@@ -931,7 +962,11 @@ mod tests {
             .trim_end_matches('\0')
             .to_string();
         assert_eq!(from, "Whisperer", "szNameFrom = el emisor");
-        assert_eq!(&to_bob[29..], b"hola bob", "mensaje sin NUL (parity strlen)");
+        assert_eq!(
+            &to_bob[29..],
+            b"hola bob",
+            "mensaje sin NUL (parity strlen)"
+        );
         // La confirmación al emisor: echo GC_WHISPER con el nombre del destino.
         let echo = read_packet(&mut a_sock).await;
         assert_eq!(echo[0], header::GC_WHISPER);

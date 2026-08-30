@@ -186,7 +186,10 @@ impl ItemRepo {
 
     /// pub(crate): lo usa también el impl de `load_attr_tables` (attr.rs).
     pub(crate) async fn connect(&self) -> Result<Client, String> {
-        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
+        self.pool
+            .get()
+            .await
+            .map_err(|e| format!("PG pool get: {e}"))
     }
 
     /// Load del QID_ITEM: los items de los 4 windows del personaje.
@@ -218,8 +221,12 @@ impl ItemRepo {
     /// (explicito o generado).
     pub async fn upsert(&self, row: &ItemRow, owner_id: i64) -> Result<i64, String> {
         let client = self.connect().await?;
-        let (sql, params): (&str, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) = if row.id == 0 {
-            (UPSERT_DEFAULT_ID_SQL, item_params_without_id(row, &owner_id))
+        let (sql, params): (&str, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) = if row.id == 0
+        {
+            (
+                UPSERT_DEFAULT_ID_SQL,
+                item_params_without_id(row, &owner_id),
+            )
         } else {
             (UPSERT_SQL, item_params_with_id(row, &owner_id))
         };
@@ -251,10 +258,7 @@ impl ItemRepo {
     /// equip aplica (`ModifyPoints`, item.cpp:718-735) — las botas llevan
     /// `APPLY_MOV_SPEED` (8) ahí. `None` = el vnum no existe en item_proto.
     /// SQL inline (sin dependencia del mapeo de filas).
-    pub async fn load_proto_use_values(
-        &self,
-        vnum: i64,
-    ) -> Result<Option<ProtoItem>, String> {
+    pub async fn load_proto_use_values(&self, vnum: i64) -> Result<Option<ProtoItem>, String> {
         let client = self.connect().await?;
         let rows = client
             .query(
@@ -272,26 +276,42 @@ impl ItemRepo {
         };
         let mut applies = [(0i16, 0i32); 3];
         for (i, slot) in applies.iter_mut().enumerate() {
-            slot.0 = r.try_get(2 + 2 * i).map_err(|e| format!("item_proto.applytype{i}: {e}"))?;
-            slot.1 = r.try_get(3 + 2 * i).map_err(|e| format!("item_proto.applyvalue{i}: {e}"))?;
+            slot.0 = r
+                .try_get(2 + 2 * i)
+                .map_err(|e| format!("item_proto.applytype{i}: {e}"))?;
+            slot.1 = r
+                .try_get(3 + 2 * i)
+                .map_err(|e| format!("item_proto.applyvalue{i}: {e}"))?;
         }
         let mut values = [0i32; 6];
         for (i, slot) in values.iter_mut().enumerate() {
-            *slot = r.try_get(8 + i).map_err(|e| format!("item_proto.value{i}: {e}"))?;
+            *slot = r
+                .try_get(8 + i)
+                .map_err(|e| format!("item_proto.value{i}: {e}"))?;
         }
         // weight es smallint (int2) en el esquema — cast DESPUÉS (patrón
         // del fix shop.rs:284-289: leer el tipo real, cast a i64 después;
         // leer int2 como i64 daba "error deserializing column 9").
-        let weight: i16 = r.try_get(15).map_err(|e| format!("item_proto.weight: {e}"))?;
+        let weight: i16 = r
+            .try_get(15)
+            .map_err(|e| format!("item_proto.weight: {e}"))?;
         Ok(Some(ProtoItem {
             b_type: r.try_get(0).map_err(|e| format!("item_proto.type: {e}"))?,
-            b_sub_type: r.try_get(1).map_err(|e| format!("item_proto.sub_type: {e}"))?,
+            b_sub_type: r
+                .try_get(1)
+                .map_err(|e| format!("item_proto.sub_type: {e}"))?,
             applies,
             values,
-            wear_flag: r.try_get(14).map_err(|e| format!("item_proto.wearflag: {e}"))?,
+            wear_flag: r
+                .try_get(14)
+                .map_err(|e| format!("item_proto.wearflag: {e}"))?,
             weight: i64::from(weight),
-            magic_pct: r.try_get(16).map_err(|e| format!("item_proto.magic_pct: {e}"))?,
-            socket_pct: r.try_get(17).map_err(|e| format!("item_proto.socket_pct: {e}"))?,
+            magic_pct: r
+                .try_get(16)
+                .map_err(|e| format!("item_proto.magic_pct: {e}"))?,
+            socket_pct: r
+                .try_get(17)
+                .map_err(|e| format!("item_proto.socket_pct: {e}"))?,
         }))
     }
 
@@ -315,8 +335,12 @@ impl ItemRepo {
         let Some(r) = rows.first() else {
             return Ok(None);
         };
-        let refine_set: i16 = r.try_get(0).map_err(|e| format!("item_proto.refine_set: {e}"))?;
-        let refined_vnum: i32 = r.try_get(1).map_err(|e| format!("item_proto.refined_vnum: {e}"))?;
+        let refine_set: i16 = r
+            .try_get(0)
+            .map_err(|e| format!("item_proto.refine_set: {e}"))?;
+        let refined_vnum: i32 = r
+            .try_get(1)
+            .map_err(|e| format!("item_proto.refined_vnum: {e}"))?;
         Ok(Some((i64::from(refine_set), i64::from(refined_vnum))))
     }
 
@@ -367,12 +391,20 @@ impl ItemRepo {
         };
         let mut materials = [(0i64, 0i32); 5];
         for (i, m) in materials.iter_mut().enumerate() {
-            m.0 = r.try_get(3 + 2 * i).map_err(|e| format!("refine_proto.vnum{i}: {e}"))?;
-            m.1 = r.try_get(4 + 2 * i).map_err(|e| format!("refine_proto.count{i}: {e}"))?;
+            m.0 = r
+                .try_get(3 + 2 * i)
+                .map_err(|e| format!("refine_proto.vnum{i}: {e}"))?;
+            m.1 = r
+                .try_get(4 + 2 * i)
+                .map_err(|e| format!("refine_proto.count{i}: {e}"))?;
         }
         Ok(Some(RefineRecipe {
-            cost: r.try_get(1).map_err(|e| format!("refine_proto.cost: {e}"))?,
-            prob: r.try_get(2).map_err(|e| format!("refine_proto.prob: {e}"))?,
+            cost: r
+                .try_get(1)
+                .map_err(|e| format!("refine_proto.cost: {e}"))?,
+            prob: r
+                .try_get(2)
+                .map_err(|e| format!("refine_proto.prob: {e}"))?,
             materials,
         }))
     }
@@ -425,7 +457,9 @@ impl ItemRepo {
                 vnum,
                 SafeboxProto {
                     size: size.max(1) as u16,
-                    antiflag: r.try_get(2).map_err(|e| format!("item_proto.antiflag: {e}"))?,
+                    antiflag: r
+                        .try_get(2)
+                        .map_err(|e| format!("item_proto.antiflag: {e}"))?,
                     flag: r.try_get(3).map_err(|e| format!("item_proto.flag: {e}"))?,
                 },
             );
@@ -460,7 +494,11 @@ impl ItemRepo {
     ///
     /// Precondicion documentada: la unidad debe caber en un batch (max_batch)
     /// y los pushes + `flush()` deben ir sin pausas > `flush_interval`.
-    pub async fn exchange_mutated(&self, batcher: &Batcher, ex: &ItemExchange) -> Result<(), String> {
+    pub async fn exchange_mutated(
+        &self,
+        batcher: &Batcher,
+        ex: &ItemExchange,
+    ) -> Result<(), String> {
         for m in exchange_mutations(ex) {
             batcher.push(m);
         }
@@ -562,12 +600,29 @@ fn item_params_with_id<'a>(
     owner_id: &'a i64,
 ) -> Vec<&'a (dyn tokio_postgres::types::ToSql + Sync)> {
     vec![
-        &row.id, owner_id, &row.window, &row.pos, &row.count, &row.vnum, //
-        &row.sockets[0], &row.sockets[1], &row.sockets[2], //
-        &row.attrs[0].0, &row.attrs[0].1, &row.attrs[1].0, &row.attrs[1].1, //
-        &row.attrs[2].0, &row.attrs[2].1, &row.attrs[3].0, &row.attrs[3].1, //
-        &row.attrs[4].0, &row.attrs[4].1, &row.attrs[5].0, &row.attrs[5].1, //
-        &row.attrs[6].0, &row.attrs[6].1,
+        &row.id,
+        owner_id,
+        &row.window,
+        &row.pos,
+        &row.count,
+        &row.vnum, //
+        &row.sockets[0],
+        &row.sockets[1],
+        &row.sockets[2], //
+        &row.attrs[0].0,
+        &row.attrs[0].1,
+        &row.attrs[1].0,
+        &row.attrs[1].1, //
+        &row.attrs[2].0,
+        &row.attrs[2].1,
+        &row.attrs[3].0,
+        &row.attrs[3].1, //
+        &row.attrs[4].0,
+        &row.attrs[4].1,
+        &row.attrs[5].0,
+        &row.attrs[5].1, //
+        &row.attrs[6].0,
+        &row.attrs[6].1,
     ]
 }
 
@@ -576,12 +631,28 @@ fn item_params_without_id<'a>(
     owner_id: &'a i64,
 ) -> Vec<&'a (dyn tokio_postgres::types::ToSql + Sync)> {
     vec![
-        owner_id, &row.window, &row.pos, &row.count, &row.vnum, //
-        &row.sockets[0], &row.sockets[1], &row.sockets[2], //
-        &row.attrs[0].0, &row.attrs[0].1, &row.attrs[1].0, &row.attrs[1].1, //
-        &row.attrs[2].0, &row.attrs[2].1, &row.attrs[3].0, &row.attrs[3].1, //
-        &row.attrs[4].0, &row.attrs[4].1, &row.attrs[5].0, &row.attrs[5].1, //
-        &row.attrs[6].0, &row.attrs[6].1,
+        owner_id,
+        &row.window,
+        &row.pos,
+        &row.count,
+        &row.vnum, //
+        &row.sockets[0],
+        &row.sockets[1],
+        &row.sockets[2], //
+        &row.attrs[0].0,
+        &row.attrs[0].1,
+        &row.attrs[1].0,
+        &row.attrs[1].1, //
+        &row.attrs[2].0,
+        &row.attrs[2].1,
+        &row.attrs[3].0,
+        &row.attrs[3].1, //
+        &row.attrs[4].0,
+        &row.attrs[4].1,
+        &row.attrs[5].0,
+        &row.attrs[5].1, //
+        &row.attrs[6].0,
+        &row.attrs[6].1,
     ]
 }
 
@@ -612,7 +683,11 @@ fn item_params_mutation(row: &ItemRow, owner_id: i64) -> Vec<Param> {
 /// (una fuente de verdad) + params. Compartida por `upsert_mutated` futuro y
 /// por la unidad ACID (`exchange_mutations`).
 pub(crate) fn upsert_mutation(row: &ItemRow, owner_id: i64) -> Mutation {
-    let sql = if row.id == 0 { UPSERT_DEFAULT_ID_SQL } else { UPSERT_SQL };
+    let sql = if row.id == 0 {
+        UPSERT_DEFAULT_ID_SQL
+    } else {
+        UPSERT_SQL
+    };
     Mutation::new(sql, item_params_mutation(row, owner_id))
 }
 
@@ -700,7 +775,11 @@ mod tests {
             .split(',')
             .map(|c| c.trim())
             .collect();
-        assert_eq!(cols.len(), 22, "id+window+pos+count+vnum+3 sockets+14 attrs");
+        assert_eq!(
+            cols.len(),
+            22,
+            "id+window+pos+count+vnum+3 sockets+14 attrs"
+        );
         assert_eq!(cols[0], "id");
         assert_eq!(cols[1], "\"window\"", "citado (reserved en PG)");
         assert_eq!(cols[2], "pos");
@@ -732,11 +811,16 @@ mod tests {
             .split(',')
             .map(|c| c.trim())
             .collect();
-        assert_eq!(cols.len(), 22, "id+window+pos+count+vnum+3 sockets+14 attrs");
+        assert_eq!(
+            cols.len(),
+            22,
+            "id+window+pos+count+vnum+3 sockets+14 attrs"
+        );
         assert_eq!(cols[0], "id");
         assert_eq!(cols[21], "attrvalue6");
         assert_eq!(
-            select, "SELECT id, \"window\", pos, count, vnum, socket0, socket1, socket2, \
+            select,
+            "SELECT id, \"window\", pos, count, vnum, socket0, socket1, socket2, \
 attrtype0, attrvalue0, attrtype1, attrvalue1, attrtype2, attrvalue2, \
 attrtype3, attrvalue3, attrtype4, attrvalue4, attrtype5, attrvalue5, \
 attrtype6, attrvalue6",
@@ -763,7 +847,10 @@ attrtype6, attrvalue6",
             SAFEBOX_PROTO_SQL, q,
             "columnas del TItemTable + batch ANY($1)"
         );
-        assert!(SAFEBOX_PROTO_SQL.contains("FROM player.item_proto"), "PROTO_FROM_DB");
+        assert!(
+            SAFEBOX_PROTO_SQL.contains("FROM player.item_proto"),
+            "PROTO_FROM_DB"
+        );
     }
 
     /// Upsert: ON CONFLICT (id) + variante DEFAULT para id==0; ambos con
@@ -772,7 +859,10 @@ attrtype6, attrvalue6",
     fn upsert_sql_conflict_and_default_variant() {
         assert!(UPSERT_SQL.contains("ON CONFLICT (id) DO UPDATE"));
         assert!(UPSERT_SQL.contains("attrtype6 = EXCLUDED.attrtype6"));
-        assert!(UPSERT_SQL.ends_with("RETURNING id"), "query_one necesita 1 fila");
+        assert!(
+            UPSERT_SQL.ends_with("RETURNING id"),
+            "query_one necesita 1 fila"
+        );
         assert!(UPSERT_SQL.starts_with("INSERT INTO player.item"));
         assert!(UPSERT_DEFAULT_ID_SQL.starts_with("INSERT INTO player.item"));
         assert!(!UPSERT_DEFAULT_ID_SQL.contains("(id,"), "id por DEFAULT");
@@ -830,9 +920,15 @@ attrtype6, attrvalue6",
             ms[0].sql,
             "UPDATE player.item SET count = $2 WHERE id = $1 AND count = $3"
         );
-        assert_eq!(ms[0].params, vec![Param::Int(100), Param::Int(2), Param::Int(5)]);
+        assert_eq!(
+            ms[0].params,
+            vec![Param::Int(100), Param::Int(2), Param::Int(5)]
+        );
         // (200, 3, 0): DELETE con guard pre (el replay no borra un stack que ya no existe).
-        assert_eq!(ms[1].sql, "DELETE FROM player.item WHERE id = $1 AND count = $2");
+        assert_eq!(
+            ms[1].sql,
+            "DELETE FROM player.item WHERE id = $1 AND count = $2"
+        );
         assert_eq!(ms[1].params, vec![Param::Int(200), Param::Int(3)]);
     }
 
@@ -856,20 +952,34 @@ attrtype6, attrvalue6",
         };
         let ms = exchange_mutations(&ex);
         assert_eq!(ms.len(), 3, "material + resultado + oro");
-        assert_eq!(ms[1].sql, UPSERT_DEFAULT_ID_SQL, "resultado id==0 -> DEFAULT");
+        assert_eq!(
+            ms[1].sql, UPSERT_DEFAULT_ID_SQL,
+            "resultado id==0 -> DEFAULT"
+        );
         assert_eq!(ms[1].params[0], Param::Int(7), "owner del resultado");
         assert_eq!(
             ms[2].sql,
             "UPDATE player.player SET gold = $2 WHERE id = $1 AND gold = $3"
         );
-        assert_eq!(ms[2].params, vec![Param::Int(7), Param::Int(1_200), Param::Int(1_000)]);
+        assert_eq!(
+            ms[2].params,
+            vec![Param::Int(7), Param::Int(1_200), Param::Int(1_000)]
+        );
     }
 
     /// Unidad vacia -> sin mutations (flush no-op con Ok).
     #[test]
     fn exchange_mutations_empty_unit_is_empty() {
-        let ex = ItemExchange { owner_id: 7, materials: vec![], result: None, gold: None };
-        assert!(exchange_mutations(&ex).is_empty(), "sin materials/resultado/oro");
+        let ex = ItemExchange {
+            owner_id: 7,
+            materials: vec![],
+            result: None,
+            gold: None,
+        };
+        assert!(
+            exchange_mutations(&ex).is_empty(),
+            "sin materials/resultado/oro"
+        );
     }
 
     /// Wiring del Batcher: `exchange_mutated` pushea TODAS las mutations y
@@ -882,7 +992,12 @@ attrtype6, attrvalue6",
         #[derive(Clone, Default)]
         struct CountingSink(Arc<Mutex<Vec<Vec<Mutation>>>>);
         impl MutationSink for CountingSink {
-            fn apply(&mut self, batch: Vec<Mutation>) -> impl std::future::Future<Output = Result<(), String>> + Send {
+            // RPITIT + Send: firma del trait, igual que los sinks reales.
+            #[allow(clippy::manual_async_fn)]
+            fn apply(
+                &mut self,
+                batch: Vec<Mutation>,
+            ) -> impl std::future::Future<Output = Result<(), String>> + Send {
                 async move {
                     self.0.lock().unwrap().push(batch);
                     Ok(())
@@ -892,14 +1007,19 @@ attrtype6, attrvalue6",
 
         let sink = CountingSink::default();
         let batcher = Batcher::spawn(std::time::Duration::from_millis(1000), 64, sink.clone());
-        let repo = ItemRepo::new(crate::pool::new_pool("host=127.0.0.1 port=1 user=x password=x dbname=x", 2).expect("pool"));
+        let repo = ItemRepo::new(
+            crate::pool::new_pool("host=127.0.0.1 port=1 user=x password=x dbname=x", 2)
+                .expect("pool"),
+        );
         let ex = ItemExchange {
             owner_id: 7,
             materials: vec![(100, 5, 2), (200, 3, 0)],
             result: Some((dummy_item(), 7)),
             gold: Some((1_000, 1_200)),
         };
-        repo.exchange_mutated(&batcher, &ex).await.expect("flush ok");
+        repo.exchange_mutated(&batcher, &ex)
+            .await
+            .expect("flush ok");
         let batches = sink.0.lock().unwrap();
         assert_eq!(batches.len(), 1, "la unidad entera en UN batch");
         assert_eq!(batches[0].len(), 4, "2 materials + resultado + oro");
@@ -925,7 +1045,11 @@ attrtype6, attrvalue6",
             .split(',')
             .map(|c| c.trim())
             .collect();
-        assert_eq!(cols.len(), 23, "id+login+vnum+count+3 sockets+14 attrs+mall+why");
+        assert_eq!(
+            cols.len(),
+            23,
+            "id+login+vnum+count+3 sockets+14 attrs+mall+why"
+        );
         assert_eq!(cols[0], "id");
         assert_eq!(cols[1], "login");
         assert_eq!(cols[2], "vnum");

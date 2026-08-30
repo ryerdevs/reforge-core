@@ -307,7 +307,15 @@ pub fn skill_master_type_from_blob(blob: &[u8], skill_id: u32) -> u8 {
 
 /// `master_type` derivado del nivel (parity `SetSkillLevel` 207-217: 40→3, 30→2, 20→1, else 0).
 pub fn master_type_for_level(level: u8) -> u8 {
-    if level >= 40 { 3 } else if level >= 30 { 2 } else if level >= 20 { 1 } else { 0 }
+    if level >= 40 {
+        3
+    } else if level >= 30 {
+        2
+    } else if level >= 20 {
+        1
+    } else {
+        0
+    }
 }
 
 /// `k` del poly: `GetSkillPower(vnum, level) * bMaxLevel / 100`
@@ -334,7 +342,12 @@ pub fn eval_poly(
     roll: &mut dyn FnMut(i32, i32) -> i32,
 ) -> Result<f64, String> {
     let tokens = tokenize(expr)?;
-    let mut p = Parser { tokens: &tokens, pos: 0, var, roll };
+    let mut p = Parser {
+        tokens: &tokens,
+        pos: 0,
+        var,
+        roll,
+    };
     let v = p.parse_expr()?;
     if p.pos != tokens.len() {
         return Err(format!("poly: tokens sobrantes tras '{expr}'"));
@@ -370,7 +383,9 @@ fn tokenize(expr: &str) -> Result<Vec<Tok>, String> {
                     i += 1;
                 }
                 let s: String = expr[start..i].chars().collect();
-                let v: f64 = s.parse().map_err(|_| format!("poly: número inválido '{s}'"))?;
+                let v: f64 = s
+                    .parse()
+                    .map_err(|_| format!("poly: número inválido '{s}'"))?;
                 out.push(Tok::Num(v));
             }
             'a'..='z' | 'A'..='Z' | '_' => {
@@ -524,7 +539,12 @@ impl Parser<'_> {
 ///    subset — los términos son identidad).
 ///
 /// Devuelve el daño (≥ 0) o 0 si el efecto no es de daño.
-pub fn skill_damage(attr: u8, amount: i32, victim_def: i32, roll: &mut dyn FnMut(i32, i32) -> i32) -> i32 {
+pub fn skill_damage(
+    attr: u8,
+    amount: i32,
+    victim_def: i32,
+    roll: &mut dyn FnMut(i32, i32) -> i32,
+) -> i32 {
     let mut dam = amount.max(0);
     if dam < 3 {
         dam = roll(1, 5); // CalcBattleDamage floor (parity battle.cpp:199-206)
@@ -563,7 +583,10 @@ impl SkillRepo {
     }
 
     async fn connect(&self) -> Result<database::pool::Client, String> {
-        self.pool.get().await.map_err(|e| format!("PG pool get: {e}"))
+        self.pool
+            .get()
+            .await
+            .map_err(|e| format!("PG pool get: {e}"))
     }
 
     /// Carga TODAS las skills del `skill_proto` (la tabla es estática en el
@@ -716,7 +739,10 @@ mod tests {
         let v = vars(&[("k", 1.0)]);
         let mut roll = roll_fixed(0);
         assert!(eval_poly("atk*k", &v, &mut roll).is_err(), "var sin setear");
-        assert!(eval_poly("pow(2,3)", &v, &mut roll).is_err(), "función desconocida");
+        assert!(
+            eval_poly("pow(2,3)", &v, &mut roll).is_err(),
+            "función desconocida"
+        );
         assert!(eval_poly("(1+2", &v, &mut roll).is_err(), "falta ')'");
         assert!(eval_poly("1+", &v, &mut roll).is_err(), "token colgado");
         assert!(eval_poly("1 @ 2", &v, &mut roll).is_err(), "token inválido");
@@ -742,7 +768,10 @@ mod tests {
         assert_eq!(skill_flags_from_text("ATTACK,USE_MELEE_DAMAGE"), 0b11);
         assert_eq!(
             skill_flags_from_text("ATTACK,USE_MELEE_DAMAGE,SELFONLY,SPLASH"),
-            skill_flag::ATTACK | skill_flag::USE_MELEE_DAMAGE | skill_flag::SELFONLY | skill_flag::SPLASH
+            skill_flag::ATTACK
+                | skill_flag::USE_MELEE_DAMAGE
+                | skill_flag::SELFONLY
+                | skill_flag::SPLASH
         );
         assert_eq!(skill_flags_from_text(""), 0);
         assert_eq!(skill_flags_from_text("SELFONLY"), skill_flag::SELFONLY);
@@ -761,7 +790,10 @@ mod tests {
         assert_eq!(affect_flag_from_text("GYEONGGONG"), aff::GYEONGGONG);
         assert_eq!(affect_flag_from_text("EUNHYUNG"), aff::EUNHYUNG);
         assert_eq!(affect_flag_from_text("RED_POSSESSION"), aff::RED_POSSESSION);
-        assert_eq!(affect_flag_from_text("BLUE_POSSESSION"), aff::BLUE_POSSESSION);
+        assert_eq!(
+            affect_flag_from_text("BLUE_POSSESSION"),
+            aff::BLUE_POSSESSION
+        );
         assert_eq!(affect_flag_from_text(""), 0);
         assert_eq!(affect_flag_from_text("BOGUS"), 0);
     }
@@ -771,7 +803,7 @@ mod tests {
     #[test]
     fn skill_level_from_blob_layout() {
         let mut blob = vec![0u8; 255 * 6];
-        blob[1 * 6 + 1] = 5; // skill 1 nivel 5
+        blob[6 + 1] = 5; // skill 1 (offset 1*6) nivel 5
         blob[19 * 6 + 1] = 3; // skill 19 nivel 3
         assert_eq!(skill_level_from_blob(&blob, 1), 5);
         assert_eq!(skill_level_from_blob(&blob, 19), 3);
@@ -847,7 +879,11 @@ mod tests {
             grand_add_sp_poly: String::new(),
         };
         assert!(atk.is_attack());
-        let buff = SkillProto { flag: skill_flag::SELFONLY, point_on: point::DEF_GRADE_BONUS, ..atk };
+        let buff = SkillProto {
+            flag: skill_flag::SELFONLY,
+            point_on: point::DEF_GRADE_BONUS,
+            ..atk
+        };
         assert!(!buff.is_attack());
     }
 
@@ -905,9 +941,15 @@ mod tests {
         assert_eq!(s19.affect_flag, aff::CHEONGEUN);
     }
 
-    #[test] fn master_type_for_level_thresholds() {
-        assert_eq!(master_type_for_level(19), 0); assert_eq!(master_type_for_level(20), 1);
-        assert_eq!(master_type_for_level(30), 2); assert_eq!(master_type_for_level(40), 3);
-        let mut b=vec![0u8;255*6]; b[6+1]=30; b[6]=2; assert_eq!(skill_master_type_from_blob(&b,1),2);
+    #[test]
+    fn master_type_for_level_thresholds() {
+        assert_eq!(master_type_for_level(19), 0);
+        assert_eq!(master_type_for_level(20), 1);
+        assert_eq!(master_type_for_level(30), 2);
+        assert_eq!(master_type_for_level(40), 3);
+        let mut b = vec![0u8; 255 * 6];
+        b[6 + 1] = 30;
+        b[6] = 2;
+        assert_eq!(skill_master_type_from_blob(&b, 1), 2);
     }
 }

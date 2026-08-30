@@ -33,7 +33,10 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             other => return Err(format!("argumento desconocido: {other}")),
         }
     }
-    Ok(Args { config_path: path.unwrap_or_else(|| "proxy.toml".into()), debug: debug_flag })
+    Ok(Args {
+        config_path: path.unwrap_or_else(|| "proxy.toml".into()),
+        debug: debug_flag,
+    })
 }
 
 #[tokio::main]
@@ -73,7 +76,9 @@ mod tests {
         assert_eq!(parse_args(&[]).unwrap().config_path, "proxy.toml");
         assert!(!parse_args(&[]).unwrap().debug);
         assert_eq!(
-            parse_args(&["--config".into(), "gpg.toml".into()]).unwrap().config_path,
+            parse_args(&["--config".into(), "gpg.toml".into()])
+                .unwrap()
+                .config_path,
             "gpg.toml"
         );
         assert!(parse_args(&["--debug".into()]).unwrap().debug);
@@ -81,4 +86,3 @@ mod tests {
         assert!(parse_args(&["--bogus".into()]).is_err());
     }
 }
-

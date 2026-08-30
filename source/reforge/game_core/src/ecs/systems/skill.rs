@@ -5,18 +5,18 @@
 use bevy_ecs::prelude::*;
 
 use crate::combat::{
-    attack_power, attack_speed_for_weapon, calc_attack_rating, def_grade_npc, distance_approx,
-    player_def_grade, PlayerState,
+    PlayerState, attack_power, attack_speed_for_weapon, calc_attack_rating, def_grade_npc,
+    distance_approx, player_def_grade,
 };
 use crate::ecs::components::{
-    Affect, Affects, Hp, HorseRiding, Mp, Player, Position, Pvp, SkillCooldowns, SkillLevels,
+    Affect, Affects, HorseRiding, Hp, Mp, Player, Position, Pvp, SkillCooldowns, SkillLevels,
 };
 use crate::ecs::events::{KillInfo, NpcEvent, SkillEvent, SplashVictimInfo};
 use crate::ecs::resources::{NpcIndex, NpcOutbox, Rand, SkillPowerTable, SkillTable, Tick};
 use crate::ecs::world::WorldSim;
 use crate::skill::{
-    attr_type, damage_flag_for_attr, eval_poly, k_value, point, skill_damage, skill_flag,
-    skill_level_from_blob, SkillProto, SkillRepo, SkillType,
+    SkillProto, SkillRepo, SkillType, attr_type, damage_flag_for_attr, eval_poly, k_value, point,
+    skill_damage, skill_flag, skill_level_from_blob,
 };
 use database::item::ProtoItem;
 
@@ -50,11 +50,14 @@ pub(crate) fn affects_system(
                     }
                     _ => {} // DEF/ATT/MOV/etc: se calculan en vivo desde Affects
                 }
-                outbox.0.push(SkillEvent::AffectRemoved {
-                    player_vid: p.vid,
-                    skill_id: aff.skill_id,
-                    point: aff.point,
-                }.into());
+                outbox.0.push(
+                    SkillEvent::AffectRemoved {
+                        player_vid: p.vid,
+                        skill_id: aff.skill_id,
+                        point: aff.point,
+                    }
+                    .into(),
+                );
             } else {
                 affects.0[i].duration_ms -= dt;
                 i += 1;
@@ -142,7 +145,13 @@ impl WorldSim {
         let Some(pe) = self.players.get(&player_vid).copied() else {
             return Vec::new();
         };
-        let Some(proto) = self.world.resource::<SkillTable>().0.get(&skill_id).cloned() else {
+        let Some(proto) = self
+            .world
+            .resource::<SkillTable>()
+            .0
+            .get(&skill_id)
+            .cloned()
+        else {
             return Vec::new(); // skill desconocida (o tabla sin cargar)
         };
         // (0) Gate HORSE (parity ComputeSkill/UseSkill — char_skill.cpp:
@@ -158,16 +167,57 @@ impl WorldSim {
         {
             return vec![horse_rejected(player_vid, skill_id, target_vid)];
         }
-        let (px, py, level, job, skill_group, st, dx, iq, ht, armor, hp, mp, max_hp, max_mp, skill_blob) = {
-            let Ok(ent) = self.world.get_entity(pe) else { return Vec::new() };
-            let Some(pos) = ent.get::<Position>() else { return Vec::new() };
-            let Some(p) = ent.get::<Player>() else { return Vec::new() };
-            let Some(h) = ent.get::<Hp>() else { return Vec::new() };
-            let Some(m) = ent.get::<Mp>() else { return Vec::new() };
-            let Some(sk) = ent.get::<SkillLevels>() else { return Vec::new() };
+        let (
+            px,
+            py,
+            level,
+            job,
+            skill_group,
+            st,
+            dx,
+            iq,
+            ht,
+            armor,
+            hp,
+            mp,
+            max_hp,
+            max_mp,
+            skill_blob,
+        ) = {
+            let Ok(ent) = self.world.get_entity(pe) else {
+                return Vec::new();
+            };
+            let Some(pos) = ent.get::<Position>() else {
+                return Vec::new();
+            };
+            let Some(p) = ent.get::<Player>() else {
+                return Vec::new();
+            };
+            let Some(h) = ent.get::<Hp>() else {
+                return Vec::new();
+            };
+            let Some(m) = ent.get::<Mp>() else {
+                return Vec::new();
+            };
+            let Some(sk) = ent.get::<SkillLevels>() else {
+                return Vec::new();
+            };
             (
-                pos.x, pos.y, p.level, p.job, p.skill_group, p.st, p.dx, p.iq, p.ht, p.armor,
-                h.hp, m.mp, h.max_hp, m.max_mp, sk.0.clone(),
+                pos.x,
+                pos.y,
+                p.level,
+                p.job,
+                p.skill_group,
+                p.st,
+                p.dx,
+                p.iq,
+                p.ht,
+                p.armor,
+                h.hp,
+                m.mp,
+                h.max_hp,
+                m.max_mp,
+                sk.0.clone(),
             )
         };
         // (1) nivel del jugador en la skill (parity GetSkillLevel == 0).
@@ -221,7 +271,9 @@ impl WorldSim {
                 }
                 splash_center = Some(center);
             } else {
-                let Some(view) = self.npc_view(target_vid) else { return Vec::new() };
+                let Some(view) = self.npc_view(target_vid) else {
+                    return Vec::new();
+                };
                 let dist = distance_approx(px - view.state.x, py - view.state.y);
                 if proto.target_range > 0 && dist > proto.target_range as i32 + 50 {
                     return Vec::new();
@@ -254,8 +306,12 @@ impl WorldSim {
             // de una PARTY es el caster → rango 0 → siempre pasa).
             let dist = match buff_target {
                 Some((_, e)) => {
-                    let Ok(ent) = self.world.get_entity(e) else { return Vec::new() };
-                    let Some(pos) = ent.get::<Position>() else { return Vec::new() };
+                    let Ok(ent) = self.world.get_entity(e) else {
+                        return Vec::new();
+                    };
+                    let Some(pos) = ent.get::<Position>() else {
+                        return Vec::new();
+                    };
                     distance_approx(px - pos.x, py - pos.y)
                 }
                 None => return Vec::new(),
@@ -268,8 +324,12 @@ impl WorldSim {
         // (3) cooldown del skill (parity TSkillUseInfo — el rechazo NO gasta
         // SP; desviación documentada arriba).
         {
-            let Ok(mut ent) = self.world.get_entity_mut(pe) else { return Vec::new() };
-            let Some(cds) = ent.get_mut::<SkillCooldowns>() else { return Vec::new() };
+            let Ok(mut ent) = self.world.get_entity_mut(pe) else {
+                return Vec::new();
+            };
+            let Some(cds) = ent.get_mut::<SkillCooldowns>() else {
+                return Vec::new();
+            };
             if cds.0.get(&skill_id).is_some_and(|t| *t > now_ms) {
                 return Vec::new();
             }
@@ -303,8 +363,15 @@ impl WorldSim {
             let ar = calc_attack_rating(dx, level, victim_dx, victim_lv) as f64;
             let def = f64::from(player_def_grade(level, ht, armor));
             let odef = def; // sin DEF_GRADE_BONUS en el subset (buffs aparte)
-            let maxhp = match victim_mob { Some((_, _, _, mhp)) => f64::from(mhp), None => f64::from(max_hp) };
-            let maxsp = if victim_mob.is_some() { 0.0 } else { f64::from(max_mp) };
+            let maxhp = match victim_mob {
+                Some((_, _, _, mhp)) => f64::from(mhp),
+                None => f64::from(max_hp),
+            };
+            let maxsp = if victim_mob.is_some() {
+                0.0
+            } else {
+                f64::from(max_mp)
+            };
             let var = |name: &str| -> Option<f64> {
                 match name {
                     "k" => Some(k),
@@ -320,18 +387,34 @@ impl WorldSim {
                     "def" => Some(def),
                     "odef" => Some(odef),
                     // coste SP: v = SP actual (o HP con USE_HP_AS_COST).
-                    "v" => Some(f64::from(if proto.flag & skill_flag::USE_HP_AS_COST != 0 { hp } else { mp })),
+                    "v" => Some(f64::from(if proto.flag & skill_flag::USE_HP_AS_COST != 0 {
+                        hp
+                    } else {
+                        mp
+                    })),
                     "maxv" => Some(f64::from(max_mp)),
                     _ => None,
                 }
             };
             let mut eval = |expr: &str| eval_poly(expr, &var, &mut roll);
             let is_grand = crate::skill::master_type_for_level(sk_level) >= 2;
-            let sp_poly = if is_grand && !proto.grand_add_sp_poly.trim().is_empty() { &proto.grand_add_sp_poly } else { &proto.sp_cost_poly };
+            let sp_poly = if is_grand && !proto.grand_add_sp_poly.trim().is_empty() {
+                &proto.grand_add_sp_poly
+            } else {
+                &proto.sp_cost_poly
+            };
             let sp_cost = eval(sp_poly).unwrap_or(0.0) as i32;
-            let hp_cost = if proto.flag & skill_flag::USE_HP_AS_COST != 0 { sp_cost } else { 0 };
+            let hp_cost = if proto.flag & skill_flag::USE_HP_AS_COST != 0 {
+                sp_cost
+            } else {
+                0
+            };
             let cooldown_ms = (eval(&proto.cooldown_poly).unwrap_or(0.0) * 1000.0) as u64;
-            let pt_poly = if is_grand && !proto.master_bonus_poly.trim().is_empty() { &proto.master_bonus_poly } else { &proto.point_poly };
+            let pt_poly = if is_grand && !proto.master_bonus_poly.trim().is_empty() {
+                &proto.master_bonus_poly
+            } else {
+                &proto.point_poly
+            };
             let amount = eval(pt_poly).unwrap_or(0.0) as i32;
             let duration_secs = eval(&proto.duration_poly).unwrap_or(0.0) as i32;
             (sp_cost, hp_cost, cooldown_ms, amount, duration_secs)
@@ -364,91 +447,84 @@ impl WorldSim {
                 // SPLASH (área): el daño a CADA víctima dentro del radio
                 // (el coste SP/cooldown ya se pagó UNA vez arriba).
                 events = self.splash_damage(
-                    player_vid,
-                    pe,
-                    skill_id,
-                    &proto,
-                    center,
-                    target_vid,
-                    weapon,
-                    sp_cost,
-                    hp_cost,
-                    k,
-                    level,
-                    job,
-                    st,
-                    dx,
-                    iq,
-                    ht,
-                    armor,
+                    player_vid, pe, skill_id, &proto, center, target_vid, weapon, sp_cost, hp_cost,
+                    k, level, job, st, dx, iq, ht, armor,
                 );
             } else {
-            // Daño del skill (parity FuncSplashDamage::OnHit): la DB da el
-            // poly en NEGATIVO → `iAmount = -iAmount` → CalcBattleDamage
-            // floor → ajuste por attr (MELEE: -victim DEF).
-            let (_, _, victim_def, _) = victim_mob.expect("mob del ataque");
-            let amount = -amount; // iAmount = -iAmount (char_skill.cpp:1143)
-            let mut rng = self.world.resource_mut::<Rand>();
-            let mut roll = |lo: i32, hi: i32| rng.roll(lo, hi);
-            let damage = skill_damage(proto.attr_type, amount, victim_def, &mut roll);
-            if damage > 0 {
-                let flag = damage_flag_for_attr(proto.attr_type);
-                let pkt = protocol::combat::GcDamageInfo::new(target_vid, flag, damage).to_bytes().to_vec();
-                let mut dead = false;
-                let mut hp_after = 0;
-                // La vista del mob ANTES del daño (parity FuncSplashDamage:
-                // el KillInfo del kill se captura antes de destruir el mob —
-                // si no, `remove_npc` la borra y el canal salta la recompensa
-                // de exp/gold del kill single-target; el splash ya lo hace
-                // bien).
-                let view = self.npc_view(target_vid);
-                if let Some(dmg) = self.damage_npc(target_vid, damage, Some(pe)) {
-                    dead = dmg.dead;
-                    hp_after = dmg.hp;
-                    if dead {
-                        self.remove_npc(target_vid);
+                // Daño del skill (parity FuncSplashDamage::OnHit): la DB da el
+                // poly en NEGATIVO → `iAmount = -iAmount` → CalcBattleDamage
+                // floor → ajuste por attr (MELEE: -victim DEF).
+                let (_, _, victim_def, _) = victim_mob.expect("mob del ataque");
+                let amount = -amount; // iAmount = -iAmount (char_skill.cpp:1143)
+                let mut rng = self.world.resource_mut::<Rand>();
+                let mut roll = |lo: i32, hi: i32| rng.roll(lo, hi);
+                let damage = skill_damage(proto.attr_type, amount, victim_def, &mut roll);
+                if damage > 0 {
+                    let flag = damage_flag_for_attr(proto.attr_type);
+                    let pkt = protocol::combat::GcDamageInfo::new(target_vid, flag, damage)
+                        .to_bytes()
+                        .to_vec();
+                    let mut dead = false;
+                    let mut hp_after = 0;
+                    // La vista del mob ANTES del daño (parity FuncSplashDamage:
+                    // el KillInfo del kill se captura antes de destruir el mob —
+                    // si no, `remove_npc` la borra y el canal salta la recompensa
+                    // de exp/gold del kill single-target; el splash ya lo hace
+                    // bien).
+                    let view = self.npc_view(target_vid);
+                    if let Some(dmg) = self.damage_npc(target_vid, damage, Some(pe)) {
+                        dead = dmg.dead;
+                        hp_after = dmg.hp;
+                        if dead {
+                            self.remove_npc(target_vid);
+                        }
                     }
+                    let victim = view.map(|v| KillInfo {
+                        vnum: v.vnum,
+                        x: v.state.x,
+                        y: v.state.y,
+                        hp: hp_after,
+                        max_hp: v.max_hp,
+                        exp: v.exp,
+                        gold_min: v.gold_min,
+                        gold_max: v.gold_max,
+                        drop_item: v.drop_item,
+                        mob_level: v.state.level,
+                    });
+                    events.push(
+                        SkillEvent::SkillResult {
+                            player_vid,
+                            skill_id,
+                            victim_vid: target_vid,
+                            packets: vec![pkt],
+                            damage,
+                            dead,
+                            victim,
+                            sp_cost,
+                            hp_cost,
+                            buff: None,
+                        }
+                        .into(),
+                    );
+                } else {
+                    // Daño 0 (bloqueado): el skill se gastó (SP/cooldown) — el
+                    // canal solo recibe el coste (GC_POINTS).
+                    events.push(
+                        SkillEvent::SkillResult {
+                            player_vid,
+                            skill_id,
+                            victim_vid: target_vid,
+                            packets: Vec::new(),
+                            damage: 0,
+                            dead: false,
+                            victim: None,
+                            sp_cost,
+                            hp_cost,
+                            buff: None,
+                        }
+                        .into(),
+                    );
                 }
-                let victim = view.map(|v| KillInfo {
-                    vnum: v.vnum,
-                    x: v.state.x,
-                    y: v.state.y,
-                    hp: hp_after,
-                    max_hp: v.max_hp,
-                    exp: v.exp,
-                    gold_min: v.gold_min,
-                    gold_max: v.gold_max,
-                    drop_item: v.drop_item,
-                    mob_level: v.state.level,
-                });
-                events.push(SkillEvent::SkillResult {
-                    player_vid,
-                    skill_id,
-                    victim_vid: target_vid,
-                    packets: vec![pkt],
-                    damage,
-                    dead,
-                    victim,
-                    sp_cost,
-                    hp_cost,
-                    buff: None,
-                }.into());
-            } else {
-                // Daño 0 (bloqueado): el skill se gastó (SP/cooldown) — el
-                // canal solo recibe el coste (GC_POINTS).
-                events.push(SkillEvent::SkillResult {
-                    player_vid,
-                    skill_id,
-                    victim_vid: target_vid,
-                    packets: Vec::new(),
-                    damage: 0,
-                    dead: false,
-                    victim: None,
-                    sp_cost,
-                    hp_cost,
-                    buff: None,
-                }.into());
-            }
             } // cierra la rama single-target (rama else del SPLASH)
         } else {
             // Buff (parity ComputeSkill: iDur > 0 → AddAffect; el valor del
@@ -475,10 +551,13 @@ impl WorldSim {
                             if vid == player_vid {
                                 return None;
                             }
-                            let Ok(ent) = self.world.get_entity(e) else { return None };
-                            let (Some(pos), Some(pvp)) =
-                                (ent.get::<Position>(), ent.get::<Pvp>())
-                            else { return None };
+                            let Ok(ent) = self.world.get_entity(e) else {
+                                return None;
+                            };
+                            let (Some(pos), Some(pvp)) = (ent.get::<Position>(), ent.get::<Pvp>())
+                            else {
+                                return None;
+                            };
                             if pvp.party_id != Some(pid)
                                 || distance_approx(px - pos.x, py - pos.y) >= PARTY_DEFAULT_RANGE
                             {
@@ -537,38 +616,47 @@ impl WorldSim {
                     // El caster ve su buff en el SkillResult (con el coste
                     // SP/cooldown del uso); CADA miembro recibe su PartyBuff
                     // (el canal lo enruta por player_vid → GC_AFFECT_ADD).
-                    events.push(if i == 0 {
-                        SkillEvent::SkillResult {
-                            player_vid,
-                            skill_id,
-                            victim_vid: target_vid,
-                            packets: Vec::new(),
-                            damage: 0,
-                            dead: false,
-                            victim: None,
-                            sp_cost,
-                            hp_cost,
-                            buff: Some(elem),
+                    events.push(
+                        if i == 0 {
+                            SkillEvent::SkillResult {
+                                player_vid,
+                                skill_id,
+                                victim_vid: target_vid,
+                                packets: Vec::new(),
+                                damage: 0,
+                                dead: false,
+                                victim: None,
+                                sp_cost,
+                                hp_cost,
+                                buff: Some(elem),
+                            }
+                        } else {
+                            SkillEvent::PartyBuff {
+                                player_vid: vid,
+                                skill_id,
+                                buff: elem,
+                            }
                         }
-                    } else {
-                        SkillEvent::PartyBuff { player_vid: vid, skill_id, buff: elem }
-                    }
-                    .into());
+                        .into(),
+                    );
                 }
             } else {
                 // Sin efecto (poly 0 o sin duración) — solo el coste.
-                events.push(SkillEvent::SkillResult {
-                    player_vid,
-                    skill_id,
-                    victim_vid: target_vid,
-                    packets: Vec::new(),
-                    damage: 0,
-                    dead: false,
-                    victim: None,
-                    sp_cost,
-                    hp_cost,
-                    buff: None,
-                }.into());
+                events.push(
+                    SkillEvent::SkillResult {
+                        player_vid,
+                        skill_id,
+                        victim_vid: target_vid,
+                        packets: Vec::new(),
+                        damage: 0,
+                        dead: false,
+                        victim: None,
+                        sp_cost,
+                        hp_cost,
+                        buff: None,
+                    }
+                    .into(),
+                );
             }
         }
         events
@@ -619,8 +707,12 @@ impl WorldSim {
         // caster NO — parity `pkChr == pkVictim → false`). (vid, x, y, pc).
         let mut candidates: Vec<(u32, i32, i32, bool)> = Vec::new();
         for (&vid, &e) in &self.world.resource::<NpcIndex>().0 {
-            let Ok(ent) = self.world.get_entity(e) else { continue };
-            let (Some(pos), Some(hp)) = (ent.get::<Position>(), ent.get::<Hp>()) else { continue };
+            let Ok(ent) = self.world.get_entity(e) else {
+                continue;
+            };
+            let (Some(pos), Some(hp)) = (ent.get::<Position>(), ent.get::<Hp>()) else {
+                continue;
+            };
             if hp.hp > 0 {
                 candidates.push((vid, pos.x, pos.y, false));
             }
@@ -629,8 +721,12 @@ impl WorldSim {
             if vid == player_vid {
                 continue;
             }
-            let Ok(ent) = self.world.get_entity(e) else { continue };
-            let (Some(pos), Some(hp)) = (ent.get::<Position>(), ent.get::<Hp>()) else { continue };
+            let Ok(ent) = self.world.get_entity(e) else {
+                continue;
+            };
+            let (Some(pos), Some(hp)) = (ent.get::<Position>(), ent.get::<Hp>()) else {
+                continue;
+            };
             if hp.hp > 0 {
                 candidates.push((vid, pos.x, pos.y, true));
             }
@@ -654,7 +750,11 @@ impl WorldSim {
         let def = f64::from(player_def_grade(level, ht, armor));
         let odef = def;
         let splash_range = proto.splash_range as i32;
-        let max_hit = if proto.max_hit == 0 { usize::MAX } else { proto.max_hit as usize };
+        let max_hit = if proto.max_hit == 0 {
+            usize::MAX
+        } else {
+            proto.max_hit as usize
+        };
         let adjust_around = !proto.splash_adjust_poly.trim().is_empty();
         let mut hits = 0usize;
         let mut victims: Vec<SplashVictimInfo> = Vec::new();
@@ -670,26 +770,49 @@ impl WorldSim {
             }
             // Gate de atacabilidad: mob → siempre (pvp.cpp:430 — `IsNPC()`
             // del C++); PC → el gate PvP del mundo (pk mode/party/muerto).
-            let ve = if is_pc { self.players.get(&vid).copied() } else { None };
+            let ve = if is_pc {
+                self.players.get(&vid).copied()
+            } else {
+                None
+            };
             if let Some(ve) = ve
-                && !self.pvp_attackable(pe, ve) {
-                    continue;
-                }
+                && !self.pvp_attackable(pe, ve)
+            {
+                continue;
+            }
             hits += 1; // el slot del lMaxHit se consume (parity HitOnce)
 
             // Stats de la víctima (las vars del poly — parity
             // FuncSplashDamage 1097-1121: `atk`/`ar` contra la víctima,
             // `maxhp`/`maxsp` DE la víctima).
             let (victim_dx, victim_lv, victim_def, vmax_hp, vmax_sp) = if let Some(ve) = ve {
-                let Ok(ent) = self.world.get_entity(ve) else { continue };
+                let Ok(ent) = self.world.get_entity(ve) else {
+                    continue;
+                };
                 let (Some(p), Some(h), Some(m)) =
                     (ent.get::<Player>(), ent.get::<Hp>(), ent.get::<Mp>())
-                else { continue };
-                (p.dx, p.level, player_def_grade(p.level, p.ht, p.armor), h.max_hp, m.max_mp)
+                else {
+                    continue;
+                };
+                (
+                    p.dx,
+                    p.level,
+                    player_def_grade(p.level, p.ht, p.armor),
+                    h.max_hp,
+                    m.max_mp,
+                )
             } else {
-                let Some(view) = self.npc_view(vid) else { continue };
+                let Some(view) = self.npc_view(vid) else {
+                    continue;
+                };
                 let s = view.state;
-                (s.dx, s.level, def_grade_npc(s.level, s.ht, s.wdef), view.max_hp, 0)
+                (
+                    s.dx,
+                    s.level,
+                    def_grade_npc(s.level, s.ht, s.wdef),
+                    view.max_hp,
+                    0,
+                )
             };
 
             // Daño del poly re-evaluado con las vars de la víctima + el
@@ -697,7 +820,8 @@ impl WorldSim {
             let damage = {
                 let mut rng = self.world.resource_mut::<Rand>();
                 let mut roll = |lo: i32, hi: i32| rng.roll(lo, hi);
-                let atk = attack_power(&player_state, victim_dx, victim_lv, weapon, &mut roll) as f64;
+                let atk =
+                    attack_power(&player_state, victim_dx, victim_lv, weapon, &mut roll) as f64;
                 let ar = calc_attack_rating(dx, level, victim_dx, victim_lv) as f64;
                 let var = |name: &str| -> Option<f64> {
                     match name {
@@ -742,13 +866,19 @@ impl WorldSim {
             }
 
             let flag = damage_flag_for_attr(proto.attr_type);
-            let pkt = protocol::combat::GcDamageInfo::new(vid, flag, damage).to_bytes().to_vec();
+            let pkt = protocol::combat::GcDamageInfo::new(vid, flag, damage)
+                .to_bytes()
+                .to_vec();
             if let Some(ve) = ve {
                 // PC: el daño va al Hp del mundo y la víctima recibe su
                 // evento (GC_DAMAGE_INFO + GC_POINTS/GC_DEAD en el canal).
                 let hp_after = {
-                    let Ok(mut ent) = self.world.get_entity_mut(ve) else { continue };
-                    let Some(mut h) = ent.get_mut::<Hp>() else { continue };
+                    let Ok(mut ent) = self.world.get_entity_mut(ve) else {
+                        continue;
+                    };
+                    let Some(mut h) = ent.get_mut::<Hp>() else {
+                        continue;
+                    };
                     h.hp = (h.hp - damage).max(0);
                     h.hp
                 };
@@ -946,22 +1076,53 @@ mod tests {
         w.set_player_mp(2, 500);
         load_skills(&mut w, vec![skill1_proto()]);
         let events = w.process_intent(
-            SkillIntent::UseSkill { player_vid: 2, skill_id: 1, target_vid: 10_000, weapon: None }.into(),
+            SkillIntent::UseSkill {
+                player_vid: 2,
+                skill_id: 1,
+                target_vid: 10_000,
+                weapon: None,
+            }
+            .into(),
             1_000,
         );
         let result = events.iter().find_map(|e| match e {
-            NpcEvent::Skill(SkillEvent::SkillResult { skill_id, packets, damage, dead, victim, sp_cost, hp_cost, buff, .. }) => {
-                Some((*skill_id, packets.clone(), *damage, *dead, *victim, *sp_cost, *hp_cost, buff.clone()))
-            }
+            NpcEvent::Skill(SkillEvent::SkillResult {
+                skill_id,
+                packets,
+                damage,
+                dead,
+                victim,
+                sp_cost,
+                hp_cost,
+                buff,
+                ..
+            }) => Some((
+                *skill_id,
+                packets.clone(),
+                *damage,
+                *dead,
+                *victim,
+                *sp_cost,
+                *hp_cost,
+                *buff,
+            )),
             _ => None,
         });
-        let (sid, packets, damage, dead, victim, sp_cost, hp_cost, buff) = result.expect("SkillResult");
+        let (sid, packets, damage, dead, victim, sp_cost, hp_cost, buff) =
+            result.expect("SkillResult");
         assert_eq!(sid, 1);
         assert_eq!(packets.len(), 1);
         assert_eq!(packets[0][0], 135, "GC_DAMAGE_INFO");
         assert_eq!(packets[0][1..5], 10_000u32.to_le_bytes(), "dwVID del mob");
-        assert_eq!(packets[0][5], crate::skill::damage_type::MELEE, "flag MELEE");
-        assert!((80..=82).contains(&damage), "daño del poly vs mob 101: {damage}");
+        assert_eq!(
+            packets[0][5],
+            crate::skill::damage_type::MELEE,
+            "flag MELEE"
+        );
+        assert!(
+            (80..=82).contains(&damage),
+            "daño del poly vs mob 101: {damage}"
+        );
         assert!(!dead);
         assert!(sp_cost > 0, "SP coste: {sp_cost}");
         assert_eq!(hp_cost, 0);
@@ -973,7 +1134,13 @@ mod tests {
         // Cooldown 12 s: el segundo uso inmediato → rechazo silencioso.
         assert!(
             w.process_intent(
-                SkillIntent::UseSkill { player_vid: 2, skill_id: 1, target_vid: 10_000, weapon: None }.into(),
+                SkillIntent::UseSkill {
+                    player_vid: 2,
+                    skill_id: 1,
+                    target_vid: 10_000,
+                    weapon: None
+                }
+                .into(),
                 1_100,
             )
             .is_empty(),
@@ -982,7 +1149,13 @@ mod tests {
         // Tras el cooldown (12 s) se puede usar de nuevo.
         assert!(
             !w.process_intent(
-                SkillIntent::UseSkill { player_vid: 2, skill_id: 1, target_vid: 10_000, weapon: None }.into(),
+                SkillIntent::UseSkill {
+                    player_vid: 2,
+                    skill_id: 1,
+                    target_vid: 10_000,
+                    weapon: None
+                }
+                .into(),
                 14_000,
             )
             .is_empty(),
@@ -1016,13 +1189,23 @@ mod tests {
 
         // Buff: valor = (200 + 6 + 15)*0.4 = 88; duración 96 s; AFF_CHEONGEUN.
         let events = w.process_intent(
-            SkillIntent::UseSkill { player_vid: 2, skill_id: 19, target_vid: 2, weapon: None }.into(),
+            SkillIntent::UseSkill {
+                player_vid: 2,
+                skill_id: 19,
+                target_vid: 2,
+                weapon: None,
+            }
+            .into(),
             1_000,
         );
         let result = events.iter().find_map(|e| match e {
-            NpcEvent::Skill(SkillEvent::SkillResult { skill_id, damage, sp_cost, buff, .. }) => {
-                Some((*skill_id, *damage, *sp_cost, buff.clone()))
-            }
+            NpcEvent::Skill(SkillEvent::SkillResult {
+                skill_id,
+                damage,
+                sp_cost,
+                buff,
+                ..
+            }) => Some((*skill_id, *damage, *sp_cost, *buff)),
             _ => None,
         });
         let (sid, damage, sp_cost, buff) = result.expect("SkillResult");
@@ -1049,7 +1232,12 @@ mod tests {
         let mut removed = false;
         for _ in 0..200 {
             let events = w.update(500);
-            removed |= events.iter().any(|e| matches!(e, NpcEvent::Skill(SkillEvent::AffectRemoved { skill_id: 19, .. })));
+            removed |= events.iter().any(|e| {
+                matches!(
+                    e,
+                    NpcEvent::Skill(SkillEvent::AffectRemoved { skill_id: 19, .. })
+                )
+            });
         }
         assert!(removed, "AffectRemoved al expirar");
         let events = w.update(2_000); // C29: cooldown 2000 ms para el golpe
@@ -1076,16 +1264,37 @@ mod tests {
         join_at(&mut w, 4, 6_000, 0); // miembro lejos (dist 6000 ≥ 5000)
         join_at(&mut w, 5, 0, 0); // no-miembro
         for vid in [2u32, 3, 4] {
-            w.process_intent(CombatIntent::SetParty { player_vid: vid, party_id: Some(7) }.into(), 1_000);
+            w.process_intent(
+                CombatIntent::SetParty {
+                    player_vid: vid,
+                    party_id: Some(7),
+                }
+                .into(),
+                1_000,
+            );
         }
-        w.process_intent(CombatIntent::SetParty { player_vid: 5, party_id: Some(8) }.into(), 1_000);
+        w.process_intent(
+            CombatIntent::SetParty {
+                player_vid: 5,
+                party_id: Some(8),
+            }
+            .into(),
+            1_000,
+        );
         w.set_player_mp(2, 200_000); // coste SP real: 80 + 220×50 = 11080
         load_skills(&mut w, vec![skill175_proto()]);
         let rows: Vec<[i32; 41]> = (0..9).map(|_| [5000; 41]).collect();
-        w.world.resource_mut::<SkillPowerTable>().0 =
-            std::sync::Arc::new(database::skill_power::SkillPowerTable::from_rows(rows.clone()));
+        w.world.resource_mut::<SkillPowerTable>().0 = std::sync::Arc::new(
+            database::skill_power::SkillPowerTable::from_rows(rows.clone()),
+        );
         let events = w.process_intent(
-            SkillIntent::UseSkill { player_vid: 2, skill_id: 175, target_vid: 2, weapon: None }.into(),
+            SkillIntent::UseSkill {
+                player_vid: 2,
+                skill_id: 175,
+                target_vid: 2,
+                weapon: None,
+            }
+            .into(),
             1_000,
         );
         // El buff llegó SOLO al caster (SkillResult) y al miembro 3 (PartyBuff
@@ -1093,14 +1302,34 @@ mod tests {
         let mut buffed: Vec<u32> = events
             .iter()
             .filter_map(|e| match e {
-                NpcEvent::Skill(SkillEvent::SkillResult { player_vid, buff: Some(b), .. }) => {
+                NpcEvent::Skill(SkillEvent::SkillResult {
+                    player_vid,
+                    buff: Some(b),
+                    ..
+                }) => {
                     assert_eq!(
-                        (b.dw_type, b.b_apply_on, b.l_apply_value, b.l_duration, b.dw_flag),
-                        (175, crate::skill::point::ATT_SPEED, 1000, 200, crate::skill::aff::BLUE_POSSESSION)
+                        (
+                            b.dw_type,
+                            b.b_apply_on,
+                            b.l_apply_value,
+                            b.l_duration,
+                            b.dw_flag
+                        ),
+                        (
+                            175,
+                            crate::skill::point::ATT_SPEED,
+                            1000,
+                            200,
+                            crate::skill::aff::BLUE_POSSESSION
+                        )
                     );
                     Some(*player_vid)
                 }
-                NpcEvent::Skill(SkillEvent::PartyBuff { player_vid, buff: b, .. }) => {
+                NpcEvent::Skill(SkillEvent::PartyBuff {
+                    player_vid,
+                    buff: b,
+                    ..
+                }) => {
                     assert_eq!(
                         (b.dw_type, b.l_apply_value, b.l_duration),
                         (175, 1000, 200),
@@ -1112,30 +1341,54 @@ mod tests {
             })
             .collect();
         buffed.sort_unstable();
-        assert_eq!(buffed, vec![2, 3], "caster + miembro cerca; ni 4 (lejano) ni 5 (ajeno)");
+        assert_eq!(
+            buffed,
+            vec![2, 3],
+            "caster + miembro cerca; ni 4 (lejano) ni 5 (ajeno)"
+        );
         // El mundo tiene el Affect aplicado en caster y miembro.
         for vid in [2u32, 3] {
             let e = *w.players.get(&vid).expect("player");
-            let affects = w.world.get_entity(e).expect("entidad").get::<Affects>().expect("Affects");
-            assert!(affects.0.iter().any(|a| a.skill_id == 175), "affect en vid {vid}");
+            let affects = w
+                .world
+                .get_entity(e)
+                .expect("entidad")
+                .get::<Affects>()
+                .expect("Affects");
+            assert!(
+                affects.0.iter().any(|a| a.skill_id == 175),
+                "affect en vid {vid}"
+            );
         }
         // Solitario (sin party): el buff solo al caster (parity `f(this)`).
         let mut w2 = world_with(7);
         join_with_skills_group(&mut w2, 2, &[(175, 1)], 1, 5);
         w2.set_player_mp(2, 200_000);
         load_skills(&mut w2, vec![skill175_proto()]);
-        w2.world.resource_mut::<SkillPowerTable>().0 =
-            std::sync::Arc::new(database::skill_power::SkillPowerTable::from_rows(rows.clone()));
+        w2.world.resource_mut::<SkillPowerTable>().0 = std::sync::Arc::new(
+            database::skill_power::SkillPowerTable::from_rows(rows.clone()),
+        );
         let events = w2.process_intent(
-            SkillIntent::UseSkill { player_vid: 2, skill_id: 175, target_vid: 2, weapon: None }.into(),
+            SkillIntent::UseSkill {
+                player_vid: 2,
+                skill_id: 175,
+                target_vid: 2,
+                weapon: None,
+            }
+            .into(),
             1_000,
         );
         assert!(
-            events.iter().any(|e| matches!(e, NpcEvent::Skill(SkillEvent::SkillResult { buff: Some(_), .. }))),
+            events.iter().any(|e| matches!(
+                e,
+                NpcEvent::Skill(SkillEvent::SkillResult { buff: Some(_), .. })
+            )),
             "solitario: el caster recibe su buff"
         );
         assert!(
-            !events.iter().any(|e| matches!(e, NpcEvent::Skill(SkillEvent::PartyBuff { .. }))),
+            !events
+                .iter()
+                .any(|e| matches!(e, NpcEvent::Skill(SkillEvent::PartyBuff { .. }))),
             "solitario: sin miembros → sin PartyBuff"
         );
     }
@@ -1152,7 +1405,13 @@ mod tests {
         // Sin nivel en la skill 1 → rechazo.
         assert!(
             w.process_intent(
-                SkillIntent::UseSkill { player_vid: 2, skill_id: 1, target_vid: 10_000, weapon: None }.into(),
+                SkillIntent::UseSkill {
+                    player_vid: 2,
+                    skill_id: 1,
+                    target_vid: 10_000,
+                    weapon: None
+                }
+                .into(),
                 1_000,
             )
             .is_empty(),
@@ -1163,7 +1422,13 @@ mod tests {
         w.set_player_mp(3, 10);
         assert!(
             w.process_intent(
-                SkillIntent::UseSkill { player_vid: 3, skill_id: 1, target_vid: 10_000, weapon: None }.into(),
+                SkillIntent::UseSkill {
+                    player_vid: 3,
+                    skill_id: 1,
+                    target_vid: 10_000,
+                    weapon: None
+                }
+                .into(),
                 2_000,
             )
             .is_empty(),
@@ -1181,7 +1446,13 @@ mod tests {
         load_skills(&mut w2, vec![ranged]);
         assert!(
             w2.process_intent(
-                SkillIntent::UseSkill { player_vid: 2, skill_id: 32, target_vid: 10_000, weapon: None }.into(),
+                SkillIntent::UseSkill {
+                    player_vid: 2,
+                    skill_id: 32,
+                    target_vid: 10_000,
+                    weapon: None
+                }
+                .into(),
                 1_000,
             )
             .is_empty(),
@@ -1198,7 +1469,13 @@ mod tests {
         // Sin load_skills: la tabla está vacía.
         assert!(
             w.process_intent(
-                SkillIntent::UseSkill { player_vid: 2, skill_id: 1, target_vid: 0, weapon: None }.into(),
+                SkillIntent::UseSkill {
+                    player_vid: 2,
+                    skill_id: 1,
+                    target_vid: 0,
+                    weapon: None
+                }
+                .into(),
                 1_000,
             )
             .is_empty()
@@ -1221,11 +1498,17 @@ mod tests {
         w.set_player_mp(2, 200_000);
         load_skills(&mut w, vec![skill1_proto()]);
         // Tabla real: fila i → 1000+i en cada nivel (idx 3 → 1003).
-        let rows: Vec<[i32; 41]> = (0..9).map(|i| [1000 + i as i32; 41]).collect();
+        let rows: Vec<[i32; 41]> = (0..9).map(|i| [1000 + i; 41]).collect();
         w.world.resource_mut::<SkillPowerTable>().0 =
             std::sync::Arc::new(database::skill_power::SkillPowerTable::from_rows(rows));
         let events = w.process_intent(
-            SkillIntent::UseSkill { player_vid: 2, skill_id: 1, target_vid: 10_000, weapon: None }.into(),
+            SkillIntent::UseSkill {
+                player_vid: 2,
+                skill_id: 1,
+                target_vid: 10_000,
+                weapon: None,
+            }
+            .into(),
             1_000,
         );
         let damage = events.iter().find_map(|e| match e {
@@ -1246,14 +1529,23 @@ mod tests {
         w2.set_player_mp(2, 500);
         load_skills(&mut w2, vec![skill1_proto()]);
         let events = w2.process_intent(
-            SkillIntent::UseSkill { player_vid: 2, skill_id: 1, target_vid: 10_000, weapon: None }.into(),
+            SkillIntent::UseSkill {
+                player_vid: 2,
+                skill_id: 1,
+                target_vid: 10_000,
+                weapon: None,
+            }
+            .into(),
             1_000,
         );
         let damage = events.iter().find_map(|e| match e {
             NpcEvent::Skill(SkillEvent::SkillResult { damage, .. }) => Some(*damage),
             _ => None,
         });
-        assert!((80..=82).contains(&damage.expect("SkillResult sin tabla")), "fail-open → aproximación");
+        assert!(
+            (80..=82).contains(&damage.expect("SkillResult sin tabla")),
+            "fail-open → aproximación"
+        );
     }
 
     /// El gate HORSE (btype 5 — SKILL_TYPE_HORSE, skill.h:47): desmontado →
@@ -1271,8 +1563,13 @@ mod tests {
         load_skills(&mut w, vec![proto]);
         let use_skill = |w: &mut WorldSim| {
             w.process_intent(
-                SkillIntent::UseSkill { player_vid: 2, skill_id: 50, target_vid: 10_000, weapon: None }
-                    .into(),
+                SkillIntent::UseSkill {
+                    player_vid: 2,
+                    skill_id: 50,
+                    target_vid: 10_000,
+                    weapon: None,
+                }
+                .into(),
                 1_000,
             )
         };
@@ -1281,9 +1578,12 @@ mod tests {
         let (packets, damage, sp_cost) = events
             .iter()
             .find_map(|e| match e {
-                NpcEvent::Skill(SkillEvent::SkillResult { packets, damage, sp_cost, .. }) => {
-                    Some((packets.clone(), *damage, *sp_cost))
-                }
+                NpcEvent::Skill(SkillEvent::SkillResult {
+                    packets,
+                    damage,
+                    sp_cost,
+                    ..
+                }) => Some((packets.clone(), *damage, *sp_cost)),
                 _ => None,
             })
             .expect("SkillResult del rechazo");
@@ -1301,9 +1601,9 @@ mod tests {
         let (packets, damage) = events
             .iter()
             .find_map(|e| match e {
-                NpcEvent::Skill(SkillEvent::SkillResult { packets, damage, .. }) => {
-                    Some((packets.clone(), *damage))
-                }
+                NpcEvent::Skill(SkillEvent::SkillResult {
+                    packets, damage, ..
+                }) => Some((packets.clone(), *damage)),
                 _ => None,
             })
             .expect("SkillResult del daño");
@@ -1327,22 +1627,35 @@ mod tests {
             r.ai_flag = Some("NOMOVE".into()); // determinista: no patrullan
             r
         };
-        load(&mut w, vec![
-            (entry(101, 0, 0, 1), nomove(101)),
-            (entry(102, 100, 0, 1), nomove(102)),
-            (entry(103, 300, 0, 1), nomove(103)), // a ~288 del centro: fuera del radio 250
-        ]);
+        load(
+            &mut w,
+            vec![
+                (entry(101, 0, 0, 1), nomove(101)),
+                (entry(102, 100, 0, 1), nomove(102)),
+                (entry(103, 300, 0, 1), nomove(103)), // a ~288 del centro: fuera del radio 250
+            ],
+        );
         join_with_skills(&mut w, 2, &[(1, 1)]);
         w.set_player_mp(2, 500);
         load_skills(&mut w, vec![skill1_splash_proto()]);
         let events = w.process_intent(
-            SkillIntent::UseSkill { player_vid: 2, skill_id: 1, target_vid: 10_000, weapon: None }.into(),
+            SkillIntent::UseSkill {
+                player_vid: 2,
+                skill_id: 1,
+                target_vid: 10_000,
+                weapon: None,
+            }
+            .into(),
             1_000,
         );
         let result = events.iter().find_map(|e| match e {
-            NpcEvent::Skill(SkillEvent::SplashResult { skill_id, victims, sp_cost, hp_cost, .. }) => {
-                Some((*skill_id, victims.clone(), *sp_cost, *hp_cost))
-            }
+            NpcEvent::Skill(SkillEvent::SplashResult {
+                skill_id,
+                victims,
+                sp_cost,
+                hp_cost,
+                ..
+            }) => Some((*skill_id, victims.clone(), *sp_cost, *hp_cost)),
             _ => None,
         });
         let (sid, victims, sp_cost, hp_cost) = result.expect("SplashResult");
@@ -1362,12 +1675,24 @@ mod tests {
         assert_eq!(v0.packets.len(), 1);
         assert_eq!(v0.packets[0][0], 135, "GC_DAMAGE_INFO");
         assert_eq!(v0.packets[0][1..5], 10_000u32.to_le_bytes(), "dwVID");
-        assert_eq!(v0.packets[0][5], crate::skill::damage_type::MELEE, "flag MELEE");
+        assert_eq!(
+            v0.packets[0][5],
+            crate::skill::damage_type::MELEE,
+            "flag MELEE"
+        );
         // El main target: el MISMO daño que el single-target (mismo atk vs
         // el mob 101 — 80-82). Las demás: floor × 0.5 ANTES de −DEF 10
         // (90-92 → 45-46 → 35-36).
-        assert!((80..=82).contains(&v0.damage), "main target sin ajuste: {}", v0.damage);
-        assert!((35..=36).contains(&v1.damage), "ajuste 0.5 antes de la DEF: {}", v1.damage);
+        assert!(
+            (80..=82).contains(&v0.damage),
+            "main target sin ajuste: {}",
+            v0.damage
+        );
+        assert!(
+            (35..=36).contains(&v1.damage),
+            "ajuste 0.5 antes de la DEF: {}",
+            v1.damage
+        );
         assert!(!v0.dead && !v1.dead);
         let k0 = v0.victim.expect("kill info del mob 101");
         assert_eq!(k0.vnum, 101);
@@ -1376,12 +1701,22 @@ mod tests {
         assert_eq!(k1.vnum, 102);
         assert_eq!(k1.hp, 126 - v1.damage);
         // El mob 103 (a ~288 > radio 250) NO recibió daño — intacto.
-        assert_eq!(w.npc_view(10_002).expect("mob 103").hp, 126, "fuera del radio");
+        assert_eq!(
+            w.npc_view(10_002).expect("mob 103").hp,
+            126,
+            "fuera del radio"
+        );
         // Cooldown 12 s: el segundo uso inmediato → rechazo silencioso
         // (el cooldown se paga UNA vez por uso, no por víctima).
         assert!(
             w.process_intent(
-                SkillIntent::UseSkill { player_vid: 2, skill_id: 1, target_vid: 10_000, weapon: None }.into(),
+                SkillIntent::UseSkill {
+                    player_vid: 2,
+                    skill_id: 1,
+                    target_vid: 10_000,
+                    weapon: None
+                }
+                .into(),
                 1_100,
             )
             .is_empty(),
@@ -1400,18 +1735,27 @@ mod tests {
             r.ai_flag = Some("NOMOVE".into());
             r
         };
-        load(&mut w, vec![
-            (entry(101, 0, 0, 1), nomove(101)),
-            (entry(102, 50, 0, 1), nomove(102)),
-            (entry(103, 100, 0, 1), nomove(103)),
-        ]);
+        load(
+            &mut w,
+            vec![
+                (entry(101, 0, 0, 1), nomove(101)),
+                (entry(102, 50, 0, 1), nomove(102)),
+                (entry(103, 100, 0, 1), nomove(103)),
+            ],
+        );
         join_with_skills(&mut w, 2, &[(1, 1)]);
         w.set_player_mp(2, 500);
         let mut proto = skill1_splash_proto();
         proto.max_hit = 2;
         load_skills(&mut w, vec![proto]);
         let events = w.process_intent(
-            SkillIntent::UseSkill { player_vid: 2, skill_id: 1, target_vid: 10_000, weapon: None }.into(),
+            SkillIntent::UseSkill {
+                player_vid: 2,
+                skill_id: 1,
+                target_vid: 10_000,
+                weapon: None,
+            }
+            .into(),
             1_000,
         );
         let victims = events.iter().find_map(|e| match e {
@@ -1419,7 +1763,11 @@ mod tests {
             _ => None,
         });
         let victims = victims.expect("SplashResult");
-        assert_eq!(victims.len(), 2, "lMaxHit 2: la tercera víctima no recibe daño");
+        assert_eq!(
+            victims.len(),
+            2,
+            "lMaxHit 2: la tercera víctima no recibe daño"
+        );
         assert_eq!(victims[0].victim_vid, 10_000);
         assert_eq!(victims[1].victim_vid, 10_001);
         assert_eq!(w.npc_view(10_002).expect("mob 103").hp, 126, "intacto");
@@ -1442,13 +1790,23 @@ mod tests {
         join_pvp(&mut w, 4, 0, 200); // PC víctima (PK off — no atacable)
         w.set_player_mp(2, 500);
         w.process_intent(
-            CombatIntent::SetPvpMode { player_vid: 3, mode: PkMode::Free }.into(),
+            CombatIntent::SetPvpMode {
+                player_vid: 3,
+                mode: PkMode::Free,
+            }
+            .into(),
             1_000,
         );
         load_skills(&mut w, vec![skill1_splash_proto()]);
         // target_vid inválido (9999): centro = caster (0,0).
         let events = w.process_intent(
-            SkillIntent::UseSkill { player_vid: 2, skill_id: 1, target_vid: 9_999, weapon: None }.into(),
+            SkillIntent::UseSkill {
+                player_vid: 2,
+                skill_id: 1,
+                target_vid: 9_999,
+                weapon: None,
+            }
+            .into(),
             2_000,
         );
         let victims = events.iter().find_map(|e| match e {
@@ -1465,9 +1823,13 @@ mod tests {
         // El golpe al PC 3: evento con routing a la VÍCTIMA + el mundo ya
         // aplicó el daño a su Hp.
         let hit = events.iter().find_map(|e| match e {
-            NpcEvent::Skill(SkillEvent::SplashVictimHit { player_vid, attacker_vid, damage, dead, .. }) => {
-                Some((*player_vid, *attacker_vid, *damage, *dead))
-            }
+            NpcEvent::Skill(SkillEvent::SplashVictimHit {
+                player_vid,
+                attacker_vid,
+                damage,
+                dead,
+                ..
+            }) => Some((*player_vid, *attacker_vid, *damage, *dead)),
             _ => None,
         });
         let (victim_pvid, attacker, damage, dead) = hit.expect("SplashVictimHit");
@@ -1475,26 +1837,88 @@ mod tests {
         assert_eq!(attacker, 2);
         assert!(damage > 0);
         assert!(!dead, "hp 100 del PC 3");
-        assert_eq!(w.player_hp(3), 100 - damage, "el mundo aplicó el daño al PC");
+        assert_eq!(
+            w.player_hp(3),
+            100 - damage,
+            "el mundo aplicó el daño al PC"
+        );
         // Sin evento para el PC 4 (PK off) ni para el caster.
         assert!(
-            !events.iter().any(|e| matches!(e, NpcEvent::Skill(SkillEvent::SplashVictimHit { player_vid: 4, .. }))),
+            !events.iter().any(|e| matches!(
+                e,
+                NpcEvent::Skill(SkillEvent::SplashVictimHit { player_vid: 4, .. })
+            )),
             "PK off: no atacable"
         );
         assert!(
-            !events.iter().any(|e| matches!(e, NpcEvent::Skill(SkillEvent::SplashVictimHit { player_vid: 2, .. }))),
+            !events.iter().any(|e| matches!(
+                e,
+                NpcEvent::Skill(SkillEvent::SplashVictimHit { player_vid: 2, .. })
+            )),
             "el caster no es víctima"
         );
     }
 
-    #[test] fn grand_master_uses_bonus_poly_and_sp() { // verifier: 30+→bonus poly/SP (char_skill.cpp:1131,2493)
-        let mut w=world_with(42); load(&mut w,vec![(entry(101,0,0,1),mob_row(101))]); join_with_skills(&mut w,2,&[(1,30)]); w.set_player_mp(2,500);
-        let mut p=skill1_proto(); p.master_bonus_poly="-(200)".into(); p.grand_add_sp_poly="5".into(); load_skills(&mut w,vec![p]);
-        let (d,s)=w.process_intent(SkillIntent::UseSkill{player_vid:2,skill_id:1,target_vid:10_000,weapon:None}.into(),1_000).iter().find_map(|e| match e{NpcEvent::Skill(SkillEvent::SkillResult{damage,sp_cost,..})=>Some((*damage,*sp_cost)),_=>None}).unwrap();
-        assert_eq!(d,190); assert_eq!(s,5);
-        let mut w2=world_with(42); load(&mut w2,vec![(entry(101,0,0,1),mob_row(101))]); join_with_skills(&mut w2,2,&[(1,1)]); w2.set_player_mp(2,5000);
-        let mut p2=skill1_proto(); p2.master_bonus_poly="-(200)".into(); p2.grand_add_sp_poly="5".into(); load_skills(&mut w2,vec![p2]);
-        let (d2,s2)=w2.process_intent(SkillIntent::UseSkill{player_vid:2,skill_id:1,target_vid:10_000,weapon:None}.into(),1_000).iter().find_map(|e| match e{NpcEvent::Skill(SkillEvent::SkillResult{damage,sp_cost,..})=>Some((*damage,*sp_cost)),_=>None}).unwrap();
-        assert!((80..=82).contains(&d2)); assert!(s2>5);
+    #[test]
+    fn grand_master_uses_bonus_poly_and_sp() {
+        // verifier: 30+→bonus poly/SP (char_skill.cpp:1131,2493)
+        let mut w = world_with(42);
+        load(&mut w, vec![(entry(101, 0, 0, 1), mob_row(101))]);
+        join_with_skills(&mut w, 2, &[(1, 30)]);
+        w.set_player_mp(2, 500);
+        let mut p = skill1_proto();
+        p.master_bonus_poly = "-(200)".into();
+        p.grand_add_sp_poly = "5".into();
+        load_skills(&mut w, vec![p]);
+        let (d, s) = w
+            .process_intent(
+                SkillIntent::UseSkill {
+                    player_vid: 2,
+                    skill_id: 1,
+                    target_vid: 10_000,
+                    weapon: None,
+                }
+                .into(),
+                1_000,
+            )
+            .iter()
+            .find_map(|e| match e {
+                NpcEvent::Skill(SkillEvent::SkillResult {
+                    damage, sp_cost, ..
+                }) => Some((*damage, *sp_cost)),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(d, 190);
+        assert_eq!(s, 5);
+        let mut w2 = world_with(42);
+        load(&mut w2, vec![(entry(101, 0, 0, 1), mob_row(101))]);
+        join_with_skills(&mut w2, 2, &[(1, 1)]);
+        w2.set_player_mp(2, 5000);
+        let mut p2 = skill1_proto();
+        p2.master_bonus_poly = "-(200)".into();
+        p2.grand_add_sp_poly = "5".into();
+        load_skills(&mut w2, vec![p2]);
+        let (d2, s2) = w2
+            .process_intent(
+                SkillIntent::UseSkill {
+                    player_vid: 2,
+                    skill_id: 1,
+                    target_vid: 10_000,
+                    weapon: None,
+                }
+                .into(),
+                1_000,
+            )
+            .iter()
+            .find_map(|e| match e {
+                NpcEvent::Skill(SkillEvent::SkillResult {
+                    damage, sp_cost, ..
+                }) => Some((*damage, *sp_cost)),
+                _ => None,
+            })
+            .unwrap();
+        assert!((80..=82).contains(&d2));
+        assert!(s2 > 5);
     }
 }

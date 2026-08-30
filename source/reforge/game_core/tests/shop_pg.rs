@@ -11,7 +11,10 @@ const DEFAULT_PG: &str = "host=127.0.0.1 port=5432 user=mt2 password=mt2 dbname=
 #[ignore = "requiere PG real (127.0.0.1:5432): cargo test -p game_core -- --ignored"]
 async fn shop_repo_loads_real_shops() {
     let pool = database::pool::new_pool(DEFAULT_PG, 2).expect("pool");
-    let shops = ShopRepo::new(pool).load().await.expect("load de player.shop");
+    let shops = ShopRepo::new(pool)
+        .load()
+        .await
+        .expect("load de player.shop");
     assert!(!shops.is_empty(), "player.shop tiene tiendas");
     // El vendedor del pueblo: shop 1 -> npc_vnum 9001 (legacy dump
     // mariadb_full_2026-08-12.sql; fix 2026-08-15 — antes apuntaba a 20002).
@@ -21,7 +24,10 @@ async fn shop_repo_loads_real_shops() {
     // Fix 2026-08-15 (paso 2): los 3 vendedores del pueblo visibles tienen
     // shop — 20002/20006/20023 asignados a las filas all_* libres (1002-1004).
     for (vnum, npc) in [(1002, 20002), (1003, 20006), (1004, 20023)] {
-        let s = shops.iter().find(|s| s.vnum == vnum).unwrap_or_else(|| panic!("shop {vnum}"));
+        let s = shops
+            .iter()
+            .find(|s| s.vnum == vnum)
+            .unwrap_or_else(|| panic!("shop {vnum}"));
         assert_eq!(s.npc_vnum, npc, "npc_vnum del shop {vnum} (vendedor {npc})");
         assert!(!s.items.is_empty(), "el shop {vnum} tiene items");
     }

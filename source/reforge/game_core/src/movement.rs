@@ -172,7 +172,11 @@ pub fn process_move(
     let dx = i128::from(packet.x) - i128::from(state.x);
     let dy = i128::from(packet.y) - i128::from(state.y);
     let dist_sq = dx * dx + dy * dy;
-    let max_dist = if state.riding { MAX_DIST_RIDING } else { MAX_DIST_NO_RIDING };
+    let max_dist = if state.riding {
+        MAX_DIST_RIDING
+    } else {
+        MAX_DIST_NO_RIDING
+    };
     if dist_sq > max_dist * max_dist {
         return Err(MoveError::TooFar);
     }
@@ -199,7 +203,8 @@ pub fn process_move(
         let client_dt =
             i64::from(packet.dw_time.wrapping_sub(state.last_client_time) as i32).max(0) as f64;
         let dt_ms = server_dt.max(client_dt);
-        let allowed = f64::from(state.speed) * (dt_ms + ENVELOPE_LAG_MS) / 1000.0 * ENVELOPE_TOLERANCE;
+        let allowed =
+            f64::from(state.speed) * (dt_ms + ENVELOPE_LAG_MS) / 1000.0 * ENVELOPE_TOLERANCE;
         if (dist_sq as f64).sqrt() > allowed {
             return Err(MoveError::ExceedsEnvelope);
         }
@@ -210,7 +215,10 @@ pub fn process_move(
     state.y = packet.y;
     state.last_client_time = packet.dw_time;
     state.last_server_time = now_ms;
-    Ok(MoveResult { x: packet.x, y: packet.y })
+    Ok(MoveResult {
+        x: packet.x,
+        y: packet.y,
+    })
 }
 
 /// Estado inicial desde una posición cargada del player (el primer MOVE tiene
@@ -291,13 +299,12 @@ mod tests {
         // Slow timer: el dwTime del paquete 40s atrás → iDelta = 65000 >= 30000.
         // (el reloj del cliente wrappea — parity del wire u32).
         let slow_time = 10_000u32.wrapping_sub(40_000);
-        let err = process_move(&mut st, &move_to(100, 0, slow_time), 60_000)
-            .expect_err("slow timer");
+        let err =
+            process_move(&mut st, &move_to(100, 0, slow_time), 60_000).expect_err("slow timer");
         assert_eq!(err, MoveError::SlowTimer);
         // Fast timer: el dwTime 10s en el futuro con iServerDelta=50s →
         // iDelta = -9900 < -(50000/50) → FastTimer.
-        let err = process_move(&mut st, &move_to(100, 0, 70_000), 60_100)
-            .expect_err("fast timer");
+        let err = process_move(&mut st, &move_to(100, 0, 70_000), 60_100).expect_err("fast timer");
         assert_eq!(err, MoveError::FastTimer);
         // El reloj razonable pasa.
         let r = process_move(&mut st, &move_to(100, 0, 60_000), 60_100).expect("reloj OK");
@@ -365,7 +372,8 @@ mod tests {
         // Pasos normales: 30 u cada 100 ms → Ok (dentro de 315 u de allowed).
         for i in 0..5 {
             let now = 10_100u32 + i as u32 * 100;
-            let r = process_move(&mut st, &move_to((i + 1) * 30, 0, now), now).expect("paso normal");
+            let r =
+                process_move(&mut st, &move_to((i + 1) * 30, 0, now), now).expect("paso normal");
             assert_eq!(r.x, (i + 1) * 30);
         }
         // Paso de 600 u en 100 ms (12× la velocidad base) → envelope.
@@ -382,7 +390,8 @@ mod tests {
         let mut st = anchored(0, 0, 10_000);
         let r = process_move(&mut st, &move_to(600, 0, 8_000), 12_000).expect("lag 2 s: 600 u");
         assert_eq!(r.x, 600);
-        let err = process_move(&mut st, &move_to(3_100, 0, 8_000), 12_000).expect_err("fuera de la tolerancia");
+        let err = process_move(&mut st, &move_to(3_100, 0, 8_000), 12_000)
+            .expect_err("fuera de la tolerancia");
         assert_eq!(err, MoveError::ExceedsEnvelope);
         // El reloj del cliente atrasado (dw_time 2 s antes) sigue pasando el
         // timer speedhack (iDelta = 4000 < 30000, no-fast) — el envelope es

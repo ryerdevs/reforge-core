@@ -92,34 +92,124 @@ pub struct AttrTables {
 /// catálogo `ENUM_COLUMNS` del mysql_proxy, translate.rs:597 — SHOW CREATE
 /// MariaDB 2026-08-11; el C++ los recibe con `apply+0`).
 pub const APPLY_NAMES: [&str; 118] = [
-    "MAX_HP", "MAX_SP", "CON", "INT", "STR", "DEX", "ATT_SPEED", "MOV_SPEED",
-    "CAST_SPEED", "HP_REGEN", "SP_REGEN", "POISON_PCT", "STUN_PCT", "SLOW_PCT",
-    "CRITICAL_PCT", "PENETRATE_PCT", "ATTBONUS_HUMAN", "ATTBONUS_ANIMAL",
-    "ATTBONUS_ORC", "ATTBONUS_MILGYO", "ATTBONUS_UNDEAD", "ATTBONUS_DEVIL",
-    "STEAL_HP", "STEAL_SP", "MANA_BURN_PCT", "DAMAGE_SP_RECOVER", "BLOCK",
-    "DODGE", "RESIST_SWORD", "RESIST_TWOHAND", "RESIST_DAGGER", "RESIST_BELL",
-    "RESIST_FAN", "RESIST_BOW", "RESIST_FIRE", "RESIST_ELEC", "RESIST_MAGIC",
-    "RESIST_WIND", "REFLECT_MELEE", "REFLECT_CURSE", "POISON_REDUCE",
-    "KILL_SP_RECOVER", "EXP_DOUBLE_BONUS", "GOLD_DOUBLE_BONUS",
-    "ITEM_DROP_BONUS", "POTION_BONUS", "KILL_HP_RECOVER", "IMMUNE_STUN",
-    "IMMUNE_SLOW", "IMMUNE_FALL", "SKILL", "BOW_DISTANCE", "ATT_GRADE_BONUS",
-    "DEF_GRADE_BONUS", "MAGIC_ATT_GRADE_BONUS", "MAGIC_DEF_GRADE_BONUS",
-    "CURSE_PCT", "MAX_STAMINA", "ATT_BONUS_TO_WARRIOR", "ATT_BONUS_TO_ASSASSIN",
-    "ATT_BONUS_TO_SURA", "ATT_BONUS_TO_SHAMAN", "ATT_BONUS_TO_MONSTER",
-    "ATT_BONUS", "MALL_DEFBONUS", "MALL_EXPBONUS", "MALL_ITEMBONUS",
-    "MALL_GOLDBONUS", "MAX_HP_PCT", "MAX_SP_PCT", "SKILL_DAMAGE_BONUS",
-    "NORMAL_HIT_DAMAGE_BONUS", "SKILL_DEFEND_BONUS", "NORMAL_HIT_DEFEND_BONUS",
-    "PC_BANG_EXP_BONUS", "PC_BANG_DROP_BONUS", "EXTRACT_HP_PCT",
-    "RESIST_WARRIOR", "RESIST_ASSASSIN", "RESIST_SURA", "RESIST_SHAMAN",
-    "ENERGY", "DEF_GRADE", "COSTUME_ATTR_BONUS", "MAGIC_ATT_BONUS_PER",
-    "MELEE_MAGIC_ATT_BONUS_PER", "RESIST_ICE", "RESIST_EARTH", "RESIST_DARK",
-    "RESIST_CRITICAL", "RESIST_PENETRATE", "BLEEDING_REDUCE", "BLEEDING_PCT",
-    "ATT_BONUS_TO_WOLFMAN", "RESIST_WOLFMAN", "RESIST_CLAW", "ACCEDRAIN_RATE",
-    "RESIST_MAGIC_REDUCTION", "ENCHANT_ELECT", "ENCHANT_FIRE", "ENCHANT_ICE",
-    "ENCHANT_WIND", "ENCHANT_EARTH", "ENCHANT_DARK", "ATTBONUS_CZ",
-    "ATTBONUS_INSECT", "ATTBONUS_DESERT", "ATTBONUS_SWORD", "ATTBONUS_TWOHAND",
-    "ATTBONUS_DAGGER", "ATTBONUS_BELL", "ATTBONUS_FAN", "ATTBONUS_BOW",
-    "ATTBONUS_CLAW", "RESIST_HUMAN", "RESIST_MOUNT_FALL", "UNK_117", "MOUNT",
+    "MAX_HP",
+    "MAX_SP",
+    "CON",
+    "INT",
+    "STR",
+    "DEX",
+    "ATT_SPEED",
+    "MOV_SPEED",
+    "CAST_SPEED",
+    "HP_REGEN",
+    "SP_REGEN",
+    "POISON_PCT",
+    "STUN_PCT",
+    "SLOW_PCT",
+    "CRITICAL_PCT",
+    "PENETRATE_PCT",
+    "ATTBONUS_HUMAN",
+    "ATTBONUS_ANIMAL",
+    "ATTBONUS_ORC",
+    "ATTBONUS_MILGYO",
+    "ATTBONUS_UNDEAD",
+    "ATTBONUS_DEVIL",
+    "STEAL_HP",
+    "STEAL_SP",
+    "MANA_BURN_PCT",
+    "DAMAGE_SP_RECOVER",
+    "BLOCK",
+    "DODGE",
+    "RESIST_SWORD",
+    "RESIST_TWOHAND",
+    "RESIST_DAGGER",
+    "RESIST_BELL",
+    "RESIST_FAN",
+    "RESIST_BOW",
+    "RESIST_FIRE",
+    "RESIST_ELEC",
+    "RESIST_MAGIC",
+    "RESIST_WIND",
+    "REFLECT_MELEE",
+    "REFLECT_CURSE",
+    "POISON_REDUCE",
+    "KILL_SP_RECOVER",
+    "EXP_DOUBLE_BONUS",
+    "GOLD_DOUBLE_BONUS",
+    "ITEM_DROP_BONUS",
+    "POTION_BONUS",
+    "KILL_HP_RECOVER",
+    "IMMUNE_STUN",
+    "IMMUNE_SLOW",
+    "IMMUNE_FALL",
+    "SKILL",
+    "BOW_DISTANCE",
+    "ATT_GRADE_BONUS",
+    "DEF_GRADE_BONUS",
+    "MAGIC_ATT_GRADE_BONUS",
+    "MAGIC_DEF_GRADE_BONUS",
+    "CURSE_PCT",
+    "MAX_STAMINA",
+    "ATT_BONUS_TO_WARRIOR",
+    "ATT_BONUS_TO_ASSASSIN",
+    "ATT_BONUS_TO_SURA",
+    "ATT_BONUS_TO_SHAMAN",
+    "ATT_BONUS_TO_MONSTER",
+    "ATT_BONUS",
+    "MALL_DEFBONUS",
+    "MALL_EXPBONUS",
+    "MALL_ITEMBONUS",
+    "MALL_GOLDBONUS",
+    "MAX_HP_PCT",
+    "MAX_SP_PCT",
+    "SKILL_DAMAGE_BONUS",
+    "NORMAL_HIT_DAMAGE_BONUS",
+    "SKILL_DEFEND_BONUS",
+    "NORMAL_HIT_DEFEND_BONUS",
+    "PC_BANG_EXP_BONUS",
+    "PC_BANG_DROP_BONUS",
+    "EXTRACT_HP_PCT",
+    "RESIST_WARRIOR",
+    "RESIST_ASSASSIN",
+    "RESIST_SURA",
+    "RESIST_SHAMAN",
+    "ENERGY",
+    "DEF_GRADE",
+    "COSTUME_ATTR_BONUS",
+    "MAGIC_ATT_BONUS_PER",
+    "MELEE_MAGIC_ATT_BONUS_PER",
+    "RESIST_ICE",
+    "RESIST_EARTH",
+    "RESIST_DARK",
+    "RESIST_CRITICAL",
+    "RESIST_PENETRATE",
+    "BLEEDING_REDUCE",
+    "BLEEDING_PCT",
+    "ATT_BONUS_TO_WOLFMAN",
+    "RESIST_WOLFMAN",
+    "RESIST_CLAW",
+    "ACCEDRAIN_RATE",
+    "RESIST_MAGIC_REDUCTION",
+    "ENCHANT_ELECT",
+    "ENCHANT_FIRE",
+    "ENCHANT_ICE",
+    "ENCHANT_WIND",
+    "ENCHANT_EARTH",
+    "ENCHANT_DARK",
+    "ATTBONUS_CZ",
+    "ATTBONUS_INSECT",
+    "ATTBONUS_DESERT",
+    "ATTBONUS_SWORD",
+    "ATTBONUS_TWOHAND",
+    "ATTBONUS_DAGGER",
+    "ATTBONUS_BELL",
+    "ATTBONUS_FAN",
+    "ATTBONUS_BOW",
+    "ATTBONUS_CLAW",
+    "RESIST_HUMAN",
+    "RESIST_MOUNT_FALL",
+    "UNK_117",
+    "MOUNT",
 ];
 
 /// Índice EApplyTypes del literal (parity `apply+0` de MySQL — 1-based;
@@ -165,7 +255,9 @@ fn number(rng: &mut dyn FnMut() -> u32, min: u32, max: u32) -> u32 {
 /// ¿El apply `idx` ya está en los slots NORMALES (0-4)? (`HasAttr`,
 /// item_attribute.cpp:129-139).
 fn has_attr(attrs: &[(i16, i16); 7], apply_index: i16) -> bool {
-    attrs[..NORM_ATTR_NUM].iter().any(|(t, _)| *t == apply_index)
+    attrs[..NORM_ATTR_NUM]
+        .iter()
+        .any(|(t, _)| *t == apply_index)
 }
 
 /// ¿El apply `idx` ya está en los slots RAROS (5-6)? (`HasRareAttr`).
@@ -189,7 +281,13 @@ fn put_attribute_with_level(
     let mut avail: Vec<usize> = Vec::new();
     let mut total: u32 = 0;
     for (i, r) in table.iter().enumerate() {
-        if r.max_level_by_set[set] > 0 && !(if rare_slot { has_rare_attr(attrs, r.apply_index) } else { has_attr(attrs, r.apply_index) }) {
+        if r.max_level_by_set[set] > 0
+            && !(if rare_slot {
+                has_rare_attr(attrs, r.apply_index)
+            } else {
+                has_attr(attrs, r.apply_index)
+            })
+        {
             avail.push(i);
             total = total.saturating_add(r.prob.max(0) as u32);
         }
@@ -213,7 +311,11 @@ fn put_attribute_with_level(
     if value == 0 {
         return false; // parity AddAttr: `lVal` 0 → no escribe
     }
-    let pos = if rare_slot { RARE_START + count_rare(attrs) } else { count_norm(attrs) };
+    let pos = if rare_slot {
+        RARE_START + count_rare(attrs)
+    } else {
+        count_norm(attrs)
+    };
     if pos >= 7 {
         return false;
     }
@@ -222,11 +324,17 @@ fn put_attribute_with_level(
 }
 
 fn count_norm(attrs: &[(i16, i16); 7]) -> usize {
-    attrs[..NORM_ATTR_NUM].iter().take_while(|(t, _)| *t != 0).count()
+    attrs[..NORM_ATTR_NUM]
+        .iter()
+        .take_while(|(t, _)| *t != 0)
+        .count()
 }
 
 fn count_rare(attrs: &[(i16, i16); 7]) -> usize {
-    attrs[RARE_START..].iter().take_while(|(t, _)| *t != 0).count()
+    attrs[RARE_START..]
+        .iter()
+        .take_while(|(t, _)| *t != 0)
+        .count()
 }
 
 /// `PutAttribute(percentTable)` (item_attribute.cpp:217-232): el nivel del
@@ -299,7 +407,11 @@ pub fn add_rare_attribute(
     let avail: Vec<usize> = rare
         .iter()
         .enumerate()
-        .filter(|(_, r)| r.apply_index != 0 && r.max_level_by_set[set] > 0 && !has_rare_attr(attrs, r.apply_index))
+        .filter(|(_, r)| {
+            r.apply_index != 0
+                && r.max_level_by_set[set] > 0
+                && !has_rare_attr(attrs, r.apply_index)
+        })
         .map(|(i, _)| i)
         .collect();
     if avail.is_empty() {
@@ -329,6 +441,9 @@ pub fn add_rare_attribute(
 /// los sockets SÍ aplican). Los attrs/sockets previos se conservan (los
 /// items ya mágicos no se re-rollean). La ÚNICA función pública del slice
 /// (ponytail: 1 función, no las 3 clases del C++).
+// 8 parámetros coherentes: rng + pct + tablas + tipo + salidas — el C++ los
+// toma de TItemTable completo; aquí van explícitos.
+#[allow(clippy::too_many_arguments)]
 pub fn roll_attrs(
     rng: &mut dyn FnMut() -> u32,
     magic_pct: i16,
@@ -374,7 +489,8 @@ FROM player.{table} ORDER BY apply";
 /// (mismo trap documentado del `weight` en item.rs). Se leen i64 y se
 /// castean a los tipos del TItemAttrTable (long/BYTE en el C++).
 fn attr_row_from_row(r: &tokio_postgres::Row) -> Result<AttrRow, String> {
-    let g = |i: usize| -> Result<i64, String> { r.try_get(i).map_err(|e| format!("attr col{i}: {e}")) };
+    let g =
+        |i: usize| -> Result<i64, String> { r.try_get(i).map_err(|e| format!("attr col{i}: {e}")) };
     let mut values = [0i32; MAX_ATTR_LEVEL];
     for (i, v) in values.iter_mut().enumerate() {
         *v = g(2 + i)? as i32;
@@ -400,13 +516,19 @@ impl crate::item::ItemRepo {
     pub async fn load_attr_tables(&self) -> Result<AttrTables, String> {
         let client = self.connect().await?;
         let mut tables = AttrTables::default();
-        for (table, out) in [("item_attr", &mut tables.normal), ("item_attr_rare", &mut tables.rare)] {
+        for (table, out) in [
+            ("item_attr", &mut tables.normal),
+            ("item_attr_rare", &mut tables.rare),
+        ] {
             let sql = ATTR_TABLE_SQL.replace("{table}", table);
             let rows = client
                 .query(&sql, &[])
                 .await
                 .map_err(|e| crate::account::pg_err(&format!("ATTR_{table}"), &e))?;
-            let mut v = rows.iter().map(attr_row_from_row).collect::<Result<Vec<_>, _>>()?;
+            let mut v = rows
+                .iter()
+                .map(attr_row_from_row)
+                .collect::<Result<Vec<_>, _>>()?;
             // El C++ indexa por dwApplyIndex (`g_map_itemAttr[dwApplyIndex]`,
             // input_db.cpp:652) → el orden de iteración de avail es por apply
             // ASCENDENTE; el ORDER BY apply del SQL es alfabético (text en
@@ -434,7 +556,11 @@ mod tests {
         assert_eq!(apply_index_by_name("MOV_SPEED"), Some(8), "APPLY_MOV_SPEED");
         assert_eq!(apply_index_by_name("MOUNT"), Some(118), "último literal");
         assert_eq!(apply_index_by_name("NO_EXISTE"), None, "no-enum → 0");
-        assert_eq!(APPLY_NAMES.len(), 118, "catálogo del proxy (translate.rs:597)");
+        assert_eq!(
+            APPLY_NAMES.len(),
+            118,
+            "catálogo del proxy (translate.rs:597)"
+        );
     }
 
     /// `GetAttributeSetIndex` parity (item_attribute.cpp:15-57): arma → 0
@@ -488,7 +614,12 @@ mod tests {
     }
 
     fn row(apply: i16, prob: i32, values: [i32; 5], sets: [i16; 8]) -> AttrRow {
-        AttrRow { apply_index: apply, prob, values, max_level_by_set: sets }
+        AttrRow {
+            apply_index: apply,
+            prob,
+            values,
+            max_level_by_set: sets,
+        }
     }
 
     /// `alter_to_magic_item` escribe 1..3 attrs en los slots NORMALES (0-4)
@@ -531,7 +662,9 @@ mod tests {
         let normal = vec![row(1, 10, [10, 0, 0, 0, 0], [0, 5, 0, 0, 0, 0, 0, 0])];
         let mut attrs = [(0i16, 0i16); 7];
         let mut rng = seq(vec![1]);
-        assert!(!put_attribute_with_level(&mut rng, &normal, SET_WEAPON, &mut attrs, 1, false));
+        assert!(!put_attribute_with_level(
+            &mut rng, &normal, SET_WEAPON, &mut attrs, 1, false
+        ));
         assert_eq!(attrs, [(0, 0); 7]);
     }
 
@@ -595,7 +728,15 @@ mod tests {
         roll_attrs(&mut rng, 50, 0, &tables, 1, 0, &mut sockets, &mut attrs);
         assert_eq!(attrs, [(0, 0); 7], "roll 99 > 50 → sin attrs");
         // Items YA mágicos no se re-rollean (parity CreateItem).
-        let mut attrs = [(1i16, 10i16), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0)];
+        let mut attrs = [
+            (1i16, 10i16),
+            (0, 0),
+            (0, 0),
+            (0, 0),
+            (0, 0),
+            (0, 0),
+            (0, 0),
+        ];
         let mut rng = seq(vec![1]);
         roll_attrs(&mut rng, 100, 0, &tables, 1, 0, &mut sockets, &mut attrs);
         assert_eq!(attrs[0], (1, 10), "intacto");

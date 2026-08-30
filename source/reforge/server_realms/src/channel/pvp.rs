@@ -74,8 +74,16 @@ mod tests {
     /// el fallback 2 B; cualquier otra longitud → rechazo limpio.
     #[test]
     fn pvp_mode_parses_10b_and_2b() {
-        assert_eq!(mode_of(&[41, 0, 0, 0, 0, 0, 0, 0, 0, 0]), Some(PkMode::Peace), "10 B PEACE");
-        assert_eq!(mode_of(&[41, 1, 2, 3, 4, 5, 6, 7, 8, 2]), Some(PkMode::Free), "10 B FREE");
+        assert_eq!(
+            mode_of(&[41, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+            Some(PkMode::Peace),
+            "10 B PEACE"
+        );
+        assert_eq!(
+            mode_of(&[41, 1, 2, 3, 4, 5, 6, 7, 8, 2]),
+            Some(PkMode::Free),
+            "10 B FREE"
+        );
         assert_eq!(mode_of(&[41, 4]), Some(PkMode::Guild), "2 B GUILD");
         assert_eq!(mode_of(&[41]), None, "1 B → malformado");
         assert_eq!(mode_of(&[41, 0, 0]), None, "3 B → malformado");

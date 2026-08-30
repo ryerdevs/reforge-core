@@ -87,7 +87,10 @@ async fn realm_list_characters_live_account() {
     assert!(list.len() >= 3, ">=3 (E2E Q3): got {}", list.len());
     let names: Vec<&str> = list.iter().map(|s| s.name.as_str()).collect();
     for expected in ["lkjsnlfknlsk", "ninja", "Chaman"] {
-        assert!(names.contains(&expected), "lista contiene {expected}: {names:?}");
+        assert!(
+            names.contains(&expected),
+            "lista contiene {expected}: {names:?}"
+        );
     }
 }
 
@@ -100,27 +103,46 @@ async fn realm_select_player_each_live_character() {
     let store = test_store().await;
 
     // Slot 0 -> pid1 = 1 (lkjsnlfknlsk).
-    let p = store.select_player(TEST_ACCOUNT, 0).await.expect("select slot 0").expect("pid1=1 existe");
+    let p = store
+        .select_player(TEST_ACCOUNT, 0)
+        .await
+        .expect("select slot 0")
+        .expect("pid1=1 existe");
     assert_eq!(p.id, 1, "pid1 de la cuenta test");
     assert_eq!(p.name, "lkjsnlfknlsk", "E2E Q3");
 
     // Slot 1 -> pid2 = 3 (Chaman).
-    let p = store.select_player(TEST_ACCOUNT, 1).await.expect("select slot 1").expect("pid2=3 existe");
+    let p = store
+        .select_player(TEST_ACCOUNT, 1)
+        .await
+        .expect("select slot 1")
+        .expect("pid2=3 existe");
     assert_eq!(p.id, 3, "pid2 de la cuenta test");
 
     // Slot 2 -> pid3 = 5.
-    let p = store.select_player(TEST_ACCOUNT, 2).await.expect("select slot 2").expect("pid3=5 existe");
+    let p = store
+        .select_player(TEST_ACCOUNT, 2)
+        .await
+        .expect("select slot 2")
+        .expect("pid3=5 existe");
     assert_eq!(p.id, 5, "pid3 de la cuenta test");
 
     // Slot 3 -> pid4 = 0 (slot vacio) -> None.
     assert_eq!(
-        store.select_player(TEST_ACCOUNT, 3).await.expect("select slot 3"),
+        store
+            .select_player(TEST_ACCOUNT, 3)
+            .await
+            .expect("select slot 3"),
         None,
         "pid4=0 -> None (input_login.cpp:266-271)"
     );
 
     // Slot 4 -> pid5 = 2 (ninja, E2E Q2: job=1).
-    let p = store.select_player(TEST_ACCOUNT, 4).await.expect("select slot 4").expect("pid5=2 existe");
+    let p = store
+        .select_player(TEST_ACCOUNT, 4)
+        .await
+        .expect("select slot 4")
+        .expect("pid5=2 existe");
     assert_eq!(p.id, 2, "pid5 de la cuenta test");
     assert_eq!(p.name, "ninja");
     assert_eq!(p.job, 1, "job=1 (E2E Q2)");
@@ -135,7 +157,10 @@ async fn realm_select_player_each_live_character() {
 #[ignore = "requiere PG real (WSL): cargo test --package game_core -- --ignored"]
 async fn realm_account_slots_live_account() {
     let store = test_store().await;
-    let slots = store.account_slots(TEST_ACCOUNT).await.expect("account_slots");
+    let slots = store
+        .account_slots(TEST_ACCOUNT)
+        .await
+        .expect("account_slots");
     assert_eq!(
         slots,
         [Some(1), Some(3), Some(5), None, Some(2)],
@@ -156,7 +181,10 @@ async fn realm_account_slots_live_account() {
 async fn realm_select_player_invalid_slot() {
     let store = test_store().await;
     for slot in [5u8, 6, 200] {
-        let err = store.select_player(TEST_ACCOUNT, slot).await.expect_err("slot invalido -> Err");
+        let err = store
+            .select_player(TEST_ACCOUNT, slot)
+            .await
+            .expect_err("slot invalido -> Err");
         assert!(err.contains("fuera de rango"), "err: {err}");
     }
 }
@@ -200,14 +228,28 @@ async fn realm_save_character_via_batcher_audit() {
             account_id: TEST_ACCOUNT,
             name: name.clone(),
             level: 1,
-            st: 30, ht: 30, dx: 30, iq: 30,
-            job: 0, voice: 0, dir: 0,
-            x: 0, y: 0, z: 0,
+            st: 30,
+            ht: 30,
+            dx: 30,
+            iq: 30,
+            job: 0,
+            voice: 0,
+            dir: 0,
+            x: 0,
+            y: 0,
+            z: 0,
             map_index: 41,
-            hp: 100, mp: 100,
-            random_hp: 0, random_sp: 0, stat_point: 0, stamina: 100,
-            part_base: 0, part_main: 0, part_hair: 0,
-            gold: 0, playtime: 0,
+            hp: 100,
+            mp: 100,
+            random_hp: 0,
+            random_sp: 0,
+            stat_point: 0,
+            stamina: 100,
+            part_base: 0,
+            part_main: 0,
+            part_hair: 0,
+            gold: 0,
+            playtime: 0,
             skill_level: vec![0x01, 0x02],
             quickslot: vec![0x01, 0x02],
         };
@@ -224,7 +266,11 @@ async fn realm_save_character_via_batcher_audit() {
         let reloaded = repo.load(id).await.expect("reload").expect("existe");
         assert_eq!(reloaded.x, 969600, "x durable via pipeline");
         assert_eq!(reloaded.y, 278400, "y durable via pipeline");
-        assert_eq!(reloaded.skill_level.as_deref(), Some(&[0x01u8, 0x02][..]), "blob intacto");
+        assert_eq!(
+            reloaded.skill_level.as_deref(),
+            Some(&[0x01u8, 0x02][..]),
+            "blob intacto"
+        );
         Ok::<(), String>(())
     }
     .await;
@@ -267,14 +313,28 @@ async fn realm_create_character_rollback_deletes_player_row() {
             account_id: account,
             name,
             level: 1,
-            st: 30, ht: 30, dx: 30, iq: 30,
-            job: 0, voice: 0, dir: 0,
-            x: 0, y: 0, z: 0,
+            st: 30,
+            ht: 30,
+            dx: 30,
+            iq: 30,
+            job: 0,
+            voice: 0,
+            dir: 0,
+            x: 0,
+            y: 0,
+            z: 0,
             map_index: 41,
-            hp: 100, mp: 100,
-            random_hp: 0, random_sp: 0, stat_point: 0, stamina: 100,
-            part_base: 0, part_main: 0, part_hair: 0,
-            gold: 0, playtime: 0,
+            hp: 100,
+            mp: 100,
+            random_hp: 0,
+            random_sp: 0,
+            stat_point: 0,
+            stamina: 100,
+            part_base: 0,
+            part_main: 0,
+            part_hair: 0,
+            gold: 0,
+            playtime: 0,
             skill_level: Vec::new(),
             quickslot: Vec::new(),
         };
@@ -305,9 +365,16 @@ async fn realm_create_character_rollback_deletes_player_row() {
             .create_character(&mk(ok_name.clone()), 0)
             .await
             .expect("create con slot 0");
-        let row = store.select_player(account, 0).await.expect("select").expect("existe");
+        let row = store
+            .select_player(account, 0)
+            .await
+            .expect("select")
+            .expect("existe");
         assert_eq!(row.id, pid, "el slot 0 apunta al pid nuevo");
-        store.delete_character(account, 0, pid).await.expect("delete normal (gate ok)");
+        store
+            .delete_character(account, 0, pid)
+            .await
+            .expect("delete normal (gate ok)");
         assert_eq!(
             store.select_player(account, 0).await.expect("select"),
             None,
@@ -320,7 +387,10 @@ async fn realm_create_character_rollback_deletes_player_row() {
     // Cleanup SIEMPRE (patrón trap del E2E): filas + fila de índice de la
     // cuenta throwaway (por si un fallo dejara residuo).
     let _ = client
-        .execute("DELETE FROM player.player WHERE name = $1", &[&rollback_name])
+        .execute(
+            "DELETE FROM player.player WHERE name = $1",
+            &[&rollback_name],
+        )
         .await;
     let _ = client
         .execute("DELETE FROM player.player WHERE name = $1", &[&ok_name])
