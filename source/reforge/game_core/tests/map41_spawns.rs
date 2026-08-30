@@ -55,7 +55,9 @@ fn load_map41() -> Option<(String, Vec<game_core::npc::SpawnEntry>)> {
 #[test]
 #[ignore = "requiere el runtime WSL (share/locale/spain/map)"]
 fn map41_spawns_against_real_runtime() {
-    let Some((path, entries)) = load_map41() else { return };
+    let Some((path, entries)) = load_map41() else {
+        return;
+    };
     eprintln!("runtime: {path}");
     eprintln!("entries (vnum+pos): {}", entries.len());
     let total: u64 = entries.iter().map(|e| e.count as u64).sum();
@@ -142,7 +144,9 @@ fn map41_spawns_against_real_runtime() {
 #[test]
 #[ignore = "requiere el runtime WSL (share/locale/spain/map)"]
 fn map41_direct_mob_vnums_inventory() {
-    let Some((_path, entries)) = load_map41() else { return };
+    let Some((_path, entries)) = load_map41() else {
+        return;
+    };
     let mut vnums: Vec<u32> = entries.iter().map(|e| e.vnum).collect();
     vnums.sort_unstable();
     vnums.dedup();
