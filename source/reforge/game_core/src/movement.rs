@@ -65,8 +65,10 @@ pub enum MoveError {
     /// `iDelta < -(iServerDelta/50)` — el reloj del cliente va rápido
     /// (input_main.cpp:1511).
     FastTimer,
-    /// `fDist > 2500` (25 m — el umbral del `ENABLE_TP_SPEED_CHECK`,
-    /// input_main.cpp:1466) — salto/teleport.
+    /// `fDist > 6000` (60 m — the effective unmounted and mounted cap) —
+    /// salto/teleport. The legacy unmounted source threshold is 2500
+    /// (`ENABLE_TP_SPEED_CHECK`, input_main.cpp:1466), but the rewrite pins
+    /// both modes to 6000.
     TooFar,
     /// F5.4 (ADR-0011): la distancia excede el ENVELOPE por entidad —
     /// `speed × Δt` de server desde el último MOVE aceptado (+20% + 100 ms de
@@ -87,9 +89,9 @@ pub enum MoveError {
 /// comentado en el source; ampliado 2026-08-13: 40 m → 60 m — los MOVEs
 /// espaciados del cliente CORRIENDO (>450 u/s) superaban 4000; 60 m sigue
 /// siendo el anti-teleport, defensa nuestra).
-const MAX_DIST_NO_RIDING: i64 = 6000;
+const MAX_DIST_NO_RIDING: i128 = 6000;
 /// Con montura: 60 m = 6000 units (`input_main.cpp:1466`).
-const MAX_DIST_RIDING: i64 = 6000;
+const MAX_DIST_RIDING: i128 = 6000;
 /// `iDelta >= 30000` → slow timer (input_main.cpp:1505).
 const SLOW_TIMER_MS: i64 = 30_000;
 
@@ -105,8 +107,8 @@ pub const DEFAULT_MOVE_SPEED: u32 = 500;
 /// 2026-08-13 cliente real: el patrón de MOVEs del cliente (ráfagas +
 /// cambios de dirección + corridas) excedía el 20% → la posición server
 /// avanzaba a saltos y los spawns tardaban minutos en materializarse. El
-/// 50% sigue acotando el speedhack sostenido (>450 u/s) — el cap 2500 y los
-/// timers del C++ siguen activos; el auto-ban por N violaciones queda
+/// 50% sigue acotando el speedhack sostenido (>450 u/s) — el cap absoluto
+/// 6000 y los timers del C++ siguen activos; el auto-ban por N violaciones queda
 /// pendiente (ADR-0011 follow-up).
 const ENVELOPE_TOLERANCE: f64 = 1.80;
 /// Tolerancia de lag del envelope: +250 ms de tiempo de server (plan §5.7).
@@ -165,8 +167,10 @@ pub fn process_move(
 
     // Distancia (anti-teleport — el umbral del ENABLE_TP_SPEED_CHECK, comentado
     // en el source pero implementado como defensa con la misma tolerancia).
-    let dx = i64::from(packet.x) - i64::from(state.x);
-    let dy = i64::from(packet.y) - i64::from(state.y);
+    // Widen before subtracting and squaring: the full i32 coordinate range is
+    // valid on the wire, but its squared delta does not fit in i64.
+    let dx = i128::from(packet.x) - i128::from(state.x);
+    let dy = i128::from(packet.y) - i128::from(state.y);
     let dist_sq = dx * dx + dy * dy;
     let max_dist = if state.riding { MAX_DIST_RIDING } else { MAX_DIST_NO_RIDING };
     if dist_sq > max_dist * max_dist {
@@ -177,7 +181,7 @@ pub fn process_move(
     // `speed × Δt` desde el último MOVE aceptado (tolerancia de lag
     // +20%/+100 ms — plan §5.7: "server owns the position; correction not
     // ban"). Sin ancla (`last_server_time == 0` — primer MOVE tras load/warp)
-    // el envelope está inerte: el cap absoluto (2500/6000) sigue validando.
+    // el envelope está inerte: el cap absoluto (6000) sigue validando.
     // Cierra el hueco del slow-accumulate: el timer del cliente pasa con
     // relojes plausibles y el cap con pasos cortos — pero la distancia media
     // no puede superar la velocidad real del personaje.
@@ -398,5 +402,40 @@ mod tests {
         // 2000 u en 100 ms se rechaza.
         let err = process_move(&mut st, &move_to(4_000, 0, 1_200), 1_200).expect_err("anclado");
         assert_eq!(err, MoveError::ExceedsEnvelope);
+    }
+
+    /// G0.1b: 6000 units is the inclusive absolute limit for both movement
+    /// modes; the next unit is a teleport. The first MOVE keeps the envelope
+    /// inert so this isolates the absolute cap.
+    #[test]
+    fn absolute_distance_limit_is_exactly_6000_for_both_modes() {
+        for riding in [false, true] {
+            let mut at_max = initial(0, 0);
+            at_max.riding = riding;
+            assert_eq!(
+                process_move(&mut at_max, &move_to(6_000, 0, 0), 0),
+                Ok(MoveResult { x: 6_000, y: 0 })
+            );
+
+            let mut over_max = initial(0, 0);
+            over_max.riding = riding;
+            assert_eq!(
+                process_move(&mut over_max, &move_to(6_001, 0, 0), 0),
+                Err(MoveError::TooFar)
+            );
+            assert_eq!((over_max.x, over_max.y), (0, 0));
+        }
+    }
+
+    /// Wire coordinates are signed i32 values. Full-range deltas must be
+    /// rejected as TooFar, not wrap a squared i64 distance or panic.
+    #[test]
+    fn absolute_distance_rejects_full_range_coordinates_without_overflow() {
+        let mut st = initial(i32::MIN, i32::MIN);
+        let err = process_move(&mut st, &move_to(i32::MAX, i32::MAX, 0), 0)
+            .expect_err("full-range coordinate jump");
+
+        assert_eq!(err, MoveError::TooFar);
+        assert_eq!((st.x, st.y), (i32::MIN, i32::MIN));
     }
 }
