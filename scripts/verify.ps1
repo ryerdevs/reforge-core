@@ -35,7 +35,7 @@ try {
         # G3.2d: 6 tests de channel_pg con wire viejo (sin handshake)
         'channel::party::tests::channel_',
         # G3.2e: flake de paralelismo en land_pg (fila compartida)
-        'database::tests::land_load_map_41'
+        'land_load_map_41'
     ) -join ' --skip '
     Invoke-Step 'test --workspace -- --ignored' { cargo test --manifest-path $mf --workspace -- --ignored --skip $ignoredSkip }
     Invoke-Step 'clippy --workspace -D warnings' { cargo clippy --manifest-path $mf --workspace -- -D warnings }

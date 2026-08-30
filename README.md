@@ -7,53 +7,66 @@ Last verified: 2026-08-30
 
 # reforge-core
 
-`reforge-core` is an independent reimplementation of a server compatible with
-a classic East Asian MMORPG. It is written from scratch in Rust through reverse
-engineering, behavioral analysis, packet and protocol analysis, compatibility
-fixtures, and tests. It is a development and test server: the matrix below
-separates verified behavior from partial and deferred work.
+`reforge-core` is an independent server written from scratch in **Rust**. Its
+compatibility surface (wire format, packet framing, handshakes, login flow,
+field semantics) was reconstructed through **reverse engineering**: studying
+captured packet traces, observing the responses of an external compatible
+client, and stating each invariant as a test before broadening coverage. No
+code was copied from any other project; the implementation here is the result
+of reading behavior and writing Rust against it.
+
+The repository is a development and test server. The status matrix separates
+verified behavior from partial and deferred work.
 
 ## What it is
 
 - A server-authoritative Rust implementation with a byte-oriented compatibility
-  boundary.
+  boundary at the wire.
 - An incremental project: each slice is checked against observed behavior
   before broader coverage is attempted.
-- A structural reimplementation focused on observable contracts, durable state,
-  and small, testable modules.
+- A structural reimplementation focused on observable contracts, durable
+  state, and small, testable modules.
+
+## How the wire was reconstructed (methodology)
+
+The project avoids two failure modes: guessing and copying. Every visible
+behavior the server exposes is anchored to one of three sources:
+
+- **Captured packet traces** — raw bytes from a compatible client talking to
+  a known-good server, with offsets, lengths, and field semantics inferred
+  from the trace and not from any other code.
+- **Live observation** — the server is run alongside a compatible client and
+  every command's request/response is logged. The wire spec is rewritten from
+  the exchange, not from prior memory of the protocol.
+- **Behavioral tests** — every contract that the implementation claims to honor
+  has a focused unit or integration test that fails on a regression. The
+  tests, not the implementation, are the source of truth.
+
+The wire reference lives in
+[`documentation/reference/login-flow.md`](documentation/reference/login-flow.md);
+the architecture decisions (data layer, ECS boundary, runtime, scope) live
+in the [ADRs](documentation/adr/). No code is imported, vendored, or
+transcribed from any other project.
 
 ## Repository boundary
 
-The public repository contains the authored Rust server and the documentation,
-scripts, and supporting metadata needed to develop and verify it. It does not
-contain client source, pack source or assets, generated client binaries, or
-other game content.
+The public repository contains the authored Rust server, the documentation,
+the scripts, and the supporting metadata needed to develop and verify it. It
+does not contain client source, pack source, runtime client assets, generated
+client artifacts, or any other game content.
 
 End-to-end compatibility checks use an external, operator-provided compatible
 client. That client and its assets are not distributed by this repository and
 are not required for server builds or the ordinary test suite. The standalone
-Rust client is F7 work deferred outside this repository; see [ADR-0015](documentation/adr/0015-rust-only-public-repository.md).
+Rust client is deferred outside this repository; see
+[ADR-0015](documentation/adr/0015-rust-only-public-repository.md).
 
 **Notice:** This project is not official or affiliated with any rights holder.
-Each operator is responsible for the use, modification, deployment, and content
-of their instance. This is a neutral project notice, not legal advice.
+Each operator is responsible for the use, modification, deployment, and
+content of their instance. This is a neutral project notice, not legal
+advice.
 
-## Methodology
-
-- **Behavioral reverse engineering:** record inputs, outputs, state transitions,
-  timing, and failure behavior.
-- **Packet and protocol analysis:** measure headers, framing, lengths, encoding,
-  and wire-state transitions. The current login contract is recorded in the
-  [wire reference](documentation/reference/login-flow.md).
-- **Compatibility fixtures:** preserve observed bytes and outcomes as fixtures
-  and regression cases.
-- **Tests and verifiers:** use focused unit, integration, mutation, and runtime
-  checks to distinguish a working slice from an unverified assumption.
-- **Written decisions:** record architecture boundaries and migration choices
-  in the [project documentation](documentation/README.md) before expanding the
-  implementation.
-
-## Server status at a glance
+## What is verified today
 
 This is the center of the project status. A row may be working while a related
 feature remains limited; a green row is not a claim of total parity or
@@ -70,55 +83,53 @@ and evidence.
 
 | Area | Status | What works today | What is limited or missing | Evidence / gate |
 |---|---|---|---|---|
-| Runtime, login, and world entry | ✅ Working and verified | Native Windows runtime with PostgreSQL; login, character selection, world entry, and movement are verified with an external compatible client. | The deployed runtime can lag the latest source until G1.5 redeployment is complete. | [Live handoff](documentation/progress.md); [ADR-0012](documentation/adr/0012-windows-native-runtime-wsl-on-demand.md) |
+| Runtime, login, and entry | ✅ Working and verified | Native Windows runtime with PostgreSQL; login, character selection, world entry, and movement are verified with an external compatible client. | The deployed runtime can lag the latest source until the redeployment gate closes. | [Live handoff](documentation/progress.md); [ADR-0012](documentation/adr/0012-windows-native-runtime-wsl-on-demand.md) |
 | Protocol, framing, and authentication | ✅ Working and verified | Byte-oriented codecs, framing, handshake, and the verified authentication/channel login path work. | This covers the verified compatibility flow, not every packet or feature. | [Wire reference](documentation/reference/login-flow.md); [Project rules](AGENTS.md) |
 | Database and persistence | 🟡 Partial or limited | PostgreSQL repositories, WAL idempotency, batching, and selected ACID item/economy mutations work. | Not every domain is persisted or complete, and the remaining persistence gates are open. | [ADR-0008](documentation/adr/0008-data-layer.md); [Gap Registry](documentation/plans/gap-registry.md) |
-| G0.1a — item stack cap | 🟡 Partial or limited | The effective cap is **200**. Channel and GM paths share it, and entry serialization rejects counts above it instead of silently wrapping them. | The requested **2000** is blocked by BYTE-sized item-count fields on the wire. Reaching it requires a coordinated `u16` client/protocol migration and a real-client stack check above 200. | [Live handoff](documentation/progress.md); [Gap Registry](documentation/plans/gap-registry.md) |
-| G0.1b — movement distance | 🟡 Partial or limited | The inclusive 6000-unit mounted and unmounted limit is preserved; widened `i128` arithmetic and 12 focused tests were verified locally. | Oracle Gate and the real-client movement check are still pending. | [Live handoff](documentation/progress.md); [Gap Registry](documentation/plans/gap-registry.md) |
-| G0.1c — spawn materialization | 🟡 Partial or limited | The retained `SPAWN_VIEW = 300000` and `DESPAWN_RADIUS = 310000` values and predicates are covered by boundary/hysteresis checks; 13 focused tests passed locally. | Oracle Gate, the benchmark ladder, and the real-client visibility check are still pending. | [Live handoff](documentation/progress.md); [Gap Registry](documentation/plans/gap-registry.md) |
-| G0.1d — boot movement speed | 🟡 Partial or limited | The cap remains **200** before BYTE serialization; wide/saturating accumulation and capped ADD/UPDATE fields passed 22 focused tests, including the mutation baseline. | The real-client equipped-boot check and Oracle Gate are still pending. | [Live handoff](documentation/progress.md); [Gap Registry](documentation/plans/gap-registry.md) |
-| G0.1e — gold | 🟡 Partial or limited | `GOLD_MAX` remains **2,000,000,000**; checked bounds cover economy, shop, and channel consumers. The focused local run passed **147 tests, 0 failed, 4 ignored**. | Oracle Gate and the final consistent economic/wire checks are still pending. | [Live handoff](documentation/progress.md); [Gap Registry](documentation/plans/gap-registry.md) |
 | World, ECS, and movement systems | 🟡 Partial or limited | The ECS world, dynamic spawning, walkability checks, movement envelope, combat foundations, and selected server-authoritative checks work. | Gameplay tuning, broader world behavior, and anti-cheat coverage remain incomplete; the checks are not an exhaustive anti-cheat system. | [ADR-0010](documentation/adr/0010-domain-boundaries-and-data-ownership.md); [ADR-0011](documentation/adr/0011-anti-hack-model.md) |
-| Items and economy beyond G0 | 🟡 Partial or limited | Attributes, sockets, refine behavior, shops, trade, safebox, belt, and Phase 1 Dragon Soul handling are implemented in selected paths. | Dragon Soul reward-item creation and full grid validation remain; the 2000 stack target is still blocked by G0.1a. | [Live handoff](documentation/progress.md); [Gap Registry](documentation/plans/gap-registry.md) |
+| Items and economy | 🟡 Partial or limited | Attributes, sockets, refine behavior, shops, trade, safebox, belt, and the Phase 1 Dragon Soul handling are implemented in selected paths. | Dragon Soul reward-item creation and full grid validation remain; the higher stack target is still blocked. | [Live handoff](documentation/progress.md); [Gap Registry](documentation/plans/gap-registry.md) |
 | Skills and buffs | 🟡 Partial or limited | Selected skill families, server-timed affects, splash/horse/party handling, and grand-master behavior are implemented. | Numeric `CASTING_SPEED`, passive and quest-granted skills, and remaining effect coverage are still limited. | [Live handoff](documentation/progress.md); [Gap Registry](documentation/plans/gap-registry.md) |
 | Guild, party, and social | 🟡 Partial or limited | Guild basics, grades/comments/ranking, war declaration and score handling, and party core actions with LINK/UNLINK work. | Guild-war lifecycle/finish/scoreboard behavior, leadership rules, marriage, block mode, and observer mode remain. | [Live handoff](documentation/progress.md); [Gap Registry](documentation/plans/gap-registry.md) |
 | Quests | 🟡 Partial or limited | The converter covers the 194/194-file corpus, and the runtime implements a tested subset with persistence and suspension. | `input_number`, additional actions, and broader quest content remain. | [Live handoff](documentation/progress.md); [Gap Registry](documentation/plans/gap-registry.md) |
 | GM commands | 🟡 Partial or limited | Parsing, permission checks, and the current command subset work. | Transfer/purge dispatch, targeting forms, and several commands remain incomplete. | [Live handoff](documentation/progress.md); [Gap Registry](documentation/plans/gap-registry.md) |
 | Events and dungeons | 🟡 Partial or limited | Event scheduling/lifecycle and dungeon WAIT → START → END behavior work. | Raid, OX, three-way war, arena, wedding, monarch, and dungeon instances remain deferred. | [Live handoff](documentation/progress.md); [Gap Registry](documentation/plans/gap-registry.md) |
 | Locale and data channel | 🟡 Partial or limited | Locale push and pull work for the current path. | A versioned manifest, delta delivery, and notification-driven hot reload are not implemented; data updates can require redeployment. | [ADR-0009](documentation/adr/0009-server-side-locale.md); [Gap Registry](documentation/plans/gap-registry.md) |
-| G0.2 — storage operations | 🟡 Partial or limited | The PostgreSQL backup cadence is active and some target cleanup was verified on **2026-08-29**. | The storage gate remains open until the target budget and post-cleanup backup check are recorded in the [Gap Registry](documentation/plans/gap-registry.md). | [Live handoff](documentation/progress.md); [Gap Registry](documentation/plans/gap-registry.md) |
-| G1 — verification, documentation, and deployment | 🔧 In progress | Focused local checks, the current documentation handoff, and current archive navigation exist. | The normal and ignored test gates, formatting, documentation CI, and current-binary redeployment still need closure; the immutable-history metadata decision is recorded and closed. | [Gap Registry](documentation/plans/gap-registry.md); [ROADMAP](ROADMAP.md) |
-| G2 — gameplay and content | 🔧 In progress | The implemented slices listed above provide a usable development/test path. | Remaining gameplay, social, quest, GM, data-channel, weight-data, and deferred-content gaps remain open. | [Live handoff](documentation/progress.md); [Gap Registry](documentation/plans/gap-registry.md) |
-| G3 — hygiene and test debt | 🔧 In progress | Mutation-tested focused work is present for the current cap lanes. | Stale comments and the policy for ignored or flaky tests still need execution and verification. | [Live handoff](documentation/progress.md); [Gap Registry](documentation/plans/gap-registry.md) |
-| F7 — Rust client rewrite | ⏳ Not started or deferred | The external compatible client is used only for server verification. | The standalone Rust client is deferred outside this repository and has not started. | [ADR-0015](documentation/adr/0015-rust-only-public-repository.md); [ROADMAP](ROADMAP.md) |
+| Caps and storage | 🟡 Partial or limited | The five implementation caps (stack, distance, view, boot speed, gold) are locally verified with mutation-tested verifiers. | The storage budget and the latest rebuild have not been fully closed in the registry. | [Live handoff](documentation/progress.md); [Gap Registry](documentation/plans/gap-registry.md) |
+| Verification, documentation, and deployment | 🔧 In progress | Focused local checks, the current documentation handoff, and current archive navigation exist; the wire is runnable end-to-end against an external compatible client. | The normal and ignored test gates, formatting, documentation CI, and current-binary redeployment still need closure. | [Gap Registry](documentation/plans/gap-registry.md); [ROADMAP](ROADMAP.md) |
+| Gameplay and content | 🔧 In progress | The implemented slices listed above provide a usable development/test path. | Remaining gameplay, social, quest, GM, data-channel, weight-data, and deferred-content gaps remain open. | [Live handoff](documentation/progress.md); [Gap Registry](documentation/plans/gap-registry.md) |
+| Hygiene and test debt | 🔧 In progress | Mutation-tested focused work is present for the current cap lanes and most gameplay systems. | Stale comments and the policy for ignored or flaky tests still need execution and verification. | [Live handoff](documentation/progress.md); [Gap Registry](documentation/plans/gap-registry.md) |
+| Standalone Rust client | ⏳ Not started or deferred | The external compatible client is used only for server verification. | The standalone Rust client is deferred outside this repository and has not started. | [ADR-0015](documentation/adr/0015-rust-only-public-repository.md); [ROADMAP](ROADMAP.md) |
 
 ## Current limitations
 
 - This is not a claim of total parity, production readiness, or complete
   anti-cheat coverage.
-- G0.1a is intentionally safe at 200; 2000 remains blocked until the coordinated
-  `u16` client/protocol migration and real-client verification.
-- G0.1b–G0.1e are implemented and locally verified, but each remains open until
-  its Oracle Gate and remaining client or wire checks are complete.
+- The verified compatibility flow covers the rows marked green above; it is
+  not a complete wire spec.
+- G0.1a remains at a safe cap of 200; the higher stack target is blocked by
+  the current wire's BYTE-sized item-count fields.
+- G0.1b–G0.1e are implemented and locally verified, but each remains open
+  until its remaining client or wire checks are complete.
 - The protocol and database cover selected compatibility slices rather than
-  every legacy packet and domain.
+  every packet and domain.
 - Data-channel manifest, delta, and notification-driven hot reload are still
   future work.
 - The current benchmark evidence supports test runs only; it is not a player
   capacity promise.
-- The Rust client rewrite is F7 work deferred outside this repository and has not started.
+- The standalone Rust client rewrite is deferred outside this repository and
+  has not started.
 
 ## Next wave
 
-1. Complete the Oracle Gate and remaining real-client or wire checks for
-   **G0.1b–G0.1e**, while retaining the safe G0.1a cap of 200.
-2. Execute **G1**: run the complete verification gates, format the workspace,
-   reconcile documentation and links, update the changelog, and redeploy the
+1. Close the remaining real-client or wire checks for the current cap lanes,
+   while keeping the safe stack cap in place.
+2. Run the complete verification gates (format, normal suite, ignored live-PG
+   suite, clippy, diff check), reconcile documentation, and redeploy the
    current Windows binary.
-3. Take the selected **G2** gameplay and content gaps, with G3 hygiene and test
-   debt handled alongside them.
-4. Keep **F7** outside this repository until a separate client project is
-   justified by the server boundary and has its own decision record.
+3. Take selected gameplay and content gaps, with hygiene and test debt handled
+   alongside them.
+4. Keep the standalone client work outside this repository until a separate
+   project is justified and has its own decision record.
 
 ## Architecture
 
@@ -188,8 +199,8 @@ For the definition-of-done check:
 powershell -ExecutionPolicy Bypass -File scripts\verify.ps1
 ```
 
-The stack is for local development and verification. Starting it does not imply
-that every subsystem in the status matrix is complete.
+The stack is for local development and verification. Starting it does not
+imply that every subsystem in the status matrix is complete.
 
 To reproduce the real-client smoke path, provide a compatible client through a
 separate, properly licensed installation. This repository does not build,
@@ -201,15 +212,17 @@ repack, or distribute that client.
   before making a change.
 - Keep changes focused, add or update tests for behavior, and preserve a clear
   evidence path.
-- Record architectural choices in the canonical ADR location before implementing
-  them; use [ADR-0010](documentation/adr/0010-domain-boundaries-and-data-ownership.md)
+- Record architectural choices in the canonical ADR location before
+  implementing them; use
+  [ADR-0010](documentation/adr/0010-domain-boundaries-and-data-ownership.md)
   as the format and context example.
 - Update the relevant canonical documentation, [ROADMAP](ROADMAP.md), and
-  [CHANGELOG](CHANGELOG.md) when project knowledge changes.
-- Run `scripts\verify.ps1` when the change is ready for review. Do not describe a
-  partial subsystem as complete until its listed gate is closed.
-- Keep client source, pack source, client assets, and generated client artifacts
-  outside this repository; see [ADR-0015](documentation/adr/0015-rust-only-public-repository.md).
+  [CHANGELOG.md](CHANGELOG.md) when project knowledge changes.
+- Run `scripts\verify.ps1` when the change is ready for review. Do not describe
+  a partial subsystem as complete until its listed gate is closed.
+- Keep client source, pack source, client assets, and generated client
+  artifacts outside this repository; see
+  [ADR-0015](documentation/adr/0015-rust-only-public-repository.md).
 
 The claims in this README were last checked on **2026-08-30** against the
 project instructions and the [live handoff](documentation/progress.md).
