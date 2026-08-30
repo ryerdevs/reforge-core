@@ -2,97 +2,181 @@
 Type: Hub
 Status: Current
 Audience: All
-Last verified: 2026-08-29
+Last verified: 2026-08-30
 ---
 
-# reforge-core
+# Metin2 Reforge
 
-> A classic MMORPG server being structurally rewritten in Rust with a server-authoritative design and PostgreSQL 18.
->
-> This is an independent alternative server built by reverse engineering the original binary. It is not affiliated with the original developer or publisher and contains no original protected assets.
+Metin2 Reforge is an independent reimplementation of a Metin2-compatible
+server, written from scratch in Rust. It is developed through behavioral
+reverse engineering, packet and protocol analysis, compatibility fixtures, and
+observation-driven tests. The goal is a server-authoritative implementation
+whose observable behavior can interoperate with the compatibility client while
+the server is replaced incrementally.
 
-[![Rust](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org)
-[![PostgreSQL](https://img.shields.io/badge/postgresql-18-blue.svg)](https://www.postgresql.org)
-[![License: pending decision](https://img.shields.io/badge/license-pending--decision-lightgrey.svg)](documentation/history/plans/server-rewrite.md)
+## What it is—and is not
 
----
+**It is:**
 
-## What is this?
+- A project-authored Rust server implementation with a byte-oriented
+  compatibility boundary.
+- An incremental rewrite: each slice is implemented and checked against
+  observed behavior before broader coverage is attempted.
+- A server-authoritative design: clients send intentions; the server validates
+  them, computes game facts, and owns durable state.
 
-**reforge-core** is an incremental, structural rewrite of a classic 2004 MMORPG server. It preserves observable wire behavior where required while replacing the legacy implementation module by module.
+**It is not:**
 
-- **Server-authoritative:** the client sends intentions; the server computes facts.
-- **Rust rewrite:** protocol, transport, authentication, world entry, movement, persistence, and gameplay modules are being replaced incrementally.
-- **Transactional persistence:** durable mutations use PostgreSQL transactions and the local WAL path.
-- **Legacy compatibility:** the original client remains the playable protocol reference while the Rust server progresses.
+- An official, endorsed, sponsored, or affiliated Metin2 product.
+- A service running on, or dependent on, a rights holder's infrastructure.
+- A claim that the Rust implementation is code from a rights holder, or that
+  the project has complete feature or behavioral parity.
 
-## Current status
+**Notice:** “Metin2” and other names and marks belong to their respective
+holders. This is a neutral project notice, not legal advice. Each operator
+must review the obligations applicable to their use, hosting, modification, and
+distribution of the project and any related software or content.
 
-> HEAD: `4579fcb` (`docs(progress): record item cap slice`), verified 2026-08-29.
->
-> Live handoff: [documentation/progress.md](documentation/progress.md) · [Gap Registry](documentation/plans/gap-registry.md) · [documentation hub](documentation/README.md)
+## How it is built
 
-| Area | Status |
-|---|---|
-| Runtime | ✅ Native Windows runtime with PostgreSQL 18 and `server_realms` roles `auth`/`channel` (ADR-0012) |
-| F0/F1/G-PG/F2 | ✅ Protocol, transport, PostgreSQL cutover, authentication, world entry, and movement implemented and verified |
-| Database, WAL, ACID paths | ✅ PostgreSQL persistence, local WAL, and transactional mutation paths implemented and verified |
-| `game_core`, social, quests, GM | 🟡 Partial; see the [live handoff](documentation/progress.md) and [Gap Registry](documentation/plans/gap-registry.md) |
-| Tests | 891 workspace tests listed at a historical measurement point; this is not a fresh suite result or a pass guarantee |
-| G0–G3 | ⏳ Pending execution |
-| G0.1a item stacks | ✅ Safely enforced at an effective cap of 200; the 2000 target is blocked until a coordinated BYTE-to-u16 protocol/client migration |
-| G0.2 storage | ✅ Target cleanup and backup verified 2026-08-29; G0 remains open because other cap rows still require execution |
-| F7 Rust client rewrite | ⏳ Not started |
+1. **Behavioral reverse engineering:** observe a reference runtime's inputs,
+   outputs, state transitions, and failure behavior.
+2. **Packet/protocol analysis:** measure headers, framing, lengths, encodings,
+   and wire state transitions.
+3. **Compatibility fixtures:** preserve observations as byte-level fixtures,
+   regression tests, and runtime checks. The [wire reference](documentation/reference/login-flow.md)
+   records the current login contract.
+4. **Original Rust implementation:** implement the server in the
+   `source/reforge` workspace; compatibility is an observable contract, not a
+   shared internal implementation.
+5. **PostgreSQL 18:** use PostgreSQL as the durable store, with domain
+   repositories, transactional mutation paths, batching, and local WAL
+   durability/replay.
+6. **Server authority:** validate movement and gameplay requests on the server
+   and do not treat client state as authoritative.
+
+## Verified slices
+
+These are bounded slices verified by tests, packet fixtures, logs, or a
+real-client check. They are **not** a claim of total parity.
+
+- **Runtime:** native Windows PostgreSQL 18 runtime; real-client
+  login → character select → world → movement was verified. The local
+  deployment still needs the current Phase 1 binary redeployed (G1.5).
+- **Protocol and network:** byte-oriented protocol codecs, Tokio transport,
+  framing, handshake/authentication paths, and compatibility fixtures.
+- **Data:** PostgreSQL repositories, durable local WAL and idempotent replay,
+  and selected ACID mutation paths.
+- **World:** `bevy_ecs` world state, dynamic spawn/despawn, map walkability,
+  movement-envelope validation, and related world-entry behavior.
+- **Gameplay:** selected skills and server-timed buffs; NPC shops and player
+  trade; guild and party slices; safebox and belt storage; Dragon Soul and
+  refine slices.
+- **Quests:** the quest DSL parser/converter and a runtime subset, including
+  suspension and selected persistence/effect paths.
+- **Locale:** locale import/cache work and the verified locale push/pull wire
+  slice.
+- **Benchmarking:** a bot benchmark harness with wire capture and runtime
+  metrics. Its measurements are test evidence, not a player-capacity promise.
+
+## Open work
+
+The [live handoff](documentation/progress.md) is the current status summary;
+the [Gap Registry](documentation/plans/gap-registry.md) owns each item's state,
+evidence, owner, and exit criteria.
+
+- **G0 — architecture and storage:**
+  - `G0.1a`: the effective item-stack cap is **200**. The requested **2000**
+    target is blocked by the current BYTE-sized item-count wire fields and
+    requires a coordinated `u16` protocol/client migration plus real-client
+    verification.
+  - `G0.1b`: retained absolute movement limit `6000` units; Oracle Gate is
+    pending.
+  - `G0.1c`: retained spawn view `300000` and despawn radius `310000`; Oracle
+    Gate is pending.
+  - `G0.1d`: retained boot movement-speed cap `200` before BYTE serialization;
+    real-client verification and the gate are pending.
+  - `G0.1e`: retained `GOLD_MAX = 2_000_000_000`; Oracle Gate is pending.
+   - `G0.2`: build-artifact storage was cleaned and the PostgreSQL backup was
+     verified on 2026-08-29; the storage gate is closed for this block.
+- **G1 — gates, documentation, and deployment** (`G1.1a–b`, `G1.2`, `G1.3`,
+  `G1.5–G1.6`, `G1.8a–b`, `G1.9`, `G1.10a–b`, `G1.11a–c`, `G1.12a–b`,
+  `G1.13`, `G1.14a–b`, `G1.15–G1.18`): normal and ignored test gates,
+  formatting, changelog coverage, the live documentation policy and
+  link/metadata checks, and redeployment of the current Windows binary remain
+  open.
+- **G2 — residual gameplay and content** (`G2.1a–d`, `G2.2a–d`, `G2.3a–c`,
+  `G2.4–G2.7b`, `G2.8a–f`, `G2.9–G2.10`, `G2.11a–c`): party
+  leadership/bonus/update rules; messenger marriage, block, observer, and
+  locale behavior; guild-war lifecycle, finish, and scoreboard; numeric
+  `CASTING_SPEED`; quest `input_number`; remaining GM dispatch/targeting
+  commands; Dragon Soul reward creation and grid validation; deferred
+  raid/OX/three-way-war/arena/wedding/monarch content; real item weights; the
+  data-channel manifest and hot reload; and land, horse/pet, and
+  dungeon-instance work.
+- **G3 — hygiene and test debt** (`G3.1a–c`, `G3.2a–b`): stale comments and
+  the two ignored/flaky lifecycle tests still require resolution or an explicit
+  isolated-gate policy.
+- **F7 — Rust client:** the client rewrite is planned but **has not started**.
+
+Closed prerequisite rows in the registry do not close G0–G3 or imply total
+parity.
 
 ## Architecture
 
-```text
-Legacy C++ client (playable reference)
-                 │
-                 ▼
-server_realms (single binary; role = auth or channel)
-        ├── protocol   (byte-exact wire contract)
-        ├── network    (Tokio transport and authentication)
-        ├── game_core  (ECS and gameplay domain)
-        └── database   (tokio-postgres, WAL, transactions)
-                              │
-                              ▼
-                    PostgreSQL 18 on Windows
-```
+| Component | Responsibility |
+|---|---|
+| `protocol` | Byte-exact client/server packets and compatibility codecs. |
+| `network` | Tokio TCP transport, framing, handshake, and the auth module. |
+| `database` | PostgreSQL access through `tokio-postgres`, domain repositories, batching, and WAL. |
+| `game_core` | Pure gameplay modules plus the `bevy_ecs` world and systems. |
+| `quest_dsl` | Quest language AST, parser, conversion, and related tooling. |
+| `server_realms` | One server binary with `auth` and `channel` roles selected by configuration. |
 
-ADR-0012 defines native Windows as the runtime. WSL is retained only as an on-demand environment for the frozen C++ parity oracle. RLS, failover, the versioned data manifest, and notification-driven hot reload remain future work; they are not presented as complete here.
+Supporting workspace crates include `locale_import`, `bench_bot`, and the
+temporary `mysql_proxy` compatibility adapter used for local parity work.
+
+The runtime target is native Windows with PostgreSQL 18. WSL is retained only
+as an on-demand compatibility environment, as recorded in [ADR-0012](documentation/adr/0012-windows-native-runtime-wsl-on-demand.md).
+The repository distributes the project-authored Rust implementation and does
+not require or distribute third-party server infrastructure or server-side
+code.
 
 ## Repository map
 
 ```text
 source/
-├── client/      # C++ client source and protocol reference
-├── server/      # frozen C++ parity oracle; local-only and not tracked by Git
+├── client/      # client source/reference used for compatibility work
 ├── reforge/     # Rust workspace
 │   ├── protocol/
 │   ├── network/
 │   ├── database/
 │   ├── game_core/
-│   └── server_realms/  # one binary, auth|channel roles by config
-├── tools/       # DBManager, DumpProto, Mysql2Proto, pack and protocol tools
-└── deploy/      # local runtime/deployment artifacts; not tracked by Git
-documentation/   # documentation hub, ADRs, plans, references and history
-scripts/        # Windows runtime and operations scripts
+│   ├── quest_dsl/
+│   └── server_realms/
+├── tools/       # data, pack, and protocol tools
+└── deploy/      # ignored local runtime artifacts
+documentation/   # documentation hub, plans, ADRs, references, and history
+scripts/        # Windows runtime/operations and WSL parity scripts
 ROADMAP.md      # master plan
 CHANGELOG.md    # chronological evidence record
-AGENTS.md       # project instructions and verified facts
+AGENTS.md       # project rules and verified facts
 ```
 
-Build artifacts, installed clients, packs, backups, the runtime, and the frozen C++ oracle remain local or are distributed separately.
+## Build and run locally
 
-## Roadmap
+From the repository root, build and test the Rust workspace:
 
-- Foundations, transport, PostgreSQL cutover, authentication, world entry, and movement: implemented and verified.
-- `game_core` gameplay and social/content coverage: partial; the [Gap Registry](documentation/plans/gap-registry.md) owns the open items.
-- G0–G3: pending execution.
-- F7 Rust client: not started; the decision is recorded in [ADR-0013](documentation/adr/0013-client-rewrite.md).
+```powershell
+Set-Location source\reforge
+cargo build --workspace
+cargo test --workspace
+Set-Location ..\..
+```
 
-## Local runtime
+The native Windows runtime requires the local PostgreSQL 18 setup and runtime
+deployment described by [ADR-0012](documentation/adr/0012-windows-native-runtime-wsl-on-demand.md).
+The scripts are intentionally separate launch/status/stop operations:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\start_win.ps1
@@ -100,10 +184,28 @@ powershell -ExecutionPolicy Bypass -File scripts\status.ps1
 powershell -ExecutionPolicy Bypass -File scripts\stop_win.ps1
 ```
 
-## Contributing
+## Plan and contribution context
 
-Issues, pull requests, and architecture discussions are welcome. Read the [documentation hub](documentation/README.md) and [live handoff](documentation/progress.md) first; architecture decisions are recorded in `documentation/` before implementation.
+- [Documentation hub](documentation/README.md)
+- [Live handoff](documentation/progress.md)
+- [Gap Registry](documentation/plans/gap-registry.md)
+- [Master roadmap](ROADMAP.md)
+- [Changelog](CHANGELOG.md)
+- [Project rules](AGENTS.md)
 
-## License
+Architecture and boundary decisions are recorded in
+[`documentation/adr/`](documentation/adr/), including the data-layer and ECS
+decisions in [ADR-0008](documentation/adr/0008-data-layer.md) and
+[ADR-0010](documentation/adr/0010-domain-boundaries-and-data-ownership.md).
 
-**Pending decision.** MPL-2.0 is proposed, but no `LICENSE` file exists until the community confirms it. The open question is recorded in the [historical server rewrite plan](documentation/history/plans/server-rewrite.md).
+## Current checkout
+
+This README does not pin an old commit. Obtain the exact commit for the
+checkout being inspected with:
+
+```powershell
+git rev-parse HEAD
+```
+
+The claims above were last checked on **2026-08-30** against the repository
+instructions and the [live handoff](documentation/progress.md).
