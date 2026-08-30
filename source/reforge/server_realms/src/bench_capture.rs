@@ -249,11 +249,7 @@ mod tests {
             b"\xfd\x01\xff\x01\x02",
             "stream crudo IN"
         );
-        assert_eq!(
-            read_retry(&out_path),
-            b"\xff\x0a",
-            "stream crudo OUT"
-        );
+        assert_eq!(read_retry(&out_path), b"\xff\x0a", "stream crudo OUT");
 
         // 3. Un id sin open_conn no escribe nada.
         capture_conn(8, Direction::Inbound, b"x");
@@ -271,11 +267,7 @@ mod tests {
         open_conn(3);
         capture_conn(3, Direction::Inbound, b"b");
         close_conn(3);
-        assert_eq!(
-            read_retry(&p3),
-            b"ab",
-            "append sobre la misma conexión"
-        );
+        assert_eq!(read_retry(&p3), b"ab", "append sobre la misma conexión");
 
         // 5. Re-init (swap de estado) apunta a un dir nuevo.
         let dir2 = tmp_dir("swap");
