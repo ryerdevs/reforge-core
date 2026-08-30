@@ -99,17 +99,19 @@ pub fn parse_power_row(mvalue: &str) -> Result<[i32; SKILL_MAX_LEVEL + 1], Strin
     let mut n = 0;
     for tok in mvalue.split_whitespace() {
         if n > SKILL_MAX_LEVEL {
-            return Err(format!(
-                "skill_power: fila con más de {} valores ('{mvalue}')",
-                SKILL_MAX_LEVEL + 1
-            ));
+            // Paridad config.cpp:532-613: el C++ lee exactamente
+            // SKILL_MAX_LEVEL+1 tokens con one_argument e IGNORA el resto de
+            // la línea — los datos reales migrados a PG traen filas más
+            // anchas (46 valores). Los extras no se miran, no son error.
+            n += 1;
+            continue;
         }
         out[n] = tok
             .parse()
             .map_err(|_| format!("skill_power: token '{tok}' no numérico en '{mvalue}'"))?;
         n += 1;
     }
-    if n != SKILL_MAX_LEVEL + 1 {
+    if n < SKILL_MAX_LEVEL + 1 {
         return Err(format!(
             "skill_power: {} valores, se esperaban {} ('{mvalue}')",
             n,
@@ -213,17 +215,26 @@ mod tests {
         // 40 valores (faltan) → Err.
         let short = (0..40).map(|i| i.to_string()).collect::<Vec<_>>().join(" ");
         assert!(parse_power_row(&short).is_err(), "40 < 41");
-        // 42 valores (sobran) → Err.
-        let long = (0..=41)
-            .map(|i| i.to_string())
+        // 46 valores (fila real migrada, más ancha que SKILL_MAX_LEVEL+1)
+        // → OK: el C++ (config.cpp:532-613) lee los primeros 41 y el resto
+        // de la línea lo ignora (evidencia: load_live_pg falló con una fila
+        // de 46 antes de la corrección).
+        let wide = (0..46)
+            .map(|i| (i * 2).to_string())
             .collect::<Vec<_>>()
             .join(" ");
-        assert!(parse_power_row(&long).is_err(), "42 > 41");
-        // Token no numérico → Err (desviación defensiva vs atoi=0).
+        let ok = parse_power_row(&wide).expect("extras ignorados, no error");
+        assert_eq!(ok[40], 80, "los 41 primeros valores mandan");
+        // Token no numérico dentro de los 41 primeros → Err (desviación
+        // defensiva vs atoi=0).
         assert!(
-            parse_power_row(&format!("{} x", fixture_row())).is_err(),
-            "token basura"
+            parse_power_row(&format!("{} x", "0 1 2 3 4 5")).is_err(),
+            "token basura dentro de los 41 primeros"
         );
+        // Token basura DESPUÉS del 41º → ignorado (paridad: el C++ deja de
+        // leer en el token 41).
+        let wide_trash = format!("{} x", fixture_row());
+        assert!(parse_power_row(&wide_trash).is_ok(), "extras sin mirar");
         // Vacío → Err.
         assert!(parse_power_row("").is_err());
     }
