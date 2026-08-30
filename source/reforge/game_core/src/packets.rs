@@ -11,7 +11,7 @@
 //! - `TPacketGCCharacterAdd` (37 B) <- `char.cpp:886-920` (`EncodeInsertPacket`).
 //! - `TPacketGCCharacterAdditionalInfo` (70 B) <- `char.cpp:924-948`.
 //!
-//! Campos que el C++ calcula en runtime (speeds, affects, parts de items,
+//! Campos que el C++ calcula en runtime (affects, parts de items,
 //! pk_mode, flechas, guilds) NO viven en el row persistido: se mapean
 //! a su default (0) y quedan documentados como GAP del slice (los alimentan
 //! los subsistemas de F4/F5). Excepción FASE 1 caballo jugable: la montura
@@ -268,6 +268,14 @@ pub fn login_success(
 /// `{ POINT_MOV_SPEED } // APPLY_MOV_SPEED, 8`).
 pub const APPLY_MOV_SPEED: i16 = 8;
 
+/// Límite efectivo de `POINT_MOV_SPEED` para un PC (`GetLimitPoint`,
+/// `char.cpp:2895-2901`). El campo del protocolo sigue siendo `BYTE`.
+const MOV_SPEED_LIMIT: u8 = 200;
+
+fn clamp_mov_speed(speed: i64) -> u8 {
+    speed.clamp(0, i64::from(MOV_SPEED_LIMIT)) as u8
+}
+
 /// Velocidad de movimiento del PC (parity `ModifyPoints` item.cpp:718-735 +
 /// `GetLimitPoint(POINT_MOV_SPEED)` char.cpp:2245,2895-2906): base 100 +
 /// la suma de los `aApplies` con `APPLY_MOV_SPEED` de la BOTA equipada
@@ -277,16 +285,15 @@ pub const APPLY_MOV_SPEED: i16 = 8;
 /// `IsPC()`, char.cpp:2902-2906) y al byte del wire (el cast `(BYTE)` del
 /// C++ trunca; el clamp es el techo real de GetLimitPoint).
 pub fn mov_speed_for_boots(boots: Option<&ProtoItem>) -> u8 {
-    let bonus: i32 = boots
+    let bonus: i64 = boots
         .map(|b| {
             b.applies
                 .iter()
                 .filter(|(t, _)| *t == APPLY_MOV_SPEED)
-                .map(|(_, v)| *v)
-                .sum()
+                .fold(0_i64, |sum, (_, value)| sum.saturating_add(i64::from(*value)))
         })
         .unwrap_or(0);
-    (100 + bonus).clamp(0, 200) as u8
+    clamp_mov_speed(100_i64.saturating_add(bonus))
 }
 
 /// `PlayerRow` -> `TPacketGCCharacterAdd` (37 B, header 1).
@@ -319,7 +326,7 @@ pub fn character_add(row: &PlayerRow, mov_speed: u8) -> TPacketGCCharacterAdd {
         row.z,
         CHAR_TYPE_PC,
         row.job as u32,
-        mov_speed, // GetLimitPoint(POINT_MOV_SPEED) — parity char.cpp:2245 + botas
+        clamp_mov_speed(i64::from(mov_speed)), // GetLimitPoint(POINT_MOV_SPEED) — parity char.cpp:2245 + botas
         100, // attack speed (parity char.cpp:2246)
         0, // state flag (runtime)
         [0, 0], // affect flags (runtime)
@@ -454,7 +461,7 @@ pub fn character_update_with_parts(
         header: TPacketGCCharacterUpdate::HEADER,
         dw_vid: row.id as u32,
         aw_part,
-        b_moving_speed: mov_speed, // GetLimitPoint(POINT_MOV_SPEED) — C27 botas
+        b_moving_speed: clamp_mov_speed(i64::from(mov_speed)), // GetLimitPoint(POINT_MOV_SPEED) — C27 botas
         b_attack_speed: 100,
         b_state_flag: 0,
         dw_affect_flag: [0, 0],
@@ -1060,7 +1067,7 @@ mod tests {
     /// `ModifyPoints` item.cpp:718-735 → `ApplyPoint(APPLY_MOV_SPEED, lValue)`
     /// sobre la base 100 del `ComputePoints` PC, char.cpp:2245; techo 200 —
     /// `GetLimitPoint` IsPC, char.cpp:2902-2906). El valor viaja en el
-    /// `b_moving_speed` del ADD/UPDATE/ADDITIONAL_INFO.
+    /// `b_moving_speed` del ADD/UPDATE.
     #[test]
     fn mov_speed_for_boots_sums_apply_mov_speed() {
         use database::item::ProtoItem;
@@ -1083,12 +1090,43 @@ mod tests {
         assert_eq!(mov_speed_for_boots(Some(&boots([(8, 5), (8, 5), (3, 20)]))), 110);
         // Otros applies NO afectan (p.ej. APPLY_CON = 3).
         assert_eq!(mov_speed_for_boots(Some(&boots([(3, 20), (0, 0), (0, 0)]))), 100);
+        // Los límites son inclusivos: 199 es válido y 200 es el techo del PC.
+        assert_eq!(mov_speed_for_boots(Some(&boots([(8, 99), (0, 0), (0, 0)]))), 199);
+        assert_eq!(mov_speed_for_boots(Some(&boots([(8, 100), (0, 0), (0, 0)]))), 200);
+        assert_eq!(mov_speed_for_boots(Some(&boots([(8, 101), (0, 0), (0, 0)]))), 200);
+        // GetLimitPoint también tiene mínimo 0; valores negativos no cruzan el
+        // límite inferior.
+        assert_eq!(mov_speed_for_boots(Some(&boots([(8, -100), (0, 0), (0, 0)]))), 0);
+        assert_eq!(mov_speed_for_boots(Some(&boots([(8, -101), (0, 0), (0, 0)]))), 0);
+        // Los valores del proto son i32: sumarlos no debe desbordar antes del
+        // clamp ni producir un valor que luego se envuelva al byte.
+        assert_eq!(mov_speed_for_boots(Some(&boots([(8, i32::MAX); 3]))), 200);
+        assert_eq!(mov_speed_for_boots(Some(&boots([(8, i32::MIN); 3]))), 0);
         // Techo del GetLimitPoint PC (200) + byte del wire.
         assert_eq!(mov_speed_for_boots(Some(&boots([(8, 500), (0, 0), (0, 0)]))), 200);
         // El ADD lleva la velocidad computada (el wire b[26] — mov speed).
         let p = character_add(&row(), mov_speed_for_boots(Some(&boots([(8, 5), (0, 0), (0, 0)]))));
         let b = p.to_bytes();
         assert_eq!(b[26], 105, "b_moving_speed@26 del ADD");
+    }
+
+    /// VERIFIER (mutation): los serializadores reciben la velocidad ya
+    /// calculada, pero el límite sigue siendo una invariante del wire. Un
+    /// caller que entregue 201..=255 no puede hacer viajar esos valores al
+    /// cliente; ambos campos siguen siendo BYTE (protocol/src/lib.rs).
+    #[test]
+    fn character_speed_serialization_is_capped_at_200() {
+        assert_eq!(MOV_SPEED_LIMIT, 200);
+        for speed in [0, 1, 199, 200, 201, u8::MAX] {
+            let expected = speed.min(200);
+            let add = character_add(&row(), speed);
+            let update = character_update_with_parts(&row(), &[0; 5], 0, speed);
+
+            assert_eq!(add.b_moving_speed, expected, "ADD field for {speed}");
+            assert_eq!(add.to_bytes()[26], expected, "ADD wire byte for {speed}");
+            assert_eq!(update.b_moving_speed, expected, "UPDATE field for {speed}");
+            assert_eq!(update.to_bytes()[25], expected, "UPDATE wire byte for {speed}");
+        }
     }
 
     /// character_additional_info: 70 B y campos spot (parity char.cpp:924-948).
