@@ -23,12 +23,13 @@
 //!   `set_qf(duration, get_time()+60*60*22)` + `on login with get_time() >=
 //!   get_qf(duration)`).
 //!
-//! ## Cobertura del catálogo (slice actual)
+//! ## Cobertura del catálogo (actualizada 2026-08-30 — G3.1c)
 //!
 //! | Acción DSL | Estado |
 //! |---|---|
-//! | say / say_title / wait / select / set_state / set_qf / give_item2 / remove_item / warp / notice / return | **Implementadas** |
-//! | say_reward / say_item_vnum / send_letter / clear_letter / set_quest_state / target_vid / target_delete / notice_multiline / affect_add / affect_remove / input_number | mapeadas-pero-pendientes (se loguean, no fallan) |
+//! | say / say_title / wait / select / set_state / set_qf / give_item2 / remove_item / warp / notice / return / say_reward / send_letter / set_quest_state / target_vid / target_delete / affect_add / affect_remove | **Implementadas** (con verifiers en engine.rs) |
+//! | clear_letter / say_item_vnum / notice_multiline | mapeadas-pero-pendientes (se loguean, no fallan) |
+//! | input_number | **Pendiente** — G2.5 en el Gap Registry |
 //!
 //! Condiciones: todo el catálogo del spec §4 (pc.level, count_item — con el
 //! snapshot del inventario que pasa la conexión, get_qf, number, get_time,
