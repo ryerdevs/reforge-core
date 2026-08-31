@@ -14,6 +14,68 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-30 (5th part)] — README status matrix expanded
+
+### Changed
+
+- The public README's `## What is verified today` table now lists, for each
+  of the 12 rows, the implementation details (paths, line numbers, test
+  counts, wire headers) and the gaps that remain for the reforge-core to
+  function at 100% (G0.1a, G2.1–G2.7, G2.8a–f, G2.10, G2.11c, G2.9,
+  G3.2c/g/h/i, G1.18 WSL leg, off-host dump copy). Two rows changed
+  status: Database 🟡 → ✅ (WAL durable, restore drill PASS, one-tx commits),
+  Verification 🔧 → ✅ (gate verde on the workspace, CI runs the same script
+  + check_docs.ps1 + handoff check, `OK: verificacion completa`). The CI
+  workflow's handoff check now also requires an update to
+  `documentation/plans/gap-registry.md` whenever `source/reforge` is
+  touched (in addition to `progress.md` and `CHANGELOG.md`).
+
+## [2026-08-30 (4th part)] — Repository boundary, test debt closure, history rewrite
+
+### Added
+
+- **Gap-registry rows G3.2d/g/h/i:** channel_pg handshake helpers were
+  rewired to the no-handshake channel wire; 3/6 tests now green
+  (`channel_full_login_select_spawn_flow`, `channel_select_empty_slot_closes`,
+  `channel_wrong_password_noid`). The remaining 3 (combat, deployed-30003,
+  idle) are tracked separately as deeper gameplay/wire contracts.
+
+### Fixed
+
+- **Test debt:**
+  - **G3.2e** serialised both `land_pg` tests with `OnceLock<Mutex<()>>`
+    (3/3 runs green against live PG).
+  - **G3.2f** raised the `f16_peer_smoke` fake-auth tolerances to
+    `attempt_timeout=15s, retry_limit=2` and removed a misplaced
+    `#[ignore]` (3/3 runs green).
+  - **G3.2d partial** — `client_handshake_channel` and
+    `mark_login_handshake` now consume the direct `GC_PHASE(LOGIN)` packet
+    (the channel stopped handshaking on 2026-08-14, `entry.rs:74`).
+  - **G3.1a/b** stale doc-comments updated in `channel/party.rs:48-54`
+    and `game_core/skill.rs:50-57` (LINK/UNLINK and kMasterBonusPoly
+    both implemented, not pending).
+  - `verify.ps1` PowerShell parser fixed (single trailing-comment block
+    after the last comma-separated skip string).
+
+### Operations
+
+- **G0.2 closed:** `target/debug` (7.6 GB) removed; `target/` is now
+  425 MB (release only), well within the 5 GB budget. C: drive has
+  31.7 GB free. Six stale `server_realms.exe` debug zombies were killed
+  before the cleanup; they were spawned by the `channel_pg` integration
+  tests and the RAII guard did not catch the panic-induced early return.
+
+### Changed
+
+- **History rewrite (force-push, `8cc42af → 53598d4 → 7052f92`):** the
+  local Git history was rewritten via `git fast-export` / `fast-import`
+  to (1) drop the `Co-authored-by: CommandCodeBot` trailer from every
+  commit and (2) collapse all author/committer identities to
+  `ryer <82473243+ryerdevs@users.noreply.github.com>` (the project
+  owner's GitHub account). The public repository now shows a single
+  author on every commit. The README front-matter (Type / Status /
+  Audience / Last verified) was removed in the same slice.
+
 ## [2026-08-30 (3rd part)] — README framed around the reverse-engineering methodology
 
 ### Changed
