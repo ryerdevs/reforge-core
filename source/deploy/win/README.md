@@ -1,3 +1,10 @@
+---
+Type: Reference
+Status: Current
+Audience: Operators
+Last verified: 2026-08-31
+---
+
 # reforge-core deploy
 
 This directory is what the **end-user** of the reforge-core server gets
@@ -43,8 +50,29 @@ admin_tui panel.
 | Restart | `s` then `x` then `s`, or press `r` in admin_tui |
 | View logs | Press `l` in admin_tui (Tab to switch auth/channel) |
 | Run a backup | `scripts\backup_win.ps1` or press `b` in admin_tui |
-| Restore a dump | Press `R` in admin_tui and pick from the list |
+| Restore a dump | Run `scripts\restore_drill.ps1` for a disposable drill; the TUI does not restore databases |
 | Edit a TOML | `notepad auth.toml` or `notepad channel.toml` |
+
+## Building the admin panel
+
+The TUI source is in `source/reforge/admin_tui/`. From the repository root,
+run `cargo build -p admin_tui` from `source/reforge/`; the debug executable is
+written to `source/reforge/target/debug/admin_tui.exe`. A release build is
+written to `source/reforge/target/release/admin_tui.exe` with
+`cargo build --release -p admin_tui`. Copy the desired executable here as
+`admin_tui.exe` for a self-contained deploy bundle.
+
+The TUI intentionally does not perform database restores. Use
+`scripts\restore_drill.ps1` only for a disposable restore drill.
+
+## Script ownership
+
+The root `scripts/*.ps1` files are canonical. The matching files under
+`source/deploy/win/scripts/` are intentionally byte-for-byte copies so this
+deploy bundle stays self-contained. After changing a root script, copy it to
+the bundle and verify the SHA-256 hashes; do not maintain divergent versions.
+They remain regular files rather than symlinks so the bundle is portable on
+Windows.
 
 ## Backup cadence
 

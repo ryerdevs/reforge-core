@@ -38,8 +38,8 @@ desktop.ini
 **/*.obj
 **/*.pdb
 **/*.ilk
-# (*.exe/.dll/.lib/.pch: only the deploy binaries under source/deploy/win/ are tracked;
-#  the rest of the workspace produces them under target/, which is gitignored via **/target/.)
+# Build binaries stay local; deploy binaries are ignored below and Rust output is
+# covered by **/target/ near the end of this file.
 **/*.dll
 **/*.lib
 **/*.pch
@@ -50,6 +50,11 @@ desktop.ini
 # el resto (runtime C++ legacy, logs, backups, binarios) se mantiene local.
 source/deploy/**/*.exe
 source/deploy/**/logs/
+!source/deploy/win/logs/
+source/deploy/win/logs/*
+source/deploy/win/logs/*.log
+source/deploy/win/logs/*.bin
+!source/deploy/win/logs/bench-run-*.md
 source/deploy/**/backups/
 source/deploy/**/*.dump
 source/deploy/**/*.bak
@@ -92,6 +97,7 @@ node_modules/
 
 # ---- Backups ----
 /archive/
+/backups/
 
 # ---- Dependencias externas (se regeneran/descargan) ----
 /Extern/
@@ -124,6 +130,9 @@ source/client/Extern/
 
 # ---- Rust (reforge) ----
 **/target/
+
+# ---- Runtime WAL (local only) ----
+**/wal/
 
 # pi runtime artifacts
 .pi-lens/
