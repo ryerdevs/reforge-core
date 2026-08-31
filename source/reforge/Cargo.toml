@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["protocol", "network", "database", "game_core", "server_realms", "mysql_proxy", "locale_import", "bench_bot", "quest_dsl"]
+members = ["protocol", "network", "database", "game_core", "server_realms", "mysql_proxy", "locale_import", "bench_bot", "quest_dsl", "admin_tui"]
 
 [workspace.package]
 version = "0.1.0"
