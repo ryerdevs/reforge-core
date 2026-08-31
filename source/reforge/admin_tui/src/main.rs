@@ -1,19 +1,54 @@
 //! admin_tui v1 - operator panel for the reforge-core deploy.
+//!
+//! Sub-modules (process, logs, ops) provide the controller layer.
+//! The TUI event loop lives in `ui` (added in the next commit).
+//! This commit only wires the CLI so the modules can be smoke-tested
+//! before the TUI exists.
 
 #![forbid(unsafe_code)]
 
 use std::env;
 use std::path::PathBuf;
+use std::process::ExitCode;
 
-fn main() -> std::process::ExitCode {
+mod logs;
+mod ops;
+mod process;
+
+fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
         print_help();
-        return std::process::ExitCode::SUCCESS;
+        return ExitCode::SUCCESS;
     }
     let deploy_dir = deploy_dir_from_args(&args);
     eprintln!("admin_tui v0.1.0 - deploy dir: {}", deploy_dir.display());
-    std::process::ExitCode::SUCCESS
+
+    // CLI smoke (not the TUI): if --probe is given, run a couple of
+    // status checks and print the result. Useful for CI / scripts.
+    if let Some(idx) = args.iter().position(|a| a == "--probe") {
+        return probe(&deploy_dir);
+    }
+
+    eprintln!("the TUI loop is not yet wired (this commit only ships the controller).");
+    ExitCode::SUCCESS
+}
+
+fn probe(deploy_dir: &PathBuf) -> ExitCode {
+    let auth = process::status(process::Role::Auth);
+    let channel = process::status(process::Role::Channel);
+    println!("auth    : {:?}", auth);
+    println!("channel : {:?}", channel);
+    if let Ok(lines) = logs::tail(&logs::log_path(deploy_dir, process::Role::Auth)) {
+        println!("auth log lines: {}", lines.len());
+    }
+    if let Ok(dumps) = logs::list_dumps() {
+        println!("dumps available: {}", dumps.len());
+        for d in dumps.iter().take(5) {
+            println!("  - {}", d);
+        }
+    }
+    ExitCode::SUCCESS
 }
 
 fn deploy_dir_from_args(args: &[String]) -> PathBuf {
@@ -46,4 +81,5 @@ fn print_help() {
     println!("OPTIONS:");
     println!("    -d, --deploy-dir <PATH>   Deploy dir (default: REFORGE_DEPLOY_DIR).");
     println!("    -h, --help                 Print this help.");
+    println!("    --probe                    Run status + log probe and exit (no TUI).");
 }
