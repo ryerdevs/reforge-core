@@ -4,17 +4,17 @@
 use std::io::{self, Stdout};
 use std::time::Duration;
 
+use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
-use ratatui::Terminal;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 
 use crate::app::{App, Screen};
@@ -41,14 +41,14 @@ fn event_loop(terminal: &mut Terminal<Backend>, app: &mut App) -> io::Result<()>
     loop {
         terminal.draw(|f| render(f, app))?;
         app.tick();
-        if event::poll(Duration::from_millis(250))? {
-            if let Event::Key(k) = event::read()? {
-                if k.kind != KeyEventKind::Press {
-                    continue;
-                }
-                if handle_key(app, k) {
-                    return Ok(());
-                }
+        if event::poll(Duration::from_millis(250))?
+            && let Event::Key(k) = event::read()?
+        {
+            if k.kind != KeyEventKind::Press {
+                continue;
+            }
+            if handle_key(app, k) {
+                return Ok(());
             }
         }
     }
@@ -61,62 +61,33 @@ fn handle_key(app: &mut App, k: KeyEvent) -> bool {
     match app.screen {
         Screen::Main => match k.code {
             KeyCode::Char('q') | KeyCode::Esc => return true,
-            KeyCode::Char('s') => do_op(app, ops::do_start, "start"),
-            KeyCode::Char('x') => do_op(app, ops::do_stop, "stop"),
-            KeyCode::Char('r') => do_op(app, ops::do_restart, "restart"),
-            KeyCode::Char('b') => do_op(app, ops::do_backup, "backup"),
+            KeyCode::Char('s') => app.start_operation("start", ops::do_start),
+            KeyCode::Char('x') => app.start_operation("stop", ops::do_stop),
+            KeyCode::Char('r') => app.start_operation("restart", ops::do_restart),
+            KeyCode::Char('b') => app.start_operation("backup", ops::do_backup),
             KeyCode::Char('l') => {
                 app.screen = Screen::Logs;
                 app.refresh_logs();
-            }
-            KeyCode::Char('R') => {
-                app.screen = Screen::Restore;
-                app.refresh_dumps();
             }
             _ => {}
         },
         Screen::Logs => match k.code {
             KeyCode::Esc | KeyCode::Char('q') => app.screen = Screen::Main,
             KeyCode::Tab => {
-                app.log_target = match app.log_target {
+                let target = match app.log_target {
                     crate::process::Role::Auth => crate::process::Role::Channel,
                     crate::process::Role::Channel => crate::process::Role::Auth,
                 };
-                app.refresh_logs();
+                app.select_log_target(target);
             }
-            KeyCode::Up => app.log_offset = app.log_offset.saturating_sub(1),
-            KeyCode::Down => {
-                if app.log_offset < app.log_lines.len() {
-                    app.log_offset += 1;
-                }
-            }
-            _ => {}
-        },
-        Screen::Restore => match k.code {
-            KeyCode::Esc | KeyCode::Char('q') => app.screen = Screen::Main,
-            KeyCode::Char('r') => {
-                app.refresh_dumps();
-                app.status_message = format!("refreshed ({} dumps)", app.dumps.len());
-            }
+            KeyCode::Up => app.scroll_up(),
+            KeyCode::Down => app.scroll_down(),
+            KeyCode::Home => app.log_offset = app.log_lines.len(),
+            KeyCode::End | KeyCode::Char('f') => app.follow_tail(),
             _ => {}
         },
     }
     false
-}
-
-fn do_op<F: Fn(&std::path::Path) -> crate::process::OpResult>(
-    app: &mut App,
-    f: F,
-    label: &str,
-) {
-    app.status_message = format!("{label}: running...");
-    let res = f(&app.deploy_dir);
-    app.status_message = match res {
-        crate::process::OpResult::Ok(msg) => format!("{label}: {msg}"),
-        crate::process::OpResult::Failed(msg) => format!("{label}: FAIL {msg}"),
-    };
-    app.refresh_status();
-    app.refresh_logs();
 }
 
 fn render(f: &mut ratatui::Frame, app: &App) {
@@ -135,7 +106,6 @@ fn render(f: &mut ratatui::Frame, app: &App) {
     match app.screen {
         Screen::Main => render_main(f, chunks[1], app),
         Screen::Logs => render_logs(f, chunks[1], app),
-        Screen::Restore => render_restore(f, chunks[1], app),
     }
 
     render_footer(f, chunks[2], app);
@@ -143,104 +113,130 @@ fn render(f: &mut ratatui::Frame, app: &App) {
 
 fn render_header(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let line = Line::from(vec![
-        Span::styled("reforge-core admin ", Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw("v0.1.0  -  "),
         Span::styled(
-            format!("log target {}", app.log_target.label()),
-            Style::default().fg(Color::Cyan),
+            "reforge admin",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         ),
+        Span::raw(format!("  HEAD {}  ", app.head)),
+        header_status(crate::process::Role::Auth, app.auth_state),
+        Span::raw("  "),
+        header_status(crate::process::Role::Channel, app.channel_state),
     ]);
     let p = Paragraph::new(line).block(Block::default().borders(Borders::ALL));
     f.render_widget(p, area);
 }
 
 fn render_main(f: &mut ratatui::Frame, area: Rect, app: &App) {
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
 
-    let process_lines: Vec<Line> = vec![
-        Line::from(proc_line("auth", app.auth_state)),
-        Line::from(proc_line("channel", app.channel_state)),
-        Line::from(""),
-        Line::from(format!("deploy: {}", app.deploy_dir.display())),
-        Line::from(format!("log tail: {}.out.log", app.log_target.label())),
+    let services = vec![
+        service_line(
+            "Auth",
+            crate::process::Role::Auth,
+            app.auth_state,
+            &app.auth_log_preview,
+        ),
+        service_line(
+            "Channel",
+            crate::process::Role::Channel,
+            app.channel_state,
+            &app.channel_log_preview,
+        ),
     ];
-    let p1 = Paragraph::new(process_lines)
-        .block(Block::default().title("Processes").borders(Borders::ALL));
-    f.render_widget(p1, cols[0]);
+    let p1 = Paragraph::new(services)
+        .wrap(Wrap { trim: true })
+        .block(Block::default().title("Services").borders(Borders::ALL));
+    f.render_widget(p1, sections[0]);
 
-    let mut activity: Vec<Line> = vec![Line::from("last log lines:")];
-    let start = app.log_lines.len().saturating_sub(5);
-    for l in &app.log_lines[start..] {
-        activity.push(Line::from(l.as_str()));
-    }
-    activity.push(Line::from(""));
-    activity.push(Line::from(vec![Span::styled(
-        format!("status: {}", app.status_message),
-        Style::default().fg(Color::Yellow),
-    )]));
+    let activity = vec![
+        Line::from(format!("deploy: {}", app.deploy_dir.display())),
+        Line::from(format!("log view: {}", app.log_target.label())),
+        Line::from(format!(
+            "operation: {}",
+            app.operation_running().unwrap_or("idle")
+        )),
+        Line::from(vec![Span::styled(
+            format!("status: {}", app.status_message),
+            Style::default().fg(Color::Yellow),
+        )]),
+    ];
     let p2 = Paragraph::new(activity)
         .wrap(Wrap { trim: true })
         .block(Block::default().title("Activity").borders(Borders::ALL));
-    f.render_widget(p2, cols[1]);
+    f.render_widget(p2, sections[1]);
 }
 
-fn proc_line(name: &'static str, state: crate::process::ProcState) -> Line<'static> {
-    let (marker, color) = if state.is_running() {
-        ("[RUNNING]", Color::Green)
-    } else {
-        ("[stopped]", Color::Red)
-    };
-    let pid_text: String = match state {
-        crate::process::ProcState::Running(pid) => format!("pid={pid}"),
+fn header_status(role: crate::process::Role, state: crate::process::ProcState) -> Span<'static> {
+    let (marker, color) = state_marker(state);
+    Span::styled(
+        format!("{marker} {}:{}", role.label(), role.port()),
+        Style::default().fg(color),
+    )
+}
+
+fn service_line(
+    name: &'static str,
+    role: crate::process::Role,
+    state: crate::process::ProcState,
+    preview: &str,
+) -> Line<'static> {
+    let (marker, color) = state_marker(state);
+    let pid_text = match state {
+        crate::process::ProcState::Running(pid) => format!(" pid={pid}"),
         _ => String::new(),
     };
     Line::from(vec![
-        Span::styled(marker, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            marker,
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
         Span::raw("  "),
         Span::styled(name, Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw("  "),
-        Span::raw(pid_text),
+        Span::raw(format!("  :{}{}  ", role.port(), pid_text)),
+        Span::raw(format!("last: {preview}")),
     ])
 }
 
+fn state_marker(state: crate::process::ProcState) -> (&'static str, Color) {
+    match state {
+        crate::process::ProcState::Running(_) => ("● RUNNING", Color::Green),
+        crate::process::ProcState::Stopped => ("○ STOPPED", Color::Red),
+        crate::process::ProcState::Unknown => ("? UNKNOWN", Color::Yellow),
+    }
+}
+
 fn render_logs(f: &mut ratatui::Frame, area: Rect, app: &App) {
-    let visible = app.log_lines.len().saturating_sub(app.log_offset);
-    let start = app.log_lines.len().saturating_sub(visible);
-    let items: Vec<ListItem> = app.log_lines[start..]
+    let visible_lines = area.height.saturating_sub(2) as usize;
+    let end = app.log_lines.len().saturating_sub(app.log_offset);
+    let start = end.saturating_sub(visible_lines);
+    let items: Vec<ListItem> = app.log_lines[start..end]
         .iter()
         .map(|l| ListItem::new(Line::from(l.as_str())))
         .collect();
-    let title = format!("logs - {} (tab to switch, esc back)", app.log_target.label());
+    let items = if items.is_empty() {
+        vec![ListItem::new("(no log output yet)")]
+    } else {
+        items
+    };
+    let follow = if app.log_offset == 0 {
+        String::from("follow")
+    } else {
+        format!("{} back", app.log_offset)
+    };
+    let title = format!("logs / {} ({follow})", app.log_target.label());
     let list = List::new(items).block(Block::default().title(title).borders(Borders::ALL));
     f.render_widget(list, area);
 }
 
-fn render_restore(f: &mut ratatui::Frame, area: Rect, app: &App) {
-    let mut lines: Vec<Line> = Vec::new();
-    lines.push(Line::from("available dumps (press R to refresh, esc back):"));
-    lines.push(Line::from(""));
-    for (i, d) in app.dumps.iter().enumerate() {
-        lines.push(Line::from(format!("  [{}] {}", i + 1, d)));
-    }
-    if app.dumps.is_empty() {
-        lines.push(Line::from("  (no dumps found in backups/ or metin2-extra/backups)"));
-    }
-    let p = Paragraph::new(lines)
-        .wrap(Wrap { trim: true })
-        .block(Block::default().title("Restore").borders(Borders::ALL));
-    f.render_widget(p, area);
-}
-
 fn render_footer(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let line = match app.screen {
-        Screen::Main => Line::from(
-            "[s]tart  [x]stop  [r]estart  [l]ogs  [b]ackup  [R]estore  [q]uit",
-        ),
-        Screen::Logs => Line::from("[tab] switch auth/channel  [^v] scroll  [esc] back"),
-        Screen::Restore => Line::from("[R] refresh  [esc] back"),
+        Screen::Main => Line::from("[s]tart [x]stop [r]estart [l]ogs [b]ackup [q]uit"),
+        Screen::Logs => Line::from("[Tab] switch [↑↓] scroll [Home/End] [f]ollow [Esc] back"),
     };
     let p = Paragraph::new(line).block(Block::default().borders(Borders::ALL));
     f.render_widget(p, area);

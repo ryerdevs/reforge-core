@@ -3,7 +3,7 @@
 #![forbid(unsafe_code)]
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 mod app;
@@ -33,12 +33,12 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn probe(deploy_dir: &PathBuf) -> ExitCode {
+fn probe(deploy_dir: &Path) -> ExitCode {
     let auth = process::status(process::Role::Auth);
     let channel = process::status(process::Role::Channel);
     println!("auth    : {:?}", auth);
     println!("channel : {:?}", channel);
-    if let Ok(lines) = logs::tail(&logs::log_path(deploy_dir, process::Role::Auth)) {
+    if let Ok(lines) = logs::tail(&logs::latest_log(deploy_dir, process::Role::Auth)) {
         println!("auth log lines: {}", lines.len());
     }
     if let Ok(dumps) = logs::list_dumps() {
@@ -48,10 +48,10 @@ fn probe(deploy_dir: &PathBuf) -> ExitCode {
 }
 
 fn deploy_dir_from_args(args: &[String]) -> PathBuf {
-    if let Some(i) = args.iter().position(|a| a == "--deploy-dir" || a == "-d") {
-        if let Some(v) = args.get(i + 1) {
-            return PathBuf::from(v);
-        }
+    if let Some(i) = args.iter().position(|a| a == "--deploy-dir" || a == "-d")
+        && let Some(v) = args.get(i + 1)
+    {
+        return PathBuf::from(v);
     }
     env::var("REFORGE_DEPLOY_DIR")
         .map(PathBuf::from)
@@ -60,12 +60,13 @@ fn deploy_dir_from_args(args: &[String]) -> PathBuf {
 
 fn cwd_relative_deploy() -> PathBuf {
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let last = cwd.file_name().and_then(|n| n.to_str());
-    match last {
-        Some("reforge") => cwd.join("deploy").join("win"),
-        Some("admin_tui") => cwd.join("..").join("..").join("deploy").join("win"),
-        _ => cwd.join("source").join("reforge").join("..").join("deploy").join("win"),
+    for ancestor in cwd.ancestors() {
+        let candidate = ancestor.join("source").join("deploy").join("win");
+        if candidate.is_dir() {
+            return candidate;
+        }
     }
+    cwd.join("source").join("deploy").join("win")
 }
 
 fn print_help() {

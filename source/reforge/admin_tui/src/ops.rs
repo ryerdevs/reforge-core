@@ -1,11 +1,8 @@
-//! Operator actions: backup + restore (delegates to the PowerShell
-//! scripts the operator would run by hand).
-
-#![allow(dead_code)] // do_restore wired in commit 4 (Restore prompt)
+//! Operator actions delegated to the PowerShell scripts.
 
 use std::path::Path;
 
-use super::process::{backup, restore, start, stop, restart, OpResult};
+use super::process::{OpResult, backup, restart, start, stop};
 
 pub fn do_start(deploy_dir: &Path) -> OpResult {
     start(deploy_dir)
@@ -21,8 +18,4 @@ pub fn do_restart(deploy_dir: &Path) -> OpResult {
 
 pub fn do_backup(deploy_dir: &Path) -> OpResult {
     backup(deploy_dir)
-}
-
-pub fn do_restore(deploy_dir: &Path, dump: &str) -> OpResult {
-    restore(deploy_dir, dump)
 }
