@@ -14,6 +14,37 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
 
+## [2026-08-30 (6th part)] — admin_tui v1: operator panel TUI
+
+### Added
+
+- **New crate `admin_tui`** joins the reforge workspace. It is the
+  operator panel TUI for the deploy directory: header (version + log
+  target), two columns (Processes and Activity), and a footer with
+  key hints. Sub-screens for log tail (auth/channel, tab to switch,
+  ↑↓ to scroll) and restore (list of dumps, r to refresh).
+- The deploy bundle is now self-contained: `source/deploy/win/`
+  ships `auth.toml`, `channel.toml`, `scripts/{start,stop,status,
+  backup,restore_drill}_win.ps1`, `examples/{auth,channel}.example.toml`,
+  and `README.md` for the end user. The legacy C++ runtime
+  artifacts (`main/`, `baks/`, `sql/`, `logs/`) stay local.
+- `admin_tui --probe` runs the controller without the TUI: prints
+  the auth and channel state, the auth log line count, and the
+  number of available dumps. Useful for CI smoke and operator
+  scripts.
+- CI workflow: a new step compiles `cargo build --release -p
+  admin_tui` and fails the run if the binary is not produced.
+- Gap-registry row **G2.12 (admin_tui v1)** closed.
+
+### Fixed
+
+- `.gitignore`: replaced the blanket `source/deploy/` ignore with
+  targeted rules (only the deploy binaries under that path, the
+  `logs/`, `backups/`, `*.dump`, `*.bak` runtime artifacts, and the
+  legacy C++ runtime are now ignored). The TOMLs, scripts, README,
+  and examples are now tracked. Also ignores the legacy C++ tool
+  binaries under `source/tools/proto/*.exe`.
+
 ## [2026-08-30 (5th part)] — README status matrix expanded
 
 ### Changed

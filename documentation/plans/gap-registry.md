@@ -5,11 +5,15 @@ Audience: Contributors
 Last verified: 2026-08-30
 ---
 
-> Tree state at verification: HEAD `2cf099f`. The G0.1b–G0.1e lanes and the
-> documentation reconciliation were committed atomically on 2026-08-30:
-> `270b8a7` (client/pack removals + LICENSE), `74f62a7` (G0.1b), `4aaff76`
-> (G0.1c), `d924aaa` (G0.1d), `96e969f` (G0.1e), `2cf099f` (docs). G0.1a remains
-> blocked on the 2000/u16 client migration.
+> Tree state at verification: HEAD `ba72d58`. G0.1b–G0.1e landed in
+> `74f62a7` / `4aaff76` / `d924aaa` / `96e969f`. G0.2 closed in `7052f92`.
+> Test debt G3.2e/f closed in `bcd030e` / `d9e7997`. G3.2d partial closed in
+> `f120fe8` (3/6 tests green; G3.2g/h/i follow-ups). G3.1a/b closed in
+> `7052f92`. G0.1a remains blocked on the 2000/u16 client migration. The
+> README status matrix was expanded in `37c3073` and the changelog/handoff
+> refreshed in `62ef54f`. The admin_tui v1 operator panel landed in
+> `99ca804` (crate) + `4e21e38` (controller) + `d5a6a9d` (TUI) +
+> `64591ce` (deploy bundle) + `ba72d58` (CI).
 >
 > Gate policy (user decision 2026-08-30): **mixed by risk** — Oracle Gate and
 > real-client checks are required only where a desync/overflow risk exists
@@ -139,6 +143,7 @@ Never copy the frozen C++ source into this repository. See [ADR-0012](../adr/001
 | G3.2i | **`channel_idle_timeout_reset_by_traffic` cuelga >2 min** esperando un heartbeat/GC_STATE del canal que el wire actual ya no emite en el formato esperado por el test (o el test asume un timeout más corto que la cfg actual del canal de 5 s). | fixer (idle timeout) | OPEN — excluded from the gate via `--skip` | `server_realms/tests/channel_pg.rs:752+`; gate timeout 2026-08-30 | None | An idle-timeout test that depends on a heartbeat that no longer matches the channel wire | The test is rewritten to use the `Session::last_activity` accessor and the test asserts a real `cfg.timeout`-driven disconnect (not a packet-shape contract) |
 | G3.2e | ~~Flaky `land_load_map_41_contract` in the parallel `--ignored` leg.~~ Serialized with `OnceLock<Mutex<()>>` (`land_pg_lock()`) covering both PG tests of `land_pg`; 3/3 runs green against live PG, skip removed from the gate. | fixer (test isolation) | CLOSED | `database/tests/land_pg.rs:23-32,41,68`; 3/3 runs ok 2026-08-30 | None | A flaky row read on a shared live-PG table can block the gate | Tests use a `OnceLock<Mutex<()>>` guard and the skip is removed from the gate |
 | G3.2f | ~~`f16_peer_smoke` flake bajo la suite completa.~~ Fake-auth `attempt_timeout` raised to 15s and `retry_limit` to 2 (3/3 runs ok); the `#[ignore]` was misplaced on a non-test function and had no effect, removed; skip removed from the gate. | coder (timeout) | CLOSED | `network/tests/f16_peer_smoke.rs:42-53`; 3/3 runs ok 2026-08-30 | None | A known-flake can block the gate or hide a real regression | Fake-auth tolerances tolerate the suite and the skip is removed from the gate |
+| G2.12 | ~~admin_tui v1: operator panel TUI for the deploy directory.~~ New `admin_tui` crate in the workspace (ratatui 0.29 + crossterm 0.28; no `crossterm` direct, no `color-eyre`, no `tokio`). Header, two-column Processes/Activity, footer with key hints. Sub-screens for log tail (auth/channel) and restore (list of dumps). `admin_tui --probe` for CI smoke. The deploy bundle is self-contained: `source/deploy/win/` ships `auth.toml`, `channel.toml`, `scripts/{start,stop,status,backup,restore_drill}_win.ps1`, `examples/{auth,channel}.example.toml`, and `README.md` for the end user. CI workflow compiles `cargo build --release -p admin_tui`. | coder (operator tooling) | CLOSED (2026-08-30) | `source/reforge/admin_tui/{Cargo.toml, src/{main,app,ui,process,logs,ops}.rs}`; commits `99ca804` (crate), `4e21e38` (controller), `d5a6a9d` (TUI), `64591ce` (deploy README + scripts), `ba72d58` (CI) | None | The end user of the reforge-core release had no operator panel and only ad-hoc scripts | The TUI starts, refreshes status + log tail every 1 s, runs start/stop/restart/backup/restore, and lists dumps; the deploy bundle is self-contained |
 
 ## Closed this block (2026-08-27–30)
 
