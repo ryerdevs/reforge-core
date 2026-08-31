@@ -41,6 +41,21 @@ jobs:
           $rows = Select-String -Path documentation/plans/gap-registry.md -Pattern '^\| G[0-9]' | ForEach-Object { $_.Line }
           $openRows = $rows | Where-Object { $_ -notmatch 'CLOSED' -and $_ -notmatch '~~' }
           Write-Host "registry has $($openRows.Count) open rows (gate 2 backlog, expected: many)"
+      - name: Build admin_tui (deploy operator TUI)
+        shell: pwsh
+        run: |
+          Push-Location source/reforge
+          try {
+            cargo build --release -p admin_tui
+            $bin = "target/release/admin_tui.exe"
+            if (-not (Test-Path $bin)) {
+              Write-Error "admin_tui.exe was not produced"
+              exit 1
+            }
+            Write-Host "admin_tui built: $((Get-Item $bin).Length) bytes"
+          } finally {
+            Pop-Location
+          }
       - name: Link checker
         uses: lycheeverse/lychee-action@v1
         with:
