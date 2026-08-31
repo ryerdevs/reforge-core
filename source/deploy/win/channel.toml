@@ -1,0 +1,12 @@
+# server_realms.toml - rol channel (Windows nativo, ADR-0012)
+listen = "127.0.0.1:30003"
+pg_conn = "host=127.0.0.1 port=5432 user=mt2 password=mt2 dbname=metin2"
+channel = 1
+ping_interval_ms = 10000
+timeout_ms = 120000
+map_path = "C:/projects/Metin2/source/deploy/main/srv1/share/locale/spain/map"
+# Quest DESACTIVADAS temporalmente (2026-08-14): el diálogo con claves crudas
+# (textos sin resolver) CRASHEA el cliente al entrar al mundo. Se reactivan
+# cuando el lane de textos entregue el quest_text resuelto.
+quest_path = ""
+legacy_dir = ""

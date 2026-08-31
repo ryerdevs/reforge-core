@@ -1,0 +1,10 @@
+# server_realms.toml - rol auth (Windows nativo, ADR-0012)
+listen = "127.0.0.1:30001"
+pg_conn = "host=127.0.0.1 port=5432 user=mt2 password=mt2 dbname=metin2"
+timeout_ms = 120000
+no_more_clients = false
+expected_version = 40999
+channels = [{name = "CH-1", ip = "127.0.0.1", port = 30003}]
+exp_rate = 100
+gold_rate = 100
+drop_rate = 100
