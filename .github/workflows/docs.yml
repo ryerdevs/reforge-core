@@ -24,17 +24,23 @@ jobs:
         shell: pwsh
         run: |
           powershell -ExecutionPolicy Bypass -File scripts/status.ps1
-      - name: Handoff check — source changed without progress/CHANGELOG
+      - name: Handoff check — source changed without progress/CHANGELOG/registry
         shell: pwsh
         run: |
           $changed = git diff --name-only origin/main...HEAD
           $touchedSource = $changed | Select-String "source/reforge"
-          $touchedDocs = $changed | Select-String "documentation/progress.md|CHANGELOG.md"
+          $touchedDocs = $changed | Select-String "documentation/progress.md|CHANGELOG.md|documentation/plans/gap-registry.md"
           if ($touchedSource -and -not $touchedDocs) {
-            Write-Error "source/reforge touched but documentation/progress.md and CHANGELOG.md not updated — update handoff"
+            Write-Error "source/reforge touched but progress.md, CHANGELOG.md, and gap-registry.md are all unchanged. The handoff must record the slice."
             exit 1
           }
           Write-Host "handoff check ok"
+      - name: Gap-registry sanity
+        shell: pwsh
+        run: |
+          $rows = Select-String -Path documentation/plans/gap-registry.md -Pattern '^\| G[0-9]' | ForEach-Object { $_.Line }
+          $openRows = $rows | Where-Object { $_ -notmatch 'CLOSED' -and $_ -notmatch '~~' }
+          Write-Host "registry has $($openRows.Count) open rows (gate 2 backlog, expected: many)"
       - name: Link checker
         uses: lycheeverse/lychee-action@v1
         with:
