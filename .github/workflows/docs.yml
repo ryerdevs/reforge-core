@@ -44,18 +44,13 @@ jobs:
       - name: Build admin_tui (deploy operator TUI)
         shell: pwsh
         run: |
-          Push-Location source/reforge
-          try {
-            cargo build --release -p admin_tui
-            $bin = "target/release/admin_tui.exe"
-            if (-not (Test-Path $bin)) {
-              Write-Error "admin_tui.exe was not produced"
-              exit 1
-            }
-            Write-Host "admin_tui built: $((Get-Item $bin).Length) bytes"
-          } finally {
-            Pop-Location
+          powershell -ExecutionPolicy Bypass -File scripts/build_admin_tui.ps1
+          $bin = "source/deploy/win/admin_tui.exe"
+          if (-not (Test-Path $bin)) {
+            Write-Error "admin_tui.exe was not copied to deploy/win"
+            exit 1
           }
+          Write-Host "admin_tui in deploy/win: $((Get-Item $bin).Length) bytes"
       - name: Link checker
         uses: lycheeverse/lychee-action@v1
         with:

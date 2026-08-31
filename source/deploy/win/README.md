@@ -55,12 +55,18 @@ admin_tui panel.
 
 ## Building the admin panel
 
-The TUI source is in `source/reforge/admin_tui/`. From the repository root,
-run `cargo build -p admin_tui` from `source/reforge/`; the debug executable is
-written to `source/reforge/target/debug/admin_tui.exe`. A release build is
-written to `source/reforge/target/release/admin_tui.exe` with
-`cargo build --release -p admin_tui`. Copy the desired executable here as
-`admin_tui.exe` for a self-contained deploy bundle.
+The TUI source is in `source/reforge/admin_tui/`. The canonical build is:
+
+```powershell
+powershell -File scripts/build_admin_tui.ps1             # release -> source/deploy/win/admin_tui.exe
+powershell -File scripts/build_admin_tui.ps1 -DebugBuild # debug  -> source/deploy/win/admin_tui.exe
+```
+
+The script builds `admin_tui` and **automatically copies** the exe to
+`source/deploy/win/admin_tui.exe` so the bundle stays self-contained.
+`source/deploy/**/*.exe` is gitignored — the copy is local-only, just like
+`server_realms.exe`. Raw `cargo build -p admin_tui` still works but won't
+copy; use the wrapper when you want the deploy bundle updated.
 
 The TUI intentionally does not perform database restores. Use
 `scripts\restore_drill.ps1` only for a disposable restore drill.
