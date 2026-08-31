@@ -2,7 +2,7 @@
 Type: Hub
 Status: Current
 Audience: All
-Last verified: 2026-08-30
+Last verified: 2026-08-31
 ---
 
 # Documentation — reforge-core
@@ -48,13 +48,13 @@ orchestrator commits one logical change after verification.
 |------|------|
 | What is done / doing / next? | [progress.md](./progress.md) (live handoff) + [plans/gap-registry.md](./plans/gap-registry.md) (per-gap tracker) |
 | Open gaps: owner, evidence, exit criteria | [plans/gap-registry.md](./plans/gap-registry.md) |
-| Which document decides when they disagree? | [reference/document-authority.md](./reference/document-authority.md) |
+| Which document decides when they disagree? | [reference/document-authority.md](./reference/document-authority.md) (precedence: verification > gap-registry > progress > ADRs > summaries > history) |
 | DB in human language | [schema.md](./schema.md) |
 | Never repeat | [rules.md](./rules.md) |
-| Why PostgreSQL, ECS, WAL…? | [adr/](./adr/) (15 ADRs; ADR-0013 is superseded) |
+| Why PostgreSQL, ECS, WAL…? | [adr/](./adr/) (17 ADRs; ADR-0013 superseded by ADR-0015) |
 | Byte-exact wire contract | [reference/login-flow.md](./reference/login-flow.md) |
 | What changed with evidence? | [../CHANGELOG.md](../CHANGELOG.md) |
-| Mission + protocol + runbook | [../AGENTS.md](../AGENTS.md) |
+| Agent instructions + runbook | [../AGENTS.md](../AGENTS.md) (lean, links to live docs) |
 | Documentation policy | [DOCUMENTATION.md](./DOCUMENTATION.md) |
 | Phase history (F0–F7) | [roadmap.md](./roadmap.md) + [../ROADMAP.md](../ROADMAP.md) (historical master) |
 | Old plans, snapshots | [Historical archive index](./history-index.md) (archive is read-only) |
