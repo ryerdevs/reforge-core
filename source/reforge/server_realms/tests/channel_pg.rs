@@ -27,7 +27,8 @@ use protocol::world::TPacketCGMarkLogin;
 use protocol::{
     TPacketCGLogin3, TPacketCGPlayerSelect, TPacketGCLoginSuccess, TPacketGCPhase, phase,
 };
-use tokio::net::TcpStream;
+use tokio::io::AsyncWriteExt;
+use tokio::net::{TcpListener, TcpStream};
 
 const DEFAULT_PG: &str = "host=127.0.0.1 port=5432 user=mt2 password=mt2 dbname=metin2";
 
@@ -276,6 +277,33 @@ async fn enter_and_read_spawns(
         .await
         .map_err(|e| format!("CHANNEL: {e}"))?;
 
+    let spawns = read_spawn_stream(conn).await?;
+    assert!(
+        !spawns.is_empty(),
+        "el mapa 41 tiene spawns (game_core::npc)"
+    );
+    // F5 perf: la resolución con caché no debe stallar la entrada (el
+    // contrato previo sin batch: ~3-4 min por entrada — regresión acá).
+    let elapsed = t0.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(15),
+        "entry + spawns en {:.1} s — la resolución debe ser batch/caché",
+        elapsed.as_secs_f64()
+    );
+    eprintln!(
+        "entry + {} spawns leídos en {:.1} s (resolución batch/caché)",
+        spawns.len(),
+        elapsed.as_secs_f64()
+    );
+    Ok(spawns)
+}
+
+/// Lee únicamente la cola dinámica posterior a `GC_PHASE(GAME)`: NPC ADD +
+/// ADDITIONAL_INFO. `GC_LOCALE` en esta fase es un error de compatibilidad, no
+/// un paquete que el cliente pueda ignorar.
+async fn read_spawn_stream(
+    conn: &mut Connection<TcpStream>,
+) -> Result<Vec<(u32, i32, i32, u32)>, String> {
     // Los NPCs del spawn del mapa (F5.2): add (1, 37 B) [+ addInfo (136,
     // 70 B) si type NPC] contiguos por mob. El add lleva vid@1, x@9, y@13,
     // wRaceNum (el vnum del mob)@22.
@@ -303,17 +331,10 @@ async fn enter_and_read_spawns(
                     .map_err(|e| format!("spawn info: {e}"))?;
             }
             140 => {
-                // GC_LOCALE (F1 — push del canal al conectar,
-                // channel/locale.rs): 0x8c + u16 payload_len (flag+chunk).
-                // Se consume (el fake no lo procesa) y el loop sigue con los
-                // spawns.
-                let len = read_exact_size(conn, 2)
-                    .await
-                    .map_err(|e| format!("locale len: {e}"))?;
-                let n = u16::from_le_bytes([len[0], len[1]]) as usize;
-                let _ = read_exact_size(conn, n)
-                    .await
-                    .map_err(|e| format!("locale chunk: {e}"))?;
+                return Err(
+                    "GC_LOCALE (140) after GC_PHASE(GAME): the compatible client cannot parse it"
+                        .into(),
+                );
             }
             other => {
                 // Fin de los spawns — el byte leído es el siguiente paquete
@@ -327,24 +348,34 @@ async fn enter_and_read_spawns(
             }
         }
     }
-    assert!(
-        !spawns.is_empty(),
-        "el mapa 41 tiene spawns (game_core::npc)"
-    );
-    // F5 perf: la resolución con caché no debe stallar la entrada (el
-    // contrato previo sin batch: ~3-4 min por entrada — regresión acá).
-    let elapsed = t0.elapsed();
-    assert!(
-        elapsed < Duration::from_secs(15),
-        "entry + spawns en {:.1} s — la resolución debe ser batch/caché",
-        elapsed.as_secs_f64()
-    );
-    eprintln!(
-        "entry + {} spawns leídos en {:.1} s (resolución batch/caché)",
-        spawns.len(),
-        elapsed.as_secs_f64()
-    );
     Ok(spawns)
+}
+
+/// Mutation target: changing the 140 arm in `read_spawn_stream` to consume or
+/// ignore the packet makes this test fail instead of masking the client reset.
+#[tokio::test]
+async fn game_spawn_stream_rejects_locale_header() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind loopback peer");
+    let addr = listener.local_addr().expect("loopback address");
+    let writer = tokio::spawn(async move {
+        let (mut peer, _) = listener.accept().await.expect("accept peer");
+        peer.write_all(&[140])
+            .await
+            .expect("write forbidden Game header");
+    });
+    let mut conn = Connection::new(TcpStream::connect(addr).await.expect("connect peer"));
+
+    let error = read_spawn_stream(&mut conn)
+        .await
+        .expect_err("Game stream must reject GC_LOCALE");
+
+    assert!(
+        error.contains("GC_LOCALE (140) after GC_PHASE(GAME)"),
+        "unexpected error: {error}"
+    );
+    writer.await.expect("writer task");
 }
 
 /// El flujo completo del cliente REAL: handshake → LOGIN3 → GC_EMPIRE →

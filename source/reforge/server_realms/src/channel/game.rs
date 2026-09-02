@@ -20,8 +20,8 @@ use game_core::ecs::{CombatIntent, Intent};
 
 use crate::channel::session::Session;
 use crate::channel::{
-    chat, combat, dragon_soul, events, horse, items, land, locale, movement, party, pvp, quest,
-    quickslot, safebox, script, shop, skills, trade,
+    chat, combat, dragon_soul, events, horse, items, land, movement, party, pvp, quest, quickslot,
+    safebox, script, shop, skills, trade,
 };
 
 /// Loop de juego de la conexión: corre SOLO con la sesión llena (las fases
@@ -107,9 +107,6 @@ async fn game_loop(session: &mut Session) -> Result<(), String> {
                     // FASE 1 caballo jugable: CG_HORSE (63, aditivo reforge —
                     // 2 B: header + bRide) monta/desmonta + persiste.
                     header::CG_HORSE => horse::handle(session, &pkt).await?.into_result()?,
-                    // F1 pull del locale (ADR-0009 — hot reload): el cliente
-                    // re-pide la lengua EN GAME; stateless (parity auth).
-                    header::CG_LOCALE_REQUEST => locale::handle(session, &pkt).await?.into_result()?,
                     // F5.3: chat — echo GC_CHAT (4) al jugador (parity
                     // `Chat()` input_main.cpp:641-685 → `ChatPacket` →
                     // char.cpp — sin interpret_command por ahora, YAGNI).

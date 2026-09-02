@@ -566,11 +566,6 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
             );
         }
     }
-    // F1 (ADR-0009): push del locale del jugador AL CONECTAR — el canal ya
-    // conoce la lengua (columna `lang` del QUERY_LOGIN — parity input_db.cpp:
-    // 150-164). El bundle GC_LOCALE (140) chunked viaja al final del entry
-    // (channel/locale.rs); fail-open: el AUTH ya sirvió el bundle.
-    crate::channel::locale::send_player_locale(session, &acc.lang).await?;
     Ok(())
 }
 

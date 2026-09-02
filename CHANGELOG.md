@@ -2,7 +2,7 @@
 Type: History
 Status: Current
 Audience: Contributors, maintainers
-Last verified: 2026-08-30
+Last verified: 2026-09-01
 ---
 
 # Changelog
@@ -13,6 +13,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.html)) once releases exist; until then, entries are grouped by date.
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
+
+## [Unreleased]
+
+### Changed
+
+- **Auth-only locale bootstrap:** the external compatible client accepts
+  `GC_LOCALE` (header 140) during authentication/loading. Auth remains the sole
+  `CG_LOCALE_REQUEST` responder; the channel must neither push nor respond with
+  header 140 after `GC_PHASE(GAME)`.
+- **Regression evidence:** the 2026-09-01 client diagnostic was
+  `Unprocessed packet header 140, state Game`; the channel-entry verifier now
+  rejects `GC_LOCALE` after `GC_PHASE(GAME)` instead of consuming it
+  ([verifier](source/reforge/server_realms/tests/channel_pg.rs#L305-L310)).
+  In-game hot reload remains deferred until a compatible client Game-phase
+  parser/cache and version-gated rollout exist outside this public server
+  repository.
 
 ## [2026-08-30 (6th part)] — admin_tui v1: operator panel TUI
 
