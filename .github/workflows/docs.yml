@@ -1,4 +1,4 @@
-﻿name: docs
+name: docs
 
 on:
   push:
@@ -73,7 +73,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Link checker
-        uses: lycheeverse/lychee-action@v1
+        uses: lycheeverse/lychee-action@v2
         with:
           args: --verbose --no-progress documentation/**/*.md
 
