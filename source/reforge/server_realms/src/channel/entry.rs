@@ -258,24 +258,27 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
         return Ok(());
     };
     session.row = Some(row);
-    // P0-B (2026-08-14): validación de la posición del load — parity
-    // `GetValidLocation` del C++ (sectree_manager). Sin esto, un row con
-    // coords FUERA del mapa crashea el CLIENTE con 0xC0000374 al cargar el
-    // mapa (probado 2×: 08-09 y hoy — reparado con UPDATE manual). Fuera de
-    // límites → primera celda movible (fallback determinista); mapa no
-    // cargable → fail-open (el movimiento también fail-opens). Leniente a
-    // propósito: las celdas del pueblo son ATTR_BLOCK legítimas (wave 45) —
-    // solo se corrige lo que rompería al cliente (out of bounds).
+    // P0-B (2026-08-14): validación de seguridad de la posición del load — la
+    // base es `GetValidLocation` del C++ (sectree_manager), con el guard
+    // adicional de walkability/client-pack de este rewrite. Sin esto, un row
+    // con coords no seguras crashea el CLIENTE con 0xC0000374 al cargar el
+    // mapa. El mapa 41 usa la aldea conocida como fallback; otros mapas buscan
+    // una celda movible. Un mapa no cargable mantiene el fail-open existente.
     if let Some((fx, fy)) = validated_load_position(session) {
         let (ox, oy) = (session.row().x, session.row().y);
         session.row_mut().x = fx;
         session.row_mut().y = fy;
         eprintln!(
-            "server_realms: channel conn {}: posición ({ox},{oy}) inválida en el mapa {} — \
-             fallback a la primera celda movible ({fx},{fy})",
+            "server_realms: channel conn {}: WARN player id={} posición ({ox},{oy}) \
+             no segura en el mapa {} — fallback a ({fx},{fy})",
             session.conn_id,
+            session.row().id,
             session.row().map_index
         );
+        // Queue the correction before later entry steps. The shared batcher
+        // persists it asynchronously; the next save is idempotent, and the
+        // row is already the safe source for the motion anchor below.
+        session.save();
     }
     // F5.1: el estado de movimiento del jugador (posición del load). El ANCLA
     // del anti-speedhack = el reloj del server AHORA (parity
@@ -696,8 +699,8 @@ const CREATE_MAP: i32 = 41;
 /// (parity `g_start_position[3]` = 969600/278400; el C++ usa
 /// `CREATE_START_X/Y` con ±300 de jitter — el rewrite fija la aldea,
 /// determinista).
-const CREATE_X: i32 = 969600;
-const CREATE_Y: i32 = 278400;
+const CREATE_X: i32 = game_core::map::MAP41_VILLAGE.0;
+const CREATE_Y: i32 = game_core::map::MAP41_VILLAGE.1;
 
 /// `CG_CHARACTER_CREATE` (4, 34 B) — parity `input_login.cpp:460-538` +
 /// `ClientManagerPlayer.cpp:774-913` + `input_db.cpp:201-248`: validaciones
@@ -1146,16 +1149,17 @@ fn channel_status_packet(listen: &str, no_more_clients: bool) -> Vec<u8> {
     out
 }
 
-/// Valida la posición cargada contra el mapa (P0-B 2026-08-14 — parity
-/// `GetValidLocation` del C++): `None` = posición válida (o mapa no
-/// cargable — fail-open, la posición cargada se mantiene); `Some((x, y))` =
-/// fallback determinista a la primera celda movible del mapa (un row con
-/// coords fuera del mapa crashea el CLIENTE con 0xC0000374 al cargar el
-/// mapa — probado 2×: 08-09 y hoy). Leniente a propósito: celdas bloqueadas
-/// in-bounds NO se corrigen (las celdas del pueblo son ATTR_BLOCK
-/// legítimas — wave 45).
+/// Valida la posición cargada contra el mapa (P0-B 2026-08-14 — la base es
+/// `GetValidLocation` del C++, con el guard adicional de `MapData`): `None` =
+/// posición segura (o mapa no cargable — fail-open, la posición cargada se
+/// mantiene); `Some((x, y))` = fallback seguro del mapa. La selección del
+/// village y el criterio de walkability viven en `game_core::map::MapData` para
+/// que load y save usen exactamente la misma regla.
 fn validated_load_position(session: &Session) -> Option<(i32, i32)> {
-    let mut store = session.map_store.lock().unwrap();
+    let mut store = session
+        .map_store
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Err(e) = store.load(&session.config.map_path, session.row().map_index) {
         eprintln!(
             "server_realms: channel conn {}: walkability no disponible (mapa {}): {e} — \
@@ -1169,31 +1173,16 @@ fn validated_load_position(session: &Session) -> Option<(i32, i32)> {
         return None; // fail-open defensivo
     };
     let (x, y) = (session.row().x, session.row().y);
-    // GUARD de posición (2026-08-16): si la celda NO es movible (fuera de
-    // límites O bloqueada/agua — no solo out-of-bounds), hacer fallback al
-    // spawn del mapa. El cliente legacy carga el mapa desde SU pack
-    // (maps.epk), que puede diferir del server_attr del runtime: una
-    // posición "in-bounds pero rara" (ej. 987103,314720 en el mapa 41)
-    // rompía LoadMap del cliente → PostQuitMessage(0) → "se cierra al
-    // entrar" (0xc0000374 / diálogo VC++ Runtime eran SÍNTOMAS del mapa
-    // no cargado, no el crash raíz). Parity: el C++ GetValidLocation
-    // (sectree_manager.cpp:790-837) falla al spawn (EMPIRE_START) cuando
-    // el árbol no encuentra la celda.
-    if map.is_movable(x, y) {
-        return None; // posición OK (movible) — mantener
+    let fallback = map.load_position_fallback(session.row().map_index, x, y);
+    if fallback.is_none() && !map.is_movable(x, y) {
+        eprintln!(
+            "server_realms: channel conn {}: mapa {} sin fallback seguro para ({x},{y}) — \
+             la posición cargada se mantiene",
+            session.conn_id,
+            session.row().map_index
+        );
     }
-    match map.first_movable() {
-        Some(f) => Some(f),
-        None => {
-            eprintln!(
-                "server_realms: channel conn {}: mapa {} sin celdas movibles — \
-                 la posición cargada se mantiene",
-                session.conn_id,
-                session.row().map_index
-            );
-            None
-        }
-    }
+    fallback
 }
 
 /// Armado del 449 B: slots del índice (orden del player_index) emparejados con
