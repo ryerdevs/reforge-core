@@ -2,7 +2,7 @@
 Type: Snapshot
 Status: Current
 Audience: Contributors
-Last verified: 2026-09-01
+Last verified: 2026-09-02
 ---
 
 # Progress — reforge-core server
@@ -70,6 +70,8 @@ All four work groups remain open in the [Gap Registry](plans/gap-registry.md):
 The registry's `C1`–`C12` rows are closed prerequisite fixes; they do not mark G0–G3 or Gate 2 as closed.
 
 ## Handoff
+
+- 2026-09-02 | **Collaborative alpha foundation (user-approved plan):** alpha is a contributor preview, not a claim of total gameplay parity. Public scope is the complete authored Rust server, clean tools, documentation, scripts, and lawful synthetic/versioned development data; client source/packs/binaries, decompiled/proprietary material, and the frozen C++ oracle remain external per ADR-0015. Apache-2.0 is the chosen public license. The canonical [A0–A5 plan](plans/alpha-collaborative-readiness.md) begins with a truthful baseline and ends only after clean-clone reproducibility, contribution governance, and enforceable CI gates are evidenced. `ARQ-E` tracks the work; implementation has not yet begun.
 
 - 2026-09-01 | **Auth-only locale bootstrap fix (orchestrator):** the external compatible client rejects `GC_LOCALE` (header 140) in `Game` (`Unprocessed packet header 140, state Game`), so the channel locale module, Game request handler, and post-entry push were removed; auth remains the sole bootstrap responder. The deterministic loopback verifier rejects header 140 after `GC_PHASE(GAME)` and fails under the `140 → break` mutation; focused channel-entry (1/1), auth-locale (2/2), fmt, clippy, and diff checks passed. Release `4277E5A8…75056B` was deployed to `source/deploy/win` with matching hash and ports 30001/30003 listening. Real client evidence: entered map 41 with 89 spawns, emitted sustained `MOVE`, NPC, item, combat, death/revive, and drop traffic, without a reset or new `syserr.txt` entry. In-game hot reload remains deferred until a compatible client Game-phase parser/cache and version-gated rollout exist outside this public server repository. `scripts/verify.ps1` completed after the OpenCode2 restart with `OK: verificacion completa` (the informational ignored PG/WSL leg was unavailable).
 

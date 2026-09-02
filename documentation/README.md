@@ -2,7 +2,7 @@
 Type: Hub
 Status: Current
 Audience: All
-Last verified: 2026-08-31
+Last verified: 2026-09-02
 ---
 
 # Documentation — reforge-core
@@ -47,6 +47,7 @@ orchestrator commits one logical change after verification.
 | Goal | Read |
 |------|------|
 | What is done / doing / next? | [progress.md](./progress.md) (live handoff) + [plans/gap-registry.md](./plans/gap-registry.md) (per-gap tracker) |
+| How we reach a contributor alpha | [Collaborative alpha readiness](./plans/alpha-collaborative-readiness.md) |
 | Open gaps: owner, evidence, exit criteria | [plans/gap-registry.md](./plans/gap-registry.md) |
 | Which document decides when they disagree? | [reference/document-authority.md](./reference/document-authority.md) (precedence: verification > gap-registry > progress > ADRs > summaries > history) |
 | DB in human language | [schema.md](./schema.md) |
