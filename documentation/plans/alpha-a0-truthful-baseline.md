@@ -535,6 +535,52 @@ the existing Rust workspace verification scripts.
   git commit -m "fix(docs): harden fragment validation"
   ```
 
+## Task 4R3: Sanitize every checker diagnostic and log its closeout
+
+**Files:**
+- Modify: `documentation/plans/alpha-a0-truthful-baseline.md`
+- Modify: `scripts/check_docs.ps1`
+- Modify: `CHANGELOG.md`
+- Test: reversible literal-control mutations, `scripts/check_docs.ps1`,
+  `git diff --check`
+
+- [x] **Step 1: Reproduce each remaining raw-diagnostic path.**
+
+  In separate reversible `try`/`finally` byte-restored mutations, insert a
+  literal BEL control character in (a) a Markdown link label and (b) its raw
+  target while forcing a documented fragment failure. Capture the checker output
+  and prove the pre-fix output contains raw U+0007. Restore every original byte
+  array and prove no test residue remains.
+
+- [x] **Step 2: Sanitize complete failure records at their single output point.**
+
+  Apply the existing control-escaping helper to every failure record immediately
+  before `Write-Host`, rather than only to decoded fragments. This must cover
+  labels, raw targets, paths, and future failure text while preserving failure
+  exit semantics and readable `\uXXXX` representations. Do not introduce a
+  dependency or a general Markdown parser.
+
+- [x] **Step 3: Prove safe diagnostics for both paths.**
+
+  Repeat both BEL mutations. Each must fail with exit 1 and readable escaped
+  text; captured output must contain no raw C0/C1 control characters and no
+  directive-looking line. Restore exact bytes, verify no mutation residue, then
+  run the unmutated checker successfully.
+
+- [x] **Step 4: Record the durable change.**
+
+  Under `CHANGELOG.md` → `[Unreleased]` → `Changed`, add one dated sentence
+  that the active-document fragment gate now allocates colliding GitHub anchors
+  correctly and escapes control characters in diagnostics. Link to the live
+  handoff for volatile gate state; do not call it a release.
+
+- [x] **Step 5: Commit the bounded repair.**
+
+  ```powershell
+  git add documentation/plans/alpha-a0-truthful-baseline.md scripts/check_docs.ps1 CHANGELOG.md
+  git commit -m "fix(docs): sanitize checker diagnostics"
+  ```
+
 ## Task 5: Gate A0 and hand off A1/A2/A3
 
 **Files:**

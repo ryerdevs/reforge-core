@@ -37,6 +37,9 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
   checks GitHub-compatible heading fragments for relative Markdown links on the
   active documentation surface. External URLs, `mailto:` links, generated
   artifacts, and archived document sources remain outside this narrow check.
+- **Active-document fragment gate (2026-09-02):** it now allocates colliding
+  GitHub anchors correctly and escapes control characters in diagnostics; see
+  the [live handoff](documentation/progress.md) for volatile gate state.
 - **OpenCode 2 coordination:** `AGENTS.md` and the operational guardrails now
   require lifecycle-based subagent handling: bounded lanes, no duplicate or
   speculative resume under uncertain state, and verified API interruption.

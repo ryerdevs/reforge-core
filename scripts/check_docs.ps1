@@ -209,7 +209,7 @@ foreach ($source in $activeSources) {
 
 if ($failures.Count -gt 0) {
     Write-Host "FALLO: check_docs"
-    $failures | ForEach-Object { Write-Host "  - $_" }
+    $failures | ForEach-Object { Write-Host "  - $(ConvertTo-DiagnosticText $_)" }
     exit 1
 }
 Write-Host "OK: check_docs (metadata + live state files)"
