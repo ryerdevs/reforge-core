@@ -29,6 +29,15 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
   in the normal leg and run via the `--ignored` leg of `scripts/verify.ps1`
   when a real PG is available. Verified: WAL 2/2 and belt 1/1 pass with PG via
   `--ignored`; the portable normal leg no longer depends on PG.
+- **Move the docs link checker off the Windows `verify` job (2026-09-02):** the
+  GitHub `verify` job ran on `windows-latest`, but `lychee-action@v1` is a
+  Linux-only action whose `entrypoint.sh` cannot execute on a Windows runner
+  (path `D:\a\_actions\lycheeverse\...` broke → `exit 127`). Once the PG-test
+  gating above let the job reach the link-checker step, this step failed
+  deterministically, so the `verify` required check could never pass on CI. The
+  link checker now runs in its own `link-check` job on `ubuntu-latest` (same
+  pattern as `dependency-review`), and the Windows `verify` job keeps only the
+  PowerShell script steps.
 
 ### Changed
 

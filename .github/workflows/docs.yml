@@ -65,6 +65,13 @@ jobs:
             exit 1
           }
           Write-Host "admin_tui in deploy/win: $((Get-Item $bin).Length) bytes"
+
+  link-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Link checker
         uses: lycheeverse/lychee-action@v1
         with:

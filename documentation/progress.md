@@ -92,23 +92,29 @@ The registry's `C1`–`C12` rows are closed prerequisite fixes; they do not mark
 
 ## Handoff
 
-- 2026-09-02 | **Gate live-PG tests behind `#[ignore]` (PR #1 CI fix):** the
+- 2026-09-02 | **Gate live-PG tests + move link checker off Windows `verify` (PR #1 CI fix):** the
   GitHub `verify` required check (`windows-latest`, no PostgreSQL) failed
-  chronically because three integration tests connected to PostgreSQL real
-  without a gate: the two `database/tests/wal_pg.rs` WAL tests and
+  chronically for two stacked reasons. (1) Three integration tests connected to
+  PostgreSQL real without a gate: the two `database/tests/wal_pg.rs` WAL tests and
   `channel::belt::tests::belt_move_wired_and_grade_gated` (`belt.rs`), which
   was overlooked in a first diagnosis. They are now gated with the standard
   `#[ignore = "requiere PG real (WSL): ... --ignored"]` pattern used by every
   other `*_pg.rs` test, and the stale "SIN gate" directive in `wal_pg.rs` was
   updated to reflect the current portable-normal / PG-gated-ignored contract in
-  `scripts/verify.ps1`. The tests still build in the normal leg and run via the
+  `scripts/verify.ps1`. (2) Once the PG gating let the job reach the link-checker
+  step, `lychee-action@v1` (a Linux-only action) failed deterministically on the
+  `windows-latest` runner (`entrypoint.sh` path broke → `exit 127`). The link
+  checker now runs in its own `link-check` job on `ubuntu-latest` (same pattern as
+  `dependency-review`), and the Windows `verify` job keeps only the PowerShell
+  steps. The PG-gated tests still build in the normal leg and run via the
   `--ignored` leg when a real PG is present (WAL 2/2 and belt 1/1 verified
-  green with PG). Oracle review confirmed this is the consistent option over
-  installing PostgreSQL in CI (which would also not suffice for the belt
-  verifier's required `player` schema/data). **Next:** confirm the full local
-  verifier gate is green, re-run CI on the PR, and with the Dependency graph now
-  enabled, get both required checks (`verify`, `dependency-review`) green + an
-  approval before merge; then A2 reproducible contributor environment.
+  green with PG). Oracle review confirmed the PG gating over installing
+  PostgreSQL in CI (which would also not suffice for the belt
+  verifier's required `player` schema/data). **Next:** re-run CI on the PR; with
+  the Dependency graph now enabled and all three jobs (`verify`, `link-check`,
+  `dependency-review`) defined, get both required checks (`verify`,
+  `dependency-review`) green + an approval before merge; then A2 reproducible
+  contributor environment.
 
 - 2026-09-02 | **Two Rust world slices committed and verified on the push
   branch:** the four pre-existing uncommitted Rust files were committed as two
