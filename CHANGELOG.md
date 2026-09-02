@@ -2,7 +2,7 @@
 Type: History
 Status: Current
 Audience: Contributors, maintainers
-Last verified: 2026-08-30
+Last verified: 2026-09-02
 ---
 
 # Changelog
@@ -13,6 +13,111 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.html)) once releases exist; until then, entries are grouped by date.
 
 > **Language note:** entries before the 2026-08-10 (4th part) docs reorganization were written in Spanish and are preserved verbatim (history is never rewritten) — this includes the 2026-08-10 1st–3rd parts and all earlier sessions. Only the 4th part and the new English documentation follow the "docs are written in English" rule (AGENTS.md).
+
+## [Unreleased]
+
+### Fixed
+
+- **Gate live-PG integration tests behind `#[ignore]` (2026-09-02):** the two
+  `database` WAL tests (`wal_pg.rs`) and the `channel::belt` live-PG verifier
+  (`belt_move_wired_and_grade_gated`) connected to PostgreSQL real but were not
+  gated, so they failed any `cargo test --workspace` run without a local PG —
+  including the GitHub `verify` job (`windows-latest`, no PostgreSQL). This
+  made the `verify` required check fail chronically in CI for the alpha-release
+  PR. They are now gated with the same `#[ignore = "requiere PG real (WSL):
+  ... --ignored"]` pattern as the rest of the `*_pg.rs` suite; they still build
+  in the normal leg and run via the `--ignored` leg of `scripts/verify.ps1`
+  when a real PG is available. Verified: WAL 2/2 and belt 1/1 pass with PG via
+  `--ignored`; the portable normal leg no longer depends on PG.
+- **Move the docs link checker off the Windows `verify` job (2026-09-02):** the
+  GitHub `verify` job ran on `windows-latest`, but `lychee-action@v1` is a
+  Linux-only action whose `entrypoint.sh` cannot execute on a Windows runner
+  (path `D:\a\_actions\lycheeverse\...` broke → `exit 127`). Once the PG-test
+  gating above let the job reach the link-checker step, this step failed
+  deterministically, so the `verify` required check could never pass on CI. The
+  link checker now runs in its own `link-check` job on `ubuntu-latest` (same
+  pattern as `dependency-review`), and the Windows `verify` job keeps only the
+  PowerShell script steps.
+
+### Changed
+
+- **Two Rust world slices committed (2026-09-02):** the long-held uncommitted
+  world changes were committed as two slices after passing the full verifier
+  gate (fmt + 874 tests + clippy + diff-check; the PG-gated ignored leg remains
+  unavailable and is not counted as passed). `b611eb2 fix(world): normalize
+  client-unsafe persisted positions` (map.rs, channel/entry.rs,
+  channel/session.rs) routes load and save position normalization through
+  `MapData` so the client is never sent a coordinate its pack cannot load
+  (map 41 falls back to the known village; other maps use the first movable
+  cell; mutex poisoning handled; the persisted copy is corrected without
+  touching motion). `1a9f179 perf(world): limit initial spawn materialization`
+  (spawn.rs) drops spawn/despawn radii so map entry no longer floods all map-41
+  spawns, with the inclusive-boundary and hysteresis verifiers updated.
+- **A1 boundary follow-up (2026-09-02):** the boundary checker now rejects
+  generated client proto outputs and extensionless binary content, and scans
+  JSON and positional MySQL templates without printing credential values;
+  JSON is parsed structurally and Windows `set` assignments are covered as
+  well. The legacy tool templates use placeholders; generated proto outputs are
+  ignored local results and are no longer in the public index. Boundary
+  mutation tests cover the new rejection paths. CI now installs the pinned
+  Rust toolchain components required by the verification gate, and the
+  verifier passes each ignored-test filter as a separate argument. The active
+  `Protect main and beta` GitHub ruleset requires pull requests, one fresh
+  approval, and the `verify`/`dependency-review` checks.
+- **A1 license and public-boundary enforcement (2026-09-02):** Rust and deploy
+  metadata now align on Apache-2.0; `scripts/check_boundary.ps1` enforces the
+  tracked public boundary, binary-output policy, and placeholder-only secret
+  assignments; and CI adds read-only permissions, Dependabot, and pull-request
+  dependency review. The clean-tool contract keeps proprietary client material
+  outside the checkout; GitHub branch protection and required checks for `main`
+  and `beta` remain repository-settings work. The normal workspace test leg is
+  still unavailable when PostgreSQL `127.0.0.1:5432` is not running and is not
+  counted as passed; see the live [handoff](documentation/progress.md).
+- **A0 truthful baseline (2026-09-02, `7442122`):** the collaborative-alpha
+  A0 baseline is complete and review-accepted. Live state is the Gap Registry +
+  progress handoff; local agent artifacts are ignored, not deleted; the
+  public-tooling and deploy-boundary inventory classifies clean tooling,
+  external operator prerequisites, and prohibited material under ADR-0015; and
+  A2.1–A2.5 reproducibility work is recorded as owned blockers gated on A1.
+  The optional live-PG verifier leg remains unavailable (PostgreSQL
+  `127.0.0.1:5432` not running) and is recorded, not passed; see the
+  [live handoff](documentation/progress.md) for volatile state.
+- **Baseline verification (2026-09-02):** the standard verifier stopped at the
+  WAL PostgreSQL tests because `127.0.0.1:5432` was unavailable; see the
+  [live handoff](documentation/progress.md) for volatile state.
+- **A0 artifact isolation (2026-09-02, `7affb25`):** the baseline classified
+  the pending Rust changes into the two named continuations `fix(world):
+  normalize client-unsafe persisted positions` and `perf(world): limit initial
+  spawn materialization`, and excluded local `.superpowers/` and
+  `docs/superpowers/` artifacts without deleting them; see the [A0.2 worktree
+  disposition](documentation/plans/gap-registry.md#a0--current-worktree-disposition)
+  in the Gap Registry for volatile details.
+- **A0 documentation authority (2026-09-02):** current status is routed to the
+  Gap Registry and progress handoff; the root roadmap is an explicitly
+  historical compatibility narrative, and the public README is a scope and
+  navigation entry point rather than a status matrix. Schema, login-flow,
+  locale, quest, and gold notes now point to their canonical evidence.
+- **A0 documentation fragments (2026-09-02):** `scripts/check_docs.ps1` now
+  checks GitHub-compatible heading fragments for relative Markdown links on the
+  active documentation surface. External URLs, `mailto:` links, generated
+  artifacts, and archived document sources remain outside this narrow check.
+- **Active-document fragment gate (2026-09-02):** it now allocates colliding
+  GitHub anchors correctly and escapes control characters in diagnostics; see
+  the [live handoff](documentation/progress.md) for volatile gate state.
+- **OpenCode 2 coordination:** `AGENTS.md` and the operational guardrails now
+  require lifecycle-based subagent handling: bounded lanes, no duplicate or
+  speculative resume under uncertain state, and verified API interruption.
+- **Auth-only locale bootstrap:** the external compatible client accepts
+  `GC_LOCALE` (header 140) during authentication/loading. Auth remains the sole
+  `CG_LOCALE_REQUEST` responder; the channel must neither push nor respond with
+  header 140 after `GC_PHASE(GAME)`.
+- **Regression evidence:** the 2026-09-01 client diagnostic was
+  `Unprocessed packet header 140, state Game`; the channel-entry verifier now
+  rejects `GC_LOCALE` after `GC_PHASE(GAME)` instead of consuming it
+  ([verifier](source/reforge/server_realms/tests/channel_pg.rs#L305-L310)).
+  In-game hot reload remains deferred until a compatible client Game-phase
+  parser/cache and version-gated rollout exist outside this public server
+  repository.
 
 ## [2026-08-30 (6th part)] — admin_tui v1: operator panel TUI
 
@@ -1865,7 +1970,7 @@ The client reached the select screen early, but world entry failed silently (cle
 
 ### Added
 
-- **G-PG design closed:** [ADR-0005](../docs/decisions/0005-postgresql-cutover-and-legacy-adapter.md) → **Accepted** with the gate checklist resolved (4/4) and implementation backlog B1–B8; cutover spec `docs/plans/server-rewrite.md` §8.2.1 (a provision, b migration, c adapter, d harness); inventories marked Accepted.
+- **G-PG design closed:** [ADR-0005](documentation/adr/0005-postgresql-cutover-and-legacy-adapter.md) → **Accepted** with the gate checklist resolved (4/4) and implementation backlog B1-B8; cutover spec `documentation/history/plans/server-rewrite.md` §8.2.1 (a provision, b migration, c adapter, d harness); inventories marked Accepted.
 - **PostgreSQL 18.4 (PGDG) provisioned** on WSL Debian-M2: db `metin2`, schemas `account`/`player`/`common`/`log`, role `mt2` (owner, scram, no SUPERUSER); runbook chain vendored in `scripts/gpg/` (02-install … 09-final).
 - **Phase-1 migration executed:** 30 tables with data (account, player subset incl. proto tables, guild/marriage/war_reservation, common locale/priv_settings/exp_table/spam_db/gmlist/gmhost, item/quest/affect/safebox, item_award) + the 26 `log` tables DDL-only (empty) + `account.mysql_hash_password` (pgcrypto, verified `*A4B6157319038724E3560894F7F932C8886EBFCF`). Counts parity 30/30 (`scripts/gpg/parity_check.py`; volatile `account.last_play` excluded — live-login write lands on PG only).
 - **`mysql_proxy` adapter** (`source/reforge/mysql_proxy`): MySQL wire v10 codec hand-written, `translate` (rewrites per `legacy-sql-compatibility.md` §4 as unit-test table), `session` (tokio-postgres 1:1, per-slot `search_path`, `standard_conforming_strings=off`, TimeZone), minimal TOML config, own SHA-1. 53 tests (workspace 111/111).

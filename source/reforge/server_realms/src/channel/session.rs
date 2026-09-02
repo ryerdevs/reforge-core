@@ -724,42 +724,74 @@ impl Session {
     /// CARGADA AL ENTRAR (x/y ANTIGUOS — el movimiento vive en `motion` y
     /// nunca se sincronizaba) → la posición se perdía al reconectar. El save
     /// es fire-and-forget e idempotente (el WAL cubre el replay).
+    /// Si la posición viva necesita fallback, solo se corrige la copia que se
+    /// persiste: mutar `motion` aquí desincronizaría al cliente y al mundo,
+    /// porque este método no emite un warp ni un intent de movimiento.
     /// Fix 2026-08-14 (panic del cierre): el motion SOLO está seteado tras el
     /// ENTERGAME — una conexión que se corta durante la carga (antes del
     /// ENTERGAME) NO tiene motion → el sync se omite (la fila conserva su
-    /// posición cargada) y el save sigue persistiendo el resto de campos.
-    /// Save durable de la sesión — DEFENSIVO (fix 2026-08-14: panic en el
-    /// cierre por RST — `store()` con expect; el save al cierre corre en
-    /// TODOS los caminos, incluidos los de sesión SIN store/row: login
-    /// fallido (NOID/NOTAVAIL retorna Ok del entry -> game::run -> cierre por
-    /// EOF), guild mark, slot vacío). Sin store/row/motion -> save omitido
-    /// (no hay estado que persistir).
+    /// posición cargada o la normaliza) y el save sigue persistiendo el resto
+    /// de campos. Save defensivo: sin store o row no hay estado que persistir;
+    /// esto cubre login fallido, guild mark y slot vacío.
     pub fn save(&mut self) {
         let Some(store) = self.store.as_ref() else {
             return;
         };
-        if let Some(m) = self.motion.as_ref()
-            && let Some(row) = self.row.as_mut()
+        if let Some((motion_x, motion_y)) = self
+            .motion
+            .as_ref()
+            .map(|m| (m.x, m.y))
+            .or_else(|| self.row.as_ref().map(|row| (row.x, row.y)))
+            && let Some((player_id, map_index)) =
+                self.row.as_ref().map(|row| (row.id, row.map_index))
         {
-            // P0-B (2026-08-14): NO persistir posiciones fuera del mapa (un
-            // row con coords inválidas crashea el CLIENTE con 0xC0000374 en
-            // el próximo load — probado 2×). El movimiento ya valida
-            // walkability por MOVE (el x/y del motion es válido); el check
-            // aquí es el seguro del borde de ESCRITURA (warps/GM). Leniente:
-            // solo out-of-bounds; mapa no cargable → fail-open (se persiste).
-            let in_bounds = {
-                let mut mstore = self.map_store.lock().unwrap();
-                match mstore.load(&self.config.map_path, row.map_index) {
-                    Ok(()) => mstore
-                        .get(row.map_index)
-                        .map(|map| map.attr(m.x, m.y).is_some())
-                        .unwrap_or(true),
-                    Err(_) => true, // fail-open (parity del movimiento)
+            // P0-B: no persistir posiciones que el cliente no puede cargar.
+            // La misma regla de seguridad del load cubre límites, BLOCK,
+            // OBJECT y las celdas conocidas. Un mapa que no carga mantiene el
+            // fail-open; un mapa cargado sin fallback seguro no se persiste.
+            let position = {
+                let mut mstore = self
+                    .map_store
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                match mstore.load(&self.config.map_path, map_index) {
+                    Ok(()) => match mstore.get(map_index) {
+                        Some(map) => {
+                            if map.is_movable(motion_x, motion_y) {
+                                Some((motion_x, motion_y, false))
+                            } else {
+                                map.fallback_position(map_index).map(|(x, y)| (x, y, true))
+                            }
+                        }
+                        None => Some((motion_x, motion_y, false)),
+                    },
+                    Err(_) => Some((motion_x, motion_y, false)), // fail-open
                 }
             };
-            if in_bounds {
-                row.x = m.x;
-                row.y = m.y;
+            let Some((x, y, corrected)) = position else {
+                eprintln!(
+                    "server_realms: channel conn {}: WARN player id={} posición \
+                     ({motion_x},{motion_y}) no segura al guardar en mapa {} y \
+                     sin fallback — save omitido",
+                    self.conn_id, player_id, map_index
+                );
+                return;
+            };
+            if corrected {
+                let player_name = self
+                    .row
+                    .as_ref()
+                    .map_or("<sin nombre>", |row| row.name.as_str());
+                eprintln!(
+                    "server_realms: channel conn {}: WARN player id={} ({}) posición \
+                     ({motion_x},{motion_y}) no segura al guardar en mapa {} — \
+                     fallback a ({x},{y})",
+                    self.conn_id, player_id, player_name, map_index
+                );
+            }
+            if let Some(row) = self.row.as_mut() {
+                row.x = x;
+                row.y = y;
             }
         }
         let Some(row) = self.row.as_ref() else { return };

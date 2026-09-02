@@ -21,13 +21,15 @@ Push-Location $root
 try {
     # rustfmt 1.9 (toolchain 1.97.0) no soporta --manifest-path ("Failed to find targets");
     # el check debe correr con cwd dentro del workspace.
+    Invoke-Step 'public boundary' { & (Join-Path $root 'scripts/check_boundary.ps1') }
+    Invoke-Step 'public boundary mutation tests' { & (Join-Path $root 'scripts/check_boundary_test.ps1') }
     Invoke-Step 'fmt --check' { Push-Location (Join-Path $root 'source/reforge'); try { cargo fmt -- --check } finally { Pop-Location } }
     Invoke-Step 'test --workspace' { cargo test --manifest-path $mf --workspace }
     # Slice F0.4: la pata --ignored se ejecuta al final como RUIDOSA, no como falla
     # del gate. Los verifiers live-PG requieren PG+WSL cargados; la condicion de
     # exito se demuestra con el runbook de backup-restore. Los skips cubren los
     # conocidos-flakes (G3.2c-e).
-    $ignoredSkip = @(
+    $ignoredTests = @(
         # G3.2c: party drain fragil de 3 miembros (orden del outbox)
         'member_remove_self',
         # G3.2d: 3/6 tests channel_pg verdes; 3 follow-ups
@@ -36,11 +38,15 @@ try {
         'channel_idle_timeout_reset_by_traffic'
         # G3.2e: serializado con OnceLock<Mutex<()>>, 3/3 runs verdes
         # G3.2f: tolerancias del fake-auth subidas a 15s + 2 retries; corre estable
-    ) -join ' --skip '
+    )
+    $ignoredArgs = @('--ignored')
+    foreach ($testName in $ignoredTests) {
+        $ignoredArgs += @('--skip', $testName)
+    }
     Write-Host "== test --workspace -- --ignored (skip known flakes, requires live PG/WSL) =="
     Push-Location (Join-Path $root 'source/reforge')
     try {
-        & cargo test --workspace -- --ignored --skip $ignoredSkip *> $null
+        & cargo test --workspace -- @ignoredArgs *> $null
         $ignoredExit = $LASTEXITCODE
     }
     catch {
@@ -51,7 +57,11 @@ try {
         Write-Host "INFO: la pata --ignored fallo (PG/WSL apagados o test ausente); el gate normal sigue"
     }
     Invoke-Step 'clippy --workspace -D warnings' { cargo clippy --manifest-path $mf --workspace -- -D warnings }
-    Invoke-Step 'git diff --check' { git diff --check }
+    Invoke-Step 'git diff --check' {
+        git diff --check
+        if ($LASTEXITCODE -ne 0) { throw "unstaged diff check exit $LASTEXITCODE" }
+        git diff --cached --check
+    }
     Write-Host 'OK: verificacion completa'
 }
 finally { Pop-Location }

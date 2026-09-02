@@ -58,7 +58,6 @@ mod guild;
 mod horse;
 mod items;
 mod land;
-mod locale;
 mod messenger;
 mod movement;
 mod party;

@@ -2,15 +2,15 @@
 Type: Reference
 Status: Current
 Audience: Contributors
-Last verified: 2026-08-12
+Last verified: 2026-09-02
 ---
 
 # Wire Protocol — Login Flow (byte-exact contract of the Rust `protocol` crate)
 
 > Extracted from the legacy C++ server on 2026-08-08 using the graphify graph (coordinates in §6).
-> This document is the byte-exact contract for the `protocol` crate of the Rust rewrite (ROADMAP Phase 0).
+> This document is the byte-exact contract for the `protocol` crate of the Rust rewrite; it is not a live-status source.
 > Verified against: `packet.h`, `packet_info.cpp`, `input_auth.cpp`, `input_login.cpp`, `input_db.cpp`, `desc.cpp`, `common/tables.h`, `length.h`, `db/src/ClientManagerLogin.cpp`, `ClientManager.cpp`, `QID.h`.
-> Related: legacy-only packets 151/152/153 live under the compatibility boundary — see [the historical compatibility reference](../history/reference/protocol/legacy-compatibility.md). Canonical plan: [the historical server plan](../history/plans/server-rewrite.md).
+> Related: legacy-only packets 151/152/153 live under the compatibility boundary — see [the historical compatibility reference](../history/reference/protocol/legacy-compatibility.md). The former canonical plan is preserved as [the historical server plan](../history/plans/server-rewrite.md). For the maintained phase map and live status, see the [phase map](../roadmap.md), [Gap Registry](../plans/gap-registry.md), and [progress handoff](../progress.md).
 
 ## 1. Constants
 

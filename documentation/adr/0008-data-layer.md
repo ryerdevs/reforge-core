@@ -3,7 +3,7 @@ Type: Decision
 Status: Accepted
 Audience: Contributors, maintainers
 Date: 2026-08-11
-Last verified: 2026-08-13
+Last verified: 2026-09-02
 Supersedes: —
 Superseded by: —
 ---
@@ -13,7 +13,7 @@ Superseded by: —
 ## Context
 
 F3 (ROADMAP Phase 3, first slice) starts the `database` crate. The design target is set in
-the historical server plan ([§5.5](../history/plans/server-rewrite.md#55-data-layer)):
+the historical server plan ([§5.5](../history/plans/server-rewrite.md#55-data-layer--final-design)):
 a crate organized **by domain** (account/world/social/
 economy/log), each with its own schema, permissions per schema, and repositories as the only
 access path. Two decisions are due now:

@@ -121,6 +121,11 @@ source/tools/pack/special_patch_ex/
 # ---- Tool binaries (se regeneran con cargo / MSBuild) ----
 source/tools/proto/*.exe
 
+# ---- Generated client proto outputs (local tool results) ----
+source/tools/proto/_out/
+source/tools/proto/**/item_proto
+source/tools/proto/**/mob_proto
+
 # ---- Dependencias de build del cliente (externas) ----
 source/client/Extern/
 
@@ -142,4 +147,6 @@ check_probe.txt
 
 # deepwork state (local only)
 .slim/deepwork/
+/.superpowers/
+/docs/superpowers/
 

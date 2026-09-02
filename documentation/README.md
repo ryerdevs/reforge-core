@@ -1,88 +1,73 @@
-﻿---
+---
 Type: Hub
 Status: Current
 Audience: All
-Last verified: 2026-08-31
+Last verified: 2026-09-02
 ---
 
 # Documentation — reforge-core
 
-Welcome. Everything you need in 5 minutes.
+This page is the human navigation hub. It describes where to look; it does not
+duplicate volatile project status.
 
-## Quick Start
+## Start here
+
+| Question | Canonical document |
+|---|---|
+| What is pending, who owns it, and what closes it? | [Gap Registry](plans/gap-registry.md) |
+| Where did the last verified session stop? | [Progress handoff](progress.md) |
+| Which source wins when documents disagree? | [Document authority](reference/document-authority.md) |
+| What do phases F0–F7 mean? | [Phase map](roadmap.md) |
+| What is the alpha scope and execution plan? | [Collaborative alpha readiness](plans/alpha-collaborative-readiness.md) and [A0 plan](plans/alpha-a0-truthful-baseline.md) |
+| What is the database shape? | [Schema reference](schema.md) |
+| What is the supported login wire? | [Login-flow reference](reference/login-flow.md) |
+| What public tools and external prerequisites apply? | [Public tools and external prerequisites](reference/public-tooling-boundary.md) |
+| Which rules prevent repeat failures? | [Rules](rules.md) |
+| Why were architecture choices made? | [Architecture decisions](adr/) |
+| What changed over time? | [Changelog](../CHANGELOG.md) |
+| Where is the immutable archive? | [Historical archive index](history-index.md) |
+
+The [Gap Registry](plans/gap-registry.md) and [progress handoff](progress.md) are
+the only live status sources. The root [ROADMAP](../ROADMAP.md) is a historical
+compatibility narrative; the [phase map](roadmap.md) is a dated navigation view.
+
+## Quick verification path
+
+Run commands from the repository root:
 
 ```powershell
-powershell -File scripts/status.ps1   # snapshot: HEAD, dirty, binary, ports, CHANGELOG
-powershell -File scripts/verify.ps1   # definition of done: fmt + test + clippy
-powershell -File scripts/start_win.ps1 # up: PG 5432 + auth 30001 + channel 30003
-powershell -File scripts/stop_win.ps1  # down
+powershell -File scripts/status.ps1
+powershell -File scripts/check_docs.ps1
+powershell -File scripts/verify.ps1
+```
+
+For a Rust-only build and test run:
+
+```powershell
 Set-Location source\reforge
-cargo test --workspace                 # Rust tests
+cargo build --workspace
+cargo test --workspace
 Set-Location ..\..
 ```
 
-## Team — preset OmO (`openai/gpt-5.6-luna`, variant `max`)
+Read the [progress handoff](progress.md) first for environmental prerequisites
+and the result of the latest gate. A command result is evidence, not a new
+status source.
 
-| Agent | Role |
-|-------|------|
-| **orchestrator** | You talk to him. Decides, delegates, reviews. |
-| **coder** | Writes clean, maintainable Rust |
-| **fixer** | Finds and fixes simple and structural bugs |
-| **oracle** | Architecture, ADRs, priorities |
-| **explorer** | Fast codebase recon (graphs first) |
-| **librarian** | Keeps docs correct, tells you when it's wrong |
-| **designer** | UI/UX (when client work) |
+## Repository map
 
-## Slice Cycle
-
-```
-status.ps1 → slice → verify.ps1 → atomic commit → update documentation/progress.md
-```
-
-Each slice updates the canonical docs and the `progress.md` handoff; the
-orchestrator commits one logical change after verification.
-
-## Index — What to Read
-
-| Goal | Read |
-|------|------|
-| What is done / doing / next? | [progress.md](./progress.md) (live handoff) + [plans/gap-registry.md](./plans/gap-registry.md) (per-gap tracker) |
-| Open gaps: owner, evidence, exit criteria | [plans/gap-registry.md](./plans/gap-registry.md) |
-| Which document decides when they disagree? | [reference/document-authority.md](./reference/document-authority.md) (precedence: verification > gap-registry > progress > ADRs > summaries > history) |
-| DB in human language | [schema.md](./schema.md) |
-| Never repeat | [rules.md](./rules.md) |
-| Why PostgreSQL, ECS, WAL…? | [adr/](./adr/) (17 ADRs; ADR-0013 superseded by ADR-0015) |
-| Byte-exact wire contract | [reference/login-flow.md](./reference/login-flow.md) |
-| What changed with evidence? | [../CHANGELOG.md](../CHANGELOG.md) |
-| Agent instructions + runbook | [../AGENTS.md](../AGENTS.md) (lean, links to live docs) |
-| Documentation policy | [DOCUMENTATION.md](./DOCUMENTATION.md) |
-| Phase history (F0–F7) | [roadmap.md](./roadmap.md) + [../ROADMAP.md](../ROADMAP.md) (historical master) |
-| Old plans, snapshots | [Historical archive index](./history-index.md) (archive is read-only) |
-
-## Layout
-
-```
+```text
 documentation/
-  README.md            → you are here (index + cheat sheet)
+  README.md            → this navigation hub
   DOCUMENTATION.md     → mandatory documentation policy
-  roadmap.md           → done / doing / future
-  schema.md            → DB
-  rules.md             → never repeat (7 rules)
-  progress.md          → live handoff
-  plans/               → live plans (gap-registry.md)
+  progress.md          → live snapshot and handoff
+  plans/               → live plans and the Gap Registry
   adr/                 → architecture decisions
-  reference/login-flow.md
-  history-index.md     → current navigation for the archive
-  history/             → archived, read-only
-scripts/
-  status.ps1 / verify.ps1 / handoff.ps1 / start_win.ps1
-source/reforge/        → Rust (protocol, network, database, game_core, server_realms)
+  reference/           → technical references and runbooks
+  roadmap.md           → dated phase map
+  schema.md            → PostgreSQL schema reference
+  history-index.md     → navigation for the read-only archive
+  history/             → archived, read-only documents
+source/reforge/        → authored Rust server
+scripts/               → verification and runtime operations
 ```
-
-## Between Sessions
-
-`documentation/progress.md` has a **Handoff** section at the end. Next session the orchestrator reads it and knows where we left off.
-
-## Stack
-
-Rust 1.97 + bevy_ecs + tokio-postgres 0.7 + PostgreSQL 18 on native Windows + frozen C++ oracle

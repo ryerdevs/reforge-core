@@ -17,7 +17,9 @@
 //!   100); `ATTR_BLOCK = 1<<0`, `ATTR_OBJECT = 1<<7`.
 //! - **`IsMovablePosition`** (`:753-761`): movible iff
 //!   `!(attr & (ATTR_BLOCK | ATTR_OBJECT))`. Fuera del mapa (sectree null)
-//!   → **no movible**.
+//!   → **no movible**. El rewrite añade una pequeña lista de celdas conocidas
+//!   como no cargables por el pack del cliente, aunque `server_attr` las marque
+//!   libres.
 //! - **Indexación de celda** (`sectree.cpp:208`): tree = `(x/6400, y/6400)`
 //!   (`sectree_manager.cpp:75-76`), tile en el archivo =
 //!   `x/6400 - base_x/6400` (`:403-404`), celda dentro del tile =
@@ -66,6 +68,18 @@ pub const ATTR_BLOCK: u32 = 1 << 0;
 pub const ATTR_OBJECT: u32 = 1 << 7;
 /// Máscara de no-movible de `IsMovablePosition` (`sectree_manager.cpp:760`).
 pub const ATTR_MOVABLE_MASK: u32 = ATTR_BLOCK | ATTR_OBJECT;
+
+/// Posición conocida y segura de la aldea c1 en UNITS.
+pub const MAP41_VILLAGE: (i32, i32) = (969_600, 278_400);
+
+/// Celdas históricas que el `server_attr` considera libres, pero que el pack
+/// del cliente no puede cargar de forma segura al entrar al mundo.
+const MAP41_CLIENT_UNSAFE_CELLS: &[(i32, i32)] = &[
+    (960_102, 268_675),
+    (960_155, 269_313),
+    (960_970, 271_421),
+    (987_103, 314_720),
+];
 
 /// Error de carga de un mapa (los fallos se cachean en el `MapStore` para no
 /// re-leer el disco por cada MOVE).
@@ -171,12 +185,21 @@ impl MapData {
 
     /// `IsMovablePosition` (sectree_manager.cpp:753-761):
     /// `!(attr & (ATTR_BLOCK | ATTR_OBJECT))`. Fuera del mapa → NO movible
-    /// (parity: `Get()` → null tree → `return false`).
+    /// (parity: `Get()` → null tree → `return false`). Las celdas históricas
+    /// que el pack del cliente no puede cargar también se rechazan.
     pub fn is_movable(&self, x: i32, y: i32) -> bool {
         match self.attr(x, y) {
-            Some(a) => a & ATTR_MOVABLE_MASK == 0,
+            Some(a) => a & ATTR_MOVABLE_MASK == 0 && !self.is_client_unsafe(x, y),
             None => false,
         }
+    }
+
+    fn is_client_unsafe(&self, x: i32, y: i32) -> bool {
+        Self::base_map_index(self.setting.index) == 41
+            && MAP41_CLIENT_UNSAFE_CELLS.iter().any(|&(bad_x, bad_y)| {
+                x.div_euclid(CELL_SIZE) == bad_x.div_euclid(CELL_SIZE)
+                    && y.div_euclid(CELL_SIZE) == bad_y.div_euclid(CELL_SIZE)
+            })
     }
 
     /// Primera celda MOVIBLE del mapa (fallback del `GetValidLocation` —
@@ -185,16 +208,46 @@ impl MapData {
     /// UNITS. Cualquier mapa con terreno tiene al menos una celda movible.
     pub fn first_movable(&self) -> Option<(i32, i32)> {
         let cols = self.tiles_w * TILE_CELLS;
-        for (i, cell) in self.cells.iter().enumerate() {
-            if cell & ATTR_MOVABLE_MASK == 0 {
-                let row = i / cols;
-                let col = i % cols;
-                let x = self.setting.base_x + (col as i32) * CELL_SIZE + CELL_SIZE / 2;
-                let y = self.setting.base_y + (row as i32) * CELL_SIZE + CELL_SIZE / 2;
+        for i in 0..self.cells.len() {
+            let row = i / cols;
+            let col = i % cols;
+            let x = self.setting.base_x + (col as i32) * CELL_SIZE + CELL_SIZE / 2;
+            let y = self.setting.base_y + (row as i32) * CELL_SIZE + CELL_SIZE / 2;
+            if self.is_movable(x, y) {
                 return Some((x, y));
             }
         }
         None
+    }
+
+    /// Fallback determinista para una posición de jugador no segura. El mapa
+    /// 41 siempre vuelve a la aldea conocida; los demás mapas usan la primera
+    /// celda movible.
+    pub fn fallback_position(&self, map_index: i32) -> Option<(i32, i32)> {
+        if Self::base_map_index(map_index) == 41 {
+            Some(MAP41_VILLAGE)
+        } else {
+            self.first_movable()
+        }
+    }
+
+    /// Un mapa privado conserva las celdas del mapa público que lo originó
+    /// (`CreatePrivateMap` en el C++).
+    fn base_map_index(map_index: i32) -> i32 {
+        if map_index >= 10_000 {
+            map_index / 10_000
+        } else {
+            map_index
+        }
+    }
+
+    /// Devuelve el fallback de carga solo cuando la posición no es segura;
+    /// `None` significa que el caller puede conservar la posición actual.
+    pub fn load_position_fallback(&self, map_index: i32, x: i32, y: i32) -> Option<(i32, i32)> {
+        if self.is_movable(x, y) {
+            return None;
+        }
+        self.fallback_position(map_index)
     }
 }
 
@@ -408,11 +461,7 @@ impl MapStore {
         }
         // Mapas de instancia (≥ 10000): mismas celdas que su mapa base
         // (parity CreatePrivateMap — el C++ copia el sectree).
-        let base = if map_id >= 10000 {
-            map_id / 10000
-        } else {
-            map_id
-        };
+        let base = MapData::base_map_index(map_id);
         let name = match self.index_of(map_path) {
             Ok(idx) => match idx.get(&base).cloned() {
                 Some(n) => n,
@@ -448,8 +497,9 @@ impl MapStore {
         self.maps.get(&map_id)
     }
 
-    /// `IsMovablePosition` con get-or-load. `Err` = el mapa no cargó (el
-    /// canal decide fail-open); `Ok(false)` = destino realmente no movible.
+    /// Comprueba una posición segura con get-or-load. `Err` = el mapa no cargó
+    /// (el canal decide fail-open); `Ok(false)` = destino no seguro para un
+    /// jugador.
     pub fn is_movable(
         &mut self,
         map_path: &str,
@@ -548,6 +598,51 @@ mod tests {
 
     fn unit_y(cy: usize) -> i32 {
         map_41_setting().base_y + (cy as i32) * CELL_SIZE
+    }
+
+    fn map_with_cell(x: i32, y: i32, attr: u32) -> MapData {
+        let base_x = x.div_euclid(SECTREE_SIZE) * SECTREE_SIZE;
+        let base_y = y.div_euclid(SECTREE_SIZE) * SECTREE_SIZE;
+        let cx = x.rem_euclid(SECTREE_SIZE).div_euclid(CELL_SIZE) as usize;
+        let cy = y.rem_euclid(SECTREE_SIZE).div_euclid(CELL_SIZE) as usize;
+        let mut cells = vec![0u32; TILE_CELLS * TILE_CELLS];
+        cells[cy * TILE_CELLS + cx] = attr;
+        MapData {
+            setting: MapSetting {
+                index: 41,
+                name: "metin2_map_c1".into(),
+                base_x,
+                base_y,
+                width: SECTREE_SIZE,
+                height: SECTREE_SIZE,
+            },
+            tiles_w: 1,
+            tiles_h: 1,
+            cells,
+        }
+    }
+
+    fn map41_test_grid(x: i32, y: i32, attr: u32) -> MapData {
+        let (base_x, base_y) = (960_000, 262_400);
+        let (tiles_w, tiles_h) = (6usize, 9usize);
+        let cols = tiles_w * TILE_CELLS;
+        let mut cells = vec![0u32; cols * tiles_h * TILE_CELLS];
+        let cx = (x - base_x).div_euclid(CELL_SIZE) as usize;
+        let cy = (y - base_y).div_euclid(CELL_SIZE) as usize;
+        cells[cy * cols + cx] = attr;
+        MapData {
+            setting: MapSetting {
+                index: 41,
+                name: "metin2_map_c1".into(),
+                base_x,
+                base_y,
+                width: tiles_w as i32 * SECTREE_SIZE,
+                height: tiles_h as i32 * SECTREE_SIZE,
+            },
+            tiles_w,
+            tiles_h,
+            cells,
+        }
     }
 
     /// Parse del Setting.txt REAL del mapa 41 (el runtime desplegado) —
@@ -722,11 +817,123 @@ mod tests {
         );
         assert!(m.is_movable(wx, wy), "el agua no bloquea");
 
+        // Rows recurrentes del incidente: el server_attr los marca sin
+        // BLOCK/OBJECT, pero el pack del cliente no puede cargarlos.
+        for &(x, y, attr) in &[
+            (960_102, 268_675, 0x44),
+            (960_155, 269_313, 0x44),
+            (960_970, 271_421, 0x40),
+            (987_103, 314_720, 0x40),
+        ] {
+            assert_eq!(
+                m.attr(x, y),
+                Some(attr),
+                "atributo de la posición ({x},{y})"
+            );
+            assert!(!m.is_movable(x, y), "posición insegura ({x},{y})");
+            assert_eq!(
+                m.load_position_fallback(41, x, y),
+                Some(MAP41_VILLAGE),
+                "posición ({x},{y}) debe ir al village"
+            );
+        }
+
         // MONTANA (ATTR_BLOCK): no movible (el anti-teleport la rechaza).
         let (mx, my) = (921_600i32, 204_800i32);
         assert_eq!(m.attr(mx, my), Some(0x49), "montana: BLOCK + bits meta");
         assert!(!m.is_movable(mx, my), "montana bloqueada");
     }
+
+    /// Regresión del row que provocó el crash recurrente: la celda de
+    /// `(960102,268675)` tiene metadata 0x44 sin BLOCK/OBJECT en el
+    /// server_attr, por lo que no se conserva y el mapa 41 usa la aldea
+    /// conocida, no la primera celda row-major.
+    #[test]
+    fn map41_bad_coordinate_falls_back_to_village() {
+        let (x, y) = (960_102, 268_675);
+        // The real row is 0x44: it has no BLOCK/OBJECT bit, so this test must
+        // fail if the client-unsafe-cell guard is removed.
+        let map = map41_test_grid(x, y, 0x44);
+
+        assert_eq!(map.attr(x, y), Some(0x44));
+        assert!(!map.is_movable(x, y), "la posición de crash no es segura");
+        assert!(
+            map.is_movable(MAP41_VILLAGE.0, MAP41_VILLAGE.1),
+            "el fallback del village debe estar dentro del mapa y ser seguro"
+        );
+        assert!(
+            map.is_movable(x + CELL_SIZE, y),
+            "la celda vecina no pertenece a la lista de coordenadas inseguras"
+        );
+        assert_eq!(
+            map.load_position_fallback(41, x, y),
+            Some(MAP41_VILLAGE),
+            "mapa 41 debe corregir al village seguro"
+        );
+    }
+    /// Todas las celdas conocidas del cliente inseguro se rechazan, pero la
+    /// celda vecina permanece movible. La prueba usa una grid sintética que
+    /// contiene los puntos y la aldea, sin depender del deploy de runtime.
+    #[test]
+    fn map41_known_client_unsafe_cells_are_rejected() {
+        for &(x, y) in MAP41_CLIENT_UNSAFE_CELLS {
+            let map = map41_test_grid(x, y, 0x44);
+
+            assert!(!map.is_movable(x, y), "posición insegura ({x},{y})");
+            assert!(
+                map.is_movable(x + CELL_SIZE, y),
+                "la celda vecina de ({x},{y}) debe seguir movible"
+            );
+            assert_eq!(
+                map.load_position_fallback(410_000, x, y),
+                Some(MAP41_VILLAGE),
+                "instancia de mapa 41 debe usar el village"
+            );
+        }
+    }
+
+    #[test]
+    fn map41_client_unsafe_guard_covers_exact_cell_boundaries() {
+        let map = map41_test_grid(960_102, 268_675, 0x44);
+
+        assert!(!map.is_movable(960_100, 268_650));
+        assert!(!map.is_movable(960_149, 268_699));
+        assert!(map.is_movable(960_150, 268_650));
+        assert!(map.is_movable(960_100, 268_700));
+    }
+
+    #[test]
+    fn map41_client_unsafe_guard_does_not_affect_other_maps() {
+        let mut map = map41_test_grid(960_102, 268_675, 0x44);
+        map.setting.index = 42;
+
+        assert!(map.is_movable(960_102, 268_675));
+    }
+
+    #[test]
+    fn non_map41_fallback_uses_a_movable_cell() {
+        let (x, y) = (960_102, 268_675);
+        let mut map = map_with_cell(x, y, 0x44);
+        map.setting.index = 42;
+
+        let fallback = map
+            .fallback_position(42)
+            .expect("un mapa con una celda libre tiene fallback");
+
+        assert_ne!(fallback, MAP41_VILLAGE);
+        assert!(map.is_movable(fallback.0, fallback.1));
+    }
+
+    #[test]
+    fn movable_position_does_not_get_a_fallback() {
+        let map = map41_test_grid(MAP41_VILLAGE.0, MAP41_VILLAGE.1, 0);
+
+        assert_eq!(
+            map.load_position_fallback(41, MAP41_VILLAGE.0, MAP41_VILLAGE.1),
+            None
+        );
+    }
+
     /// Carga completa por el `MapStore` (index + Setting + attr) y fallos
     /// cacheados: un mapa inexistente no re-intenta por MOVE.
     #[test]

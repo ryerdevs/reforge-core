@@ -5,13 +5,22 @@ on:
     branches: [main, beta]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   verify:
     runs-on: windows-latest
+    env:
+      RUSTUP_TOOLCHAIN: 1.97.0
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        shell: pwsh
+        run: rustup toolchain install 1.97.0 --profile minimal --component rustfmt --component clippy
       - name: Verify workspace
         shell: pwsh
         run: |
@@ -27,11 +36,16 @@ jobs:
       - name: Handoff check — source changed without progress/CHANGELOG/registry
         shell: pwsh
         run: |
-          $changed = git diff --name-only origin/main...HEAD
+          $changed = @(git diff --name-only origin/main...HEAD)
           $touchedSource = $changed | Select-String "source/reforge"
-          $touchedDocs = $changed | Select-String "documentation/progress.md|CHANGELOG.md|documentation/plans/gap-registry.md"
-          if ($touchedSource -and -not $touchedDocs) {
-            Write-Error "source/reforge touched but progress.md, CHANGELOG.md, and gap-registry.md are all unchanged. The handoff must record the slice."
+          $requiredHandoff = @(
+            "documentation/progress.md",
+            "CHANGELOG.md",
+            "documentation/plans/gap-registry.md"
+          )
+          $missingHandoff = @($requiredHandoff | Where-Object { $_ -notin $changed })
+          if ($touchedSource -and $missingHandoff.Count -gt 0) {
+            Write-Error "source/reforge touched but required handoff files are missing: $($missingHandoff -join ', ')"
             exit 1
           }
           Write-Host "handoff check ok"
@@ -51,7 +65,27 @@ jobs:
             exit 1
           }
           Write-Host "admin_tui in deploy/win: $((Get-Item $bin).Length) bytes"
+
+  link-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Link checker
         uses: lycheeverse/lychee-action@v1
         with:
           args: --verbose --no-progress documentation/**/*.md
+
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Dependency review
+        uses: actions/dependency-review-action@v4

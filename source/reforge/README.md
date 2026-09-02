@@ -2,7 +2,7 @@
 Type: Hub
 Status: Current
 Audience: Contributors
-Last verified: 2026-08-30
+Last verified: 2026-09-02
 ---
 
 # `reforge` Rust workspace
@@ -40,6 +40,9 @@ cargo test --workspace
 cargo fmt -- --check
 cargo clippy --workspace -- -D warnings
 ```
+
+[`rust-toolchain.toml`](rust-toolchain.toml) pins Rust `1.97.0` and the
+`rustfmt`/`clippy` components used by the verification gate.
 
 For current status, verified test counts, open gaps, and the next handoff, use
 the [project documentation hub](../../documentation/README.md) and

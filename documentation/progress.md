@@ -2,7 +2,7 @@
 Type: Snapshot
 Status: Current
 Audience: Contributors
-Last verified: 2026-08-30
+Last verified: 2026-09-02
 ---
 
 # Progress — reforge-core server
@@ -15,27 +15,48 @@ implementation. Preset: OmO (`openai/gpt-5.6-luna`, variant `max`).
 
 ## Current
 
-- Date: 2026-08-30
-- HEAD: `37c3073` at verification time. Working tree clean at slice close. Verification: full `verify.ps1` (fmt + test --workspace + ignored informative leg + clippy -D warnings + git diff --check) — `OK: verificacion completa`. Last log: `.omo/evidence/verify-201428.log`.
-- Deploy: `source\deploy\win\server_realms.exe` is the binary of a fresh release build of HEAD (hash `F2CDF55B…`); ports 5432/30001/30003 LISTEN; wire smoke `bench_bot --bots 1 --login test` = 1/1 ok. After long debug-test sessions, kill stale `server_realms.exe` debug zombies before running `target/debug`-touching commands (six were killed during G0.2 cleanup).
-- Storage (G0.2): `target/` = 425 MB (release only; debug profile removed). C: drive has 31.7 GB free. Within the 5 GB budget.
-- History rewrite: local Git history was rewritten via `git fast-export` / `fast-import` to (1) drop the `Co-authored-by: CommandCodeBot` trailer from every commit and (2) collapse all author/committer identities to `ryer <82473243+ryerdevs@users.noreply.github.com>` (the project owner's GitHub account). The public repository now shows a single author on every commit. The README front-matter (Type/Status/Audience/Last verified) was removed in the same slice.
-- Gate policy: **mixed by risk** (user decision 2026-08-30) — oracle runs and real-client checks only where a desync/overflow risk exists (wire formats, caps, movement); the rest close with tests + documented decision. Recorded in the registry header.
-- G0.1a: unchanged — BLOCKED on the wire item-count field size; the safe cap is enforced, GM clamps, entry wire rejects above.
-- G0.1b movement / G0.1d boots: committed (`74f62a7`, `d924aaa`) with focused tests; remain **IN PROGRESS — real-client movement/boot-speed checks** after redeploy (same operator session).
-- G0.1c spawn: committed (`4aaff76`); bench evidence recorded (wave-44: 20/20 and 100/100 bots, spawns 1100/1100); **IN PROGRESS — real-client visibility check**; the 250/500/1000 ladder stays open under F5.
-- G0.1e gold: **CLOSED** under the mixed-by-risk policy (commit `96e969f`; 147-test focused run + property verifier).
-- G0.2 disk: **CLOSED** (`7052f92`).
-- Gate work (G1): `verify.ps1` runs the normal suite before the ignored set (G1.1a CLOSED, `9056cc3`); `#[ignore]` policy = PG-gated live verifiers only, de-flakes re-enabled (G1.1b/G3.2a/G3.2b CLOSED, `fa41755`, `0b4d757`, `70246a9`); rustfmt + clippy 1.97 lint pass workspace-wide (G1.2 CLOSED, `6d8fdeb`); docs metadata gate in CI (G1.18 metadata leg, `5937186`); G1.5 redeploy CLOSED (`F2CDF55B…`); G1.18 WSL parity leg still OPEN (operator action).
-- Test debt (G3.2): G3.2e serialised with `OnceLock<Mutex<()>>` (`bcd030e`); G3.2f fake-auth tolerances raised to 15s+2 retries (`d9e7997`); G3.2d CLOSED-partial — handshake helpers rewired to the no-handshake channel wire (`f120fe8`); 3 follow-ups tracked as G3.2g/h/i. G3.1a/b stale doc-comments updated (`7052f92`). G3.2c party drain OPEN.
-- New gate findings fixed: skill_power wide rows accepted per parity `config.cpp:532-613` (C13, `5946364`); mob_proto rank/sp_* read as smallint (C14, `81c934b`).
-- Data safety: `scripts/restore_drill.ps1` + runbook `documentation/reference/backup-restore.md`; drill executed and PASSED 2026-08-30 against `metin2_2026-08-29.dump`. Off-host copy of dumps remains an operator action (no second volume on this host).
-- Documentation simplification (F1): `documentation/reference/document-authority.md` sets a single precedence (fresh verification > gap-registry > progress.md > ADRs > summaries > archives); `documentation/roadmap.md` is now the phase map; README routes status questions to the two live files; ROADMAP.md banner marks it historical. ADR-0016 (quest engine) and ADR-0017 (regional channels deferred) recorded; ADR-0006 amended (legacy deletion trigger = F6); ADR-0010 re-affirmed pending with wave-44 evidence; ADR-0011 anti-teleport cap corrected to 6000. README rewritten in a generic voice around the reverse-engineering methodology (no legacy artifact mentions, no code-copy claims).
-- **README status matrix expanded** (`37c3073`): each of the 12 rows now lists explicitly what is missing for the reforge-core to function at 100% (G0.1a, G2.1–G2.7, G2.8a–f, G2.10, G2.11c, G2.9, G3.2c/g/h/i, G1.18 WSL leg, off-host dump copy). Two rows changed status: Database 🟡→✅ (WAL durable, restore drill PASS, Batcher::flush()), Verification 🔧→✅ (gate verde + CI + handoff check).
-- Tracker: [Gap Registry](plans/gap-registry.md) is the live per-gap tracker; historical gap analyses remain read-only.
-- Documentation policy: [DOCUMENTATION.md](DOCUMENTATION.md) is the current policy; the copy under `history/` is retained as read-only migration history.
-- Archive navigation: [history-index.md](history-index.md) is the current successor hub; `history/README.md` remains an immutable pre-migration snapshot and is not a source of truth.
-- Gate 2: G0.1b/c/d (client checks), G0.1a (blocked), G1.18 WSL leg, G2 gameplay rows, G3.2c/g/h/i remain open in the registry. G0.2, G1.5, G1.18 metadata leg, G3.1a/b, G3.2a/b/d/e/f are closed.
+- Baseline snapshot (2026-09-02, before the Task 1 documentation commit): captured HEAD is `42783e9c335ce56562258a18744418f60c24dcc3`. The captured worktree had four modified tracked Rust files (`spawn.rs`, `map.rs`, `channel/entry.rs`, and `channel/session.rs`) and untracked `.superpowers/` and `docs/` directories; Task 1 leaves them untouched.
+- Task 2 disposition (captured at HEAD `1c59cb1650499da09cb005b091fece6d0550fbec`): `map.rs`, `channel/entry.rs`, and `channel/session.rs` were held as `continue in named slice` for the provisional `fix(world): normalize client-unsafe persisted positions` continuation; `ecs/systems/spawn.rs` as the separate provisional `perf(world): limit initial spawn materialization` continuation. Both slices were later committed after passing the full verifier gate (`971afe9` era baseline): `b611eb2 fix(world): normalize client-unsafe persisted positions` and `1a9f179 perf(world): limit initial spawn materialization`, each with focused regression and mutation verifiers.
+- The captured local agent files are `ignore as local tool state`: they remain on disk and are excluded by the root `/.superpowers/` and `/docs/superpowers/` rules. No public `docs/` tree is created; the exact path-level table is in the [A0.2 worktree disposition](plans/gap-registry.md).
+- Standard gate: the fresh `scripts/verify.ps1` run passed the public boundary,
+  boundary mutation suite, `fmt --check`, normal `cargo test --workspace` (874
+  passed, 0 failed), clippy, and both working-tree/index diff checks. The
+  optional ignored PG/WSL leg returned non-zero because its full prerequisite
+  environment is unavailable; it is informational and is not counted as
+  passed. The verifier nevertheless produced `OK: verificacion completa`.
+- Deploy snapshot: `source/deploy/win/server_realms.exe` exists with SHA-256 `4277E5A8C74E69B2D9643967B260C7E345641EBDB991848421435EC83375056B`; listeners 5432, 30001, and 30003 were all closed in the capture. The executable hash was observed independently; no deployed-HEAD equivalence is claimed.
+- Task 4R2/R3 documentation-gate hardening (2026-09-02): the dependency-free
+  fragment check now allocates every heading anchor against the full used set,
+  escapes decoded control characters, and sanitizes every failure record at the
+  single diagnostic output boundary. The duplicate-anchor mutation passes; the
+  `%0A::warning` and literal-BEL label/target mutations fail with escapes and
+  no raw C0/C1 controls or directive-looking lines; the post-fix
+  missing-fragment marker is `task-4r-final-mutation-fragment-does-not-exist`;
+  the earlier `task-4r-mutation-fragment-does-not-exist` remains only as Task
+  4R's expected pre-fix false-success evidence.
+- A0 truthful baseline (2026-09-02, `7442122`): live state reconciled to HEAD
+  `7442122`; local agent artifacts isolated and ignored; public-tooling and
+  deploy-boundary inventory published; A2.1–A2.5 reproducibility rows remain
+  planning blockers pending A2 after A1. Tasks 1–4 exits accepted by review or
+  direct verification; only the optional PostgreSQL-gated verifier leg remains
+  unavailable.
+- A1 license and public-boundary enforcement (2026-09-02): Rust workspace and
+  deploy metadata now identify Apache-2.0; `scripts/check_boundary.ps1` checks
+  tracked and status-reported public paths, generated client proto outputs,
+  extensionless binary content, decompiled artifacts, and placeholder-only
+  credential assignments in TOML, JSON, scripts, and legacy MySQL templates.
+  The mutation suite covers those rejection paths. CI has read-only permissions,
+  Dependabot, and pull-request dependency review. The clean-tool contract keeps
+  proprietary client material outside the checkout; the active `Protect main
+  and beta` GitHub ruleset requires a pull request,
+  one fresh approval, and the `verify` plus `dependency-review` checks. The
+  generated proto outputs are no longer in the index and remain ignored locally;
+  CI installs the pinned Rust toolchain components required by the gate, and the
+  verifier passes known ignored-test filters as separate arguments.
+  Local evidence is recorded in the A1 handoff below; the four pre-existing Rust
+  slices remain uncommitted and untouched.
+- Next action: proceed to the A2 reproducible contributor environment; rerun the
+  optional ignored leg when the documented PG/WSL prerequisites are available.
 
 ## Verified capabilities (not a Gate 2 closure)
 
@@ -47,7 +68,7 @@ implementation. Preset: OmO (`openai/gpt-5.6-luna`, variant `max`).
 - [x] Skill splash/horse/skill_power, PARTY family, and grand master (`kMasterBonusPoly` in `ecs/systems/skill.rs:329-334`; `ATT_SPEED` applied in `combat.rs:554`); numeric `CASTING_SPEED` remains G2.4
 - [x] Berserk/coward/godspeed/stoneskin AIFLAG handling (ECS combat)
 - [x] Weight gate is fail-open by design because the classic sources contain no weight column; zero weight never rejects pickup (`weight.rs:64-73`), while an external import remains G2.9
-- [x] Locale push and pull (`GC_LOCALE` chunks on connect plus `CG_LOCALE_REQUEST` → `GC_LOCALE`, `287e414`)
+- [x] Auth/loading locale bootstrap (`GC_LOCALE` chunks from auth plus `CG_LOCALE_REQUEST` → `GC_LOCALE`, `287e414`); the external compatible client rejects header 140 in `Game`, so the channel must neither push nor respond with it. In-game hot reload remains deferred until a compatible external client Game-phase parser/cache and version-gated rollout exist outside this public server repository.
 - [x] Phase 1 dungeon/event/land/belt/Dragon Soul/refine wire and persistence; deferred content and dungeon instances remain in the live registry
 - [x] Full refine probability, scroll destroy/degrade, fee, and window behavior; see `items.rs:1664` and `game_core::refine`
 - [x] Party core wire/actions — `set_state`/`use_skill` plus LINK/UNLINK emission (`91b389c`); leader bonus, leadership thresholds, and periodic updates remain G2.1a–G2.1d
@@ -62,7 +83,7 @@ implementation. Preset: OmO (`openai/gpt-5.6-luna`, variant `max`).
 
 All four work groups remain open in the [Gap Registry](plans/gap-registry.md):
 
-- [ ] **G0 — Architecture and storage:** G0.1b–G0.1e are implementation-complete for their focused checks and ready for Oracle Gate, but remain open; G0.1a is safely enforced at 200 but blocked at the requested 2000 by the current BYTE item-count wire, and disk-storage work remains open.
+- [ ] **G0 — Architecture and storage:** G0.1b–G0.1e are implementation-complete for their focused checks and ready for Oracle Gate, but remain open; G0.1a is safely enforced at 200 but blocked at the requested 2000 by the current BYTE item-count wire. [G0.2 disk storage is closed](plans/gap-registry.md) with the registry's dated 2026-08-30 evidence.
 - [ ] **G1 — Gates, documentation, and deployment:** normal/ignored verification, formatting, documentation CI, and redeployment remain open; G1.14b's immutable-history decision is closed, and changelog freshness/current archive navigation are reconciled.
 - [ ] **G2 — Gameplay and content:** the remaining gameplay, social, quest, GM, data-channel, and deferred-content rows remain open in the registry.
 - [ ] **G3 — Hygiene and test debt:** stale comments and ignored-test policy remain to be executed and verified.
@@ -70,6 +91,126 @@ All four work groups remain open in the [Gap Registry](plans/gap-registry.md):
 The registry's `C1`–`C12` rows are closed prerequisite fixes; they do not mark G0–G3 or Gate 2 as closed.
 
 ## Handoff
+
+- 2026-09-02 | **Gate live-PG tests + move link checker off Windows `verify` (PR #1 CI fix):** the
+  GitHub `verify` required check (`windows-latest`, no PostgreSQL) failed
+  chronically for two stacked reasons. (1) Three integration tests connected to
+  PostgreSQL real without a gate: the two `database/tests/wal_pg.rs` WAL tests and
+  `channel::belt::tests::belt_move_wired_and_grade_gated` (`belt.rs`), which
+  was overlooked in a first diagnosis. They are now gated with the standard
+  `#[ignore = "requiere PG real (WSL): ... --ignored"]` pattern used by every
+  other `*_pg.rs` test, and the stale "SIN gate" directive in `wal_pg.rs` was
+  updated to reflect the current portable-normal / PG-gated-ignored contract in
+  `scripts/verify.ps1`. (2) Once the PG gating let the job reach the link-checker
+  step, `lychee-action@v1` (a Linux-only action) failed deterministically on the
+  `windows-latest` runner (`entrypoint.sh` path broke → `exit 127`). The link
+  checker now runs in its own `link-check` job on `ubuntu-latest` (same pattern as
+  `dependency-review`), and the Windows `verify` job keeps only the PowerShell
+  steps. The PG-gated tests still build in the normal leg and run via the
+  `--ignored` leg when a real PG is present (WAL 2/2 and belt 1/1 verified
+  green with PG). Oracle review confirmed the PG gating over installing
+  PostgreSQL in CI (which would also not suffice for the belt
+  verifier's required `player` schema/data). **Next:** re-run CI on the PR; with
+  the Dependency graph now enabled and all three jobs (`verify`, `link-check`,
+  `dependency-review`) defined, get both required checks (`verify`,
+  `dependency-review`) green + an approval before merge; then A2 reproducible
+  contributor environment.
+
+- 2026-09-02 | **Two Rust world slices committed and verified on the push
+  branch:** the four pre-existing uncommitted Rust files were committed as two
+  slices after passing the full verifier gate (fmt + 874 tests + clippy +
+  diff-check, `OK: verificacion completa`; the PG-gated ignored leg remains
+  unavailable and is not counted as passed). `b611eb2 fix(world): normalize
+  client-unsafe persisted positions` (map.rs + channel/entry.rs +
+  channel/session.rs) routes load and save position normalization through
+  `MapData` so the client is never sent a coordinate its pack cannot load
+  (map 41 falls back to the known village; other maps use the first movable
+  cell; mutex poisoning handled; the persisted copy is corrected without
+  touching motion). `1a9f179 perf(world): limit initial spawn materialization`
+  (spawn.rs) drops `SPAWN_VIEW` 300_000→10_000 and `DESPAWN_RADIUS`
+  310_000→15_000 so map entry no longer floods all map-41 spawns, with the
+  inclusive-boundary and hysteresis verifiers updated. Both were committed to
+  `chore/alpha-foundation-push` alongside the 19 A0/A1 documentation commits
+  for the protected-PR release. **Next:** update the live A2 handoff docs and
+  push the branch / open the PR; then A2 reproducible contributor environment.
+
+- 2026-09-02 | **A1 boundary follow-up:** the boundary checker now rejects
+  generated client proto outputs by path, detects extensionless binary content
+  without misclassifying UTF-16 C++ resources, and scans JSON structurally plus
+  positional MySQL and Windows `set` assignments without printing credential
+  values. The three tracked `Mysql2Proto` templates and the DBManager example
+  now use placeholders; 34 generated proto outputs were removed from the
+  public index and remain ignored as local tool results.
+  `scripts/check_boundary_test.ps1` passed all deliberate secret, path,
+  generated-output, binary-content, multiline-JSON, and Windows-script
+  mutations; the clean `scripts/check_boundary.ps1` run printed
+  `OK: check_boundary`; the workflow installs the pinned Rust toolchain
+  components before verification, the verifier expands ignored-test filters
+  without merging them, and the active GitHub ruleset protects `main`/`beta`.
+  The four pre-existing Rust slices remain unstaged and untouched. **Next:** A2
+  reproducible contributor environment.
+
+- 2026-09-02 | **A1 license and public-boundary enforcement:** `cargo metadata
+  --no-deps` reports Apache-2.0 for all workspace packages; the clean
+  `scripts/check_boundary.ps1` run printed `OK: check_boundary`, while the
+  deliberate untracked `source/deploy/win/share/a1-forbidden-fixture.pack`
+  mutation printed `FALLO: check_boundary` and exited 1. `scripts/check_docs.ps1`
+  printed `OK: check_docs (metadata + live state files)` and `git diff --check`
+  exited 0. The post-commit clean boundary run reported `tracked paths: 510;
+  status paths checked: 4`. The four pre-existing Rust slices remain unstaged
+  and untouched; normal `cargo test --workspace` remains unavailable because
+  PostgreSQL `127.0.0.1:5432` is not running, and it is not counted as passed.
+  **Next:** A2 reproducible contributor environment.
+
+- 2026-09-02 | **A0 truthful baseline closed (`7442122`):** the documentation
+  baseline for the collaborative alpha is complete and review-accepted. Live
+  state (progress + gap registry) is the only authority; local `.superpowers/`
+  and `docs/superpowers/` artifacts are ignored, not deleted; the public-tooling
+  and deploy-boundary inventory (`documentation/reference/public-tooling-boundary.md`)
+  classifies clean tooling, external operator prerequisites, and prohibited
+  material under ADR-0015; A2.1–A2.5 are owned registry blockers gated on A1.
+  Active-document fragments, heading collisions, and diagnostic safety are
+  enforced by `scripts/check_docs.ps1`. The four pre-existing Rust slices remain
+  uncommitted and untouched. The optional live-PG verifier leg is still
+  unavailable because PostgreSQL `127.0.0.1:5432` is not running (recorded, not
+  passed). **Next:** A1 license/boundary alignment and the deterministic
+  boundary check; then A2 reproducibility.
+
+- 2026-09-02 | **A0 Task 4R2 documentation-gate hardening:**
+  `scripts/check_docs.ps1` now allocates every heading anchor against the full
+  used set and renders decoded fragment controls as escapes. The duplicate
+  `echo`, `echo`, `echo 1` mutation passes; the `%0A::warning` mutation fails
+  with `\u000A`, without a line beginning `::warning`; both sources restore
+  byte-for-byte. The post-fix missing-fragment mutation uses
+  `task-4r-final-mutation-fragment-does-not-exist`; the earlier
+  `task-4r-mutation-fragment-does-not-exist` was the expected pre-fix
+  false-success marker. The unmutated checker passes; the four Rust worktree
+  changes remain unstaged and untouched.
+
+- 2026-09-02 | **A0 Task 4R documentation-contract repair:** active Markdown
+  fragments now use their actual GitHub-compatible heading slugs (or no anchor
+  where a line number was cited). The pre-fix
+  `task-4r-mutation-fragment-does-not-exist` mutation was the expected false
+  success; the post-fix rejection is recorded with the unique
+  `task-4r-final-mutation-fragment-does-not-exist` marker and its source path and
+  link text. The mutation source was restored byte-for-byte. The checker
+  intentionally excludes external URLs, `mailto:`, generated artifacts, and
+  `documentation/history/`. Next action: orchestrator validation; the four Rust
+  worktree changes remain unstaged and untouched.
+
+- 2026-09-02 | **A0 Task 2 artifact isolation:** commit `7affb25`
+  (`chore(repo): isolate local agent artifacts`) records the disposition; local
+  `.superpowers/` and `docs/superpowers/` files remain on disk and are ignored,
+  not deleted. The two Rust slices remain uncommitted:
+  `fix(world): normalize client-unsafe persisted positions` (map/entry/session)
+  and `perf(world): limit initial spawn materialization` (spawn). **Next A0
+  task:** Task 3, publish the [tooling and deploy-boundary inventory](plans/alpha-a0-truthful-baseline.md#task-3-publish-the-tooling-and-deploy-boundary-inventory).
+
+- 2026-09-02 | **Collaborative alpha foundation (user-approved plan):** alpha is a contributor preview, not a claim of total gameplay parity. Public scope is the complete authored Rust server, clean tools, documentation, scripts, and lawful synthetic/versioned development data; client source/packs/binaries, decompiled/proprietary material, and the frozen C++ oracle remain external per ADR-0015. Apache-2.0 is the chosen public license. The canonical [A0–A5 plan](plans/alpha-collaborative-readiness.md) begins with a truthful baseline and ends only after clean-clone reproducibility, contribution governance, and enforceable CI gates are evidenced. `ARQ-E` tracks the work; implementation has not yet begun.
+
+- 2026-09-02 | **OpenCode 2 subagent correction (orchestrator):** the current OpenCode service/API was healthy, but a completed child could remain `unconfirmed` in task tracking; a continuation was therefore rejected and no duplicate was created. `AGENTS.md` and `documentation/rules.md` now require lifecycle-based handling: a bounded child is never resumed, re-prompted, or duplicated under live/unconfirmed state; background cancellation uses `POST /api/session/<id>/interrupt` followed by API verification. The cancelled crash-diagnostics research lane is not evidence and must be re-scoped only after its workflow is reliable.
+
+- 2026-09-01 | **Auth-only locale bootstrap fix (orchestrator):** the external compatible client rejects `GC_LOCALE` (header 140) in `Game` (`Unprocessed packet header 140, state Game`), so the channel locale module, Game request handler, and post-entry push were removed; auth remains the sole bootstrap responder. The deterministic loopback verifier rejects header 140 after `GC_PHASE(GAME)` and fails under the `140 → break` mutation; focused channel-entry (1/1), auth-locale (2/2), fmt, clippy, and diff checks passed. Release `4277E5A8…75056B` was deployed to `source/deploy/win` with matching hash and ports 30001/30003 listening. Real client evidence: entered map 41 with 89 spawns, emitted sustained `MOVE`, NPC, item, combat, death/revive, and drop traffic, without a reset or new `syserr.txt` entry. In-game hot reload remains deferred until a compatible client Game-phase parser/cache and version-gated rollout exist outside this public server repository. `scripts/verify.ps1` completed after the OpenCode2 restart with `OK: verificacion completa` (the informational ignored PG/WSL leg was unavailable).
 
 - 2026-08-30 | **Plan general, higiene F0 y gobernanza documental F1 (orchestrator):** el usuario aprobó el plan de diagnóstico general (fases 0–4, en `~/.commandcode/plans/`) con foco en gameplay + simplificación documental y criterio de gate MIXTO POR RIESGO. Ejecutado en este slice: (0.1) commits atómicos del árbol sucio — `270b8a7` (client/pack+LICENSE), `74f62a7`/`4aaff76`/`d924aaa`/`96e969f` (lanes G0.1b–e), `2cf099f` (docs). (0.2) G0.1e CERRADA (mixto por riesgo) y G0.1b/c/d estrechadas al check de cliente real. (0.3) G1.5 lado servidor: binario desplegado 09:19:55 == build release de HEAD (SHA `65C1EBFC…`), puertos LISTEN, smoke wire 1/1 ok (el harness falsamente reportaba desync por el push GC_LOCALE — splitter corregido `1b595e0`). (0.4) G1.1a: `verify.ps1` corre la suite normal antes que la ignorada (`9056cc3`); G1.2: pase fmt+clippy 1.97 completo (`6d8fdeb`); G1.1b/G3.2: flakes des-flakeados y re-habilitados (`fa41755`, `0b4d757`, `70246a9`). Primeras corridas del gate destaparon deuda REAL: C13 skill_power filas anchas (`5946364`, paridad config.cpp:532-613), C14 mob_proto smallint (`81c934b`), flake remove_dir_all (Windows 145). (0.5) `restore_drill.ps1` ejecutado y PASADO contra `metin2_2026-08-29.dump` + runbook `documentation/reference/backup-restore.md`; G0.2: target/ 7,36 GB, presupuesto <=5 GB documentado (clean pendiente). (F1) `document-authority.md` (precedencia única), roadmap.md → mapa de fases, README rutea al estado vivo, banner histórico en ROADMAP.md, disposition en trackers .omo/.slim, ADR-0016 (quest engine) y ADR-0017 (regional channels deferida), enmiendas ADR-0006/0010/0011, gate de metadata en CI (`5937186`), tabla de cobertura quest corregida (G3.1c). Pendiente del operador: sesión de cliente real (login test/1234 + andar + montar + tienda NPC) para cerrar G0.1b/c/d y G1.5; copia off-host de dumps (no hay segundo volumen).
 - 2026-08-29 | **G0.1a item-stack cap audit (coder):** baseline `96606e3`; committed as `5354e6f`. `ITEM_COUNT_LIMIT` remains 200 and is shared by the channel and GM paths. The client/server item count fields are BYTE-sized (`protocol/src/world.rs` item set/update/move/drop2), so the requested 2000 target is not enabled. `game_core::packets::item_set_packets` rejects counts above 200 rather than silently wrapping 2000 to 208; the GM parser/handler clamps to 200. Mutation verifiers cover the cap, shared channel value, explicit 2000 clamp, and entry-wire rejection. `ItemRow.count` stays bigint-backed; events, quests, safebox, belt, trade, economy, movement/spawn, and bench lanes were not modified. G0.1a remains **BLOCKED** until a coordinated u16 protocol/client migration and real-client stack test above 200.

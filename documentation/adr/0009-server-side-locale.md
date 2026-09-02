@@ -2,7 +2,7 @@
 Type: Decision
 Status: Accepted
 Audience: Contributors, maintainers
-Last verified: 2026-08-12
+Last verified: 2026-09-01
 ---
 
 # ADR-0009: Server-Side Locale (text ownership)
@@ -43,11 +43,11 @@ Rows per language, not columns: adding a language = INSERTs, never ALTER TABLE.
 
 **Wire — one request/response pair, one cache:**
 
-- `CG_LOCALE_REQUEST` (carries `lang`) / `GC_LOCALE` (typed sections: mob, item, item-desc, skill, map, ui). Served by the auth role at connect, under a loading screen (map-loading pattern). Stateless → both roles can serve it → **hot reload** of language/content (re-request, swap cache).
+- `CG_LOCALE_REQUEST` (carries `lang`) / `GC_LOCALE` (typed sections: mob, item, item-desc, skill, map, ui). The auth role is the sole responder and serves the bundle during authentication/loading. For the external compatible client, this is a bootstrap-only contract: after `GC_PHASE(GAME)`, the channel must neither push nor respond with `GC_LOCALE` (header 140), because the client's Game parser rejects it. In-game hot reload is deferred until a compatible client Game-phase parser/cache and a version-gated rollout exist outside this public server repository.
 - Single channel for ALL text: quest texts join later as a new section (`common.quest_texts`) when the quest engine lands — no design change.
 - Chunked if the legacy wire caps packet size (verified in F1).
 
-**Client — one cache module (CPythonLocale), per-domain maps:** mob/NPC names, item names/descriptions, skill names, uiScriptLocale, map names (image kept as style + localized text overlay). Fallback chain: cache → pack (transition) → empty. Language selector at login (default **EN**), applies at login, hot-switchable live.
+**Client — one cache module (CPythonLocale), per-domain maps:** mob/NPC names, item names/descriptions, skill names, uiScriptLocale, map names (image kept as style + localized text overlay). Fallback chain: cache → pack (transition) → empty. Language selector at login (default **EN**), applies during authentication/loading. In-game hot switching is deferred until the compatible client has a Game-phase parser/cache and the version-gated rollout described above.
 
 **Server — importer CLI (one subcommand per domain):** `import-mobs`, `import-items`, `import-skills`, `import-ui`, `import-messages`, `import-icons` — re-runnable at will. Fallback language: **EN** (diverges from legacy `LANGUAGE_DEFAULT = ES`, intentional; EN is the completeness baseline of the new data).
 
@@ -66,7 +66,7 @@ Rows per language, not columns: adding a language = INSERTs, never ALTER TABLE.
 Positive:
 
 - Text becomes SQL rows: rename a mob = `UPDATE`; new language = INSERTs; no pack, no client rebuild.
-- The locale cache is the single channel for all text (UI today, quests later) with hot reload.
+- The locale cache is the single channel for all text (UI today, quests later) during the supported authentication/loading bootstrap; in-game refresh is a separately gated client capability.
 - Panel-ready: item browser (names + stats + icons), locale CRUD, refinement slider — all over the same tables.
 - locale.epk shrinks to visuals only; pack staleness stops affecting text.
 
@@ -75,6 +75,7 @@ Negative / costs:
 - Client changes: CPythonLocale + 5 touchpoints + loading screen + language selector → one rebuild per phase, each verified empirically.
 - Initial data incomplete: ES complete, EN/DE partial → fallback shows gaps until imported.
 - Legacy C++ baseline untouched (oracle); the EN default applies to the new system only.
+- The compatible client's Game parser rejects header 140 (`GC_LOCALE`), so in-game hot reload remains deferred until an external compatible client parser/cache rollout is version-gated outside this repository.
 - New wire pair (`CG_LOCALE_REQUEST`/`GC_LOCALE`) must stay byte-exact (F0 protocol crate discipline).
 
 ## References

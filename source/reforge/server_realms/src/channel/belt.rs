@@ -200,6 +200,7 @@ mod tests {
     // Requiere la PG local (patrón de los tests live de la suite — el stack
     // diario la mantiene arriba; DATABASE_TEST_PG para otra instancia).
     #[tokio::test]
+    #[ignore = "requiere PG real (WSL): cargo test --package server_realms -- --ignored"]
     async fn belt_move_wired_and_grade_gated() {
         let conn = std::env::var("DATABASE_TEST_PG").unwrap_or_else(|_| {
             "host=127.0.0.1 port=5432 user=mt2 password=mt2 dbname=metin2".to_string()
