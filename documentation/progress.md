@@ -45,7 +45,7 @@ implementation. Preset: OmO (`openai/gpt-5.6-luna`, variant `max`).
 
 All four work groups remain open in the [Gap Registry](plans/gap-registry.md):
 
-- [ ] **G0 — Architecture and storage:** G0.1b–G0.1e are implementation-complete for their focused checks and ready for Oracle Gate, but remain open; G0.1a is safely enforced at 200 but blocked at the requested 2000 by the current BYTE item-count wire, and disk-storage work remains open.
+- [ ] **G0 — Architecture and storage:** G0.1b–G0.1e are implementation-complete for their focused checks and ready for Oracle Gate, but remain open; G0.1a is safely enforced at 200 but blocked at the requested 2000 by the current BYTE item-count wire. [G0.2 disk storage is closed](plans/gap-registry.md#L79) with the registry's dated 2026-08-30 evidence.
 - [ ] **G1 — Gates, documentation, and deployment:** normal/ignored verification, formatting, documentation CI, and redeployment remain open; G1.14b's immutable-history decision is closed, and changelog freshness/current archive navigation are reconciled.
 - [ ] **G2 — Gameplay and content:** the remaining gameplay, social, quest, GM, data-channel, and deferred-content rows remain open in the registry.
 - [ ] **G3 — Hygiene and test debt:** stale comments and ignored-test policy remain to be executed and verified.

@@ -102,6 +102,60 @@ the existing Rust workspace verification scripts.
   git commit -m "docs(status): reconcile alpha baseline evidence"
   ```
 
+## Task 1R: Repair review-found truthfulness gaps
+
+**Files:**
+- Modify: `documentation/plans/alpha-a0-truthful-baseline.md`
+- Modify: `documentation/progress.md`
+- Modify: `documentation/plans/gap-registry.md`
+- Modify: `README.md`
+- Modify: `CHANGELOG.md`
+- Test: `scripts/check_docs.ps1`, `git diff --check`
+
+- [x] **Step 1: Correct the closed-storage contradiction.**
+
+  The progress snapshot must not say disk storage is open while the registry
+  closes `G0.2`. Keep `G0.2` closed in the registry and replace the stale
+  progress claim with a link to the registry row and its dated evidence.
+
+- [x] **Step 2: Remove current-runtime claims from the static README.**
+
+  Replace every claim that ports are listening, the deploy binary equals HEAD,
+  or the verifier currently passes with a link to the two live state sources:
+
+  ```markdown
+  Current verified state and deployment availability:
+  [`documentation/progress.md`](documentation/progress.md) and
+  [`documentation/plans/gap-registry.md`](documentation/plans/gap-registry.md).
+  ```
+
+  Retain the README's project description and supported-flow links. This is a
+  truthfulness repair, not the broader entry-point reduction owned by Task 4.
+
+- [x] **Step 3: Record the dated baseline failure as evidence, not a release claim.**
+
+  Under `CHANGELOG.md` → `[Unreleased]` → `Changed`, add one dated sentence
+  that the 2026-09-02 standard verifier stopped at the WAL PostgreSQL tests
+  because `127.0.0.1:5432` was unavailable, and link to `progress.md` for
+  volatile state. Do not call it a code regression or a passing gate.
+
+- [x] **Step 4: Re-run the review-found checks.**
+
+  ```powershell
+  powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check_docs.ps1
+  git diff --check
+  ```
+
+  Expected: documentation metadata/live-state checks and whitespace checks pass;
+  all three Important Task-1 review findings are addressed.
+
+- [x] **Step 5: Commit the bounded repair.**
+
+  ```powershell
+  git add documentation/plans/alpha-a0-truthful-baseline.md documentation/progress.md documentation/plans/gap-registry.md README.md CHANGELOG.md
+  git commit -m "docs(status): repair baseline truth gaps"
+  ```
+
 ## Task 2: Classify the current worktree and local artifacts
 
 **Files:**

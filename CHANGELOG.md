@@ -18,6 +18,9 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **Baseline verification (2026-09-02):** the standard verifier stopped at the
+  WAL PostgreSQL tests because `127.0.0.1:5432` was unavailable; see the
+  [live handoff](documentation/progress.md) for volatile state.
 - **OpenCode 2 coordination:** `AGENTS.md` and the operational guardrails now
   require lifecycle-based subagent handling: bounded lanes, no duplicate or
   speculative resume under uncertain state, and verified API interruption.
