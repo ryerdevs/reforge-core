@@ -62,6 +62,8 @@ evidence in the repository and CI:
 
 **Goal:** make current status auditable before changing release surfaces.
 
+Detailed execution: [A0 truthful-baseline implementation plan](alpha-a0-truthful-baseline.md).
+
 - Reconcile `progress.md`, the gap registry, roadmap summaries, and release
   metadata with the actual HEAD and verified evidence.
 - Classify the dirty worktree into independently documented slices; commit,
