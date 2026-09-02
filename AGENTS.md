@@ -2,7 +2,7 @@
 Type: Reference
 Status: Current
 Audience: Contributors, maintainers
-Last verified: 2026-08-31
+Last verified: 2026-09-02
 ---
 
 # reforge-core Agent Instructions
@@ -68,6 +68,23 @@ GitHub `docs.yml` runs the same + `scripts/check_docs.ps1` metadata gate + hando
 14. **Automate in scripts.** Repeatable → `scripts/*.ps1` (`status.ps1`, `verify.ps1`, `clean.ps1`, `start_win.ps1`). Don't improvise.
 15. **Single handoff.** `documentation/progress.md` is the session handoff. Read at start, update at close.
 16. **Tests that catch bugs.** Every fix needs a mutation test (fails if reverted) + `proptest` where invariants exist.
+
+## OpenCode 2 subagent lifecycle
+
+- Start an independent lane only through the OpenCode subagent mechanism, with
+  one bounded objective, explicit file ownership, and a validation owner.
+- Treat a child as live until the scheduler reports a terminal result. Do not
+  resume, re-prompt, or duplicate a child merely to check its status; reconcile
+  its result first. If task tracking is `unconfirmed`, stop scheduling that
+  lane and diagnose the service/session state instead of guessing.
+- To stop a background child, run `opencode2 api post
+  /api/session/<session-id>/interrupt`, then verify both `/api/session/active`
+  and `/api/session/<session-id>`. Never use a second child as a workaround for
+  an uncertain first child.
+- The OpenCode service owns child-session lifecycle. Project instructions guide
+  agents; scripts and CI enforce repository policy. See the V2
+  [agents](https://opencode.ai/v2/docs/agents/) and
+  [API](https://opencode.ai/v2/docs/api/) references.
 
 > `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` in `~/.config/opencode/opencode.jsonc` keeps lane tasks backgrounded.
 

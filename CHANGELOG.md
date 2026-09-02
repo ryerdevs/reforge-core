@@ -2,7 +2,7 @@
 Type: History
 Status: Current
 Audience: Contributors, maintainers
-Last verified: 2026-09-01
+Last verified: 2026-09-02
 ---
 
 # Changelog
@@ -18,6 +18,9 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **OpenCode 2 coordination:** `AGENTS.md` and the operational guardrails now
+  require lifecycle-based subagent handling: bounded lanes, no duplicate or
+  speculative resume under uncertain state, and verified API interruption.
 - **Auth-only locale bootstrap:** the external compatible client accepts
   `GC_LOCALE` (header 140) during authentication/loading. Auth remains the sole
   `CG_LOCALE_REQUEST` responder; the channel must neither push nor respond with

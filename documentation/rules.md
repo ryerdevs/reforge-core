@@ -2,7 +2,7 @@
 Type: Guardrail
 Status: Current
 Audience: Contributors, maintainers, operators
-Last verified: 2026-08-30
+Last verified: 2026-09-02
 ---
 
 # Guardrails — rules not to repeat
@@ -122,5 +122,28 @@ use an independently supplied compatible client.
 
 **Consequence:** The public boundary and ordinary server verification become
 ambiguous; remove the material and record the reconciliation.
+
+**Status:** Active
+
+## 8. Coordinate OpenCode 2 subagents through their lifecycle
+
+**Rule:** Start one bounded child lane at a time through the OpenCode subagent
+mechanism. Do not resume, re-prompt, or duplicate a child while its scheduler
+state is live or unconfirmed. Interrupt a background child only through
+`POST /api/session/<session-id>/interrupt`, then verify the active-session list
+and terminal session outcome.
+
+**Why:** Agent instructions are context, not a session-control mechanism.
+Treating an uncertain child as completed or creating a replacement can duplicate
+work, lose a cancellation, and leave the project state unclear.
+
+**Evidence:** [`AGENTS.md`](../AGENTS.md#opencode-2-subagent-lifecycle), the
+OpenCode V2 [agents](https://opencode.ai/v2/docs/agents/) and
+[API](https://opencode.ai/v2/docs/api/) references, and the OpenCode service
+health check verified on 2026-09-02.
+
+**Consequence:** Stop the affected lane, inspect the OpenCode service and
+session state, reconcile the result, and only then schedule a distinct next
+task. Do not work around the uncertainty with another child.
 
 **Status:** Active
