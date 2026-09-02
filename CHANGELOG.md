@@ -18,6 +18,15 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **A1 license and public-boundary enforcement (2026-09-02):** Rust and deploy
+  metadata now align on Apache-2.0; `scripts/check_boundary.ps1` enforces the
+  tracked public boundary, binary-output policy, and placeholder-only secret
+  assignments; and CI adds read-only permissions, Dependabot, and pull-request
+  dependency review. The clean-tool contract keeps proprietary client material
+  outside the checkout; GitHub branch protection and required checks for `main`
+  and `beta` remain repository-settings work. The normal workspace test leg is
+  still unavailable when PostgreSQL `127.0.0.1:5432` is not running and is not
+  counted as passed; see the live [handoff](documentation/progress.md).
 - **A0 truthful baseline (2026-09-02, `7442122`):** the collaborative-alpha
   A0 baseline is complete and review-accepted. Live state is the Gap Registry +
   progress handoff; local agent artifacts are ignored, not deleted; the

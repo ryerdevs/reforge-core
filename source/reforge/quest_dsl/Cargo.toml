@@ -3,6 +3,6 @@ name = "quest_dsl"
 version = "0.1.0"
 edition = "2024"
 description = "Metin2 quest DSL core engine (parser + AST + families) — replaces the legacy Lua quest system"
-license = "MPL-2.0"
+license.workspace = true
 
 [dependencies]

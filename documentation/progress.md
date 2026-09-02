@@ -18,7 +18,13 @@ implementation. Preset: OmO (`openai/gpt-5.6-luna`, variant `max`).
 - Baseline snapshot (2026-09-02, before the Task 1 documentation commit): captured HEAD is `42783e9c335ce56562258a18744418f60c24dcc3`. The captured worktree had four modified tracked Rust files (`spawn.rs`, `map.rs`, `channel/entry.rs`, and `channel/session.rs`) and untracked `.superpowers/` and `docs/` directories; Task 1 leaves them untouched.
 - Task 2 disposition (captured at HEAD `1c59cb1650499da09cb005b091fece6d0550fbec`): `map.rs`, `channel/entry.rs`, and `channel/session.rs` are `continue in named slice` for the provisional `fix(world): normalize client-unsafe persisted positions` continuation; `ecs/systems/spawn.rs` is `continue in named slice` for the separate provisional `perf(world): limit initial spawn materialization` continuation. None is staged or committed by A0 Task 2; each still needs focused tests, applicable mutation/negative coverage, current-document confirmation, and review before its named commit.
 - The captured local agent files are `ignore as local tool state`: they remain on disk and are excluded by the root `/.superpowers/` and `/docs/superpowers/` rules. No public `docs/` tree is created; the exact path-level table is in the [A0.2 worktree disposition](plans/gap-registry.md).
-- Standard gate: `scripts/verify.ps1` **FAILED** in normal `cargo test --workspace` (exit 101). Both `database/tests/wal_pg.rs` integration tests failed at `wal_pg.rs:27` because PostgreSQL at `127.0.0.1:5432` refused the connection. The optional ignored PG/WSL leg was not reached and is not counted as passed; `scripts/verify.ps1:24-55` therefore produced no final `OK: verificacion completa`.
+- Standard gate: the fresh `scripts/verify.ps1` run reached `public boundary`
+  (`OK: check_boundary (tracked paths: 510; status paths checked: 4)`) and
+  `fmt --check`, then **FAILED** in normal `cargo test --workspace` (exit 101).
+  Both `database/tests/wal_pg.rs` integration tests failed at `wal_pg.rs:27`
+  because PostgreSQL at `127.0.0.1:5432` refused the connection. The optional
+  ignored PG/WSL leg was not reached and is not counted as passed; the verifier
+  therefore produced no final `OK: verificacion completa`.
 - Deploy snapshot: `source/deploy/win/server_realms.exe` exists with SHA-256 `4277E5A8C74E69B2D9643967B260C7E345641EBDB991848421435EC83375056B`; listeners 5432, 30001, and 30003 were all closed in the capture. The executable hash was observed independently; no deployed-HEAD equivalence is claimed.
 - Task 4R2/R3 documentation-gate hardening (2026-09-02): the dependency-free
   fragment check now allocates every heading anchor against the full used set,
@@ -31,13 +37,22 @@ implementation. Preset: OmO (`openai/gpt-5.6-luna`, variant `max`).
   4R's expected pre-fix false-success evidence.
 - A0 truthful baseline (2026-09-02, `7442122`): live state reconciled to HEAD
   `7442122`; local agent artifacts isolated and ignored; public-tooling and
-  deploy-boundary inventory published; A2.1–A2.5 reproducibility rows recorded
-  as planning blockers on A1. Tasks 1–4 exits accepted by review or direct
-  verification; only the optional PostgreSQL-gated verifier leg remains
+  deploy-boundary inventory published; A2.1–A2.5 reproducibility rows remain
+  planning blockers pending A2 after A1. Tasks 1–4 exits accepted by review or
+  direct verification; only the optional PostgreSQL-gated verifier leg remains
   unavailable.
-- Next action: proceed to A1 (license/public-boundary alignment and deterministic
-  boundary check); make PostgreSQL available at `127.0.0.1:5432` and rerun the
-  optional live-PG leg of `scripts/verify.ps1` when needed.
+- A1 license and public-boundary enforcement (2026-09-02): Rust workspace and
+  deploy metadata now identify Apache-2.0; `scripts/check_boundary.ps1` checks
+  tracked and status-reported public paths, binary-looking outputs, decompiled
+  artifacts, and placeholder-only credential assignments. CI has read-only
+  permissions, Dependabot, and pull-request dependency review. The clean-tool
+  contract keeps proprietary client material outside the checkout; actual GitHub
+  branch protection and required checks for `main`/`beta` remain settings work.
+  Local evidence is recorded in the A1 handoff below; the four pre-existing Rust
+  slices remain uncommitted and untouched.
+- Next action: proceed to A2 reproducible contributor environment; make
+  PostgreSQL available at `127.0.0.1:5432` and rerun the optional live-PG leg of
+  `scripts/verify.ps1` when needed.
 
 ## Verified capabilities (not a Gate 2 closure)
 
@@ -72,6 +87,18 @@ All four work groups remain open in the [Gap Registry](plans/gap-registry.md):
 The registry's `C1`–`C12` rows are closed prerequisite fixes; they do not mark G0–G3 or Gate 2 as closed.
 
 ## Handoff
+
+- 2026-09-02 | **A1 license and public-boundary enforcement:** `cargo metadata
+  --no-deps` reports Apache-2.0 for all workspace packages; the clean
+  `scripts/check_boundary.ps1` run printed `OK: check_boundary`, while the
+  deliberate untracked `source/deploy/win/share/a1-forbidden-fixture.pack`
+  mutation printed `FALLO: check_boundary` and exited 1. `scripts/check_docs.ps1`
+  printed `OK: check_docs (metadata + live state files)` and `git diff --check`
+  exited 0. The post-commit clean boundary run reported `tracked paths: 510;
+  status paths checked: 4`. The four pre-existing Rust slices remain unstaged
+  and untouched; normal `cargo test --workspace` remains unavailable because
+  PostgreSQL `127.0.0.1:5432` is not running, and it is not counted as passed.
+  **Next:** A2 reproducible contributor environment.
 
 - 2026-09-02 | **A0 truthful baseline closed (`7442122`):** the documentation
   baseline for the collaborative alpha is complete and review-accepted. Live

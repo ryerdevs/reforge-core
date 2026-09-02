@@ -2,7 +2,7 @@
 Type: Reference
 Status: Current
 Audience: Operators
-Last verified: 2026-08-31
+Last verified: 2026-09-02
 ---
 
 # reforge-core deploy
@@ -98,4 +98,4 @@ The nightly `pg_dump` produces a file like
 ## License
 
 This deploy bundle is part of the reforge-core project, licensed
-under MPL-2.0.
+under Apache-2.0.
