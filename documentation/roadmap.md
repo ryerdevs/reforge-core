@@ -7,20 +7,21 @@ Last verified: 2026-09-02
 
 # Phase map — reforge-core
 
-This page is the **phase map only** (what F0–F7 mean and their completion
-state at a glance). It does not track per-item status:
+This page is the **sole phase map** (what F0–F7 mean and their phase-level
+state at a dated glance). It does not track per-item, runtime, or worktree
+status. The phase states below are a map snapshot, not a live status source:
 
 - Live per-item state: [Gap Registry](plans/gap-registry.md)
 - Live handoff / current snapshot: [progress.md](progress.md)
 - Precedence when documents disagree: [document-authority.md](reference/document-authority.md)
-- Long-form phase history: [`ROADMAP.md`](../ROADMAP.md) (historical master, snapshot-style)
+- Long-form phase history: [`ROADMAP.md`](../ROADMAP.md) (historical compatibility narrative)
 
 > **A0 navigation note (2026-09-02):** A0 classification is tracked by
 > **ARQ-E** in the [Gap Registry](plans/gap-registry.md). Current status remains
 > in the [Gap Registry](plans/gap-registry.md) / [progress handoff](progress.md)
 > pair; this phase map is navigational, not a third current-state source.
 
-## Phase states (2026-08-30)
+## Phase map snapshot (2026-08-30)
 
 | Phase | Meaning | State |
 |---|---|---|
@@ -39,6 +40,8 @@ Gate-2 execution blocks live in the registry: **G0** (caps/storage), **G1**
 
 ## Rules of the map
 
+- These dated phase labels summarize historical milestone evidence; they do not
+  replace the registry or handoff.
 - A phase is DONE only when its milestone evidence is recorded in the registry
   or the handoff — never by wish.
 - New work opens registry rows; it does not reopen phases here.

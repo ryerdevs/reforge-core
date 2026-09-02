@@ -2,13 +2,17 @@
 Type: Reference
 Status: Current
 Audience: Contributors, maintainers
-Last verified: 2026-08-30
+Last verified: 2026-09-02
 ---
 
 # Schema — PostgreSQL 18
 
 Database `metin2` runs at `127.0.0.1:5432` through the
 `postgresql-metin2` service with role `mt2/mt2`.
+
+This page describes the schema contract, not the availability of a local
+database. For current runtime and verification status, use the [Gap
+Registry](plans/gap-registry.md) and [progress handoff](progress.md).
 
 ## Schemas
 
@@ -26,8 +30,6 @@ Database `metin2` runs at `127.0.0.1:5432` through the
   `ON CONFLICT DO NOTHING`.
 - `pgcrypto` in `account` provides
   `mysql_hash_password(pw) = '*' + UPPER(SHA1(UNHEX(SHA1(pw))))`.
-
-## Fuente
 
 ## Sources
 

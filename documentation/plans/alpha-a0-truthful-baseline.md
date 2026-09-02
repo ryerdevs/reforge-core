@@ -340,12 +340,15 @@ the existing Rust workspace verification scripts.
 - Modify: `documentation/reference/document-authority.md`
 - Modify: `documentation/README.md`
 - Modify: `documentation/roadmap.md`
+- Modify: `documentation/schema.md`
+- Modify: `documentation/reference/login-flow.md`
 - Modify: `README.md`
 - Modify: `ROADMAP.md`
+- Modify: `CHANGELOG.md`
 - Modify: `documentation/history-index.md`
 - Test: `scripts/check_docs.ps1`
 
-- [ ] **Step 1: Establish the exact current-state wording.**
+- [x] **Step 1: Establish the exact current-state wording.**
 
   The only live status sources are:
 
@@ -359,34 +362,39 @@ the existing Rust workspace verification scripts.
   Preserve the verification precedence already defined in
   `document-authority.md`.
 
-- [ ] **Step 2: Reduce public entry documents to their unique job.**
+- [x] **Step 2: Reduce public entry documents to their unique job.**
 
   - Root README: purpose, alpha limitations, supported first path, and links.
   - `documentation/README.md`: human navigation, no model/preset/team internals.
   - `documentation/roadmap.md`: sole phase map; set `Type: Plan` if it remains
     the active phase map.
-  - Root ROADMAP: explicitly historical compatibility narrative, with links to
-    the phase map and live state.
+  - Root ROADMAP: change its metadata and introduction to an explicitly
+    historical compatibility narrative. Remove or relabel every present-tense
+    `live`/`current` status claim in it, including the stale G0.2 and backup
+    cadence claims; preserve the underlying historical body with a clear dated
+    archive boundary and links to the phase map and live state.
   - CHANGELOG: chronological evidence only.
 
   Remove the stale detailed status matrix from README only after its supported
   claims are represented by a stable reference or linked registry row.
 
-- [ ] **Step 3: Preserve history while making its non-authority visible.**
+- [x] **Step 3: Preserve history while making its non-authority visible.**
 
   Do not edit `documentation/history/**`. In `history-index.md`, add a clear
   note that archived metadata and paths are historical and may be stale; expand
   the index to include the omitted dated records found in the A0 audit. Link to
   their canonical successors where a live reader needs current information.
 
-- [ ] **Step 4: Correct identified current-document defects.**
+- [x] **Step 4: Correct identified current-document defects.**
 
   Correct the empty `## Fuente` heading in `schema.md`, replace the stale
   current-plan claim in `reference/login-flow.md` with a link to the historical
   plan, and reconcile the README claims about gold, quest actions, and locale
-  with their current registry/ADR evidence. Do not change historical files.
+  with their current registry/ADR evidence. Correct the A0.2 changelog link to
+  the exact `#a0-current-worktree-disposition` fragment. Do not change
+  historical files.
 
-- [ ] **Step 5: Run current-document checks.**
+- [x] **Step 5: Run current-document checks.**
 
   Run:
 
@@ -398,7 +406,7 @@ the existing Rust workspace verification scripts.
   Expected: metadata and live-state checks pass, all new relative links resolve,
   and no current document claims authority outside the two live files.
 
-- [ ] **Step 6: Commit the authority reduction.**
+- [x] **Step 6: Commit the authority reduction.**
 
   ```powershell
   git add README.md ROADMAP.md documentation CHANGELOG.md AGENTS.md

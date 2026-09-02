@@ -2,7 +2,7 @@
 Type: Reference
 Status: Current
 Audience: All
-Last verified: 2026-08-30
+Last verified: 2026-09-02
 ---
 
 # Document authority — where each question is answered
@@ -13,12 +13,21 @@ disagree, this precedence list decides — not seniority, not habit.
 
 ## The two live files
 
+The only live status sources are:
+
+1. `documentation/plans/gap-registry.md` — owned work, state, evidence,
+   dependency, risk, and exit.
+2. `documentation/progress.md` — the current verified snapshot and session
+   handoff.
+
 | Question | Answer lives in |
 |---|---|
 | **What is pending, who owns it, what closes it?** | [`plans/gap-registry.md`](../plans/gap-registry.md) — per-row tracker (owner, state, evidence, dependency, risk, exit criterion) |
 | **Where did we leave off, what is the current snapshot?** | [`progress.md`](../progress.md) — `Current` section + `Handoff` entries (rule 19, read at start / updated at close) |
 
-Everything else is a view of those two plus the code.
+Everything else is a view of those two plus the code. A fresh verification
+command is evidence that may outrank written status; it is not a third live
+status document and its durable result belongs in the registry or handoff.
 
 ## Precedence (when documents disagree)
 
@@ -30,17 +39,18 @@ Everything else is a view of those two plus the code.
 3. **progress.md Current/Handoff** — the session handoff; dated entries.
 4. **Accepted ADRs** — decisions (why), not status (what/when). Never updated
    to reflect progress, only to record decisions or supersessions.
-5. **README, documentation/roadmap.md, ROADMAP.md, CHANGELOG.md** — summaries,
-   phase history, and chronological record. A changelog entry is history, not
-   proof of fresh execution.
+5. **README, documentation/roadmap.md, ROADMAP.md, CHANGELOG.md** — navigation,
+   phase map, historical narrative, and chronological record. A changelog entry
+   is history, not proof of fresh execution.
 6. **`documentation/history/`, `.omo/`, `.slim/`** — archives and external
    trackers. Read-only context; nothing there is current status.
 
 ## Document kinds and states
 
-- Kinds: `Hub` (entry points), `Plan` (gap-registry, roadmaps), `Reference`
-  (contracts, authority, schema), `Guardrail` (rules.md), `ADR` (decisions),
-  `Snapshot` (dated captures, e.g. progress handoff entries).
+- Kinds: `Hub` (entry points), `Plan` (gap-registry and active plans),
+  `Reference` (contracts, authority, schema, and the phase map), `Guardrail`
+  (rules.md), `ADR` (decisions), `History` (frozen historical narratives),
+  and `Snapshot` (dated captures, e.g. progress handoff entries).
 - Document states: `Current` (maintained), `Historical` (frozen, correct for
   its date), `Superseded` (replaced by a named successor).
 - Item states (registry): `OPEN`, `IN PROGRESS`, `BLOCKED`, `CLOSED`.
@@ -52,6 +62,8 @@ Everything else is a view of those two plus the code.
 - Historical documents are never edited (no-hide-history); errors get a note,
   supersession gets a successor.
 - Every live document carries `Type / Status / Audience / Last verified`.
+- README and reference/plan summaries must link to the two live files instead of
+  restating volatile status.
 - When code changes behavior, the same slice updates: the registry row (or a
   new one), `progress.md`, and — if a decision was made — an ADR first.
 
@@ -60,4 +72,5 @@ Everything else is a view of those two plus the code.
 1. Registry rows: state + evidence.
 2. `progress.md`: one dated Handoff entry + refresh `Current`.
 3. `CHANGELOG.md`: one dated entry summarizing the block.
-4. `README.md` status matrix: only if it still agrees with the two live files.
+4. `README.md`: update only stable scope and navigation; never make it a third
+   live status source.

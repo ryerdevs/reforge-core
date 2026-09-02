@@ -2,7 +2,7 @@
 Type: Hub
 Status: Current
 Audience: Contributors, maintainers
-Last verified: 2026-08-30
+Last verified: 2026-09-02
 ---
 
 # Documentation policy
@@ -26,7 +26,7 @@ Every document has exactly one kind:
 | How-to | `how-to/` | A focused recipe for a real task |
 | Reference | `reference/` | Exact, structured technical information |
 | Explanation | `explanation/` | Context and rationale without a procedure |
-| Plan | `plans/` or a root plan such as `ROADMAP.md` | Active sequencing and acceptance criteria |
+| Plan | `plans/` or the maintained phase map | Active sequencing and acceptance criteria |
 | Decision | `adr/` | One architectural decision per ADR |
 | Guardrail | `guardrails/` | Rules that prevent repeat failures |
 | History | `history/` | Read-only superseded plans, records, and snapshots |
@@ -80,20 +80,28 @@ Each rule in a guardrail document has exactly these fields:
 - If a historical link is stale, link to the historical document from a live
   hub or canonical successor rather than changing the historical body.
 
-## 6. Current sources of truth
+## 6. Current status authority
 
-- [`documentation/progress.md`](progress.md) is the current status and handoff:
-  what is done, blocked, and next.
-- [`ROADMAP.md`](../ROADMAP.md) is the master plan and sequence.
-- [`CHANGELOG.md`](../CHANGELOG.md) is the chronological evidence record.
-- [`documentation/README.md`](README.md) is the documentation hub.
+Exactly two documents carry live project status:
 
-When these sources disagree, reconcile them in the same session and record the
-verified change in the changelog.
+1. [`plans/gap-registry.md`](plans/gap-registry.md) — owned work, state,
+   evidence, dependency, risk, and exit criterion.
+2. [`progress.md`](progress.md) — the current verified snapshot and session
+   handoff.
+
+Fresh verification commands are evidence and can outrank written status, but a
+command result is not a third status document. Record durable status evidence in
+the registry or handoff, as appropriate.
+
+The other public documents have narrower jobs: [`README.md`](README.md) is a
+navigation hub, [`roadmap.md`](roadmap.md) is the phase map, the root
+[`ROADMAP.md`](../ROADMAP.md) is historical, [`CHANGELOG.md`](../CHANGELOG.md)
+is chronological evidence, ADRs record decisions, and `history/` preserves
+read-only context. None of them is a competing live status source.
 
 ## 7. Phase documentation
 
-Each active roadmap phase or gate entry identifies, at minimum:
+Each active phase or gate entry in the maintained plan identifies, at minimum:
 
 1. the code paths involved;
 2. the acceptance criterion;
@@ -127,9 +135,9 @@ before implementing them. Use the lifecycle `Proposed` → `Accepted` or
   edits.
 - The oracle reviews architecture and the complete change.
 - The orchestrator coordinates lanes and commits the reconciled result.
-- Every session updates the canonical docs, `ROADMAP.md`,
-  [`CHANGELOG.md`](../CHANGELOG.md), and [`progress.md`](progress.md) when
-  project knowledge changes.
+- Every session updates the two live status documents and records durable
+  changes in [`CHANGELOG.md`](../CHANGELOG.md). The root `ROADMAP.md` remains a
+  historical archive and is not edited for volatile status.
 
 ## Review checklist
 
@@ -138,7 +146,7 @@ before implementing them. Use the lifecycle `Proposed` → `Accepted` or
 - [ ] Guardrails contain Rule, Why, Evidence, Consequence, and Status.
 - [ ] The canonical document was updated instead of creating a duplicate.
 - [ ] Historical documents were not edited or deleted.
-- [ ] Status claims agree with `progress.md` and `ROADMAP.md`.
+- [ ] Status claims agree with `progress.md` and `plans/gap-registry.md`.
 - [ ] Active phase entries include code, acceptance, command, evidence, and next
       action.
 - [ ] Relative links resolve to existing paths.

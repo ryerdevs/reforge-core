@@ -26,8 +26,13 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
   normalize client-unsafe persisted positions` and `perf(world): limit initial
   spawn materialization`, and excluded local `.superpowers/` and
   `docs/superpowers/` artifacts without deleting them; see the [A0.2 worktree
-  disposition](documentation/plans/gap-registry.md#current-worktree-disposition)
+  disposition](documentation/plans/gap-registry.md#a0-current-worktree-disposition)
   in the Gap Registry for volatile details.
+- **A0 documentation authority (2026-09-02):** current status is routed to the
+  Gap Registry and progress handoff; the root roadmap is an explicitly
+  historical compatibility narrative, and the public README is a scope and
+  navigation entry point rather than a status matrix. Schema, login-flow,
+  locale, quest, and gold notes now point to their canonical evidence.
 - **OpenCode 2 coordination:** `AGENTS.md` and the operational guardrails now
   require lifecycle-based subagent handling: bounded lanes, no duplicate or
   speculative resume under uncertain state, and verified API interruption.
@@ -1894,7 +1899,7 @@ The client reached the select screen early, but world entry failed silently (cle
 
 ### Added
 
-- **G-PG design closed:** [ADR-0005](../docs/decisions/0005-postgresql-cutover-and-legacy-adapter.md) → **Accepted** with the gate checklist resolved (4/4) and implementation backlog B1–B8; cutover spec `docs/plans/server-rewrite.md` §8.2.1 (a provision, b migration, c adapter, d harness); inventories marked Accepted.
+- **G-PG design closed:** [ADR-0005](documentation/adr/0005-postgresql-cutover-and-legacy-adapter.md) → **Accepted** with the gate checklist resolved (4/4) and implementation backlog B1-B8; cutover spec `documentation/history/plans/server-rewrite.md` §8.2.1 (a provision, b migration, c adapter, d harness); inventories marked Accepted.
 - **PostgreSQL 18.4 (PGDG) provisioned** on WSL Debian-M2: db `metin2`, schemas `account`/`player`/`common`/`log`, role `mt2` (owner, scram, no SUPERUSER); runbook chain vendored in `scripts/gpg/` (02-install … 09-final).
 - **Phase-1 migration executed:** 30 tables with data (account, player subset incl. proto tables, guild/marriage/war_reservation, common locale/priv_settings/exp_table/spam_db/gmlist/gmhost, item/quest/affect/safebox, item_award) + the 26 `log` tables DDL-only (empty) + `account.mysql_hash_password` (pgcrypto, verified `*A4B6157319038724E3560894F7F932C8886EBFCF`). Counts parity 30/30 (`scripts/gpg/parity_check.py`; volatile `account.last_play` excluded — live-login write lands on PG only).
 - **`mysql_proxy` adapter** (`source/reforge/mysql_proxy`): MySQL wire v10 codec hand-written, `translate` (rewrites per `legacy-sql-compatibility.md` §4 as unit-test table), `session` (tokio-postgres 1:1, per-slot `search_path`, `standard_conforming_strings=off`, TimeZone), minimal TOML config, own SHA-1. 53 tests (workspace 111/111).
