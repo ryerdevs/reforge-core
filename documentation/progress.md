@@ -20,12 +20,15 @@ implementation. Preset: OmO (`openai/gpt-5.6-luna`, variant `max`).
 - The captured local agent files are `ignore as local tool state`: they remain on disk and are excluded by the root `/.superpowers/` and `/docs/superpowers/` rules. No public `docs/` tree is created; the exact path-level table is in the [A0.2 worktree disposition](plans/gap-registry.md).
 - Standard gate: `scripts/verify.ps1` **FAILED** in normal `cargo test --workspace` (exit 101). Both `database/tests/wal_pg.rs` integration tests failed at `wal_pg.rs:27` because PostgreSQL at `127.0.0.1:5432` refused the connection. The optional ignored PG/WSL leg was not reached and is not counted as passed; `scripts/verify.ps1:24-55` therefore produced no final `OK: verificacion completa`.
 - Deploy snapshot: `source/deploy/win/server_realms.exe` exists with SHA-256 `4277E5A8C74E69B2D9643967B260C7E345641EBDB991848421435EC83375056B`; listeners 5432, 30001, and 30003 were all closed in the capture. The executable hash was observed independently; no deployed-HEAD equivalence is claimed.
-- Task 4R documentation repair (2026-09-02): the phase-map `Type: Reference`
-  exception is explicit in the policy and authority reference; eight active
-  document fragments were repaired. The dependency-free fragment check is
-  mutation-tested and its unmutated run passes; it does not claim generic link
-  validation. The four Rust worktree changes remain outside this documentation
-  slice.
+- Task 4R2 documentation-gate hardening (2026-09-02): the dependency-free
+  fragment check now allocates every heading anchor against the full used set
+  and escapes decoded control characters in diagnostics. The duplicate-anchor
+  mutation passes; the `%0A::warning` mutation fails with `\u000A` and no raw
+  `::warning` line. The post-fix missing-fragment marker is
+  `task-4r-final-mutation-fragment-does-not-exist`; the earlier
+  `task-4r-mutation-fragment-does-not-exist` remains only as Task 4R's expected
+  pre-fix false-success evidence. The four Rust worktree changes remain outside
+  this documentation slice.
 - Next action: make PostgreSQL available at `127.0.0.1:5432` and rerun `scripts/verify.ps1`.
 
 ## Verified capabilities (not a Gate 2 closure)
@@ -62,14 +65,27 @@ The registry's `C1`–`C12` rows are closed prerequisite fixes; they do not mark
 
 ## Handoff
 
+- 2026-09-02 | **A0 Task 4R2 documentation-gate hardening:**
+  `scripts/check_docs.ps1` now allocates every heading anchor against the full
+  used set and renders decoded fragment controls as escapes. The duplicate
+  `echo`, `echo`, `echo 1` mutation passes; the `%0A::warning` mutation fails
+  with `\u000A`, without a line beginning `::warning`; both sources restore
+  byte-for-byte. The post-fix missing-fragment mutation uses
+  `task-4r-final-mutation-fragment-does-not-exist`; the earlier
+  `task-4r-mutation-fragment-does-not-exist` was the expected pre-fix
+  false-success marker. The unmutated checker passes; the four Rust worktree
+  changes remain unstaged and untouched.
+
 - 2026-09-02 | **A0 Task 4R documentation-contract repair:** active Markdown
   fragments now use their actual GitHub-compatible heading slugs (or no anchor
-  where a line number was cited). `scripts/check_docs.ps1` passes on the
-  unmutated tree and fails the unique `task-4r-mutation-fragment-does-not-exist`
-  mutation with the source path and link text; the mutation source was restored
-  byte-for-byte. The checker intentionally excludes external URLs, `mailto:`,
-  generated artifacts, and `documentation/history/`. Next action: orchestrator
-  validation; the four Rust worktree changes remain unstaged and untouched.
+  where a line number was cited). The pre-fix
+  `task-4r-mutation-fragment-does-not-exist` mutation was the expected false
+  success; the post-fix rejection is recorded with the unique
+  `task-4r-final-mutation-fragment-does-not-exist` marker and its source path and
+  link text. The mutation source was restored byte-for-byte. The checker
+  intentionally excludes external URLs, `mailto:`, generated artifacts, and
+  `documentation/history/`. Next action: orchestrator validation; the four Rust
+  worktree changes remain unstaged and untouched.
 
 - 2026-09-02 | **A0 Task 2 artifact isolation:** commit `7affb25`
   (`chore(repo): isolate local agent artifacts`) records the disposition; local

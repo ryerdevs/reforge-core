@@ -482,6 +482,59 @@ the existing Rust workspace verification scripts.
   git commit -m "docs: validate current documentation fragments"
   ```
 
+## Task 4R2: Harden the fragment validator and reconcile its evidence
+
+**Files:**
+- Modify: `documentation/plans/alpha-a0-truthful-baseline.md`
+- Modify: `documentation/progress.md`
+- Modify: `documentation/plans/gap-registry.md`
+- Modify: `scripts/check_docs.ps1`
+- Test: reversible duplicate-anchor and control-character mutation tests,
+  `scripts/check_docs.ps1`, `git diff --check`
+
+- [x] **Step 1: Reconcile the recorded mutation marker.**
+
+  Replace active-document claims that the pre-fix marker
+  `task-4r-mutation-fragment-does-not-exist` was rejected. The post-fix rejection
+  used `task-4r-final-mutation-fragment-does-not-exist`; preserve the report's
+  distinction that the former was the expected pre-fix false success.
+
+- [x] **Step 2: Demonstrate both validator defects before implementation.**
+
+  In separate reversible `try`/`finally` mutations, with byte-for-byte restore:
+
+  1. Add headings equivalent to `echo`, `echo`, and `echo 1` plus a link to
+     `#echo-1-1`; record that the current checker rejects the valid third GitHub
+     anchor.
+  2. Add a fragment containing `%0A::warning` and capture the current checker
+     output; record that an unescaped decoded control character can create a
+     line beginning `::warning`.
+
+  Restore the exact original bytes after each probe and prove no test text or
+  temporary heading remains in the worktree.
+
+- [x] **Step 3: Correct heading-collision and diagnostic safety behavior.**
+
+  Generate GitHub-style anchors by testing candidate anchors against the full
+  set already used, so `echo`, `echo`, `echo 1` becomes `echo`, `echo-1`, and
+  `echo-1-1`. Before any failure reaches `Write-Host`, reject control characters
+  decoded from a fragment or render them in a non-control escaped form. Never
+  interpolate decoded untrusted control characters into diagnostics.
+
+- [x] **Step 4: Prove both repairs and the normal gate.**
+
+  Repeat both mutations. The duplicate anchor must now pass. The control-fragment
+  input must fail safely: no line of captured output may begin `::warning`, and
+  the error must identify the malformed fragment without emitting raw controls.
+  Restore bytes after each probe, then run the unmutated checker successfully.
+
+- [x] **Step 5: Commit the bounded hardening.**
+
+  ```powershell
+  git add documentation/plans/alpha-a0-truthful-baseline.md documentation/progress.md documentation/plans/gap-registry.md scripts/check_docs.ps1
+  git commit -m "fix(docs): harden fragment validation"
+  ```
+
 ## Task 5: Gate A0 and hand off A1/A2/A3
 
 **Files:**

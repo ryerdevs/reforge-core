@@ -36,9 +36,20 @@ function ConvertTo-GitHubFragment([string]$heading) {
     return $slug.ToString().Trim('-')
 }
 
+function ConvertTo-DiagnosticText([string]$value) {
+    $safe = New-Object System.Text.StringBuilder
+    foreach ($character in $value.ToCharArray()) {
+        if ([char]::IsControl($character)) {
+            [void]$safe.Append(('\u{0:X4}' -f [int]$character))
+        } else {
+            [void]$safe.Append($character)
+        }
+    }
+    return $safe.ToString()
+}
+
 function Get-MarkdownFragments([string]$path) {
     $fragments = @{}
-    $duplicates = @{}
     $inFence = $false
 
     foreach ($line in [System.IO.File]::ReadAllLines($path, [System.Text.Encoding]::UTF8)) {
@@ -52,12 +63,11 @@ function Get-MarkdownFragments([string]$path) {
             $fragment = ConvertTo-GitHubFragment $Matches[1]
             if ([string]::IsNullOrEmpty($fragment)) { continue }
 
-            if ($duplicates.ContainsKey($fragment)) {
-                $duplicates[$fragment]++
-                $anchor = "$fragment-$($duplicates[$fragment])"
-            } else {
-                $duplicates[$fragment] = 0
-                $anchor = $fragment
+            $anchor = $fragment
+            $suffix = 0
+            while ($fragments.ContainsKey($anchor)) {
+                $suffix++
+                $anchor = "$fragment-$suffix"
             }
             $fragments[$anchor] = $true
         }
@@ -126,6 +136,7 @@ function Test-MarkdownFragments([System.IO.FileInfo]$source, [hashtable]$heading
 
         try { $fragment = [System.Uri]::UnescapeDataString($fragment).ToLowerInvariant() }
         catch { continue }
+        $diagnosticFragment = ConvertTo-DiagnosticText $fragment
 
         $targetPath = Get-TargetPath $source $relativeTarget
         if ($null -eq $targetPath) { continue }
@@ -135,7 +146,7 @@ function Test-MarkdownFragments([System.IO.FileInfo]$source, [hashtable]$heading
         if (-not (Test-Path -LiteralPath $targetPath -PathType Leaf)) {
             $sourcePath = Get-RelativePath $source.FullName
             $linkText = ($match.Groups['text'].Value -replace '\s+', ' ').Trim()
-            $found += "MISSING MARKDOWN TARGET FOR FRAGMENT '#$fragment': $sourcePath [$linkText] -> $target"
+            $found += "MISSING MARKDOWN TARGET FOR FRAGMENT '#$diagnosticFragment': $sourcePath [$linkText] -> $target"
             continue
         }
 
@@ -145,7 +156,7 @@ function Test-MarkdownFragments([System.IO.FileInfo]$source, [hashtable]$heading
         if (-not $headingCache[$targetPath].ContainsKey($fragment)) {
             $sourcePath = Get-RelativePath $source.FullName
             $linkText = ($match.Groups['text'].Value -replace '\s+', ' ').Trim()
-            $found += "MISSING MARKDOWN FRAGMENT '#$fragment': $sourcePath [$linkText] -> $target"
+            $found += "MISSING MARKDOWN FRAGMENT '#$diagnosticFragment': $sourcePath [$linkText] -> $target"
         }
     }
     return $found
