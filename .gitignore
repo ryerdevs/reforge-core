@@ -142,4 +142,6 @@ check_probe.txt
 
 # deepwork state (local only)
 .slim/deepwork/
+/.superpowers/
+/docs/superpowers/
 

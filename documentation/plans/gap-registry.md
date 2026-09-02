@@ -68,6 +68,39 @@ Never copy the frozen C++ source into this repository. See [ADR-0012](../adr/001
 | ARQ-D | **Block D — guild war end to end.** Implement the WAIT/ON_WAR lifecycle, finish conditions, persistence, and score-board wire; declaration, score handling, and no-penalty war PK are already recorded. Execution: G2.3a–G2.3c. | coder (guild lane) | OPEN | `source/reforge/game_core/src/guild.rs:181-206`; commit `06846f6` (declaration); commit `cb5e9a5` (war-PK no-penalty and event persistence lane) | G2.3a–G2.3c; war persistence | Guild wars cannot finish and clients cannot see the complete score ladder | G2.3a–G2.3c are closed with the `guild_war_lifecycle` verifier and a live end-to-end war |
 | ARQ-E | **Block E — collaborative alpha foundation.** Make the public Rust server reproducible and contributor-ready without claiming total parity: truthful state, Apache-2.0 alignment, public-boundary enforcement, clean-clone environment and lawful synthetic seed, human/agent documentation, contribution governance, and CI controls. Execution: A0–A5. | orchestrator (release) + librarian (docs) + fixer (automation) | IN PROGRESS — A0 baseline | [`alpha-collaborative-readiness.md`](alpha-collaborative-readiness.md) (approved 2026-09-02); [ADR-0015](../adr/0015-rust-only-public-repository.md) | A0 truthful baseline; no client, pack, binary, decompiled material, or frozen oracle in the public tree | An unreproducible or legally ambiguous preview wastes contributor time and can expose excluded material | All eight alpha definition-of-done conditions in the canonical plan have verified evidence; release notes declare a contributor preview and its known limits |
 
+### A0 — Current worktree disposition
+
+| ID | Work item | Owner | State | Evidence | Dependency | Risk | Exit criterion |
+|---|---|---|---|---|---|---|---|
+| A0.2 | **Classify the captured worktree and local agent artifacts.** The four modified Rust paths remain outside the index as two independently verifiable provisional continuations; all captured local agent files remain on disk and are ignored. | orchestrator (release) + librarian (docs) | IN PROGRESS — disposition recorded; source slices remain uncommitted | `git status --short`, `git diff --name-status`, and `git ls-files --others --exclude-standard` captured at HEAD `1c59cb1650499da09cb005b091fece6d0550fbec`; source diffs inspected at the paths below; the historical [world-entry crash record](../history/guardrails/world-entry-crash.md) remains read-only evidence | A0 Task 2; focused source-slice validation and review are later owner work | Mixing the world-entry safety and spawn-view changes could make either behavior or evidence non-atomic; local agent state must not enter the public index | Every captured path has exactly one disposition below; local state matches `.gitignore`; each source slice later lands only after focused tests, applicable mutation/negative coverage, current-doc evidence, and review under its exact named commit |
+
+#### A0.2 path-level disposition
+
+The table records the exact paths returned by the pre-ignore capture. `M` is a
+modified tracked path and `??` is an untracked path at that capture; each path
+has one disposition only.
+
+| Path | Captured state | Disposition | Named continuation or handling |
+|---|---|---|---|
+| `source/reforge/game_core/src/map.rs` | `M` | `continue in named slice` | `fix(world): normalize client-unsafe persisted positions`; do not stage in A0 Task 2; focused map safety tests and review remain required |
+| `source/reforge/server_realms/src/channel/entry.rs` | `M` | `continue in named slice` | `fix(world): normalize client-unsafe persisted positions`; do not stage in A0 Task 2; focused entry/load tests and review remain required |
+| `source/reforge/server_realms/src/channel/session.rs` | `M` | `continue in named slice` | `fix(world): normalize client-unsafe persisted positions`; do not stage in A0 Task 2; focused save/persistence tests and review remain required |
+| `source/reforge/game_core/src/ecs/systems/spawn.rs` | `M` | `continue in named slice` | `perf(world): limit initial spawn materialization`; do not stage in A0 Task 2; focused spawn-view and negative/boundary tests and review remain required |
+| `.superpowers/sdd/2026-09-01-auth-only-locale-bootstrap/progress.md` | `??` | `ignore as local tool state` | Retain on disk; excluded by `/.superpowers/`; never stage |
+| `.superpowers/sdd/2026-09-01-auth-only-locale-bootstrap/task-1-2-report.md` | `??` | `ignore as local tool state` | Retain on disk; excluded by `/.superpowers/`; never stage |
+| `.superpowers/sdd/2026-09-01-auth-only-locale-bootstrap/task-3-report.md` | `??` | `ignore as local tool state` | Retain on disk; excluded by `/.superpowers/`; never stage |
+| `.superpowers/sdd/alpha-a0-truthful-baseline/progress.md` | `??` | `ignore as local tool state` | Retain on disk; excluded by `/.superpowers/`; never stage |
+| `.superpowers/sdd/alpha-a0-truthful-baseline/task-1-brief.md` | `??` | `ignore as local tool state` | Retain on disk; excluded by `/.superpowers/`; never stage |
+| `.superpowers/sdd/alpha-a0-truthful-baseline/task-1-report.md` | `??` | `ignore as local tool state` | Retain on disk; excluded by `/.superpowers/`; never stage |
+| `.superpowers/sdd/alpha-a0-truthful-baseline/task-1-review-package.md` | `??` | `ignore as local tool state` | Retain on disk; excluded by `/.superpowers/`; never stage |
+| `.superpowers/sdd/alpha-a0-truthful-baseline/task-1r-brief.md` | `??` | `ignore as local tool state` | Retain on disk; excluded by `/.superpowers/`; never stage |
+| `.superpowers/sdd/alpha-a0-truthful-baseline/task-1r-report.md` | `??` | `ignore as local tool state` | Retain on disk; excluded by `/.superpowers/`; never stage |
+| `.superpowers/sdd/alpha-a0-truthful-baseline/task-1r-review-package.md` | `??` | `ignore as local tool state` | Retain on disk; excluded by `/.superpowers/`; never stage |
+| `.superpowers/sdd/alpha-a0-truthful-baseline/task-2-brief.md` | `??` | `ignore as local tool state` | Retain on disk; excluded by `/.superpowers/`; never stage |
+| `.superpowers/sdd/alpha-a0-truthful-baseline/task-2-report.md` | `??` | `ignore as local tool state` | Retain on disk; excluded by `/.superpowers/`; never stage; detailed evidence is recorded locally here |
+| `docs/superpowers/plans/2026-09-01-auth-only-locale-bootstrap.md` | `??` | `ignore as local tool state` | Retain on disk; excluded by `/docs/superpowers/`; never stage |
+| `docs/superpowers/specs/2026-09-01-auth-only-locale-bootstrap.md` | `??` | `ignore as local tool state` | Retain on disk; excluded by `/docs/superpowers/`; never stage |
+
 ### P0 — user priorities: caps and storage
 
 | ID | Work item | Owner | State | Evidence | Dependency | Risk | Exit criterion |
