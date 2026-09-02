@@ -5,15 +5,11 @@ Audience: Contributors
 Last verified: 2026-09-02
 ---
 
-> Tree state at verification: HEAD `ba72d58`. G0.1b–G0.1e landed in
-> `74f62a7` / `4aaff76` / `d924aaa` / `96e969f`. G0.2 closed in `7052f92`.
-> Test debt G3.2e/f closed in `bcd030e` / `d9e7997`. G3.2d partial closed in
-> `f120fe8` (3/6 tests green; G3.2g/h/i follow-ups). G3.1a/b closed in
-> `7052f92`. G0.1a remains blocked on the 2000/u16 client migration. The
-> README status matrix was expanded in `37c3073` and the changelog/handoff
-> refreshed in `62ef54f`. The admin_tui v1 operator panel landed in
-> `99ca804` (crate) + `4e21e38` (controller) + `d5a6a9d` (TUI) +
-> `64591ce` (deploy bundle) + `ba72d58` (CI).
+> Baseline snapshot (2026-09-02, before the Task 1 documentation commit):
+> captured HEAD is `42783e9c335ce56562258a18744418f60c24dcc3`. See
+> [progress.md](../progress.md) for volatile repository, deploy, listener, and
+> standard-gate facts; the rows below retain their own dated implementation
+> evidence.
 >
 > Gate policy (user decision 2026-08-30): **mixed by risk** — Oracle Gate and
 > real-client checks are required only where a desync/overflow risk exists
@@ -197,7 +193,9 @@ Never copy the frozen C++ source into this repository. See [ADR-0012](../adr/001
 
 - Phase 1 recorded 891 tests at its historical measurement point; recount after G1.1a and
   G1.2 belongs in `documentation/progress.md`, not as an unverified number here.
-- `source/deploy/win` still runs a pre-Phase-1 binary until G1.5 is complete.
+- Deploy and listener state is volatile; see [progress.md](../progress.md) for
+  the latest captured snapshot. G1.5 retains its dated server-side evidence and
+  remains open for real-client semantic verification.
 - This registry is the live tracker; the historical gap analysis retains its
   original ranking and is never edited.
 - `documentation/history-index.md` is the current archive-navigation successor.
