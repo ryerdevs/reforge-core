@@ -1,7 +1,7 @@
 {
 	"hostname":	"localhost",
 	"user":		"mt2",
-	"password":	"mt2",
+	"password":	"<MYSQL_PASSWORD>",
 	"database":	"player",
 	"port":		3306
 }

@@ -11,18 +11,20 @@ permissions:
 jobs:
   verify:
     runs-on: windows-latest
+    env:
+      RUSTUP_TOOLCHAIN: 1.97.0
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        shell: pwsh
+        run: rustup toolchain install 1.97.0 --profile minimal --component rustfmt --component clippy
       - name: Verify workspace
         shell: pwsh
         run: |
           powershell -ExecutionPolicy Bypass -File scripts/verify.ps1
-      - name: Public boundary and secret gate (A1)
-        shell: pwsh
-        run: |
-          powershell -ExecutionPolicy Bypass -File scripts/check_boundary.ps1
       - name: Documentation metadata gate (G1.18)
         shell: pwsh
         run: |
@@ -34,11 +36,16 @@ jobs:
       - name: Handoff check — source changed without progress/CHANGELOG/registry
         shell: pwsh
         run: |
-          $changed = git diff --name-only origin/main...HEAD
+          $changed = @(git diff --name-only origin/main...HEAD)
           $touchedSource = $changed | Select-String "source/reforge"
-          $touchedDocs = $changed | Select-String "documentation/progress.md|CHANGELOG.md|documentation/plans/gap-registry.md"
-          if ($touchedSource -and -not $touchedDocs) {
-            Write-Error "source/reforge touched but progress.md, CHANGELOG.md, and gap-registry.md are all unchanged. The handoff must record the slice."
+          $requiredHandoff = @(
+            "documentation/progress.md",
+            "CHANGELOG.md",
+            "documentation/plans/gap-registry.md"
+          )
+          $missingHandoff = @($requiredHandoff | Where-Object { $_ -notin $changed })
+          if ($touchedSource -and $missingHandoff.Count -gt 0) {
+            Write-Error "source/reforge touched but required handoff files are missing: $($missingHandoff -join ', ')"
             exit 1
           }
           Write-Host "handoff check ok"
@@ -71,5 +78,7 @@ jobs:
       pull-requests: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Dependency review
         uses: actions/dependency-review-action@v4

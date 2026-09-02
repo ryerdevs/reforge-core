@@ -10,7 +10,7 @@
 ## Open .worker/config/common/mysql.conf to change its mysql data connection
 host user password database
 ## e.g.
-localhost tools tools player
+localhost <MYSQL_USER> <MYSQL_PASSWORD> <MYSQL_DATABASE>
 #############################
 ### NEW WAY
 ## How to use pan.sh to import/export item/mob protos

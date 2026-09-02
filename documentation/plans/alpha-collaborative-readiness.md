@@ -100,17 +100,20 @@ present in the intended release tree.
 - [x] Cargo workspace metadata and deploy documentation identify Apache-2.0;
   historical records remain unchanged.
 - [x] `scripts/check_boundary.ps1` rejects forbidden tracked/status paths,
-  binary-looking outputs, and non-placeholder secret assignments while allowing
-  the documented protocol fixture.
+  generated client proto outputs, extensionless binary content, and
+  non-placeholder secret assignments in TOML, JSON, scripts, and legacy MySQL
+  templates while allowing the documented protocol fixture.
 - [x] The clean-tool contract states that lawful synthetic fixtures are allowed
   and proprietary client material stays outside the checkout as operator-only
   input/output.
 - [x] CI has read-only permissions, Dependabot schedules, and pull-request
   dependency review; no write token or production secret is granted.
-- [x] Required checks and branch protection for `main` and `beta` are explicitly
-  documented as GitHub repository-settings work.
-- [x] Local evidence: the clean boundary check passes, an untracked forbidden
-  fixture fails it, `check_docs.ps1` passes, and `git diff --check` is clean.
+- [x] The active GitHub repository ruleset protects `main` and `beta` (including
+  a future `beta` branch), requires pull requests with one fresh approval, and
+  requires the `verify` and `dependency-review` checks.
+- [x] Local evidence: the clean boundary check and its mutation suite pass,
+  untracked forbidden, secret, generated-output, and extensionless-binary
+  fixtures fail it, `check_docs.ps1` passes, and `git diff --check` is clean.
 
 **Exit:** a deliberate forbidden-file fixture fails locally/CI, repository
 metadata has one license, and the public checkout has an explicit supported

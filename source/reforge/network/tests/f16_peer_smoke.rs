@@ -13,11 +13,15 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use tokio::io::{AsyncRead, AsyncWriteExt, DuplexStream, duplex};
 use tokio::net::TcpListener;
 
 use network::handshake::{HandshakeConfig, perform_with};
 use network::{Connection, ConnectionRole, Framer, read_exact_size};
-use protocol::{TPacketCGLogin3, TPacketGCLoginFailure, header};
+use protocol::{
+    TPacketCGHandshake, TPacketCGLogin3, TPacketGCHandshake, TPacketGCLoginFailure, TPacketGCPhase,
+    header, phase,
+};
 
 /// Ruta del binario del example (compilado por `cargo test` antes de los tests).
 fn f16_peer_bin() -> PathBuf {
@@ -53,6 +57,32 @@ fn fake_cfg() -> HandshakeConfig {
     }
 }
 
+/// Lee el LOGIN3 del flujo de auth después del handshake.
+///
+/// Se mantiene separado porque el framer puede haber recibido el eco y el
+/// LOGIN3 en el mismo `read`; leer directamente del socket perdería los bytes
+/// que ya quedaron en el buffer del framer.
+async fn read_auth_login3<S: AsyncRead + Unpin>(
+    conn: &mut Connection<S>,
+    framer: &mut Framer,
+) -> Result<Vec<u8>, network::FramingError> {
+    framer.next_packet(conn).await
+}
+
+async fn recv_server_handshake(stream: &mut DuplexStream) -> TPacketGCHandshake {
+    let phase_bytes = read_exact_size(stream, TPacketGCPhase::SIZE)
+        .await
+        .expect("server sends GC_PHASE");
+    assert_eq!(
+        phase_bytes,
+        TPacketGCPhase::new(phase::HANDSHAKE).to_bytes()
+    );
+    let handshake_bytes = read_exact_size(stream, TPacketGCHandshake::SIZE)
+        .await
+        .expect("server sends GC_HANDSHAKE");
+    TPacketGCHandshake::from_bytes(&handshake_bytes).expect("valid GC_HANDSHAKE")
+}
+
 /// Lado servidor (fake-auth): handshake + LOGIN3 + GC_LOGIN_FAILURE.
 /// (G3.2f: tolerancias altas — 15s + 2 retries — aplicadas al fake-auth
 /// para tolerar la suite completa. La cobertura real contra el canal
@@ -76,7 +106,7 @@ async fn fake_auth_with_login3() -> std::io::Result<()> {
             h.delta
         );
         // LOGIN3 al auth = 68 B (65 + szLanguage[3], packet_info.cpp:157).
-        let login3 = read_exact_size(&mut conn, TPacketCGLogin3::SIZE_AUTH)
+        let login3 = read_auth_login3(&mut conn, &mut framer)
             .await
             .expect("peer envía LOGIN3");
         assert_eq!(login3[0], header::CG_LOGIN3);
@@ -125,6 +155,43 @@ async fn fake_auth_with_login3() -> std::io::Result<()> {
     );
     assert!(stdout.contains("WRONGPWD"), "status del failure");
     Ok(())
+}
+
+#[tokio::test]
+async fn auth_login3_survives_coalesced_echo_and_login3() {
+    let (server_side, mut client_side): (DuplexStream, DuplexStream) = duplex(1024);
+    let mut server = tokio::spawn(async move {
+        let mut conn = Connection::new(server_side);
+        let mut framer = Framer::new(network::ConnectionRole::Auth);
+        perform_with(&mut conn, &mut framer, 1_000_000, &fake_cfg())
+            .await
+            .expect("handshake completes");
+        read_auth_login3(&mut conn, &mut framer)
+            .await
+            .expect("coalesced LOGIN3 remains readable")
+    });
+
+    let hs = recv_server_handshake(&mut client_side).await;
+    let mut combined = TPacketCGHandshake::new(hs.dw_handshake, hs.dw_time, 0)
+        .to_bytes()
+        .to_vec();
+    combined.extend_from_slice(
+        &TPacketCGLogin3::new_auth("test", "1234", [0; 4], "es").to_bytes_auth(),
+    );
+    client_side
+        .write_all(&combined)
+        .await
+        .expect("echo and LOGIN3 are written together");
+
+    let result = tokio::time::timeout(Duration::from_secs(1), &mut server).await;
+    if result.is_err() {
+        server.abort();
+    }
+    let login3 = result
+        .expect("coalesced LOGIN3 must not wait on the socket")
+        .expect("server task completes");
+    assert_eq!(login3[0], header::CG_LOGIN3);
+    assert_eq!(login3.len(), TPacketCGLogin3::SIZE_AUTH);
 }
 
 /// Modo solo transporte (sin --login3): el peer cierra tras el eco; el fake
