@@ -20,16 +20,24 @@ implementation. Preset: OmO (`openai/gpt-5.6-luna`, variant `max`).
 - The captured local agent files are `ignore as local tool state`: they remain on disk and are excluded by the root `/.superpowers/` and `/docs/superpowers/` rules. No public `docs/` tree is created; the exact path-level table is in the [A0.2 worktree disposition](plans/gap-registry.md).
 - Standard gate: `scripts/verify.ps1` **FAILED** in normal `cargo test --workspace` (exit 101). Both `database/tests/wal_pg.rs` integration tests failed at `wal_pg.rs:27` because PostgreSQL at `127.0.0.1:5432` refused the connection. The optional ignored PG/WSL leg was not reached and is not counted as passed; `scripts/verify.ps1:24-55` therefore produced no final `OK: verificacion completa`.
 - Deploy snapshot: `source/deploy/win/server_realms.exe` exists with SHA-256 `4277E5A8C74E69B2D9643967B260C7E345641EBDB991848421435EC83375056B`; listeners 5432, 30001, and 30003 were all closed in the capture. The executable hash was observed independently; no deployed-HEAD equivalence is claimed.
-- Task 4R2 documentation-gate hardening (2026-09-02): the dependency-free
-  fragment check now allocates every heading anchor against the full used set
-  and escapes decoded control characters in diagnostics. The duplicate-anchor
-  mutation passes; the `%0A::warning` mutation fails with `\u000A` and no raw
-  `::warning` line. The post-fix missing-fragment marker is
-  `task-4r-final-mutation-fragment-does-not-exist`; the earlier
-  `task-4r-mutation-fragment-does-not-exist` remains only as Task 4R's expected
-  pre-fix false-success evidence. The four Rust worktree changes remain outside
-  this documentation slice.
-- Next action: make PostgreSQL available at `127.0.0.1:5432` and rerun `scripts/verify.ps1`.
+- Task 4R2/R3 documentation-gate hardening (2026-09-02): the dependency-free
+  fragment check now allocates every heading anchor against the full used set,
+  escapes decoded control characters, and sanitizes every failure record at the
+  single diagnostic output boundary. The duplicate-anchor mutation passes; the
+  `%0A::warning` and literal-BEL label/target mutations fail with escapes and
+  no raw C0/C1 controls or directive-looking lines; the post-fix
+  missing-fragment marker is `task-4r-final-mutation-fragment-does-not-exist`;
+  the earlier `task-4r-mutation-fragment-does-not-exist` remains only as Task
+  4R's expected pre-fix false-success evidence.
+- A0 truthful baseline (2026-09-02, `7442122`): live state reconciled to HEAD
+  `7442122`; local agent artifacts isolated and ignored; public-tooling and
+  deploy-boundary inventory published; A2.1–A2.5 reproducibility rows recorded
+  as planning blockers on A1. Tasks 1–4 exits accepted by review or direct
+  verification; only the optional PostgreSQL-gated verifier leg remains
+  unavailable.
+- Next action: proceed to A1 (license/public-boundary alignment and deterministic
+  boundary check); make PostgreSQL available at `127.0.0.1:5432` and rerun the
+  optional live-PG leg of `scripts/verify.ps1` when needed.
 
 ## Verified capabilities (not a Gate 2 closure)
 
@@ -64,6 +72,20 @@ All four work groups remain open in the [Gap Registry](plans/gap-registry.md):
 The registry's `C1`–`C12` rows are closed prerequisite fixes; they do not mark G0–G3 or Gate 2 as closed.
 
 ## Handoff
+
+- 2026-09-02 | **A0 truthful baseline closed (`7442122`):** the documentation
+  baseline for the collaborative alpha is complete and review-accepted. Live
+  state (progress + gap registry) is the only authority; local `.superpowers/`
+  and `docs/superpowers/` artifacts are ignored, not deleted; the public-tooling
+  and deploy-boundary inventory (`documentation/reference/public-tooling-boundary.md`)
+  classifies clean tooling, external operator prerequisites, and prohibited
+  material under ADR-0015; A2.1–A2.5 are owned registry blockers gated on A1.
+  Active-document fragments, heading collisions, and diagnostic safety are
+  enforced by `scripts/check_docs.ps1`. The four pre-existing Rust slices remain
+  uncommitted and untouched. The optional live-PG verifier leg is still
+  unavailable because PostgreSQL `127.0.0.1:5432` is not running (recorded, not
+  passed). **Next:** A1 license/boundary alignment and the deterministic
+  boundary check; then A2 reproducibility.
 
 - 2026-09-02 | **A0 Task 4R2 documentation-gate hardening:**
   `scripts/check_docs.ps1` now allocates every heading anchor against the full

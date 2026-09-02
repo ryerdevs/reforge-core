@@ -18,6 +18,15 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **A0 truthful baseline (2026-09-02, `7442122`):** the collaborative-alpha
+  A0 baseline is complete and review-accepted. Live state is the Gap Registry +
+  progress handoff; local agent artifacts are ignored, not deleted; the
+  public-tooling and deploy-boundary inventory classifies clean tooling,
+  external operator prerequisites, and prohibited material under ADR-0015; and
+  A2.1–A2.5 reproducibility work is recorded as owned blockers gated on A1.
+  The optional live-PG verifier leg remains unavailable (PostgreSQL
+  `127.0.0.1:5432` not running) and is recorded, not passed; see the
+  [live handoff](documentation/progress.md) for volatile state.
 - **Baseline verification (2026-09-02):** the standard verifier stopped at the
   WAL PostgreSQL tests because `127.0.0.1:5432` was unavailable; see the
   [live handoff](documentation/progress.md) for volatile state.

@@ -589,7 +589,7 @@ the existing Rust workspace verification scripts.
 - Modify: `CHANGELOG.md`
 - Test: `scripts/verify.ps1`, `scripts/check_docs.ps1`, Git status
 
-- [ ] **Step 1: Run the final A0 evidence set.**
+- [x] **Step 1: Run the final A0 evidence set.**
 
   ```powershell
   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check_docs.ps1
@@ -601,13 +601,13 @@ the existing Rust workspace verification scripts.
   Expected: documented result for each command; no unintended tracked material;
   optional external-client/oracle legs reported only as available or unavailable.
 
-- [ ] **Step 2: Record only verified A0 completion.**
+- [x] **Step 2: Record only verified A0 completion.**
 
   Mark `ARQ-E`/A0 complete only if the Task 1–4 exits are evidenced. Otherwise
   leave the exact failing child row `OPEN` or `BLOCKED`; never convert an audit
   finding into a completion claim.
 
-- [ ] **Step 3: Request the planned architecture gate.**
+- [x] **Step 3: Request the planned architecture gate.**
 
   Give the reviewer the changed-path list, verifier output, public-tooling
   inventory, retained dirty-slice disposition, and the specific question:
@@ -615,7 +615,7 @@ the existing Rust workspace verification scripts.
   documentation governance independently executable without creating another
   source of truth?”
 
-- [ ] **Step 4: Commit the A0 handoff after the gate is reconciled.**
+- [x] **Step 4: Commit the A0 handoff after the gate is reconciled.**
 
   ```powershell
   git add documentation/progress.md documentation/plans/gap-registry.md CHANGELOG.md
