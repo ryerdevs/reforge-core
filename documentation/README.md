@@ -21,6 +21,7 @@ duplicate volatile project status.
 | What is the alpha scope and execution plan? | [Collaborative alpha readiness](plans/alpha-collaborative-readiness.md) and [A0 plan](plans/alpha-a0-truthful-baseline.md) |
 | What is the database shape? | [Schema reference](schema.md) |
 | What is the supported login wire? | [Login-flow reference](reference/login-flow.md) |
+| What public tools and external prerequisites apply? | [Public tools and external prerequisites](reference/public-tooling-boundary.md) |
 | Which rules prevent repeat failures? | [Rules](rules.md) |
 | Why were architecture choices made? | [Architecture decisions](adr/) |
 | What changed over time? | [Changelog](../CHANGELOG.md) |
