@@ -56,6 +56,14 @@ The registry's `C1`–`C12` rows are closed prerequisite fixes; they do not mark
 
 ## Handoff
 
+- 2026-09-02 | **A0 Task 2 artifact isolation:** commit `7affb25`
+  (`chore(repo): isolate local agent artifacts`) records the disposition; local
+  `.superpowers/` and `docs/superpowers/` files remain on disk and are ignored,
+  not deleted. The two Rust slices remain uncommitted:
+  `fix(world): normalize client-unsafe persisted positions` (map/entry/session)
+  and `perf(world): limit initial spawn materialization` (spawn). **Next A0
+  task:** Task 3, publish the [tooling and deploy-boundary inventory](plans/alpha-a0-truthful-baseline.md#task-3-publish-the-tooling-and-deploy-boundary-inventory).
+
 - 2026-09-02 | **Collaborative alpha foundation (user-approved plan):** alpha is a contributor preview, not a claim of total gameplay parity. Public scope is the complete authored Rust server, clean tools, documentation, scripts, and lawful synthetic/versioned development data; client source/packs/binaries, decompiled/proprietary material, and the frozen C++ oracle remain external per ADR-0015. Apache-2.0 is the chosen public license. The canonical [A0–A5 plan](plans/alpha-collaborative-readiness.md) begins with a truthful baseline and ends only after clean-clone reproducibility, contribution governance, and enforceable CI gates are evidenced. `ARQ-E` tracks the work; implementation has not yet begun.
 
 - 2026-09-02 | **OpenCode 2 subagent correction (orchestrator):** the current OpenCode service/API was healthy, but a completed child could remain `unconfirmed` in task tracking; a continuation was therefore rejected and no duplicate was created. `AGENTS.md` and `documentation/rules.md` now require lifecycle-based handling: a bounded child is never resumed, re-prompted, or duplicated under live/unconfirmed state; background cancellation uses `POST /api/session/<id>/interrupt` followed by API verification. The cancelled crash-diagnostics research lane is not evidence and must be re-scoped only after its workflow is reliable.

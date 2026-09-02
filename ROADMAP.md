@@ -2,7 +2,7 @@
 Type: Plan
 Status: Current
 Audience: Contributors, maintainers
-Last verified: 2026-08-30
+Last verified: 2026-09-02
 ---
 
 # ROADMAP — reforge-core server
@@ -13,6 +13,12 @@ Last verified: 2026-08-30
 > (see [document authority](documentation/reference/document-authority.md) for
 > precedence). This file preserves the F0–F7 phase design and dated execution
 > history; older values quoted below may be superseded by the registry.
+
+> **A0 navigation note (2026-09-02):** A0 classification is tracked by
+> **ARQ-E** in the [Gap Registry](documentation/plans/gap-registry.md). Current
+> status remains in the [Gap Registry](documentation/plans/gap-registry.md) /
+> [progress handoff](documentation/progress.md) pair; this roadmap is not a
+> third current-state source.
 
 > **Living plan.** This document is the project's master plan and is updated every session.
 > Tracking methodology: `AGENTS.md` (rules + verified state) + `CHANGELOG.md` (chronological record) + `ROADMAP.md` (this plan) + `documentation/adr/` (ADRs).

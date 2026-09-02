@@ -21,6 +21,13 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 - **Baseline verification (2026-09-02):** the standard verifier stopped at the
   WAL PostgreSQL tests because `127.0.0.1:5432` was unavailable; see the
   [live handoff](documentation/progress.md) for volatile state.
+- **A0 artifact isolation (2026-09-02, `7affb25`):** the baseline classified
+  the pending Rust changes into the two named continuations `fix(world):
+  normalize client-unsafe persisted positions` and `perf(world): limit initial
+  spawn materialization`, and excluded local `.superpowers/` and
+  `docs/superpowers/` artifacts without deleting them; see the [A0.2 worktree
+  disposition](documentation/plans/gap-registry.md#current-worktree-disposition)
+  in the Gap Registry for volatile details.
 - **OpenCode 2 coordination:** `AGENTS.md` and the operational guardrails now
   require lifecycle-based subagent handling: bounded lanes, no duplicate or
   speculative resume under uncertain state, and verified API interruption.

@@ -2,7 +2,7 @@
 Type: Reference
 Status: Current
 Audience: Contributors, maintainers
-Last verified: 2026-08-30
+Last verified: 2026-09-02
 ---
 
 # Phase map — reforge-core
@@ -14,6 +14,11 @@ state at a glance). It does not track per-item status:
 - Live handoff / current snapshot: [progress.md](progress.md)
 - Precedence when documents disagree: [document-authority.md](reference/document-authority.md)
 - Long-form phase history: [`ROADMAP.md`](../ROADMAP.md) (historical master, snapshot-style)
+
+> **A0 navigation note (2026-09-02):** A0 classification is tracked by
+> **ARQ-E** in the [Gap Registry](plans/gap-registry.md). Current status remains
+> in the [Gap Registry](plans/gap-registry.md) / [progress handoff](progress.md)
+> pair; this phase map is navigational, not a third current-state source.
 
 ## Phase states (2026-08-30)
 

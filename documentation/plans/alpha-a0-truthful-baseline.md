@@ -164,7 +164,7 @@ the existing Rust workspace verification scripts.
 - Modify: `documentation/plans/gap-registry.md`
 - Test: Git index/status commands
 
-- [ ] **Step 1: Build a disposition table for every dirty path.**
+- [x] **Step 1: Build a disposition table for every dirty path.**
 
   Run:
 
@@ -179,7 +179,7 @@ the existing Rust workspace verification scripts.
   state`, or `requires owner decision`. Never use `git clean`, `reset --hard`,
   or recursive deletion in this task.
 
-- [ ] **Step 2: Keep generated agent artifacts local without deleting them.**
+- [x] **Step 2: Keep generated agent artifacts local without deleting them.**
 
   Add only the missing root ignore entries for local agent execution state:
 
@@ -191,7 +191,7 @@ the existing Rust workspace verification scripts.
   Do not ignore `documentation/`, and do not create a new public `docs/` tree.
   The project policy reserves `documentation/` for current documentation.
 
-- [ ] **Step 3: Split source edits before any alpha contract work depends on them.**
+- [x] **Step 3: Split source edits before any alpha contract work depends on them.**
 
   The current pending paths are `spawn.rs`, `map.rs`, `channel/entry.rs`, and
   `channel/session.rs`. Inspect each diff and group it into independently
@@ -201,7 +201,7 @@ the existing Rust workspace verification scripts.
   test, a mutation/negative test where applicable, current-doc evidence, and a
   conventional commit.
 
-- [ ] **Step 4: Prove the release index excludes local artifacts.**
+- [x] **Step 4: Prove the release index excludes local artifacts.**
 
   Run:
 
@@ -213,11 +213,58 @@ the existing Rust workspace verification scripts.
   Expected: the first command names `.gitignore`; the second contains no local
   agent state, client/oracle material, deploy binaries, logs, dumps, or backups.
 
-- [ ] **Step 5: Commit local-artifact hygiene separately.**
+- [x] **Step 5: Commit local-artifact hygiene separately.**
 
   ```powershell
   git add .gitignore documentation/progress.md documentation/plans/gap-registry.md
   git commit -m "chore(repo): isolate local agent artifacts"
+  ```
+
+## Task 2R: Record artifact-hygiene closeout on every required summary
+
+**Files:**
+- Modify: `documentation/plans/alpha-a0-truthful-baseline.md`
+- Modify: `CHANGELOG.md`
+- Modify: `documentation/progress.md`
+- Modify: `ROADMAP.md`
+- Modify: `documentation/roadmap.md`
+- Test: `scripts/check_docs.ps1`, `git diff --check`
+
+- [x] **Step 1: Add dated historical evidence to the changelog.**
+
+  Under `CHANGELOG.md` → `[Unreleased]` → `Changed`, record that the
+  2026-09-02 A0 baseline classified the pending Rust slices and excluded local
+  `.superpowers/` and `docs/superpowers/` artifacts without deleting them.
+  Link to the registry for volatile disposition details.
+
+- [x] **Step 2: Add one concise dated handoff entry.**
+
+  In `documentation/progress.md`, record the committed artifact-isolation
+  result, the two still-uncommitted named Rust slices, and the next A0 task.
+  Do not restate the disposition table.
+
+- [x] **Step 3: Keep both roadmap surfaces navigational, not live-state sources.**
+
+  In root `ROADMAP.md` and `documentation/roadmap.md`, add a 2026-09-02
+  navigation note that A0 classification is tracked by `ARQ-E` in the registry
+  and that current status remains in the registry/progress pair. Update each
+  document's metadata only after checking that this claim is true.
+
+- [x] **Step 4: Validate the closeout.**
+
+  ```powershell
+  powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check_docs.ps1
+  git diff --check
+  ```
+
+  Expected: no document becomes a third current-state source, and metadata/link
+  validation passes.
+
+- [x] **Step 5: Commit the bounded closeout.**
+
+  ```powershell
+  git add documentation/plans/alpha-a0-truthful-baseline.md CHANGELOG.md documentation/progress.md ROADMAP.md documentation/roadmap.md
+  git commit -m "docs(status): record artifact hygiene closeout"
   ```
 
 ## Task 3: Publish the tooling and deploy-boundary inventory
