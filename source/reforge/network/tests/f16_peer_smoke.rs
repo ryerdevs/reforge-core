@@ -171,7 +171,12 @@ async fn auth_login3_survives_coalesced_echo_and_login3() {
             .expect("coalesced LOGIN3 remains readable")
     });
 
-    let hs = recv_server_handshake(&mut client_side).await;
+    let hs = tokio::time::timeout(
+        Duration::from_secs(1),
+        recv_server_handshake(&mut client_side),
+    )
+    .await
+    .expect("server handshake must arrive promptly");
     let mut combined = TPacketCGHandshake::new(hs.dw_handshake, hs.dw_time, 0)
         .to_bytes()
         .to_vec();
