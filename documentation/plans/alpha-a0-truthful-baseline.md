@@ -48,7 +48,7 @@ the existing Rust workspace verification scripts.
 - Modify: `documentation/plans/gap-registry.md`
 - Test: `scripts/status.ps1`, `scripts/verify.ps1`, `scripts/check_docs.ps1`
 
-- [ ] **Step 1: Capture repository and deploy facts without changing files.**
+- [x] **Step 1: Capture repository and deploy facts without changing files.**
 
   Run:
 
@@ -63,7 +63,7 @@ the existing Rust workspace verification scripts.
   (or its absence), listener state, and command outcomes. Do not infer a
   deployed hash from an old handoff entry.
 
-- [ ] **Step 2: Run the standard project verifier only after the snapshot is captured.**
+- [x] **Step 2: Run the standard project verifier only after the snapshot is captured.**
 
   Run:
 
@@ -75,7 +75,7 @@ the existing Rust workspace verification scripts.
   blocker. The ignored PG/WSL leg is recorded as optional availability, never
   as a pass if its prerequisite is absent.
 
-- [ ] **Step 3: Replace stale live claims with evidence-linked current facts.**
+- [x] **Step 3: Replace stale live claims with evidence-linked current facts.**
 
   In `progress.md`, keep a short Current section that names the captured HEAD,
   last standard-gate result, deploy state, and one next action. Move no history
@@ -83,7 +83,7 @@ the existing Rust workspace verification scripts.
   header, replace stale “tree state at verification” text with the same HEAD
   and a link to `progress.md` for volatile runtime facts.
 
-- [ ] **Step 4: Verify documentation and whitespace.**
+- [x] **Step 4: Verify documentation and whitespace.**
 
   Run:
 
@@ -95,7 +95,7 @@ the existing Rust workspace verification scripts.
   Expected: `OK: check_docs (metadata + live state files)` and no whitespace
   errors.
 
-- [ ] **Step 5: Commit the truth snapshot.**
+- [x] **Step 5: Commit the truth snapshot.**
 
   ```powershell
   git add documentation/progress.md documentation/plans/gap-registry.md
