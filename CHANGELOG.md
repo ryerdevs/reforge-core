@@ -18,6 +18,18 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **Two Rust world slices committed (2026-09-02):** the long-held uncommitted
+  world changes were committed as two slices after passing the full verifier
+  gate (fmt + 874 tests + clippy + diff-check; the PG-gated ignored leg remains
+  unavailable and is not counted as passed). `b611eb2 fix(world): normalize
+  client-unsafe persisted positions` (map.rs, channel/entry.rs,
+  channel/session.rs) routes load and save position normalization through
+  `MapData` so the client is never sent a coordinate its pack cannot load
+  (map 41 falls back to the known village; other maps use the first movable
+  cell; mutex poisoning handled; the persisted copy is corrected without
+  touching motion). `1a9f179 perf(world): limit initial spawn materialization`
+  (spawn.rs) drops spawn/despawn radii so map entry no longer floods all map-41
+  spawns, with the inclusive-boundary and hysteresis verifiers updated.
 - **A1 boundary follow-up (2026-09-02):** the boundary checker now rejects
   generated client proto outputs and extensionless binary content, and scans
   JSON and positional MySQL templates without printing credential values;

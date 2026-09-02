@@ -16,7 +16,7 @@ implementation. Preset: OmO (`openai/gpt-5.6-luna`, variant `max`).
 ## Current
 
 - Baseline snapshot (2026-09-02, before the Task 1 documentation commit): captured HEAD is `42783e9c335ce56562258a18744418f60c24dcc3`. The captured worktree had four modified tracked Rust files (`spawn.rs`, `map.rs`, `channel/entry.rs`, and `channel/session.rs`) and untracked `.superpowers/` and `docs/` directories; Task 1 leaves them untouched.
-- Task 2 disposition (captured at HEAD `1c59cb1650499da09cb005b091fece6d0550fbec`): `map.rs`, `channel/entry.rs`, and `channel/session.rs` are `continue in named slice` for the provisional `fix(world): normalize client-unsafe persisted positions` continuation; `ecs/systems/spawn.rs` is `continue in named slice` for the separate provisional `perf(world): limit initial spawn materialization` continuation. None is staged or committed by A0 Task 2; each still needs focused tests, applicable mutation/negative coverage, current-document confirmation, and review before its named commit.
+- Task 2 disposition (captured at HEAD `1c59cb1650499da09cb005b091fece6d0550fbec`): `map.rs`, `channel/entry.rs`, and `channel/session.rs` were held as `continue in named slice` for the provisional `fix(world): normalize client-unsafe persisted positions` continuation; `ecs/systems/spawn.rs` as the separate provisional `perf(world): limit initial spawn materialization` continuation. Both slices were later committed after passing the full verifier gate (`971afe9` era baseline): `b611eb2 fix(world): normalize client-unsafe persisted positions` and `1a9f179 perf(world): limit initial spawn materialization`, each with focused regression and mutation verifiers.
 - The captured local agent files are `ignore as local tool state`: they remain on disk and are excluded by the root `/.superpowers/` and `/docs/superpowers/` rules. No public `docs/` tree is created; the exact path-level table is in the [A0.2 worktree disposition](plans/gap-registry.md).
 - Standard gate: the fresh `scripts/verify.ps1` run passed the public boundary,
   boundary mutation suite, `fmt --check`, normal `cargo test --workspace` (874
@@ -91,6 +91,24 @@ All four work groups remain open in the [Gap Registry](plans/gap-registry.md):
 The registry's `C1`–`C12` rows are closed prerequisite fixes; they do not mark G0–G3 or Gate 2 as closed.
 
 ## Handoff
+
+- 2026-09-02 | **Two Rust world slices committed and verified on the push
+  branch:** the four pre-existing uncommitted Rust files were committed as two
+  slices after passing the full verifier gate (fmt + 874 tests + clippy +
+  diff-check, `OK: verificacion completa`; the PG-gated ignored leg remains
+  unavailable and is not counted as passed). `b611eb2 fix(world): normalize
+  client-unsafe persisted positions` (map.rs + channel/entry.rs +
+  channel/session.rs) routes load and save position normalization through
+  `MapData` so the client is never sent a coordinate its pack cannot load
+  (map 41 falls back to the known village; other maps use the first movable
+  cell; mutex poisoning handled; the persisted copy is corrected without
+  touching motion). `1a9f179 perf(world): limit initial spawn materialization`
+  (spawn.rs) drops `SPAWN_VIEW` 300_000→10_000 and `DESPAWN_RADIUS`
+  310_000→15_000 so map entry no longer floods all map-41 spawns, with the
+  inclusive-boundary and hysteresis verifiers updated. Both were committed to
+  `chore/alpha-foundation-push` alongside the 19 A0/A1 documentation commits
+  for the protected-PR release. **Next:** update the live A2 handoff docs and
+  push the branch / open the PR; then A2 reproducible contributor environment.
 
 - 2026-09-02 | **A1 boundary follow-up:** the boundary checker now rejects
   generated client proto outputs by path, detects extensionless binary content
