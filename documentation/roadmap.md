@@ -11,6 +11,10 @@ This page is the **sole phase map** (what F0–F7 mean and their phase-level
 state at a dated glance). It does not track per-item, runtime, or worktree
 status. The phase states below are a map snapshot, not a live status source:
 
+Its metadata intentionally remains `Type: Reference` as the navigation
+exception defined by the [documentation policy](DOCUMENTATION.md) and
+[document authority](reference/document-authority.md).
+
 - Live per-item state: [Gap Registry](plans/gap-registry.md)
 - Live handoff / current snapshot: [progress.md](progress.md)
 - Precedence when documents disagree: [document-authority.md](reference/document-authority.md)

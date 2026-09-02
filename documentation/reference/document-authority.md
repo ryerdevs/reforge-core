@@ -55,6 +55,10 @@ status document and its durable result belongs in the registry or handoff.
   its date), `Superseded` (replaced by a named successor).
 - Item states (registry): `OPEN`, `IN PROGRESS`, `BLOCKED`, `CLOSED`.
 
+The maintained phase map, [`documentation/roadmap.md`](../roadmap.md), keeps
+`Type: Reference` as a navigation exception. It is a dated phase-level view,
+not a per-item plan or a live status source.
+
 ## Hard rules
 
 - A claim of "done" must name a commit, a command, or a real-client check. A
@@ -64,6 +68,10 @@ status document and its durable result belongs in the registry or handoff.
 - Every live document carries `Type / Status / Audience / Last verified`.
 - README and reference/plan summaries must link to the two live files instead of
   restating volatile status.
+- The fragment check is deliberately narrow: relative Markdown targets on the
+  active documentation surface are checked against GitHub-compatible heading
+  fragments; external URLs, `mailto:` links, generated artifacts, and archived
+  document sources are outside its scope.
 - When code changes behavior, the same slice updates: the registry row (or a
   new one), `progress.md`, and — if a decision was made — an ADR first.
 

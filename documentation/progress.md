@@ -20,6 +20,12 @@ implementation. Preset: OmO (`openai/gpt-5.6-luna`, variant `max`).
 - The captured local agent files are `ignore as local tool state`: they remain on disk and are excluded by the root `/.superpowers/` and `/docs/superpowers/` rules. No public `docs/` tree is created; the exact path-level table is in the [A0.2 worktree disposition](plans/gap-registry.md).
 - Standard gate: `scripts/verify.ps1` **FAILED** in normal `cargo test --workspace` (exit 101). Both `database/tests/wal_pg.rs` integration tests failed at `wal_pg.rs:27` because PostgreSQL at `127.0.0.1:5432` refused the connection. The optional ignored PG/WSL leg was not reached and is not counted as passed; `scripts/verify.ps1:24-55` therefore produced no final `OK: verificacion completa`.
 - Deploy snapshot: `source/deploy/win/server_realms.exe` exists with SHA-256 `4277E5A8C74E69B2D9643967B260C7E345641EBDB991848421435EC83375056B`; listeners 5432, 30001, and 30003 were all closed in the capture. The executable hash was observed independently; no deployed-HEAD equivalence is claimed.
+- Task 4R documentation repair (2026-09-02): the phase-map `Type: Reference`
+  exception is explicit in the policy and authority reference; eight active
+  document fragments were repaired. The dependency-free fragment check is
+  mutation-tested and its unmutated run passes; it does not claim generic link
+  validation. The four Rust worktree changes remain outside this documentation
+  slice.
 - Next action: make PostgreSQL available at `127.0.0.1:5432` and rerun `scripts/verify.ps1`.
 
 ## Verified capabilities (not a Gate 2 closure)
@@ -47,7 +53,7 @@ implementation. Preset: OmO (`openai/gpt-5.6-luna`, variant `max`).
 
 All four work groups remain open in the [Gap Registry](plans/gap-registry.md):
 
-- [ ] **G0 — Architecture and storage:** G0.1b–G0.1e are implementation-complete for their focused checks and ready for Oracle Gate, but remain open; G0.1a is safely enforced at 200 but blocked at the requested 2000 by the current BYTE item-count wire. [G0.2 disk storage is closed](plans/gap-registry.md#L79) with the registry's dated 2026-08-30 evidence.
+- [ ] **G0 — Architecture and storage:** G0.1b–G0.1e are implementation-complete for their focused checks and ready for Oracle Gate, but remain open; G0.1a is safely enforced at 200 but blocked at the requested 2000 by the current BYTE item-count wire. [G0.2 disk storage is closed](plans/gap-registry.md) with the registry's dated 2026-08-30 evidence.
 - [ ] **G1 — Gates, documentation, and deployment:** normal/ignored verification, formatting, documentation CI, and redeployment remain open; G1.14b's immutable-history decision is closed, and changelog freshness/current archive navigation are reconciled.
 - [ ] **G2 — Gameplay and content:** the remaining gameplay, social, quest, GM, data-channel, and deferred-content rows remain open in the registry.
 - [ ] **G3 — Hygiene and test debt:** stale comments and ignored-test policy remain to be executed and verified.
@@ -55,6 +61,15 @@ All four work groups remain open in the [Gap Registry](plans/gap-registry.md):
 The registry's `C1`–`C12` rows are closed prerequisite fixes; they do not mark G0–G3 or Gate 2 as closed.
 
 ## Handoff
+
+- 2026-09-02 | **A0 Task 4R documentation-contract repair:** active Markdown
+  fragments now use their actual GitHub-compatible heading slugs (or no anchor
+  where a line number was cited). `scripts/check_docs.ps1` passes on the
+  unmutated tree and fails the unique `task-4r-mutation-fragment-does-not-exist`
+  mutation with the source path and link text; the mutation source was restored
+  byte-for-byte. The checker intentionally excludes external URLs, `mailto:`,
+  generated artifacts, and `documentation/history/`. Next action: orchestrator
+  validation; the four Rust worktree changes remain unstaged and untouched.
 
 - 2026-09-02 | **A0 Task 2 artifact isolation:** commit `7affb25`
   (`chore(repo): isolate local agent artifacts`) records the disposition; local

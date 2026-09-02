@@ -44,7 +44,7 @@ The following section is a dated snapshot, not a present-tense status report.
 - **G0 (as recorded on 2026-08-30):** G0.1a was safely capped at 200 because
   the item-count wire was byte-sized; G0.1b–G0.1e were locally checked and
   awaited their Oracle Gates. The snapshot's statement that G0.2 remained open
-  is superseded by the [Gap Registry's cap and storage section](documentation/plans/gap-registry.md#p0-user-priorities-caps-and-storage),
+  is superseded by the [Gap Registry's cap and storage section](documentation/plans/gap-registry.md#p0--user-priorities-caps-and-storage),
   which records the later closure evidence.
 - **G1–G3 (as recorded on 2026-08-30):** verification/deployment/documentation,
   gameplay/content, and hygiene work were described as open in the [Gap

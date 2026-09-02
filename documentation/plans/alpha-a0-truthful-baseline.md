@@ -366,8 +366,9 @@ the existing Rust workspace verification scripts.
 
   - Root README: purpose, alpha limitations, supported first path, and links.
   - `documentation/README.md`: human navigation, no model/preset/team internals.
-  - `documentation/roadmap.md`: sole phase map; set `Type: Plan` if it remains
-    the active phase map.
+  - `documentation/roadmap.md`: sole phase map and navigation reference; keep
+    its `Type: Reference` exception explicit in the documentation policy and
+    authority reference.
   - Root ROADMAP: change its metadata and introduction to an explicitly
     historical compatibility narrative. Remove or relabel every present-tense
     `live`/`current` status claim in it, including the stale G0.2 and backup
@@ -391,7 +392,7 @@ the existing Rust workspace verification scripts.
   current-plan claim in `reference/login-flow.md` with a link to the historical
   plan, and reconcile the README claims about gold, quest actions, and locale
   with their current registry/ADR evidence. Correct the A0.2 changelog link to
-  the exact `#a0-current-worktree-disposition` fragment. Do not change
+  the exact `#a0--current-worktree-disposition` fragment. Do not change
   historical files.
 
 - [x] **Step 5: Run current-document checks.**
@@ -411,6 +412,74 @@ the existing Rust workspace verification scripts.
   ```powershell
   git add README.md ROADMAP.md documentation CHANGELOG.md AGENTS.md
   git commit -m "docs: simplify current-state authority"
+  ```
+
+## Task 4R: Repair documentation-contract and fragment-validation gaps
+
+**Files:**
+- Modify: `documentation/plans/alpha-a0-truthful-baseline.md`
+- Modify: `documentation/DOCUMENTATION.md`
+- Modify: `documentation/reference/document-authority.md`
+- Modify: `documentation/roadmap.md`
+- Modify: `README.md`
+- Modify: `ROADMAP.md`
+- Modify: `CHANGELOG.md`
+- Modify: `documentation/progress.md`
+- Modify: `documentation/plans/gap-registry.md`
+- Modify: `documentation/adr/0008-data-layer.md`
+- Modify: `scripts/check_docs.ps1`
+- Test: mutation test plus `scripts/check_docs.ps1`, `git diff --check`
+
+- [x] **Step 1: Resolve the phase-map type contract before changing code.**
+
+  The maintained phase map is navigational, not the per-item tracker or a live
+  snapshot. Keep `documentation/roadmap.md` as `Type: Reference`, as required
+  by the existing deterministic checker, and make that explicit exception in
+  `documentation/DOCUMENTATION.md` and
+  `documentation/reference/document-authority.md`. Remove the conflicting
+  `Type: Plan` direction from this plan. Do not create another status source.
+
+- [x] **Step 2: Demonstrate the missing validation with a reversible mutation.**
+
+  Before changing `scripts/check_docs.ps1`, temporarily replace one known-good
+  fragment in `README.md` with a unique nonexistent fragment. Run the checker
+  and record that it incorrectly exits successfully. Restore the exact original
+  file in a `finally` block or equivalent, and prove the worktree contains no
+  leftover test mutation. This is the required negative/mutation test for the
+  link-validator fix.
+
+- [x] **Step 3: Add the smallest fragment-aware check to the existing gate.**
+
+  Extend `scripts/check_docs.ps1` to inspect Markdown links from current
+  versioned entry documents and `documentation/` outside `documentation/history/`.
+  For relative Markdown targets with a `#fragment`, resolve the target inside
+  the repository, derive GitHub-compatible heading fragments from its headings,
+  and fail with source path/link text when the fragment is absent. Do not parse
+  external URLs, `mailto:`, generated artifacts, or archived-document sources;
+  preserve the archive as read-only. Keep the implementation dependency-free
+  and narrow enough to validate the active documentation surface.
+
+- [x] **Step 4: Correct every identified active-document fragment.**
+
+  Repair the known links in `README.md`, `ROADMAP.md`, `CHANGELOG.md`,
+  `documentation/progress.md`, `documentation/adr/0008-data-layer.md`, and
+  `documentation/plans/gap-registry.md`. Use the actual GitHub heading slugs,
+  including the double hyphen produced by spaces around an em dash; remove a
+  line-number fragment rather than pretending it is a heading. Re-run the new
+  checker until no active-document fragment failure remains.
+
+- [x] **Step 5: Prove the new check and record truthful evidence.**
+
+  Repeat the Step 2 mutation: the checker must now fail and name the unique
+  fragment. Restore the source, run the unmutated checker successfully, then
+  record the exact checks in the Task 4R report. Do not
+  claim generic link validation beyond the implemented fragment scope.
+
+- [x] **Step 6: Commit the repair.**
+
+  ```powershell
+  git add documentation/plans/alpha-a0-truthful-baseline.md documentation/DOCUMENTATION.md documentation/reference/document-authority.md documentation/roadmap.md README.md ROADMAP.md CHANGELOG.md documentation/progress.md documentation/plans/gap-registry.md documentation/adr/0008-data-layer.md scripts/check_docs.ps1
+  git commit -m "docs: validate current documentation fragments"
   ```
 
 ## Task 5: Gate A0 and hand off A1/A2/A3

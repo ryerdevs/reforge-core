@@ -57,17 +57,17 @@ checks; they are not build inputs for this repository.
 - The effective gold cap is `2_000_000_000`; the G0.1e cap row is closed under
   focused and property evidence. Wallet non-negative constraints are described
   in the [schema reference](documentation/schema.md). See the [Gap Registry's
-  cap section](documentation/plans/gap-registry.md#p0-user-priorities-caps-and-storage)
+  cap section](documentation/plans/gap-registry.md#p0--user-priorities-caps-and-storage)
   for status evidence.
 - The native quest DSL and runtime are accepted by [ADR-0016](documentation/adr/0016-quest-system-dsl-and-runtime.md).
   Target/affect, timer, reward, letter, and quest-state actions are implemented;
   `clear_letter`, `say_item_vnum`, `notice_multiline`, and `input_number` remain
-  open in G2.5. See the [gameplay gap section](documentation/plans/gap-registry.md#p2-gameplay-and-content-gaps).
+  open in G2.5. See the [gameplay gap section](documentation/plans/gap-registry.md#p2--gameplay-and-content-gaps).
 - Locale bootstrap is authentication/loading-only. Auth answers
   `CG_LOCALE_REQUEST`; the channel must not send or answer `GC_LOCALE` (header
   140) after `GC_PHASE(GAME)`. The versioned manifest, delta delivery, and
   notification-driven reload remain open under G2.10; see [ADR-0009](documentation/adr/0009-server-side-locale.md)
-  and the [Gap Registry](documentation/plans/gap-registry.md#p2-gameplay-and-content-gaps).
+  and the [Gap Registry](documentation/plans/gap-registry.md#p2--gameplay-and-content-gaps).
 - Broader gameplay, scale, real-client, and operational gates remain tracked
   in the live sources rather than summarized here.
 

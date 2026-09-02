@@ -26,12 +26,16 @@ Every document has exactly one kind:
 | How-to | `how-to/` | A focused recipe for a real task |
 | Reference | `reference/` | Exact, structured technical information |
 | Explanation | `explanation/` | Context and rationale without a procedure |
-| Plan | `plans/` or the maintained phase map | Active sequencing and acceptance criteria |
+| Plan | `plans/` | Active sequencing and acceptance criteria |
 | Decision | `adr/` | One architectural decision per ADR |
 | Guardrail | `guardrails/` | Rules that prevent repeat failures |
 | History | `history/` | Read-only superseded plans, records, and snapshots |
 | Hub | Navigation or documentation metadata | Indexes and explains the documentation set |
 | Snapshot | A dated status document | Point-in-time project status |
+
+The maintained phase map, [`roadmap.md`](roadmap.md), intentionally carries
+`Type: Reference` as a navigation exception. It is a dated phase-level view,
+not a per-item plan or a live status source.
 
 Do not create an empty category merely to reserve a directory. Create a
 category when its first document is needed.
@@ -120,6 +124,10 @@ Each active phase or gate entry in the maintained plan identifies, at minimum:
 - Do not use superseded `docs/`, `decisions/`, `superpowers/`, or old crate
   names in new links or current guidance. Historical records may retain their
   original wording.
+- `scripts/check_docs.ps1` validates GitHub-compatible fragments only for
+  relative Markdown targets on the active documentation surface. It does not
+  inspect external URLs, `mailto:` links, generated artifacts, or archived
+  document sources.
 
 ## 9. ADRs before architecture code
 

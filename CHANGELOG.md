@@ -26,13 +26,17 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
   normalize client-unsafe persisted positions` and `perf(world): limit initial
   spawn materialization`, and excluded local `.superpowers/` and
   `docs/superpowers/` artifacts without deleting them; see the [A0.2 worktree
-  disposition](documentation/plans/gap-registry.md#a0-current-worktree-disposition)
+  disposition](documentation/plans/gap-registry.md#a0--current-worktree-disposition)
   in the Gap Registry for volatile details.
 - **A0 documentation authority (2026-09-02):** current status is routed to the
   Gap Registry and progress handoff; the root roadmap is an explicitly
   historical compatibility narrative, and the public README is a scope and
   navigation entry point rather than a status matrix. Schema, login-flow,
   locale, quest, and gold notes now point to their canonical evidence.
+- **A0 documentation fragments (2026-09-02):** `scripts/check_docs.ps1` now
+  checks GitHub-compatible heading fragments for relative Markdown links on the
+  active documentation surface. External URLs, `mailto:` links, generated
+  artifacts, and archived document sources remain outside this narrow check.
 - **OpenCode 2 coordination:** `AGENTS.md` and the operational guardrails now
   require lifecycle-based subagent handling: bounded lanes, no duplicate or
   speculative resume under uncertain state, and verified API interruption.
