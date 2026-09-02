@@ -92,6 +92,24 @@ The registry's `C1`–`C12` rows are closed prerequisite fixes; they do not mark
 
 ## Handoff
 
+- 2026-09-02 | **Gate live-PG tests behind `#[ignore]` (PR #1 CI fix):** the
+  GitHub `verify` required check (`windows-latest`, no PostgreSQL) failed
+  chronically because three integration tests connected to PostgreSQL real
+  without a gate: the two `database/tests/wal_pg.rs` WAL tests and
+  `channel::belt::tests::belt_move_wired_and_grade_gated` (`belt.rs`), which
+  was overlooked in a first diagnosis. They are now gated with the standard
+  `#[ignore = "requiere PG real (WSL): ... --ignored"]` pattern used by every
+  other `*_pg.rs` test, and the stale "SIN gate" directive in `wal_pg.rs` was
+  updated to reflect the current portable-normal / PG-gated-ignored contract in
+  `scripts/verify.ps1`. The tests still build in the normal leg and run via the
+  `--ignored` leg when a real PG is present (WAL 2/2 and belt 1/1 verified
+  green with PG). Oracle review confirmed this is the consistent option over
+  installing PostgreSQL in CI (which would also not suffice for the belt
+  verifier's required `player` schema/data). **Next:** confirm the full local
+  verifier gate is green, re-run CI on the PR, and with the Dependency graph now
+  enabled, get both required checks (`verify`, `dependency-review`) green + an
+  approval before merge; then A2 reproducible contributor environment.
+
 - 2026-09-02 | **Two Rust world slices committed and verified on the push
   branch:** the four pre-existing uncommitted Rust files were committed as two
   slices after passing the full verifier gate (fmt + 874 tests + clippy +

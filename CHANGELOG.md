@@ -16,6 +16,20 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- **Gate live-PG integration tests behind `#[ignore]` (2026-09-02):** the two
+  `database` WAL tests (`wal_pg.rs`) and the `channel::belt` live-PG verifier
+  (`belt_move_wired_and_grade_gated`) connected to PostgreSQL real but were not
+  gated, so they failed any `cargo test --workspace` run without a local PG —
+  including the GitHub `verify` job (`windows-latest`, no PostgreSQL). This
+  made the `verify` required check fail chronically in CI for the alpha-release
+  PR. They are now gated with the same `#[ignore = "requiere PG real (WSL):
+  ... --ignored"]` pattern as the rest of the `*_pg.rs` suite; they still build
+  in the normal leg and run via the `--ignored` leg of `scripts/verify.ps1`
+  when a real PG is available. Verified: WAL 2/2 and belt 1/1 pass with PG via
+  `--ignored`; the portable normal leg no longer depends on PG.
+
 ### Changed
 
 - **Two Rust world slices committed (2026-09-02):** the long-held uncommitted
