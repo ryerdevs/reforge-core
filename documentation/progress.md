@@ -94,17 +94,18 @@ The registry's `C1`–`C12` rows are closed prerequisite fixes; they do not mark
 
 - 2026-09-02 | **A1 boundary follow-up:** the boundary checker now rejects
   generated client proto outputs by path, detects extensionless binary content
-  without misclassifying UTF-16 C++ resources, and scans JSON plus positional
-  MySQL templates without printing credential values. The three tracked
-  `Mysql2Proto` templates and the DBManager example now use placeholders; 34
-  generated proto outputs were removed from the public index and remain ignored
-  as local tool results. `scripts/check_boundary_test.ps1` passed all deliberate
-  secret, path, generated-output, and binary-content mutations; the clean
-  `scripts/check_boundary.ps1` run printed `OK: check_boundary`; the workflow
-  installs the pinned Rust toolchain components before verification, the
-  verifier expands ignored-test filters without merging them, and the active
-  GitHub ruleset protects `main`/`beta`. The four
-  pre-existing Rust slices remain unstaged and untouched. **Next:** A2
+  without misclassifying UTF-16 C++ resources, and scans JSON structurally plus
+  positional MySQL and Windows `set` assignments without printing credential
+  values. The three tracked `Mysql2Proto` templates and the DBManager example
+  now use placeholders; 34 generated proto outputs were removed from the
+  public index and remain ignored as local tool results.
+  `scripts/check_boundary_test.ps1` passed all deliberate secret, path,
+  generated-output, binary-content, multiline-JSON, and Windows-script
+  mutations; the clean `scripts/check_boundary.ps1` run printed
+  `OK: check_boundary`; the workflow installs the pinned Rust toolchain
+  components before verification, the verifier expands ignored-test filters
+  without merging them, and the active GitHub ruleset protects `main`/`beta`.
+  The four pre-existing Rust slices remain unstaged and untouched. **Next:** A2
   reproducible contributor environment.
 
 - 2026-09-02 | **A1 license and public-boundary enforcement:** `cargo metadata

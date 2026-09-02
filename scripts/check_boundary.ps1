@@ -195,6 +195,33 @@ function Test-AllowedSecretValue([string]$value, [string]$line, [string]$key) {
     return $candidate -match '(?i)^(?:<[^>\r\n]+>|CHANGE_ME|\$\{[^}\r\n]+\}|YOUR_[A-Za-z0-9_]*)$'
 }
 
+function Test-JsonSecretNode([object]$node, [string]$path) {
+    if ($null -eq $node -or $node -is [string] -or $node -is [System.ValueType]) {
+        return
+    }
+    if ($node -is [System.Collections.IEnumerable]) {
+        foreach ($item in $node) {
+            Test-JsonSecretNode $item $path
+        }
+        return
+    }
+
+    foreach ($property in $node.PSObject.Properties) {
+        if ($property.Name -match '(?i)^(?:password|token|secret|api_key)$' -and
+            $null -ne $property.Value) {
+            $value = if ($property.Value -is [string]) {
+                $property.Value
+            } else {
+                [string]$property.Value
+            }
+            if (-not (Test-AllowedSecretValue $value '' $property.Name)) {
+                Add-Failure ("{0} secret-like assignment ({1})" -f $path, $property.Name)
+            }
+        }
+        Test-JsonSecretNode $property.Value $path
+    }
+}
+
 function Test-TrackedSecrets([string]$path) {
     if (-not (Test-SecretScanPath $path)) { return }
 
@@ -211,10 +238,22 @@ function Test-TrackedSecrets([string]$path) {
     $isToml = $extension -eq '.toml'
     $isJson = $path -match '(?i)\.json(?:\.sample)?$'
     $isMysqlConfig = $path -match '(?i)(?:^|/)mysql\.conf$'
+    $isWindowsScript = $extension -in @('.cmd', '.bat')
     $tomlPattern = '(?i)(?<![A-Za-z0-9_])(?<key>password|token|secret|api_key)\s*=\s*(?<value>[^#\r\n]*)'
-    $jsonPattern = '(?i)"(?<key>password|token|secret|api_key)"\s*:\s*(?<value>"(?:\\.|[^"\\])*"|null|[^,\r\n}]*)'
     $mysqlConfigPattern = '^\s*\S+\s+\S+\s+(?<value>\S+)\s+\S+\s*$'
     $scriptPattern = '(?i)^\s*(?:[$](?:env:)?|export\s+)?(?<key>PGPASSWORD|MYSQL_PASSWORD|password|token|secret|api_key)\s*=\s*(?<value>[^#\r\n]*)'
+    $windowsScriptPattern = '(?i)^\s*set\s+"?(?<key>PGPASSWORD|MYSQL_PASSWORD|password|token|secret|api_key)\s*=\s*(?<value>[^"\r\n]*?)"?\s*$'
+
+    if ($isJson) {
+        try {
+            $document = Get-Content -LiteralPath $fullPath -Raw | ConvertFrom-Json
+        } catch {
+            Add-Failure ("unable to parse secret-scan JSON: {0}" -f $path)
+            return
+        }
+        Test-JsonSecretNode $document $path
+        return
+    }
 
     for ($lineNumber = 0; $lineNumber -lt $lines.Count; $lineNumber++) {
         $line = $lines[$lineNumber]
@@ -225,10 +264,13 @@ function Test-TrackedSecrets([string]$path) {
 
         if ($isToml) {
             $matches = [regex]::Matches($line, $tomlPattern)
-        } elseif ($isJson) {
-            $matches = [regex]::Matches($line, $jsonPattern)
         } elseif ($isMysqlConfig) {
             $matches = @([regex]::Match($line, $mysqlConfigPattern))
+        } elseif ($isWindowsScript) {
+            $matches = @(
+                [regex]::Match($line, $windowsScriptPattern)
+                [regex]::Match($line, $scriptPattern)
+            )
         } else {
             $matches = @([regex]::Match($line, $scriptPattern))
         }

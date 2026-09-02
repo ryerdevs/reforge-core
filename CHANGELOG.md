@@ -20,14 +20,15 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 - **A1 boundary follow-up (2026-09-02):** the boundary checker now rejects
   generated client proto outputs and extensionless binary content, and scans
-  JSON and positional MySQL templates without printing credential values. The
-  legacy tool templates use placeholders; generated proto outputs are ignored
-  local results and are no longer in the public index. Boundary mutation tests
-  cover the new rejection paths. CI now installs the pinned Rust toolchain
-  components required by the verification gate, and the verifier passes each
-  ignored-test filter as a separate argument. The active `Protect main and beta`
-  GitHub ruleset requires pull requests, one fresh approval, and the
-  `verify`/`dependency-review` checks.
+  JSON and positional MySQL templates without printing credential values;
+  JSON is parsed structurally and Windows `set` assignments are covered as
+  well. The legacy tool templates use placeholders; generated proto outputs are
+  ignored local results and are no longer in the public index. Boundary
+  mutation tests cover the new rejection paths. CI now installs the pinned
+  Rust toolchain components required by the verification gate, and the
+  verifier passes each ignored-test filter as a separate argument. The active
+  `Protect main and beta` GitHub ruleset requires pull requests, one fresh
+  approval, and the `verify`/`dependency-review` checks.
 - **A1 license and public-boundary enforcement (2026-09-02):** Rust and deploy
   metadata now align on Apache-2.0; `scripts/check_boundary.ps1` enforces the
   tracked public boundary, binary-output policy, and placeholder-only secret

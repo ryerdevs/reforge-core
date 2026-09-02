@@ -27,10 +27,10 @@ configuration.
 The retained legacy converter sources under `source/tools` are supporting
 tooling, not server runtime or client distribution. Their MySQL configuration
 templates use placeholders, while generated client proto outputs under
-`source/tools/proto/` stay local and ignored. The boundary check also scans the
-JSON and positional MySQL templates and rejects extensionless binary content;
-the UTF-16 C++ resource sources remain text source files rather than generated
-outputs.
+`source/tools/proto/` stay local and ignored. The boundary check structurally
+scans JSON, checks positional MySQL and Windows `set` assignments, and rejects
+extensionless binary content; the UTF-16 C++ resource sources remain text source
+files rather than generated outputs.
 
 ## Public clean tooling
 

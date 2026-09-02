@@ -76,6 +76,60 @@ function Test-UntrackedJsonSecretIsRejected {
     }
 }
 
+function Test-UntrackedMultilineJsonSecretIsRejected {
+    $relative = "source/tools/Mysql2Proto/HOWTO/boundary-test-$([Guid]::NewGuid().ToString('N')).json"
+    $content = @(
+        '{'
+        '  "credentials": {'
+        '    "password"'
+        '      :'
+        '        "not-a-placeholder"'
+        '  }'
+        '}'
+    ) -join [Environment]::NewLine
+    $path = New-Fixture $relative $content
+    try {
+        $result = Invoke-Checker
+        Assert-True ($result.ExitCode -ne 0) 'multiline JSON secret assignment must fail'
+        Assert-True ($result.Output -match 'secret-like assignment') 'multiline JSON failure should identify the check'
+        Assert-True ($result.Output -notmatch 'not-a-placeholder') 'secret value must not be printed'
+    } finally {
+        Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Test-UntrackedWindowsScriptSecretIsRejected {
+    $relative = "source/deploy/win/scripts/boundary-test-$([Guid]::NewGuid().ToString('N')).cmd"
+    $content = @(
+        'set "PGPASSWORD=not-a-placeholder"'
+        'set MYSQL_PASSWORD=another-not-a-placeholder'
+    ) -join [Environment]::NewLine
+    $path = New-Fixture $relative $content
+    try {
+        $result = Invoke-Checker
+        Assert-True ($result.ExitCode -ne 0) 'Windows set secret assignment must fail'
+        Assert-True ($result.Output -match 'secret-like assignment') 'Windows script failure should identify the check'
+        Assert-True ($result.Output -notmatch 'not-a-placeholder') 'secret value must not be printed'
+    } finally {
+        Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Test-WindowsScriptPlaceholdersAreAllowed {
+    $relative = "source/deploy/win/scripts/boundary-test-$([Guid]::NewGuid().ToString('N')).cmd"
+    $content = @(
+        'set "PGPASSWORD=<PG_PASSWORD>"'
+        'set MYSQL_PASSWORD=${MYSQL_PASSWORD}'
+    ) -join [Environment]::NewLine
+    $path = New-Fixture $relative $content
+    try {
+        $result = Invoke-Checker
+        Assert-True ($result.ExitCode -eq 0) 'Windows script placeholders must pass'
+    } finally {
+        Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Test-UntrackedMysqlConfigSecretIsRejected {
     $relative = "source/tools/DBManager/.worker/config/boundary-test-$([Guid]::NewGuid().ToString('N'))/mysql.conf"
     $path = New-Fixture $relative 'localhost user not-a-placeholder database'
@@ -322,6 +376,9 @@ try {
     Assert-True ($baseline.ExitCode -eq 0) 'clean boundary must pass before mutations'
     Test-UntrackedSecretIsRejected
     Test-UntrackedJsonSecretIsRejected
+    Test-UntrackedMultilineJsonSecretIsRejected
+    Test-UntrackedWindowsScriptSecretIsRejected
+    Test-WindowsScriptPlaceholdersAreAllowed
     Test-UntrackedMysqlConfigSecretIsRejected
     Test-ExactPlaceholdersAreAllowed
     Test-JsonPlaceholdersAreAllowed
