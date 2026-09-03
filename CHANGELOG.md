@@ -18,6 +18,14 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **Whitelisted package assembly and manifest verification (A2.4, 2026-09-03):**
+  added cross-platform Python distribution package tool `scripts/package.py` and
+  integrated `manage.py package` command. Strictly isolates allowlisted runtime
+  configurations, schema DDL, seed data, control scripts, and release binaries while
+  rejecting prohibited dirty runtime artifacts (`.dump`, `.bak`, `.log`, `.tmp`, `logs/`,
+  `backups/`). Generates deterministic `manifest.json` with per-file SHA-256 digests and
+  supports bidirectional package verification (`package.py verify`).
+
 - **Native Windows PostgreSQL bootstrap and lawful synthetic seed (A2.3, 2026-09-03):**
   added versioned PostgreSQL 18 development schema (`source/deploy/win/schema/schema.sql`)
   and minimal lawful synthetic development seed (`source/deploy/win/schema/seed.sql`).
