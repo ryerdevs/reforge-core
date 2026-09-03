@@ -93,6 +93,18 @@ The registry's `C1`–`C12` rows are closed prerequisite fixes; they do not mark
 
 ## Handoff
 
+- 2026-09-03 | **A2.4 whitelisted package assembly and manifest closed (Milestone A2 100% complete):**
+  implemented zero-dependency standard Python tool `scripts/package.py` and `manage.py package`
+  for reproducible cross-platform package distribution on Windows and Linux.
+  Strictly enforces allowlisted deployment assets (`README.md`, `config/`, `schema/`, `scripts/`,
+  and optional release binaries) while proactively rejecting dirty runtime artifacts
+  (`.dump`, `.bak`, `.log`, `.tmp`, `logs/`, `backups/`). Generates deterministic, sorted
+  `manifest.json` with per-file SHA-256 checksums and provides zip archive creation and
+  bidirectional manifest verification (`package.py verify`). 6 unit tests passing in
+  `scripts/test_package.py`. Milestone A2 (Reproducible contributor environment: A2.1–A2.5)
+  is now completely closed.
+  **Next:** Milestone A3 contribution governance and documentation.
+
 - 2026-09-03 | **A2.3 native Windows PostgreSQL bootstrap plus lawful synthetic seed closed:**
   versioned clean PostgreSQL 18 development DDL (`source/deploy/win/schema/schema.sql`)
   covering 5 domain schemas (`account`, `common`, `player`, `log`, `world`) and minimal

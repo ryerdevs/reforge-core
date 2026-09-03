@@ -377,6 +377,11 @@ def cmd_db(args: argparse.Namespace) -> int:
     return handlers[args.db_command](args)
 
 
+def cmd_package(args: argparse.Namespace) -> int:
+    import package
+    return package.cmd_build(args)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Cross-platform management CLI for reforge-core server stack."
@@ -401,6 +406,14 @@ def main(argv: list[str] | None = None) -> int:
     db_restore = db_sub.add_parser("restore", help="Restore a custom database dump (.dump or .sql)")
     db_restore.add_argument("file", help="Path to .dump or .sql file")
 
+    # package subcommand
+    pkg_p = subparsers.add_parser("package", help="Assemble whitelisted distribution package and manifest")
+    pkg_p.add_argument("--source-dir", help="Path to source deploy directory")
+    pkg_p.add_argument("--out-dir", help="Path to output assembled package directory")
+    pkg_p.add_argument("--no-binaries", action="store_true", help="Exclude compiled executables")
+    pkg_p.add_argument("--no-archive", action="store_true", help="Do not create a zip archive")
+    pkg_p.add_argument("--target", default="auto", help="Target platform identifier")
+
     args = parser.parse_args(argv)
 
     handlers = {
@@ -411,6 +424,7 @@ def main(argv: list[str] | None = None) -> int:
         "backup": cmd_backup,
         "doctor": cmd_doctor,
         "db": cmd_db,
+        "package": cmd_package,
     }
     return handlers[args.command](args)
 
