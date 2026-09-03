@@ -20,6 +20,7 @@ struct PendingOperation {
 }
 
 struct RefreshResult {
+    pg_state: bool,
     auth_state: ProcState,
     channel_state: ProcState,
     auth_lines: Vec<String>,
@@ -29,6 +30,7 @@ struct RefreshResult {
 pub struct App {
     pub deploy_dir: PathBuf,
     pub screen: Screen,
+    pub pg_state: bool,
     pub auth_state: ProcState,
     pub channel_state: ProcState,
     pub head: String,
@@ -49,6 +51,7 @@ impl App {
         let mut app = App {
             deploy_dir,
             screen: Screen::Main,
+            pg_state: process::is_postgres_running(),
             auth_state: process::status(Role::Auth),
             channel_state: process::status(Role::Channel),
             head,
@@ -172,6 +175,7 @@ impl App {
         let (sender, result) = mpsc::channel();
         thread::spawn(move || {
             let _ = sender.send(RefreshResult {
+                pg_state: process::is_postgres_running(),
                 auth_state: process::status(Role::Auth),
                 channel_state: process::status(Role::Channel),
                 auth_lines: logs::tail(&logs::latest_log(&deploy_dir, Role::Auth))
@@ -189,6 +193,7 @@ impl App {
         };
         match result.try_recv() {
             Ok(refresh) => {
+                self.pg_state = refresh.pg_state;
                 self.auth_state = refresh.auth_state;
                 self.channel_state = refresh.channel_state;
                 self.set_preview(Role::Auth, &refresh.auth_lines);
@@ -239,6 +244,7 @@ mod tests {
         let mut app = App {
             deploy_dir: PathBuf::from("."),
             screen: Screen::Logs,
+            pg_state: false,
             auth_state: ProcState::Stopped,
             channel_state: ProcState::Stopped,
             head: String::from("test"),
@@ -261,6 +267,7 @@ mod tests {
         let mut app = App {
             deploy_dir: PathBuf::from("."),
             screen: Screen::Logs,
+            pg_state: false,
             auth_state: ProcState::Stopped,
             channel_state: ProcState::Stopped,
             head: String::from("test"),
@@ -287,6 +294,7 @@ mod tests {
         let mut app = App {
             deploy_dir: PathBuf::from("."),
             screen: Screen::Main,
+            pg_state: false,
             auth_state: ProcState::Stopped,
             channel_state: ProcState::Stopped,
             head: String::from("test"),

@@ -129,12 +129,255 @@ fn endpoint_port(endpoint: &str) -> Option<u16> {
         .ok()
 }
 
-pub fn start(deploy_dir: &Path) -> OpResult {
-    run_script(deploy_dir, "start_win.ps1", &[])
+pub fn is_postgres_running() -> bool {
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::Duration;
+    let addr = SocketAddr::from(([127, 0, 0, 1], 5432));
+    TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()
 }
 
-pub fn stop(deploy_dir: &Path) -> OpResult {
-    run_script(deploy_dir, "stop_win.ps1", &[])
+pub fn ensure_postgres_running() -> Result<(), String> {
+    if is_postgres_running() {
+        return Ok(());
+    }
+
+    #[cfg(windows)]
+    {
+        let _ = Command::new("net")
+            .args(["start", "postgresql-metin2"])
+            .output();
+        let _ = Command::new("sc.exe")
+            .args(["start", "postgresql-metin2"])
+            .output();
+        let _ = Command::new("net").args(["start", "postgresql"]).output();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = Command::new("systemctl")
+            .args(["start", "postgresql"])
+            .output();
+    }
+
+    for _ in 0..15 {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        if is_postgres_running() {
+            return Ok(());
+        }
+    }
+    Err("PostgreSQL is not responding on 127.0.0.1:5432".to_string())
+}
+
+pub fn find_server_realms_exe(deploy_dir: &Path) -> Option<PathBuf> {
+    let exe_name = if cfg!(windows) {
+        "server_realms.exe"
+    } else {
+        "server_realms"
+    };
+
+    let in_deploy = deploy_dir.join(exe_name);
+    if in_deploy.is_file() {
+        return Some(in_deploy);
+    }
+
+    for ancestor in deploy_dir.ancestors() {
+        let release = ancestor
+            .join("source")
+            .join("reforge")
+            .join("target")
+            .join("release")
+            .join(exe_name);
+        if release.is_file() {
+            return Some(release);
+        }
+        let debug = ancestor
+            .join("source")
+            .join("reforge")
+            .join("target")
+            .join("debug")
+            .join(exe_name);
+        if debug.is_file() {
+            return Some(debug);
+        }
+    }
+
+    if let Ok(current) = std::env::current_exe() {
+        for ancestor in current.ancestors() {
+            let candidate = ancestor.join(exe_name);
+            if candidate.is_file() && candidate != current {
+                return Some(candidate);
+            }
+            let release = ancestor
+                .join("source")
+                .join("reforge")
+                .join("target")
+                .join("release")
+                .join(exe_name);
+            if release.is_file() {
+                return Some(release);
+            }
+        }
+    }
+    None
+}
+
+pub fn find_config(deploy_dir: &Path, file_name: &str) -> Option<PathBuf> {
+    let in_deploy = deploy_dir.join(file_name);
+    if in_deploy.is_file() {
+        return Some(in_deploy);
+    }
+    let in_config = deploy_dir.join("config").join(file_name);
+    if in_config.is_file() {
+        return Some(in_config);
+    }
+    for ancestor in deploy_dir.ancestors() {
+        let candidate = ancestor
+            .join("source")
+            .join("deploy")
+            .join("win")
+            .join(file_name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        let example = ancestor
+            .join("source")
+            .join("deploy")
+            .join("win")
+            .join("examples")
+            .join(format!(
+                "{}.example.toml",
+                file_name.trim_end_matches(".toml")
+            ));
+        if example.is_file() {
+            return Some(example);
+        }
+    }
+    None
+}
+
+fn current_timestamp() -> String {
+    use std::time::SystemTime;
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let secs_of_day = now % 86400;
+    let hours = secs_of_day / 3600;
+    let mins = (secs_of_day % 3600) / 60;
+    let secs = secs_of_day % 60;
+    format!("{hours:02}{mins:02}{secs:02}")
+}
+
+pub fn start(deploy_dir: &Path) -> OpResult {
+    // 1. PostgreSQL check
+    if !is_postgres_running()
+        && let Err(e) = ensure_postgres_running()
+    {
+        return OpResult::Failed(format!("PostgreSQL (127.0.0.1:5432): {e}"));
+    }
+
+    // 2. server_realms binary
+    let Some(exe_path) = find_server_realms_exe(deploy_dir) else {
+        return OpResult::Failed(format!(
+            "server_realms binary not found in {}",
+            deploy_dir.display()
+        ));
+    };
+
+    // 3. configs
+    let Some(auth_cfg) = find_config(deploy_dir, "auth.toml") else {
+        return OpResult::Failed("auth.toml config not found".to_string());
+    };
+    let Some(channel_cfg) = find_config(deploy_dir, "channel.toml") else {
+        return OpResult::Failed("channel.toml config not found".to_string());
+    };
+
+    // 4. Stop existing
+    let _ = stop(deploy_dir);
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    // 5. Logs dir
+    let logs_dir = deploy_dir.join("logs");
+    let _ = std::fs::create_dir_all(&logs_dir);
+    let ts = current_timestamp();
+
+    // 6. Spawn Auth
+    let auth_out = match std::fs::File::create(logs_dir.join(format!("auth.{ts}.out.log"))) {
+        Ok(f) => Stdio::from(f),
+        Err(e) => return OpResult::Failed(format!("auth log creation: {e}")),
+    };
+    let auth_err = match std::fs::File::create(logs_dir.join(format!("auth.{ts}.err.log"))) {
+        Ok(f) => Stdio::from(f),
+        Err(e) => return OpResult::Failed(format!("auth err log creation: {e}")),
+    };
+
+    let mut auth_cmd = Command::new(&exe_path);
+    auth_cmd
+        .arg("--role")
+        .arg("auth")
+        .arg("--config")
+        .arg(&auth_cfg)
+        .current_dir(deploy_dir)
+        .stdin(Stdio::null())
+        .stdout(auth_out)
+        .stderr(auth_err);
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        auth_cmd.creation_flags(0x0000_0208);
+    }
+
+    if let Err(e) = auth_cmd.spawn() {
+        return OpResult::Failed(format!("failed to spawn auth: {e}"));
+    }
+
+    // 7. Spawn Channel
+    let ch_out = match std::fs::File::create(logs_dir.join(format!("channel.{ts}.out.log"))) {
+        Ok(f) => Stdio::from(f),
+        Err(e) => return OpResult::Failed(format!("channel log creation: {e}")),
+    };
+    let ch_err = match std::fs::File::create(logs_dir.join(format!("channel.{ts}.err.log"))) {
+        Ok(f) => Stdio::from(f),
+        Err(e) => return OpResult::Failed(format!("channel err log creation: {e}")),
+    };
+
+    let mut ch_cmd = Command::new(&exe_path);
+    ch_cmd
+        .arg("--role")
+        .arg("channel")
+        .arg("--config")
+        .arg(&channel_cfg)
+        .current_dir(deploy_dir)
+        .stdin(Stdio::null())
+        .stdout(ch_out)
+        .stderr(ch_err);
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        ch_cmd.creation_flags(0x0000_0208);
+    }
+
+    if let Err(e) = ch_cmd.spawn() {
+        return OpResult::Failed(format!("failed to spawn channel: {e}"));
+    }
+
+    OpResult::Ok(format!("auth + channel launched (logs: {ts})"))
+}
+
+pub fn stop(_deploy_dir: &Path) -> OpResult {
+    #[cfg(windows)]
+    {
+        let _ = Command::new("taskkill")
+            .args(["/F", "/IM", "server_realms.exe"])
+            .output();
+        OpResult::Ok("server_realms processes stopped".to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = Command::new("pkill").args(["-9", "server_realms"]).output();
+        OpResult::Ok("server_realms processes stopped".to_string())
+    }
 }
 
 pub fn restart(deploy_dir: &Path) -> OpResult {
@@ -291,6 +534,54 @@ mod tests {
 
         let found = find_script(&deploy, "test_script.ps1");
         assert_eq!(found, dummy_script);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn find_server_realms_exe_discovers_binary() {
+        let unique = format!(
+            "tui_exe_test_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(unique);
+        let deploy = root.join("source").join("deploy").join("win");
+        let _ = std::fs::create_dir_all(&deploy);
+        let exe_name = if cfg!(windows) {
+            "server_realms.exe"
+        } else {
+            "server_realms"
+        };
+        let dummy_exe = deploy.join(exe_name);
+        let _ = std::fs::write(&dummy_exe, [0x4d, 0x5a]);
+
+        let found = find_server_realms_exe(&deploy);
+        assert_eq!(found, Some(dummy_exe));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn find_config_discovers_toml_files() {
+        let unique = format!(
+            "tui_cfg_test_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(unique);
+        let deploy = root.join("deploy");
+        let config_dir = deploy.join("config");
+        let _ = std::fs::create_dir_all(&config_dir);
+        let dummy_cfg = config_dir.join("auth.toml");
+        let _ = std::fs::write(&dummy_cfg, "port = 30001\n");
+
+        let found = find_config(&deploy, "auth.toml");
+        assert_eq!(found, Some(dummy_cfg));
 
         let _ = std::fs::remove_dir_all(&root);
     }

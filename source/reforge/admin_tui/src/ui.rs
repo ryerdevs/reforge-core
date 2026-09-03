@@ -112,6 +112,11 @@ fn render(f: &mut ratatui::Frame, app: &App) {
 }
 
 fn render_header(f: &mut ratatui::Frame, area: Rect, app: &App) {
+    let (pg_mark, pg_col) = if app.pg_state {
+        ("●", Color::Green)
+    } else {
+        ("○", Color::Red)
+    };
     let line = Line::from(vec![
         Span::styled(
             "reforge admin",
@@ -120,6 +125,8 @@ fn render_header(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(format!("  HEAD {}  ", app.head)),
+        Span::styled(format!("{pg_mark} pg:5432"), Style::default().fg(pg_col)),
+        Span::raw("  "),
         header_status(crate::process::Role::Auth, app.auth_state),
         Span::raw("  "),
         header_status(crate::process::Role::Channel, app.channel_state),
@@ -134,7 +141,29 @@ fn render_main(f: &mut ratatui::Frame, area: Rect, app: &App) {
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
 
+    let (pg_mark, pg_col) = if app.pg_state {
+        ("●", Color::Green)
+    } else {
+        ("○", Color::Red)
+    };
+    let pg_desc = if app.pg_state {
+        "listening 127.0.0.1:5432 (ready)"
+    } else {
+        "STOPPED (start local postgresql service or docker container)"
+    };
+    let pg_line = Line::from(vec![
+        Span::styled(
+            format!("{pg_mark} PostgreSQL  "),
+            Style::default().fg(pg_col).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("port=5432  {pg_desc}"),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]);
+
     let services = vec![
+        pg_line,
         service_line(
             "Auth",
             crate::process::Role::Auth,

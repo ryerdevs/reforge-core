@@ -93,6 +93,19 @@ The registry's `C1`–`C12` rows are closed prerequisite fixes; they do not mark
 
 ## Handoff
 
+- 2026-09-02 | **A2.5 TUI native process controller and PostgreSQL monitoring closed:**
+  replaced PowerShell script delegation in `admin_tui` (`process.rs`) with native
+  Rust process lifecycle management. `start` now detects whether PostgreSQL is
+  reachable on `127.0.0.1:5432` with a 300 ms timeout; if down, it attempts to
+  start the local service (`net start postgresql-metin2` / `systemctl`) and polls
+  before launching. `server_realms` auth and channel roles are spawned detached
+  with process creation flags and file log redirection (`logs/auth.<ts>.out.log`,
+  `logs/channel.<ts>.out.log`). `stop` terminates processes directly via `taskkill`
+  (Windows) or `pkill` (Linux). `admin_tui` header (`● pg:5432`) and Services panel
+  now visually display PostgreSQL health alongside Auth and Channel. 17 unit tests
+  passed and `admin_tui --probe` reports postgres, auth, channel status. **Next:**
+  A2.2 runtime configuration overrides and secret-free examples.
+
 - 2026-09-02 | **A2.1 path contract and executable-relative deploy/TUI discovery closed:**
   hardcoded maintainer repository paths (`C:\projects\Metin2`) were eliminated from
   `scripts/start_win.ps1`, `scripts/deploy_win.ps1`, `scripts/backup_win.ps1`, and

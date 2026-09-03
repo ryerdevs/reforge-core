@@ -18,6 +18,15 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **Native TUI process controller and PostgreSQL monitoring (A2.5, 2026-09-02):**
+  replaced PowerShell script delegation in `admin_tui` (`process.rs`) with direct
+  native Rust lifecycle management. Implemented TCP-based PostgreSQL health
+  detection (`is_postgres_running`) and service auto-start (`ensure_postgres_running`)
+  before launching server roles. Added detached spawning of `server_realms` for
+  `auth` and `channel` roles with timestamped log redirection, direct process
+  termination (`stop`), visual PostgreSQL indicator in the TUI header (`● pg:5432`)
+  and Services list, and expanded unit test suite (17 passed).
+
 - **Path contract and executable-relative deploy/TUI discovery (A2.1, 2026-09-02):**
   eliminated hardcoded maintainer paths (`C:\projects\Metin2`) across Windows
   runtime and deployment scripts (`start_win.ps1`, `deploy_win.ps1`,
