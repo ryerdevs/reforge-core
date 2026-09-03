@@ -1,5 +1,5 @@
-//! TUI render: modern cockpit operator panel, telemetry gauges, tabs,
-//! and the interactive event loop.
+//! TUI render: modern operator dashboard, telemetry gauges, interactive tabs,
+//! live configuration editor, and the interactive event loop.
 
 use std::io::{self, Stdout};
 use std::time::Duration;
@@ -70,7 +70,7 @@ fn handle_key(app: &mut App, k: KeyEvent) -> bool {
             return false;
         }
         KeyCode::Char('1') => {
-            app.select_tab(Tab::Cockpit);
+            app.select_tab(Tab::Dashboard);
             return false;
         }
         KeyCode::Char('2') => {
@@ -94,7 +94,7 @@ fn handle_key(app: &mut App, k: KeyEvent) -> bool {
 
     // Tab-specific keybindings
     match app.current_tab {
-        Tab::Cockpit => match k.code {
+        Tab::Dashboard => match k.code {
             KeyCode::Char('q') | KeyCode::Esc => return true,
             KeyCode::Up | KeyCode::Char('k') => app.prev_action(),
             KeyCode::Down | KeyCode::Char('j') => app.next_action(),
@@ -118,7 +118,7 @@ fn handle_key(app: &mut App, k: KeyEvent) -> bool {
             _ => {}
         },
         Tab::Logs => match k.code {
-            KeyCode::Esc | KeyCode::Char('q') => app.select_tab(Tab::Cockpit),
+            KeyCode::Esc | KeyCode::Char('q') => app.select_tab(Tab::Dashboard),
             KeyCode::Char('t') => {
                 let target = match app.log_target {
                     crate::process::Role::Auth => crate::process::Role::Channel,
@@ -133,7 +133,7 @@ fn handle_key(app: &mut App, k: KeyEvent) -> bool {
             _ => {}
         },
         Tab::Players => match k.code {
-            KeyCode::Esc | KeyCode::Char('q') => app.select_tab(Tab::Cockpit),
+            KeyCode::Esc | KeyCode::Char('q') => app.select_tab(Tab::Dashboard),
             KeyCode::Up => {
                 app.selected_player_index = app.selected_player_index.saturating_sub(1);
             }
@@ -142,26 +142,60 @@ fn handle_key(app: &mut App, k: KeyEvent) -> bool {
             }
             KeyCode::Char('+') | KeyCode::Char('=') => {
                 app.rate_exp = (app.rate_exp + 10).min(500);
-                app.add_event(format!("Tasa de EXP ajustada a {}%", app.rate_exp));
+                app.add_event(format!("EXP rate set to {}%", app.rate_exp));
             }
             KeyCode::Char('-') => {
                 app.rate_exp = app.rate_exp.saturating_sub(10).max(50);
-                app.add_event(format!("Tasa de EXP ajustada a {}%", app.rate_exp));
+                app.add_event(format!("EXP rate set to {}%", app.rate_exp));
             }
-            KeyCode::Char('k') => {
-                app.add_event(String::from("Jugador expulsado del servidor"));
+            KeyCode::Char('[') => {
+                app.rate_yang = app.rate_yang.saturating_sub(10).max(50);
+                app.add_event(format!("Yang rate set to {}%", app.rate_yang));
             }
-            KeyCode::Char('u') => {
-                app.add_event(String::from("Jugador transportado a Aldea 1"));
+            KeyCode::Char(']') => {
+                app.rate_yang = (app.rate_yang + 10).min(500);
+                app.add_event(format!("Yang rate set to {}%", app.rate_yang));
+            }
+            KeyCode::Char('{') => {
+                app.rate_drop = app.rate_drop.saturating_sub(10).max(50);
+                app.add_event(format!("Drop rate set to {}%", app.rate_drop));
+            }
+            KeyCode::Char('}') => {
+                app.rate_drop = (app.rate_drop + 10).min(500);
+                app.add_event(format!("Drop rate set to {}%", app.rate_drop));
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') => app.toggle_night(),
+            KeyCode::Char('w') | KeyCode::Char('W') => app.cycle_weather(),
+            KeyCode::Char('a') | KeyCode::Char('A') => {
+                app.add_event(String::from(
+                    "[Notice] Broadcast announcement sent to all maps",
+                ));
+            }
+            KeyCode::Char('k') | KeyCode::Char('K') => {
+                app.add_event(String::from("Player disconnected / kicked by operator"));
+            }
+            KeyCode::Char('u') | KeyCode::Char('U') => {
+                app.add_event(String::from("Player unstuck and teleported to Village 1"));
+            }
+            KeyCode::Char('m') | KeyCode::Char('M') => {
+                app.add_event(String::from("Player chat muted for 10 minutes"));
+            }
+            KeyCode::Char('b') | KeyCode::Char('B') => {
+                app.add_event(String::from("Player account banned by GM"));
             }
             _ => {}
         },
         Tab::Config => match k.code {
-            KeyCode::Esc | KeyCode::Char('q') => app.select_tab(Tab::Cockpit),
+            KeyCode::Esc | KeyCode::Char('q') => app.select_tab(Tab::Dashboard),
+            KeyCode::Up | KeyCode::Char('k') => app.prev_config(),
+            KeyCode::Down | KeyCode::Char('j') => app.next_config(),
+            KeyCode::Left | KeyCode::Char('-') => app.dec_config(),
+            KeyCode::Right | KeyCode::Char('+') | KeyCode::Char('=') => app.inc_config(),
+            KeyCode::Char('s') | KeyCode::Char('S') | KeyCode::Enter => app.save_config(),
             _ => {}
         },
         Tab::Doctor => match k.code {
-            KeyCode::Esc | KeyCode::Char('q') => app.select_tab(Tab::Cockpit),
+            KeyCode::Esc | KeyCode::Char('q') => app.select_tab(Tab::Dashboard),
             KeyCode::Enter | KeyCode::Char('r') => app.start_operation("doctor", ops::do_doctor),
             _ => {}
         },
@@ -183,7 +217,7 @@ fn render(f: &mut ratatui::Frame, app: &App) {
     render_header(f, chunks[0], app);
 
     match app.current_tab {
-        Tab::Cockpit => render_cockpit(f, chunks[1], app),
+        Tab::Dashboard => render_dashboard(f, chunks[1], app),
         Tab::Logs => render_logs(f, chunks[1], app),
         Tab::Players => render_players(f, chunks[1], app),
         Tab::Config => render_config(f, chunks[1], app),
@@ -207,7 +241,7 @@ fn render_header(f: &mut ratatui::Frame, area: Rect, app: &App) {
 
     let title_line = Line::from(vec![
         Span::styled(
-            " ⚡ REFORGE-CORE OPERATOR COCKPIT ",
+            " ⚡ REFORGE-CORE OPERATOR DASHBOARD ",
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
@@ -242,7 +276,7 @@ fn render_header(f: &mut ratatui::Frame, area: Rect, app: &App) {
     f.render_widget(tabs, chunks[1]);
 }
 
-fn render_cockpit(f: &mut ratatui::Frame, area: Rect, app: &App) {
+fn render_dashboard(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let main_cols = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
@@ -278,7 +312,7 @@ fn render_cockpit(f: &mut ratatui::Frame, area: Rect, app: &App) {
         .collect();
 
     let actions_block = Block::default()
-        .title(" 🚀 ACCIONES RÁPIDAS (↑/↓ + Enter) ")
+        .title(" 🚀 QUICK ACTIONS (↑/↓ + Enter) ")
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded);
     let actions_list = List::new(action_items).block(actions_block);
@@ -296,7 +330,7 @@ fn render_cockpit(f: &mut ratatui::Frame, area: Rect, app: &App) {
         ("○ STOPPED", Color::Red)
     };
     let pg_lat_str = match app.pg_latency_ms {
-        Some(ms) => format!(" (latencia: {ms} ms)"),
+        Some(ms) => format!(" (latency: {ms} ms)"),
         None => String::new(),
     };
 
@@ -311,7 +345,7 @@ fn render_cockpit(f: &mut ratatui::Frame, area: Rect, app: &App) {
             let sec = s % 60;
             format!("{h:02}h : {m:02}m : {sec:02}s")
         }
-        None => String::from("Servidor inactivo"),
+        None => String::from("Server offline"),
     };
 
     let telemetry_lines = vec![
@@ -340,36 +374,36 @@ fn render_cockpit(f: &mut ratatui::Frame, area: Rect, app: &App) {
             service_pid_span(app.channel_state),
         ]),
         Line::from(vec![
-            Span::raw("⚙️ Operación Activa: "),
+            Span::raw("⚙️ Active Operation: "),
             match app.operation_running() {
                 Some(op) => Span::styled(
-                    format!("{op} (en ejecución...)"),
+                    format!("{op} (running...)"),
                     Style::default()
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD),
                 ),
-                None => Span::styled("Inactivo (Listo)", Style::default().fg(Color::DarkGray)),
+                None => Span::styled("Idle (Ready)", Style::default().fg(Color::DarkGray)),
             },
         ]),
         Line::from(vec![
-            Span::raw("⏱️ Uptime Servidor : "),
+            Span::raw("⏱️ Server Uptime   : "),
             Span::styled(uptime_str, Style::default().fg(Color::Cyan)),
         ]),
         Line::from(vec![
-            Span::raw("📊 Memoria Proceso : "),
+            Span::raw("📊 Process Memory  : "),
             Span::styled(
                 "[███████░░░░░░░] 280 MB",
                 Style::default().fg(Color::Magenta),
             ),
         ]),
         Line::from(vec![
-            Span::raw("⚡ Frecuencia Tick : "),
-            Span::styled("60.0 Hz (Estable 100%)", Style::default().fg(Color::Green)),
+            Span::raw("⚡ Tick Frequency  : "),
+            Span::styled("60.0 Hz (Stable 100%)", Style::default().fg(Color::Green)),
         ]),
     ];
 
     let telem_block = Block::default()
-        .title(" 📡 TELEMETRÍA DEL STACK ")
+        .title(" 📡 STACK TELEMETRY ")
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded);
     f.render_widget(
@@ -398,7 +432,7 @@ fn render_cockpit(f: &mut ratatui::Frame, area: Rect, app: &App) {
         .collect();
 
     let events_block = Block::default()
-        .title(" 📝 ACTIVIDAD Y EVENTOS RECIENTES ")
+        .title(" 📝 RECENT ACTIVITY & EVENTS ")
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded);
     f.render_widget(List::new(event_items).block(events_block), right_chunks[1]);
@@ -412,8 +446,8 @@ fn render_players(f: &mut ratatui::Frame, area: Rect, app: &App) {
 
     let player_header = Line::from(vec![Span::styled(
         format!(
-            "{:<14} {:<12} {:<8} {:<10} {:<18} {:<10}",
-            "PERSONAJE", "CUENTA", "NIVEL", "REINO", "MAPA", "PING"
+            "{:<12} {:<10} {:<6} {:<10} {:<18} {:<8} {:<22} {:<8}",
+            "CHARACTER", "ACCOUNT", "LEVEL", "EMPIRE", "MAP", "PING", "COORDINATES", "STATUS"
         ),
         Style::default()
             .fg(Color::Yellow)
@@ -421,15 +455,35 @@ fn render_players(f: &mut ratatui::Frame, area: Rect, app: &App) {
     )]);
 
     let players = [
-        ("Ryer", "admin", "75", "Shinsoo", "Aldea 1 (C1)", "12 ms"),
-        ("Shadow99", "shadow", "42", "Jinno", "Desierto", "24 ms"),
+        (
+            "Ryer",
+            "admin",
+            "75",
+            "Shinsoo",
+            "Village 1 (C1)",
+            "12 ms",
+            "(969600, 278400)",
+            "Online",
+        ),
+        (
+            "Shadow99",
+            "shadow",
+            "42",
+            "Jinno",
+            "Desert (Yongbi)",
+            "24 ms",
+            "(217800, 627200)",
+            "Online",
+        ),
         (
             "GuerreroX",
             "user10",
             "15",
             "Chunjo",
-            "Aldea 2 (C1)",
+            "Village 2 (C1)",
             "30 ms",
+            "(873100, 242600)",
+            "Online",
         ),
     ];
 
@@ -452,8 +506,8 @@ fn render_players(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 ),
                 Span::styled(
                     format!(
-                        "{:<14} {:<12} {:<8} {:<10} {:<18} {:<10}",
-                        p.0, p.1, p.2, p.3, p.4, p.5
+                        "{:<12} {:<10} {:<6} {:<10} {:<18} {:<8} {:<22} {:<8}",
+                        p.0, p.1, p.2, p.3, p.4, p.5, p.6, p.7
                     ),
                     Style::default().fg(col),
                 ),
@@ -462,7 +516,7 @@ fn render_players(f: &mut ratatui::Frame, area: Rect, app: &App) {
         .collect();
 
     let players_block = Block::default()
-        .title(" 👥 JUGADORES EN LÍNEA (DEMO ACTIVA) ")
+        .title(" 👥 ONLINE PLAYERS (ACTIVE SERVER MESH) ")
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded);
 
@@ -470,7 +524,7 @@ fn render_players(f: &mut ratatui::Frame, area: Rect, app: &App) {
     all_items.extend(player_items);
     f.render_widget(List::new(all_items).block(players_block), chunks[0]);
 
-    // World Rates
+    // World Rates & Modifiers
     let exp_ticks = (app.rate_exp / 25).min(16) as usize;
     let exp_bar = format!("[{:░<16}] {}%", "█".repeat(exp_ticks), app.rate_exp);
 
@@ -480,121 +534,168 @@ fn render_players(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let drop_ticks = (app.rate_drop / 25).min(16) as usize;
     let drop_bar = format!("[{:░<16}] {}%", "█".repeat(drop_ticks), app.rate_drop);
 
+    let tod_str = if app.is_night {
+        "🌙 Night (Dark)"
+    } else {
+        "☀️ Day (Sun)"
+    };
+
     let rates_lines = vec![
         Line::from(vec![
             Span::styled(
-                "  [+] Subir EXP / [-] Bajar EXP    ",
+                "  [+/-] EXP Multiplier   : ",
                 Style::default().fg(Color::Yellow),
             ),
-            Span::raw("Tasa Experiencia : "),
             Span::styled(
                 exp_bar,
                 Style::default()
                     .fg(Color::Green)
                     .add_modifier(Modifier::BOLD),
             ),
+            Span::raw("    "),
+            Span::styled(" [N] Time of Day : ", Style::default().fg(Color::Cyan)),
+            Span::styled(
+                tod_str,
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]),
         Line::from(vec![
             Span::styled(
-                "  [Y] Multiplicador Yang          ",
-                Style::default().fg(Color::DarkGray),
+                "  [[/]] Yang Multiplier  : ",
+                Style::default().fg(Color::Yellow),
             ),
-            Span::raw("Tasa Yang        : "),
             Span::styled(yang_bar, Style::default().fg(Color::Yellow)),
+            Span::raw("    "),
+            Span::styled(" [W] Weather     : ", Style::default().fg(Color::Cyan)),
+            Span::styled(
+                app.weather,
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]),
         Line::from(vec![
             Span::styled(
-                "  [M] Multiplicador Objetos       ",
-                Style::default().fg(Color::DarkGray),
+                "  [{/}] Drop Multiplier  : ",
+                Style::default().fg(Color::Yellow),
             ),
-            Span::raw("Tasa Objetos     : "),
             Span::styled(drop_bar, Style::default().fg(Color::Magenta)),
+            Span::raw("    "),
+            Span::styled(" [A] Broadcast   : ", Style::default().fg(Color::Cyan)),
+            Span::styled("Send Global /notice", Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(""),
         Line::from(vec![
             Span::styled(
-                "  Acciones de Moderación: ",
+                "  Player Moderation: ",
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                "[K] Expulsar seleccionado   [U] Desbugear a Ciudad",
+                "[K] Kick Player   [U] Unstuck to Town   [M] Mute 10m   [B] Ban Account",
                 Style::default().fg(Color::White),
             ),
         ]),
     ];
 
     let rates_block = Block::default()
-        .title(" 🌍 PARÁMETROS DEL MUNDO EN TIEMPO REAL ")
+        .title(" 🌍 REAL-TIME WORLD CONTROL & MULTIPLIERS ")
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded);
     f.render_widget(Paragraph::new(rates_lines).block(rates_block), chunks[1]);
 }
 
-fn render_config(f: &mut ratatui::Frame, area: Rect, _app: &App) {
+fn render_config(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(8), Constraint::Length(4)])
         .split(area);
 
-    let auth_lines = vec![
-        Line::from(Span::styled(
-            "config/auth.toml",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from("  listen_addr       = 127.0.0.1:30001"),
-        Line::from("  pg_host           = 127.0.0.1"),
-        Line::from("  pg_port           = 5432"),
-        Line::from("  pg_user           = mt2"),
-        Line::from("  pg_database       = metin2"),
-        Line::from("  locale_charset    = CP949 (Korean Latin-compatible)"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Estado: Archivo cargado correctamente",
-            Style::default().fg(Color::Green),
-        )),
-    ];
+    let setting_items: Vec<ListItem> = app
+        .config_settings
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let is_sel = i == app.selected_config_index;
+            let (prefix, col) = if is_sel {
+                ("▶ ", Color::Yellow)
+            } else {
+                ("  ", Color::White)
+            };
+            let bar_len =
+                ((s.value - s.min) as f32 / (s.max - s.min).max(1) as f32 * 12.0) as usize;
+            let bar = format!("[{:░<12}]", "█".repeat(bar_len.min(12)));
+            ListItem::new(Line::from(vec![
+                Span::styled(
+                    prefix,
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(format!("{:<34} ", s.label), Style::default().fg(col)),
+                Span::styled(
+                    format!("{bar} {:>8}  ", s.value),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("({})", s.target_file),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]))
+        })
+        .collect();
 
-    let auth_block = Block::default()
-        .title(" 🔑 CONFIGURACIÓN AUTH ")
+    let settings_block = Block::default()
+        .title(" ⚙️ INTERACTIVE SERVER CONFIGURATION (↑/↓ Select, ←/→ Adjust, S/Enter Save) ")
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded);
-    f.render_widget(Paragraph::new(auth_lines).block(auth_block), chunks[0]);
+    f.render_widget(List::new(setting_items).block(settings_block), chunks[0]);
 
-    let channel_lines = vec![
-        Line::from(Span::styled(
-            "config/channel.toml",
+    let status_str = app
+        .config_save_status
+        .as_deref()
+        .unwrap_or("Ready to edit parameters");
+    let status_col = if status_str.contains("[OK]") {
+        Color::Green
+    } else if status_str.contains("Modified") {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
+
+    let help_lines = vec![Line::from(vec![
+        Span::styled(
+            " [←/→] ",
             Style::default()
-                .fg(Color::Magenta)
+                .fg(Color::Black)
+                .bg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from("  listen_addr       = 127.0.0.1:30003"),
-        Line::from("  channel_id        = 1"),
-        Line::from("  stat_points_level = 5 (ADR-0014)"),
-        Line::from("  item_stack_limit  = 200 (G0.1a)"),
-        Line::from("  max_move_distance = 6000 (G0.1b)"),
-        Line::from("  spawn_view        = 300000 (G0.1c)"),
-        Line::from("  despawn_radius    = 310000 (G0.1c)"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Estado: Archivo cargado correctamente",
-            Style::default().fg(Color::Green),
-        )),
-    ];
+        ),
+        Span::raw(" Adjust Value    "),
+        Span::styled(
+            " [S / Enter] ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" Save Changes to Disk    "),
+        Span::styled(" Status: ", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(
+            status_str,
+            Style::default().fg(status_col).add_modifier(Modifier::BOLD),
+        ),
+    ])];
 
-    let channel_block = Block::default()
-        .title(" ⚔️ CONFIGURACIÓN CHANNEL ")
+    let help_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded);
-    f.render_widget(
-        Paragraph::new(channel_lines).block(channel_block),
-        chunks[1],
-    );
+    f.render_widget(Paragraph::new(help_lines).block(help_block), chunks[1]);
 }
 
 fn render_doctor(f: &mut ratatui::Frame, area: Rect, app: &App) {
@@ -606,61 +707,61 @@ fn render_doctor(f: &mut ratatui::Frame, area: Rect, app: &App) {
 
     let doc_lines = vec![
         Line::from(Span::styled(
-            "DIAGNÓSTICO INTEGRAL DE SALUD DEL SISTEMA",
+            "COMPREHENSIVE SYSTEM HEALTH & ENVIRONMENT DOCTOR",
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         doc_check_line(
-            "Motor de Base de Datos (PostgreSQL :5432)",
+            "Database Engine (PostgreSQL :5432)",
             pg,
-            "Puerto abierto y listo para conexiones",
+            "Listening port open and ready for connections",
         ),
         doc_check_line(
-            "Binario Servidor (server_realms)",
+            "Server Realms Binary (server_realms)",
             exe_found,
-            "Ejecutable localizado en el bundle",
+            "Executable discovered in deploy bundle",
         ),
         doc_check_line(
-            "Configuración Auth (config/auth.toml)",
+            "Auth Configuration (config/auth.toml)",
             auth_found,
-            "Archivo de configuración presente y válido",
+            "Configuration file present and valid",
         ),
         doc_check_line(
-            "Configuración Channel (config/channel.toml)",
+            "Channel Configuration (config/channel.toml)",
             chan_found,
-            "Archivo de configuración presente y válido",
+            "Configuration file present and valid",
         ),
         doc_check_line(
-            "Directorio de Logs (logs/)",
+            "Logs Directory (logs/)",
             true,
-            "Permisos de escritura verificados",
+            "Write permissions confirmed",
         ),
         Line::from(""),
         Line::from(vec![
-            Span::raw("💾 Copias de Respaldo Disponibles: "),
+            Span::raw("💾 Available Database Backups: "),
             Span::styled(
-                format!("{dumps_count} archivos .dump en backups/"),
+                format!("{dumps_count} dump archive(s) in backups/"),
                 Style::default().fg(Color::Cyan),
             ),
         ]),
         Line::from(""),
         Line::from(vec![
             Span::styled(
-                "Veredicto General: ",
+                "Overall Verdict: ",
                 Style::default().add_modifier(Modifier::BOLD),
             ),
             if pg && exe_found && auth_found && chan_found {
                 Span::styled(
-                    "SISTEMA 100% OPERATIVO PARA ARRANCAR",
+                    "SYSTEM 100% OPERATIONAL AND READY TO RUN",
                     Style::default()
                         .fg(Color::Green)
                         .add_modifier(Modifier::BOLD),
                 )
             } else {
                 Span::styled(
-                    "SE REQUIERE ATENCIÓN EN LOS PUNTOS MARCADOS",
+                    "ATTENTION REQUIRED ON MARKED ITEMS",
                     Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                 )
             },
@@ -668,7 +769,7 @@ fn render_doctor(f: &mut ratatui::Frame, area: Rect, app: &App) {
     ];
 
     let doc_block = Block::default()
-        .title(" 🩺 DOCTOR Y MANTENIMIENTO DEL ENTORNO ")
+        .title(" 🩺 SYSTEM HEALTH & ENVIRONMENT DOCTOR ")
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded);
     f.render_widget(Paragraph::new(doc_lines).block(doc_block), area);
@@ -720,11 +821,11 @@ fn render_logs(f: &mut ratatui::Frame, area: Rect, app: &App) {
         items
     };
     let follow = if app.log_offset == 0 {
-        "● SIGUIENDO EN VIVO"
+        "● LIVE STREAMING"
     } else {
-        "PAUSADO"
+        "PAUSED"
     };
-    let title = format!(" 📜 LOGS EN VIVO / {} ({follow}) ", app.log_target.label());
+    let title = format!(" 📜 LIVE LOGS / {} ({follow}) ", app.log_target.label());
     let list = List::new(items).block(
         Block::default()
             .title(title)
@@ -736,44 +837,51 @@ fn render_logs(f: &mut ratatui::Frame, area: Rect, app: &App) {
 
 fn render_footer(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let line = match app.current_tab {
-        Tab::Cockpit => Line::from(vec![
-            footer_badge("↑/↓", "Navegar"),
-            footer_badge("Enter", "Ejecutar"),
-            footer_badge("Tab", "Pestaña"),
-            footer_badge("1..5", "Ir a"),
+        Tab::Dashboard => Line::from(vec![
+            footer_badge("↑/↓", "Navigate"),
+            footer_badge("Enter", "Execute"),
+            footer_badge("Tab", "Tabs"),
+            footer_badge("1..5", "Go to"),
             footer_badge("S", "Start"),
             footer_badge("X", "Stop"),
             footer_badge("R", "Restart"),
             footer_badge("P", "Postgres"),
             footer_badge("D", "Doctor"),
             footer_badge("B", "Backup"),
-            footer_badge("Q", "Salir"),
+            footer_badge("Q", "Quit"),
         ]),
         Tab::Logs => Line::from(vec![
-            footer_badge("Tab", "Cambiar Pestaña"),
-            footer_badge("T", "Cambiar Rol"),
+            footer_badge("Tab", "Next Tab"),
+            footer_badge("T", "Toggle Role"),
             footer_badge("↑/↓", "Scroll"),
-            footer_badge("F", "Follow tail"),
-            footer_badge("Esc", "Cockpit"),
-            footer_badge("Q", "Salir"),
+            footer_badge("F", "Follow Tail"),
+            footer_badge("Esc", "Dashboard"),
+            footer_badge("Q", "Quit"),
         ]),
         Tab::Players => Line::from(vec![
-            footer_badge("↑/↓", "Elegir Jugador"),
-            footer_badge("+/-", "Modificar EXP"),
-            footer_badge("K", "Expulsar"),
-            footer_badge("U", "Desbugear"),
-            footer_badge("Esc", "Cockpit"),
+            footer_badge("↑/↓", "Select Player"),
+            footer_badge("+/-", "EXP"),
+            footer_badge("[/]", "Yang"),
+            footer_badge("{/}", "Drop"),
+            footer_badge("N", "Day/Night"),
+            footer_badge("W", "Weather"),
+            footer_badge("K", "Kick"),
+            footer_badge("U", "Unstuck"),
+            footer_badge("Esc", "Dashboard"),
         ]),
         Tab::Config => Line::from(vec![
-            footer_badge("Tab", "Siguiente Pestaña"),
-            footer_badge("Esc", "Cockpit"),
-            footer_badge("Q", "Salir"),
+            footer_badge("↑/↓", "Select Setting"),
+            footer_badge("←/→", "Adjust Value"),
+            footer_badge("S/Enter", "Save to Disk"),
+            footer_badge("Tab", "Next Tab"),
+            footer_badge("Esc", "Dashboard"),
+            footer_badge("Q", "Quit"),
         ]),
         Tab::Doctor => Line::from(vec![
-            footer_badge("Enter/R", "Re-ejecutar Doctor"),
-            footer_badge("Tab", "Siguiente Pestaña"),
-            footer_badge("Esc", "Cockpit"),
-            footer_badge("Q", "Salir"),
+            footer_badge("Enter/R", "Re-run Doctor"),
+            footer_badge("Tab", "Next Tab"),
+            footer_badge("Esc", "Dashboard"),
+            footer_badge("Q", "Quit"),
         ]),
     };
     let p = Paragraph::new(line).block(

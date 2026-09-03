@@ -16,7 +16,7 @@ pub enum Screen {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
-    Cockpit,
+    Dashboard,
     Logs,
     Players,
     Config,
@@ -26,7 +26,7 @@ pub enum Tab {
 impl Tab {
     pub fn all() -> &'static [Tab] {
         &[
-            Tab::Cockpit,
+            Tab::Dashboard,
             Tab::Logs,
             Tab::Players,
             Tab::Config,
@@ -36,17 +36,17 @@ impl Tab {
 
     pub fn title(self) -> &'static str {
         match self {
-            Tab::Cockpit => " 1. Cockpit ",
-            Tab::Logs => " 2. Logs en Vivo ",
-            Tab::Players => " 3. Jugadores & Mundo ",
-            Tab::Config => " 4. Configuración ",
-            Tab::Doctor => " 5. Doctor & Mantenimiento ",
+            Tab::Dashboard => " 1. Dashboard ",
+            Tab::Logs => " 2. Live Logs ",
+            Tab::Players => " 3. Players & World ",
+            Tab::Config => " 4. Configuration ",
+            Tab::Doctor => " 5. System Doctor ",
         }
     }
 
     pub fn index(self) -> usize {
         match self {
-            Tab::Cockpit => 0,
+            Tab::Dashboard => 0,
             Tab::Logs => 1,
             Tab::Players => 2,
             Tab::Config => 3,
@@ -83,14 +83,14 @@ impl ActionItem {
 
     pub fn label(self) -> &'static str {
         match self {
-            ActionItem::StartServer => "1. Iniciar Servidor Completo",
-            ActionItem::StopServer => "2. Detener Servidor",
-            ActionItem::RestartServer => "3. Reiniciar Servidor",
-            ActionItem::TogglePostgres => "4. Iniciar / Gestionar PostgreSQL (P)",
-            ActionItem::RunDoctor => "5. Diagnóstico del Sistema (Doctor) (D)",
-            ActionItem::CreateBackup => "6. Crear Copia de Respaldo (.dump) (B)",
-            ActionItem::ViewLogs => "7. Ver Registros en Vivo (L)",
-            ActionItem::Quit => "8. Salir del Panel (Q)",
+            ActionItem::StartServer => "1. Start Server (Auth + Channel)",
+            ActionItem::StopServer => "2. Stop Server",
+            ActionItem::RestartServer => "3. Restart Server",
+            ActionItem::TogglePostgres => "4. Manage / Start PostgreSQL (P)",
+            ActionItem::RunDoctor => "5. System Doctor & Health (D)",
+            ActionItem::CreateBackup => "6. Create Database Backup (.dump) (B)",
+            ActionItem::ViewLogs => "7. View Live Logs (L)",
+            ActionItem::Quit => "8. Exit Panel (Q)",
         }
     }
 
@@ -106,6 +106,17 @@ impl ActionItem {
             ActionItem::Quit => "🚪",
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct ConfigSetting {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub value: u32,
+    pub step: u32,
+    pub min: u32,
+    pub max: u32,
+    pub target_file: &'static str,
 }
 
 struct PendingOperation {
@@ -142,7 +153,12 @@ pub struct App {
     pub rate_exp: u32,
     pub rate_yang: u32,
     pub rate_drop: u32,
+    pub weather: &'static str,
+    pub is_night: bool,
     pub selected_player_index: usize,
+    pub config_settings: Vec<ConfigSetting>,
+    pub selected_config_index: usize,
+    pub config_save_status: Option<String>,
     pub start_time: Option<Instant>,
     pub last_tick: Instant,
     pending_operation: Option<PendingOperation>,
@@ -176,10 +192,76 @@ fn current_time_str() -> String {
 impl App {
     pub fn new(deploy_dir: PathBuf) -> Self {
         let head = process::git_head(&deploy_dir);
+        let config_settings = vec![
+            ConfigSetting {
+                key: "listen_addr",
+                label: "Auth Service Listen Port",
+                value: 30001,
+                step: 1,
+                min: 1024,
+                max: 65535,
+                target_file: "config/auth.toml",
+            },
+            ConfigSetting {
+                key: "listen_addr",
+                label: "Channel Service Listen Port",
+                value: 30003,
+                step: 1,
+                min: 1024,
+                max: 65535,
+                target_file: "config/channel.toml",
+            },
+            ConfigSetting {
+                key: "stat_points_per_level",
+                label: "Stat Points per Level Up",
+                value: 5,
+                step: 1,
+                min: 1,
+                max: 20,
+                target_file: "config/channel.toml",
+            },
+            ConfigSetting {
+                key: "item_count_limit",
+                label: "Inventory Item Stack Limit",
+                value: 200,
+                step: 50,
+                min: 1,
+                max: 1000,
+                target_file: "config/channel.toml",
+            },
+            ConfigSetting {
+                key: "max_move_distance",
+                label: "Max Movement Distance / Tick",
+                value: 6000,
+                step: 500,
+                min: 1000,
+                max: 20000,
+                target_file: "config/channel.toml",
+            },
+            ConfigSetting {
+                key: "spawn_view",
+                label: "Mob Spawn View Range",
+                value: 300000,
+                step: 10000,
+                min: 50000,
+                max: 1000000,
+                target_file: "config/channel.toml",
+            },
+            ConfigSetting {
+                key: "despawn_radius",
+                label: "Mob Despawn Radius",
+                value: 310000,
+                step: 10000,
+                min: 60000,
+                max: 1100000,
+                target_file: "config/channel.toml",
+            },
+        ];
+
         let mut app = App {
             deploy_dir,
             screen: Screen::Main,
-            current_tab: Tab::Cockpit,
+            current_tab: Tab::Dashboard,
             selected_action: 0,
             pg_state: process::is_postgres_running(),
             pg_latency_ms: measure_pg_latency(),
@@ -193,16 +275,24 @@ impl App {
             channel_log_preview: String::from("no output yet"),
             status_message: String::from("ready"),
             recent_events: vec![
-                (current_time_str(), String::from("Panel Cockpit iniciado")),
                 (
                     current_time_str(),
-                    String::from("Monitoreo de cluster activo"),
+                    String::from("Dashboard panel initialized"),
+                ),
+                (
+                    current_time_str(),
+                    String::from("Cluster monitoring active"),
                 ),
             ],
             rate_exp: 100,
             rate_yang: 100,
             rate_drop: 100,
+            weather: "Clear",
+            is_night: false,
             selected_player_index: 0,
+            config_settings,
+            selected_config_index: 0,
+            config_save_status: None,
             start_time: None,
             last_tick: Instant::now(),
             pending_operation: None,
@@ -252,6 +342,70 @@ impl App {
 
     pub fn prev_action(&mut self) {
         self.selected_action = self.selected_action.saturating_sub(1);
+    }
+
+    pub fn next_config(&mut self) {
+        let count = self.config_settings.len();
+        if count > 0 {
+            self.selected_config_index = (self.selected_config_index + 1).min(count - 1);
+        }
+    }
+
+    pub fn prev_config(&mut self) {
+        self.selected_config_index = self.selected_config_index.saturating_sub(1);
+    }
+
+    pub fn inc_config(&mut self) {
+        if let Some(s) = self.config_settings.get_mut(self.selected_config_index) {
+            s.value = (s.value + s.step).min(s.max);
+            self.config_save_status = Some(String::from("Modified (press 'S' to save)"));
+        }
+    }
+
+    pub fn dec_config(&mut self) {
+        if let Some(s) = self.config_settings.get_mut(self.selected_config_index) {
+            s.value = s.value.saturating_sub(s.step).max(s.min);
+            self.config_save_status = Some(String::from("Modified (press 'S' to save)"));
+        }
+    }
+
+    pub fn save_config(&mut self) {
+        let channel_path = self.deploy_dir.join("config").join("channel.toml");
+        if channel_path.is_file()
+            && let Ok(content) = std::fs::read_to_string(&channel_path)
+        {
+            let mut new_content = content;
+            for s in &self.config_settings {
+                if s.target_file.contains("channel") {
+                    let pattern = format!("{} = ", s.key);
+                    if let Some(pos) = new_content.find(&pattern)
+                        && let Some(line_end) = new_content[pos..].find('\n')
+                    {
+                        let full_end = pos + line_end;
+                        let replacement = format!("{} = {}", s.key, s.value);
+                        new_content.replace_range(pos..full_end, &replacement);
+                    }
+                }
+            }
+            let _ = std::fs::write(&channel_path, new_content);
+        }
+        self.config_save_status = Some(String::from("[OK] Saved to config/channel.toml"));
+        self.add_event(String::from("Configuration saved to disk"));
+    }
+
+    pub fn cycle_weather(&mut self) {
+        self.weather = match self.weather {
+            "Clear" => "Rain",
+            "Rain" => "Snow",
+            _ => "Clear",
+        };
+        self.add_event(format!("Weather changed to {}", self.weather));
+    }
+
+    pub fn toggle_night(&mut self) {
+        self.is_night = !self.is_night;
+        let mode = if self.is_night { "Night" } else { "Day" };
+        self.add_event(format!("Time of day switched to {mode}"));
     }
 
     pub fn add_event(&mut self, msg: String) {
@@ -452,7 +606,7 @@ impl App {
             current_tab: if screen == Screen::Logs {
                 Tab::Logs
             } else {
-                Tab::Cockpit
+                Tab::Dashboard
             },
             selected_action: 0,
             pg_state: false,
@@ -470,7 +624,12 @@ impl App {
             rate_exp: 100,
             rate_yang: 100,
             rate_drop: 100,
+            weather: "Clear",
+            is_night: false,
             selected_player_index: 0,
+            config_settings: Vec::new(),
+            selected_config_index: 0,
+            config_save_status: None,
             start_time: None,
             last_tick: Instant::now(),
             pending_operation: None,
