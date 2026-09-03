@@ -46,6 +46,10 @@ fn main() -> ExitCode {
             "backup" => run_cli_op("backup", ops::do_backup(&deploy_dir)),
             "postgres" => run_cli_op("postgres", ops::do_postgres(&deploy_dir)),
             "doctor" => run_doctor(&deploy_dir),
+            "db-init" => run_cli_op("db-init", ops::do_db_init(&deploy_dir)),
+            "db-seed" => run_cli_op("db-seed", ops::do_db_seed(&deploy_dir)),
+            "db-reset" => run_cli_op("db-reset", ops::do_db_reset(&deploy_dir)),
+            "db-check" => run_cli_op("db-check", ops::do_db_check(&deploy_dir)),
             other => {
                 eprintln!("admin_tui: unknown command '{other}'");
                 ExitCode::FAILURE
@@ -206,12 +210,25 @@ fn print_help() {
     println!("admin_tui - reforge-core operator panel");
     println!();
     println!("USAGE:");
-    println!("    admin_tui [--deploy-dir <PATH>]");
+    println!("    admin_tui [SUBCOMMAND] [--deploy-dir <PATH>]");
+    println!();
+    println!("SUBCOMMANDS:");
+    println!("    start        Start PostgreSQL, auth, and channel in background");
+    println!("    stop         Stop running server_realms processes");
+    println!("    restart      Restart server_realms");
+    println!("    status       Show status probe (no TUI)");
+    println!("    backup       Create PostgreSQL dump backup in backups/");
+    println!("    postgres     Start PostgreSQL service");
+    println!("    doctor       Run system health checks");
+    println!("    db-init      Create database and apply versioned schema DDL");
+    println!("    db-seed      Load minimal lawful synthetic development seed");
+    println!("    db-reset     Drop and recreate database from schema + seed");
+    println!("    db-check     Verify database connectivity, schemas, and counts");
     println!();
     println!("OPTIONS:");
     println!("    -d, --deploy-dir <PATH>   Deploy dir (default: REFORGE_DEPLOY_DIR).");
-    println!("    -h, --help                 Print this help.");
-    println!("    --probe                    Run status + log probe and exit (no TUI).");
+    println!("    -h, --help                Print this help.");
+    println!("    --probe                   Run status + log probe and exit (no TUI).");
 }
 
 #[cfg(test)]

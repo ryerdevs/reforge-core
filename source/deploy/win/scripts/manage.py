@@ -341,8 +341,40 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     except OSError as e:
         print(f"Logs Directory : [FAIL] Cannot write ({e})")
 
+    # Check database schema & seed if postgres is running
+    if pg:
+        try:
+            import bootstrap_db
+            code, stdout, _ = bootstrap_db.run_psql(
+                sql_cmd="SELECT count(*) FROM information_schema.tables WHERE table_schema IN ('account','common','player','log','world');",
+                db="metin2",
+            )
+            tbl_count = stdout.strip() if code == 0 else "0"
+            code, stdout, _ = bootstrap_db.run_psql(
+                sql_cmd="SELECT count(*) FROM account.account;",
+                db="metin2",
+            )
+            acc_count = stdout.strip() if code == 0 else "0"
+            db_status = f"[OK] {tbl_count} tables, {acc_count} accounts" if int(tbl_count or 0) >= 30 else "[WARN] Incomplete (run: manage.py db init)"
+            print(f"Database Schema: {db_status}")
+        except Exception:
+            pass
+
     print("==================================")
     return 0
+
+
+def cmd_db(args: argparse.Namespace) -> int:
+    import bootstrap_db
+
+    handlers = {
+        "init": bootstrap_db.cmd_init,
+        "seed": bootstrap_db.cmd_seed,
+        "reset": bootstrap_db.cmd_reset,
+        "check": bootstrap_db.cmd_check,
+        "restore": bootstrap_db.cmd_restore,
+    }
+    return handlers[args.db_command](args)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -358,6 +390,17 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.add_parser("backup", help="Run pg_dump backup into backups/")
     subparsers.add_parser("doctor", help="Perform health diagnosis of environment")
 
+    # db subcommand group
+    db_parser = subparsers.add_parser("db", help="Manage PostgreSQL database schema, bootstrap, and seed")
+    db_sub = db_parser.add_subparsers(dest="db_command", required=True)
+    db_sub.add_parser("init", help="Create database 'metin2' and apply versioned schema DDL")
+    db_sub.add_parser("seed", help="Load minimal lawful synthetic development seed records")
+    db_reset = db_sub.add_parser("reset", help="Drop and recreate 'metin2' database from schema + seed")
+    db_reset.add_argument("-f", "--force", action="store_true", help="Skip confirmation prompt")
+    db_sub.add_parser("check", help="Verify database connectivity, schemas, and table counts")
+    db_restore = db_sub.add_parser("restore", help="Restore a custom database dump (.dump or .sql)")
+    db_restore.add_argument("file", help="Path to .dump or .sql file")
+
     args = parser.parse_args(argv)
 
     handlers = {
@@ -367,6 +410,7 @@ def main(argv: list[str] | None = None) -> int:
         "status": cmd_status,
         "backup": cmd_backup,
         "doctor": cmd_doctor,
+        "db": cmd_db,
     }
     return handlers[args.command](args)
 

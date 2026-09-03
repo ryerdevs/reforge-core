@@ -429,7 +429,37 @@ fn run_script(deploy_dir: &Path, script: &str, args: &[&str]) -> OpResult {
     }
 }
 
-fn find_script(deploy_dir: &Path, script: &str) -> PathBuf {
+pub fn run_bootstrap_db(deploy_dir: &Path, command: &str) -> OpResult {
+    let script = find_script(deploy_dir, "bootstrap_db.py");
+    if !script.exists() {
+        return OpResult::Failed(format!(
+            "bootstrap_db.py not found from {}",
+            deploy_dir.display()
+        ));
+    }
+    let mut cmd = Command::new("python");
+    cmd.arg(&script).arg(command);
+    if command == "reset" {
+        cmd.arg("--force");
+    }
+    cmd.current_dir(deploy_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    match cmd.output() {
+        Ok(output) if output.status.success() => {
+            let out = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            OpResult::Ok(out)
+        }
+        Ok(output) => {
+            let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            OpResult::Failed(format!("db {command} failed: {detail}"))
+        }
+        Err(e) => OpResult::Failed(format!("db {command} spawn: {e}")),
+    }
+}
+
+pub fn find_script(deploy_dir: &Path, script: &str) -> PathBuf {
     let deployed = deploy_dir.join("scripts").join(script);
     if deployed.exists() {
         return deployed;
@@ -584,5 +614,22 @@ mod tests {
         assert_eq!(found, Some(dummy_cfg));
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn run_bootstrap_db_fails_gracefully_on_invalid_command() {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let res = run_bootstrap_db(&cwd, "invalid_command_xyz");
+        match res {
+            super::OpResult::Failed(msg) => {
+                assert!(
+                    msg.contains("invalid_command_xyz")
+                        || msg.contains("invalid")
+                        || msg.contains("error")
+                        || msg.contains("db invalid_command_xyz")
+                );
+            }
+            _ => panic!("expected Failed on invalid command"),
+        }
     }
 }

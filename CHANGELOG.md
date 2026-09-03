@@ -16,6 +16,20 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- **Native Windows PostgreSQL bootstrap and lawful synthetic seed (A2.3, 2026-09-03):**
+  added versioned PostgreSQL 18 development schema (`source/deploy/win/schema/schema.sql`)
+  and minimal lawful synthetic development seed (`source/deploy/win/schema/seed.sql`).
+  Covers 5 domain schemas (`account`, `common`, `player`, `log`, `world`) with standard
+  cryptographic password hashing (`account.mysql_hash_password`), test accounts (`test/1234`,
+  `admin/admin`), Shinsoo Warrior Lv.1 character 'Ryer' at Village 1, starter items (Sword+0,
+  potions), baseline protos, Village 1 map definitions, and level 1..120 polynomial experience
+  table without proprietary client/server dumps. Implemented automated cross-platform tooling
+  `scripts/bootstrap_db.py`, `scripts/bootstrap_db.ps1`, `manage.py db <init|seed|reset|check|restore>`,
+  and `admin_tui db-<init|seed|reset|check>` with interactive Doctor tab controls (`[I]` Init DB,
+  `[S]` Seed DB).
+
 ### Changed
 
 - **Modern 5-tab operator dashboard, interactive config editor, and rich player/world controls for admin_tui (2026-09-03):**

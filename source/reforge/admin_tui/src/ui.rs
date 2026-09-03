@@ -197,6 +197,12 @@ fn handle_key(app: &mut App, k: KeyEvent) -> bool {
         Tab::Doctor => match k.code {
             KeyCode::Esc | KeyCode::Char('q') => app.select_tab(Tab::Dashboard),
             KeyCode::Enter | KeyCode::Char('r') => app.start_operation("doctor", ops::do_doctor),
+            KeyCode::Char('i') | KeyCode::Char('I') => {
+                app.start_operation("db-init", ops::do_db_init)
+            }
+            KeyCode::Char('s') | KeyCode::Char('S') => {
+                app.start_operation("db-seed", ops::do_db_seed)
+            }
             _ => {}
         },
     }
@@ -738,6 +744,12 @@ fn render_doctor(f: &mut ratatui::Frame, area: Rect, app: &App) {
             true,
             "Write permissions confirmed",
         ),
+        doc_check_line(
+            "Database Schemas & Seed (schema.sql, seed.sql)",
+            app.deploy_dir.join("schema").join("schema.sql").exists()
+                && app.deploy_dir.join("schema").join("seed.sql").exists(),
+            "Versioned development DDL & synthetic fixtures present",
+        ),
         Line::from(""),
         Line::from(vec![
             Span::raw("💾 Available Database Backups: "),
@@ -879,6 +891,8 @@ fn render_footer(f: &mut ratatui::Frame, area: Rect, app: &App) {
         ]),
         Tab::Doctor => Line::from(vec![
             footer_badge("Enter/R", "Re-run Doctor"),
+            footer_badge("I", "Init DB"),
+            footer_badge("S", "Seed DB"),
             footer_badge("Tab", "Next Tab"),
             footer_badge("Esc", "Dashboard"),
             footer_badge("Q", "Quit"),

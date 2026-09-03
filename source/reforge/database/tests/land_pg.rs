@@ -37,6 +37,7 @@ fn land_pg_lock() -> &'static Mutex<()> {
 /// duro es el count y la estructura).
 #[tokio::test]
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
+#[allow(clippy::await_holding_lock)]
 async fn land_load_map_41_contract() {
     let _g = land_pg_lock().lock().unwrap_or_else(|e| e.into_inner());
     let repo = LandRepo::new(database::pool::new_pool(&pg_conn(), 4).expect("pool PG"));
@@ -73,6 +74,7 @@ async fn land_load_map_41_contract() {
 /// (parity `SetOwner`) y `load_by_map` lo ve. Limpieza total al final.
 #[tokio::test]
 #[ignore = "requiere PG real (WSL): cargo test --package database -- --ignored"]
+#[allow(clippy::await_holding_lock)]
 async fn land_buy_sequence_and_transfer_roundtrip() {
     let _g = land_pg_lock().lock().unwrap_or_else(|e| e.into_inner());
     let repo = LandRepo::new(database::pool::new_pool(&pg_conn(), 4).expect("pool PG"));
