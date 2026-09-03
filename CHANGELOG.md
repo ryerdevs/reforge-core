@@ -18,6 +18,13 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **Modern Cockpit dashboard and tabbed interface for admin_tui (2026-09-03):**
+  transformed operator console into a 5-tab terminal cockpit (`[1] Cockpit`, `[2] Logs`,
+  `[3] Players & World`, `[4] Config`, `[5] Doctor`). Implemented cursor navigation
+  (`↑`/`↓` + `Enter`) over quick actions, database TCP latency ping monitoring, dynamic
+  uptime counter, syntax-highlighted log viewer, real-time activity event log, and
+  tab-contextual footer bars.
+
 - **Configuration centralization, cross-platform Python CLI, and TUI subcommands (A2.2, 2026-09-02):**
   reorganized deploy tree to isolate all runtime configuration inside `config/`
   (`config/auth.toml`, `config/channel.toml`, and secret-free reference templates in

@@ -93,6 +93,15 @@ The registry's `C1`–`C12` rows are closed prerequisite fixes; they do not mark
 
 ## Handoff
 
+- 2026-09-03 | **Modern Cockpit operator panel and tabbed dashboard for admin_tui:**
+  redesigned `admin_tui` from flat single-character keys into a rich, modern terminal
+  dashboard. Implemented visual action menu with cursor navigation (`↑`/`↓` + `Enter`),
+  tabbed navigation across 5 dedicated views (`[1] Cockpit`, `[2] Logs en Vivo`,
+  `[3] Jugadores & Mundo`, `[4] Configuración`, `[5] Doctor & Mantenimiento`), real-time
+  database latency ping monitoring, dynamic uptime counter, syntax-highlighted log viewer,
+  and in-memory event activity log. All 17 unit tests passed; path contract and boundary
+  verifications green. **Next:** A2.3 native Windows PostgreSQL bootstrap plus lawful synthetic seed.
+
 - 2026-09-02 | **A2.2 runtime configuration centralization, Python management CLI, and TUI subcommands closed:**
   centralized deploy configuration files into `source/deploy/win/config/` (`config/auth.toml`,
   `config/channel.toml`, and secret-free reference templates in `config/examples/`). Created
