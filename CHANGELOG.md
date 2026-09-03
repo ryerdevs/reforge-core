@@ -16,6 +16,20 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- **Path contract and executable-relative deploy/TUI discovery (A2.1, 2026-09-02):**
+  eliminated hardcoded maintainer paths (`C:\projects\Metin2`) across Windows
+  runtime and deployment scripts (`start_win.ps1`, `deploy_win.ps1`,
+  `backup_win.ps1`, and `restore_drill.ps1`), substituting repository-relative
+  discovery via `$PSScriptRoot` with explicit environment overrides
+  (`REFORGE_ROOT`, `REFORGE_DEPLOY_WIN`, `REFORGE_BACKUP_DIR`, `PGDUMP_PATH`,
+  `PGBIN_PATH`). Updated `admin_tui` discovery logic to search executable
+  ancestors (`current_exe()`), deploy directory ancestors, and CWD ancestors
+  before falling back. Added unit tests for flag parsing and ancestor script
+  discovery, plus `scripts/check_path_contract.ps1` to enforce clean static paths
+  and verify external directory execution in `scripts/verify.ps1`.
+
 ### Fixed
 
 - **Gate live-PG integration tests behind `#[ignore]` (2026-09-02):** the two

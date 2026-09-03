@@ -6,7 +6,7 @@
 #   3. Copiar el binario a source\deploy\win\server_realms.exe
 #   4. start_win.ps1 (PG + auth + channel, detached) + verificacion de puertos
 #
-# Uso (desde la raiz C:\projects\Metin2):
+# Uso (desde la raiz del repositorio):
 #   powershell -ExecutionPolicy Bypass -File scripts\deploy_win.ps1
 #   powershell -ExecutionPolicy Bypass -File scripts\deploy_win.ps1 -SkipBuild
 #   powershell -ExecutionPolicy Bypass -File scripts\deploy_win.ps1 -NoStart
@@ -21,9 +21,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$root    = "C:\projects\Metin2"
-$reforge = Join-Path $root "source\reforge"
-$win     = Join-Path $root "source\deploy\win"
+$root    = if ($env:REFORGE_ROOT) { $env:REFORGE_ROOT } else { Split-Path $PSScriptRoot -Parent }
+$reforge = if ($env:REFORGE_SRC) { $env:REFORGE_SRC } else { Join-Path $root "source\reforge" }
+$win     = if ($env:REFORGE_DEPLOY_WIN) { $env:REFORGE_DEPLOY_WIN } else { Join-Path $root "source\deploy\win" }
 $exe     = Join-Path $win "server_realms.exe"
 $srcExe  = Join-Path $reforge "target\release\server_realms.exe"
 $ts      = Get-Date -Format "HHmmss"

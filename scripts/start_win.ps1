@@ -9,7 +9,8 @@
 #      (benchmark F5: tick_ms.csv + captura wire; relativo a win\logs).
 param([string]$BenchCapture = "", [switch]$HsDebug)
 $ErrorActionPreference = "Stop"
-$win = "C:\projects\Metin2\source\deploy\win"
+$repoRoot = if ($env:REFORGE_ROOT) { $env:REFORGE_ROOT } else { Split-Path $PSScriptRoot -Parent }
+$win = if ($env:REFORGE_DEPLOY_WIN) { $env:REFORGE_DEPLOY_WIN } else { Join-Path $repoRoot "source\deploy\win" }
 $exe = Join-Path $win "server_realms.exe"
 $logs = Join-Path $win "logs"
 New-Item -ItemType Directory -Force -Path $logs | Out-Null

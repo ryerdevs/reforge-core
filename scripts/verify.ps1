@@ -23,6 +23,7 @@ try {
     # el check debe correr con cwd dentro del workspace.
     Invoke-Step 'public boundary' { & (Join-Path $root 'scripts/check_boundary.ps1') }
     Invoke-Step 'public boundary mutation tests' { & (Join-Path $root 'scripts/check_boundary_test.ps1') }
+    Invoke-Step 'path contract' { & (Join-Path $root 'scripts/check_path_contract.ps1') }
     Invoke-Step 'fmt --check' { Push-Location (Join-Path $root 'source/reforge'); try { cargo fmt -- --check } finally { Pop-Location } }
     Invoke-Step 'test --workspace' { cargo test --manifest-path $mf --workspace }
     # Slice F0.4: la pata --ignored se ejecuta al final como RUIDOSA, no como falla

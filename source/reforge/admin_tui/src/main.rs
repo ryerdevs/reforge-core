@@ -55,12 +55,30 @@ fn deploy_dir_from_args(args: &[String]) -> PathBuf {
     }
     env::var("REFORGE_DEPLOY_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| cwd_relative_deploy())
+        .unwrap_or_else(|_| discover_deploy_dir())
 }
 
-fn cwd_relative_deploy() -> PathBuf {
+fn discover_deploy_dir() -> PathBuf {
+    if let Ok(exe) = env::current_exe() {
+        for ancestor in exe.ancestors() {
+            if (ancestor.ends_with("deploy/win") || ancestor.ends_with(r"deploy\win"))
+                && ancestor.is_dir()
+            {
+                return ancestor.to_path_buf();
+            }
+            let candidate = ancestor.join("source").join("deploy").join("win");
+            if candidate.is_dir() {
+                return candidate;
+            }
+        }
+    }
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     for ancestor in cwd.ancestors() {
+        if (ancestor.ends_with("deploy/win") || ancestor.ends_with(r"deploy\win"))
+            && ancestor.is_dir()
+        {
+            return ancestor.to_path_buf();
+        }
         let candidate = ancestor.join("source").join("deploy").join("win");
         if candidate.is_dir() {
             return candidate;
@@ -79,4 +97,27 @@ fn print_help() {
     println!("    -d, --deploy-dir <PATH>   Deploy dir (default: REFORGE_DEPLOY_DIR).");
     println!("    -h, --help                 Print this help.");
     println!("    --probe                    Run status + log probe and exit (no TUI).");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deploy_dir_from_args_explicit_flag() {
+        let args = vec![
+            "--deploy-dir".to_string(),
+            r"C:\custom\deploy\path".to_string(),
+        ];
+        assert_eq!(
+            deploy_dir_from_args(&args),
+            PathBuf::from(r"C:\custom\deploy\path")
+        );
+    }
+
+    #[test]
+    fn deploy_dir_from_args_short_flag() {
+        let args = vec!["-d".to_string(), r"D:\alt\path".to_string()];
+        assert_eq!(deploy_dir_from_args(&args), PathBuf::from(r"D:\alt\path"));
+    }
 }

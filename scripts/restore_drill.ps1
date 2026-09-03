@@ -20,12 +20,22 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$pgBin    = "C:\projects\metin2-extra\pg18\pgsql\bin"
+$pgBin = if ($env:PGBIN_PATH) {
+    $env:PGBIN_PATH
+} elseif (Get-Command psql.exe -ErrorAction SilentlyContinue) {
+    Split-Path -Parent (Get-Command psql.exe).Source
+} else {
+    "C:\projects\metin2-extra\pg18\pgsql\bin"
+}
 $psql     = Join-Path $pgBin "psql.exe"
 $createdb = Join-Path $pgBin "createdb.exe"
 $dropdb   = Join-Path $pgBin "dropdb.exe"
 $pgRestore = Join-Path $pgBin "pg_restore.exe"
-$backupDir = "C:\projects\metin2-extra\backups"
+$backupDir = if ($env:REFORGE_BACKUP_DIR) {
+    $env:REFORGE_BACKUP_DIR
+} else {
+    "C:\projects\metin2-extra\backups"
+}
 
 foreach ($tool in @($psql, $createdb, $pgRestore)) {
     if (-not (Test-Path -LiteralPath $tool)) { throw "Tool not found: $tool" }

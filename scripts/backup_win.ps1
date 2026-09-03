@@ -22,8 +22,19 @@ param()
 
 $ErrorActionPreference = "Stop"
 
-$pgDump    = "C:\projects\metin2-extra\pg18\pgsql\bin\pg_dump.exe"
-$backupDir = "C:\projects\metin2-extra\backups"
+$pgDump = if ($env:PGDUMP_PATH) {
+    $env:PGDUMP_PATH
+} elseif (Get-Command pg_dump.exe -ErrorAction SilentlyContinue) {
+    (Get-Command pg_dump.exe).Source
+} else {
+    "C:\projects\metin2-extra\pg18\pgsql\bin\pg_dump.exe"
+}
+
+$backupDir = if ($env:REFORGE_BACKUP_DIR) {
+    $env:REFORGE_BACKUP_DIR
+} else {
+    "C:\projects\metin2-extra\backups"
+}
 $retention = 7
 
 if (-not (Test-Path -LiteralPath $pgDump)) { throw "pg_dump not found: $pgDump" }
