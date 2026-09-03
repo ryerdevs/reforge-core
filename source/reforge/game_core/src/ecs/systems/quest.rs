@@ -159,14 +159,21 @@ impl WorldSim {
                 let outcome =
                     self.run_quest(player_vid, trigger, &HashMap::new(), now_ms, false, 0);
                 match outcome {
-                    Some(out) => vec![NpcEvent::Quest(QuestEvent::Run {
-                        player_vid,
-                        script: out.script,
-                        effects: out.effects,
-                        dirty: out.dirty,
-                        suspended: out.suspended,
-                    })],
-                    None => Vec::new(),
+                    Some(out)
+                        if out.script.is_some()
+                            || !out.effects.is_empty()
+                            || !out.dirty.is_empty()
+                            || out.suspended =>
+                    {
+                        vec![NpcEvent::Quest(QuestEvent::Run {
+                            player_vid,
+                            script: out.script,
+                            effects: out.effects,
+                            dirty: out.dirty,
+                            suspended: out.suspended,
+                        })]
+                    }
+                    _ => Vec::new(),
                 }
             }
         }
