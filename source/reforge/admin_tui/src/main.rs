@@ -34,8 +34,10 @@ fn main() -> ExitCode {
 }
 
 fn probe(deploy_dir: &Path) -> ExitCode {
+    let pg = process::is_postgres_running();
     let auth = process::status(process::Role::Auth);
     let channel = process::status(process::Role::Channel);
+    println!("postgres: {}", if pg { "running" } else { "stopped" });
     println!("auth    : {:?}", auth);
     println!("channel : {:?}", channel);
     if let Ok(lines) = logs::tail(&logs::latest_log(deploy_dir, process::Role::Auth)) {
