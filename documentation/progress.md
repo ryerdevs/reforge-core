@@ -93,6 +93,19 @@ The registry's `C1`–`C12` rows are closed prerequisite fixes; they do not mark
 
 ## Handoff
 
+- 2026-09-03 | **A2.3 native Windows PostgreSQL bootstrap plus lawful synthetic seed closed:**
+  versioned clean PostgreSQL 18 development DDL (`source/deploy/win/schema/schema.sql`)
+  covering 5 domain schemas (`account`, `common`, `player`, `log`, `world`) and minimal
+  lawful synthetic development seed (`source/deploy/win/schema/seed.sql`) providing test accounts
+  (`test/1234`, `admin/admin`), player index mappings, starter character ('Ryer', Shinsoo Lv.1
+  at Village 1 `969600, 278400`), starter inventory items (Sword+0, red/blue potions), baseline
+  item/mob protos, map 1, and polynomial level 1..120 experience table without proprietary data.
+  Implemented cross-platform automation tooling `scripts/bootstrap_db.py`, `scripts/bootstrap_db.ps1`,
+  `manage.py db <init|seed|reset|check|restore>`, and `admin_tui db-<init|seed|reset|check>`.
+  Interactive Doctor tab enhanced with `[I]` Init DB, `[S]` Seed DB, and schema presence checks.
+  All 18 unit tests passed; `cargo clippy` and `cargo test --workspace` fully verified.
+  **Next:** A2.4 whitelisted package assembly and manifest.
+
 - 2026-09-03 | **Modern 5-tab operator dashboard, interactive config editor, and rich player/world controls for admin_tui:**
   transformed `admin_tui` into a fully English terminal operator dashboard. Implemented
   interactive cursor navigation (`↑`/`↓` + `Enter`), 5-tab navigation (`[1] Dashboard`,

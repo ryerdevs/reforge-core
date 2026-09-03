@@ -31,6 +31,22 @@ pub fn do_postgres(_deploy_dir: &Path) -> OpResult {
     }
 }
 
+pub fn do_db_init(deploy_dir: &Path) -> OpResult {
+    crate::process::run_bootstrap_db(deploy_dir, "init")
+}
+
+pub fn do_db_seed(deploy_dir: &Path) -> OpResult {
+    crate::process::run_bootstrap_db(deploy_dir, "seed")
+}
+
+pub fn do_db_reset(deploy_dir: &Path) -> OpResult {
+    crate::process::run_bootstrap_db(deploy_dir, "reset")
+}
+
+pub fn do_db_check(deploy_dir: &Path) -> OpResult {
+    crate::process::run_bootstrap_db(deploy_dir, "check")
+}
+
 pub fn do_doctor(deploy_dir: &Path) -> OpResult {
     let pg = crate::process::is_postgres_running();
     let exe = crate::process::find_server_realms_exe(deploy_dir).is_some();
