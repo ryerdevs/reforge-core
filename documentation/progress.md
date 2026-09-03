@@ -93,6 +93,17 @@ The registry's `C1`–`C12` rows are closed prerequisite fixes; they do not mark
 
 ## Handoff
 
+- 2026-09-03 | **Modern 5-tab operator dashboard, interactive config editor, and rich player/world controls for admin_tui:**
+  transformed `admin_tui` into a fully English terminal operator dashboard. Implemented
+  interactive cursor navigation (`↑`/`↓` + `Enter`), 5-tab navigation (`[1] Dashboard`,
+  `[2] Live Logs`, `[3] Players & World`, `[4] Configuration`, `[5] System Doctor`), live
+  in-TUI configuration editing with direct disk persistence to `config/channel.toml`,
+  rich player mesh table with GM moderation actions (kick, unstuck, mute, ban), real-time
+  world parameter controls (EXP, Yang, Drop multipliers, Day/Night toggle, Weather cycle,
+  broadcast notice), database TCP latency ping monitoring, and dynamic uptime counter.
+  All 17 unit tests passed; path contract and boundary verifications green.
+  **Next:** A2.3 native Windows PostgreSQL bootstrap plus lawful synthetic seed.
+
 - 2026-09-02 | **A2.2 runtime configuration centralization, Python management CLI, and TUI subcommands closed:**
   centralized deploy configuration files into `source/deploy/win/config/` (`config/auth.toml`,
   `config/channel.toml`, and secret-free reference templates in `config/examples/`). Created

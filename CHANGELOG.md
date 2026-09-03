@@ -18,6 +18,15 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **Modern 5-tab operator dashboard, interactive config editor, and rich player/world controls for admin_tui (2026-09-03):**
+  transformed operator console into a fully English 5-tab terminal dashboard (`[1] Dashboard`,
+  `[2] Live Logs`, `[3] Players & World`, `[4] Configuration`, `[5] System Doctor`).
+  Implemented cursor navigation (`↑`/`↓` + `Enter`) over quick actions, direct in-TUI configuration
+  editing with disk persistence to `config/channel.toml`, rich player mesh table with GM moderation
+  actions (kick, unstuck, mute, ban), real-time world multipliers (EXP, Yang, Drop, Day/Night toggle,
+  Weather cycle, broadcast notice), database TCP latency ping monitoring, dynamic uptime counter,
+  syntax-highlighted log viewer, real-time activity event log, and tab-contextual footer bars.
+
 - **Configuration centralization, cross-platform Python CLI, and TUI subcommands (A2.2, 2026-09-02):**
   reorganized deploy tree to isolate all runtime configuration inside `config/`
   (`config/auth.toml`, `config/channel.toml`, and secret-free reference templates in
