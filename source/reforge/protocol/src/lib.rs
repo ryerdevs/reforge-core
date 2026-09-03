@@ -350,6 +350,14 @@ pub mod header {
     /// `HEADER_GC_PARTY_REMOVE` (packet.h:183 — 80): expulsión/salida
     /// (`TPacketGCPartyRemove` 5 B — packet.h:1551-1555).
     pub const GC_PARTY_REMOVE: u8 = 80;
+    /// `HEADER_GC_QUEST_INFO` (packet.h:184 — 81): información de quest / carta
+    /// de misión para el cliente (`uiQuest.py`). Variable: header(1) + size(2) +
+    /// index(2) + flag(1) + payload dinámico según flag.
+    pub const GC_QUEST_INFO: u8 = 81;
+    /// `HEADER_GC_SCRIPT` (packet.h:160 — 45): diálogo de quest (ventana de texto y opciones).
+    pub const GC_SCRIPT: u8 = 45;
+    /// `HEADER_GC_QUEST_CONFIRM` (packet.h:161 — 46): confirmación de quest (Sí / No).
+    pub const GC_QUEST_CONFIRM: u8 = 46;
     /// `HEADER_GC_PARTY_PARAMETER` (packet.h:186 — 83): modo de reparto de
     /// exp (`TPacketGCPartyParameter` 2 B — packet.h:1510-1514).
     pub const GC_PARTY_PARAMETER: u8 = 83;

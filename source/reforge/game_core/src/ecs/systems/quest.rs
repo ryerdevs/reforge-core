@@ -148,17 +148,33 @@ impl WorldSim {
                 );
                 Vec::new()
             }
-            // CG_SCRIPT_BUTTON (66): botón de diálogo/ventana de quest. El
-            // engine no tiene QuestButton/QuestInfo — log + no-op (GAP
-            // documentado; parity `ScriptButton` input_main.cpp:1850-1868).
+            // CG_SCRIPT_BUTTON (66): botón de diálogo/ventana de quest (parity `ScriptButton` input_main.cpp:1850-1868).
             QuestIntent::Button { player_vid, idx } => {
                 let info = idx & 0x8000_0000 != 0;
-                eprintln!(
-                    "game_core: quest button de pid {player_vid}: idx {idx} \
-                     ({} — engine sin QuestButton/QuestInfo, GAP documentado), no-op",
-                    if info { "QuestInfo" } else { "QuestButton" }
-                );
-                Vec::new()
+                let trigger = if info {
+                    QuestTrigger::Info
+                } else {
+                    QuestTrigger::Button
+                };
+                let outcome =
+                    self.run_quest(player_vid, trigger, &HashMap::new(), now_ms, false, 0);
+                match outcome {
+                    Some(out)
+                        if out.script.is_some()
+                            || !out.effects.is_empty()
+                            || !out.dirty.is_empty()
+                            || out.suspended =>
+                    {
+                        vec![NpcEvent::Quest(QuestEvent::Run {
+                            player_vid,
+                            script: out.script,
+                            effects: out.effects,
+                            dirty: out.dirty,
+                            suspended: out.suspended,
+                        })]
+                    }
+                    _ => Vec::new(),
+                }
             }
         }
     }

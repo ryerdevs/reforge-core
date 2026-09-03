@@ -93,6 +93,14 @@ The registry's `C1`–`C12` rows are closed prerequisite fixes; they do not mark
 
 ## Handoff
 
+- 2026-09-03 | **In-game quest visibility and client wire packet integration:**
+  implemented `TPacketGCQuestInfo` (header 81, `0x51`) matching C++ oracle `packet_quest_info` layout
+  with bitmask flags and fixed C-string title/icon payload. Wired `QuestEffect::SendLetter` and
+  world entry character initialization in `server_realms` to transmit quest info letters to the client
+  GUI (`uiQuest.py`), rendering the quest scroll icon on screen. Wired `CG_SCRIPT_BUTTON` (66) in `game_core`
+  and `server_realms` to evaluate quest button triggers and output quest dialog markup (`[TITLE]`, `[ENTER]`, `[NEXT]`).
+  Verified with unit tests in `protocol` and full gate `python scripts/verify.py`.
+
 - 2026-09-03 | **Cross-platform pure Python tooling migration and PowerShell extinction (maintainer directive):**
   rewrote all core validation and verification tooling from PowerShell into standard Python 3
   (`scripts/verify.py`, `scripts/check_docs.py`, `scripts/check_boundary.py`, `scripts/check_path_contract.py`,

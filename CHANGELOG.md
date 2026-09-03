@@ -18,6 +18,14 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **Quest packet implementation and client UI letter delivery (2026-09-03):**
+  implemented Metin2 wire packet `TPacketGCQuestInfo` (header 81, `0x51`) in `protocol::world`
+  matching frozen oracle `questpc.cpp:236-300` layout. Connected `QuestEffect::SendLetter`
+  and world entry character initialization in `server_realms` to deliver active quest letters
+  and display parchment icons on the Metin2 client UI (`uiQuest.py`). Wired `CG_SCRIPT_BUTTON`
+  (66) event handling in `game_core` and `server_realms` to trigger quest dialog scripts upon
+  clicking quest letters.
+
 - **Whitelisted package assembly and manifest verification (A2.4, 2026-09-03):**
   added cross-platform Python distribution package tool `scripts/package.py` and
   integrated `manage.py package` command. Strictly isolates allowlisted runtime

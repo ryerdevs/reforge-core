@@ -561,6 +561,22 @@ async fn login_flow(session: &mut Session, login3: TPacketCGLogin3) -> Result<()
                 session.conn_id,
                 flags.len()
             );
+
+            // F5 quests: enviar la carta de bienvenida para que el cliente
+            // uiQuest.py dibuje el pergamino en pantalla desde el world entry.
+            if let Err(e) = crate::channel::quest::send_quest_info(
+                session,
+                1,
+                "Bienvenido a Metin2",
+                "scroll_open.tga",
+            )
+            .await
+            {
+                eprintln!(
+                    "server_realms: channel conn {}: fallo enviando quest info inicial: {e}",
+                    session.conn_id
+                );
+            }
         }
         Err(e) => {
             eprintln!(
