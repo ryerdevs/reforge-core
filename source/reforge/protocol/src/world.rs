@@ -2605,6 +2605,284 @@ pub fn land_list_bytes(elements: &[TLandPacketElement]) -> Vec<u8> {
     out
 }
 
+/// Flags del paquete `TPacketGCQuestInfo` (parity `questpc.h:QUEST_SEND_*`).
+pub mod quest_info_flags {
+    pub const QUEST_SEND_ISBEGIN: u8 = 1 << 0; // 0x01: 1 B (bStart ? 1 : 0)
+    pub const QUEST_SEND_TITLE: u8 = 1 << 1; // 0x02: 31 B (fixed string)
+    pub const QUEST_SEND_CLOCK_NAME: u8 = 1 << 2; // 0x04: 17 B (fixed string)
+    pub const QUEST_SEND_CLOCK_VALUE: u8 = 1 << 3; // 0x08: 4 B (i32 LE)
+    pub const QUEST_SEND_COUNTER_NAME: u8 = 1 << 4; // 0x10: 17 B (fixed string)
+    pub const QUEST_SEND_COUNTER_VALUE: u8 = 1 << 5; // 0x20: 4 B (i32 LE)
+    pub const QUEST_SEND_ICON_FILE: u8 = 1 << 6; // 0x40: 25 B (fixed string)
+}
+
+/// `TPacketGCQuestInfo` (packet.h:1395-1404) — header 81 (0x51).
+/// El servidor emite este paquete para que el cliente Metin2 (`uiQuest.py`)
+/// cree los pergaminos / cartas de misión en el lateral de la pantalla.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct TPacketGCQuestInfo {
+    pub index: u16,
+    pub is_begin: Option<bool>,
+    pub title: Option<String>,
+    pub clock_name: Option<String>,
+    pub clock_value: Option<i32>,
+    pub counter_name: Option<String>,
+    pub counter_value: Option<i32>,
+    pub icon_file: Option<String>,
+}
+
+impl TPacketGCQuestInfo {
+    pub const HEADER: u8 = crate::header::GC_QUEST_INFO; // 81
+
+    /// Constructor para abrir una carta de misión con título e icono.
+    pub fn new_letter(index: u16, title: impl Into<String>, icon_file: impl Into<String>) -> Self {
+        Self {
+            index,
+            is_begin: Some(true),
+            title: Some(title.into()),
+            clock_name: None,
+            clock_value: None,
+            counter_name: None,
+            counter_value: None,
+            icon_file: Some(icon_file.into()),
+        }
+    }
+
+    /// Constructor para cerrar o eliminar una carta de misión en el cliente.
+    pub fn remove_letter(index: u16) -> Self {
+        Self {
+            index,
+            is_begin: Some(false),
+            title: None,
+            clock_name: None,
+            clock_value: None,
+            counter_name: None,
+            counter_value: None,
+            icon_file: None,
+        }
+    }
+
+    /// Serializa el paquete a bytes con la estructura exacta del protocolo Metin2.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut flag: u8 = 0;
+        let mut payload = Vec::new();
+
+        if let Some(b) = self.is_begin {
+            flag |= quest_info_flags::QUEST_SEND_ISBEGIN;
+            payload.push(if b { 1 } else { 0 });
+        }
+        if let Some(ref t) = self.title {
+            flag |= quest_info_flags::QUEST_SEND_TITLE;
+            let mut buf = [0u8; 31];
+            let bytes = t.as_bytes();
+            let copy_len = bytes.len().min(30);
+            buf[..copy_len].copy_from_slice(&bytes[..copy_len]);
+            payload.extend_from_slice(&buf);
+        }
+        if let Some(ref cn) = self.clock_name {
+            flag |= quest_info_flags::QUEST_SEND_CLOCK_NAME;
+            let mut buf = [0u8; 17];
+            let bytes = cn.as_bytes();
+            let copy_len = bytes.len().min(16);
+            buf[..copy_len].copy_from_slice(&bytes[..copy_len]);
+            payload.extend_from_slice(&buf);
+        }
+        if let Some(cv) = self.clock_value {
+            flag |= quest_info_flags::QUEST_SEND_CLOCK_VALUE;
+            payload.extend_from_slice(&cv.to_le_bytes());
+        }
+        if let Some(ref ctn) = self.counter_name {
+            flag |= quest_info_flags::QUEST_SEND_COUNTER_NAME;
+            let mut buf = [0u8; 17];
+            let bytes = ctn.as_bytes();
+            let copy_len = bytes.len().min(16);
+            buf[..copy_len].copy_from_slice(&bytes[..copy_len]);
+            payload.extend_from_slice(&buf);
+        }
+        if let Some(ctv) = self.counter_value {
+            flag |= quest_info_flags::QUEST_SEND_COUNTER_VALUE;
+            payload.extend_from_slice(&ctv.to_le_bytes());
+        }
+        if let Some(ref ic) = self.icon_file {
+            flag |= quest_info_flags::QUEST_SEND_ICON_FILE;
+            let mut buf = [0u8; 25];
+            let bytes = ic.as_bytes();
+            let copy_len = bytes.len().min(24);
+            buf[..copy_len].copy_from_slice(&bytes[..copy_len]);
+            payload.extend_from_slice(&buf);
+        }
+
+        let total_size = (6 + payload.len()) as u16;
+        let mut out = Vec::with_capacity(total_size as usize);
+        out.push(Self::HEADER);
+        out.extend_from_slice(&total_size.to_le_bytes());
+        out.extend_from_slice(&self.index.to_le_bytes());
+        out.push(flag);
+        out.extend_from_slice(&payload);
+        out
+    }
+
+    /// Deserializa un paquete `TPacketGCQuestInfo` desde su flujo de bytes.
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() < 6 {
+            return Err(ProtocolError::BadLength {
+                expected: 6,
+                got: data.len(),
+            });
+        }
+        if data[0] != Self::HEADER {
+            return Err(ProtocolError::BadLength {
+                expected: 6,
+                got: data.len(),
+            });
+        }
+        let total_size = u16::from_le_bytes([data[1], data[2]]) as usize;
+        if data.len() < total_size {
+            return Err(ProtocolError::BadLength {
+                expected: total_size,
+                got: data.len(),
+            });
+        }
+        let index = u16::from_le_bytes([data[3], data[4]]);
+        let flag = data[5];
+
+        let mut offset = 6;
+        let is_begin = if flag & quest_info_flags::QUEST_SEND_ISBEGIN != 0 {
+            if offset >= total_size {
+                return Err(ProtocolError::BadLength {
+                    expected: offset + 1,
+                    got: total_size,
+                });
+            }
+            let val = data[offset] != 0;
+            offset += 1;
+            Some(val)
+        } else {
+            None
+        };
+
+        let title = if flag & quest_info_flags::QUEST_SEND_TITLE != 0 {
+            if offset + 31 > total_size {
+                return Err(ProtocolError::BadLength {
+                    expected: offset + 31,
+                    got: total_size,
+                });
+            }
+            let end = data[offset..offset + 31]
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(31);
+            let s = String::from_utf8_lossy(&data[offset..offset + end]).into_owned();
+            offset += 31;
+            Some(s)
+        } else {
+            None
+        };
+
+        let clock_name = if flag & quest_info_flags::QUEST_SEND_CLOCK_NAME != 0 {
+            if offset + 17 > total_size {
+                return Err(ProtocolError::BadLength {
+                    expected: offset + 17,
+                    got: total_size,
+                });
+            }
+            let end = data[offset..offset + 17]
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(17);
+            let s = String::from_utf8_lossy(&data[offset..offset + end]).into_owned();
+            offset += 17;
+            Some(s)
+        } else {
+            None
+        };
+
+        let clock_value = if flag & quest_info_flags::QUEST_SEND_CLOCK_VALUE != 0 {
+            if offset + 4 > total_size {
+                return Err(ProtocolError::BadLength {
+                    expected: offset + 4,
+                    got: total_size,
+                });
+            }
+            let val = i32::from_le_bytes([
+                data[offset],
+                data[offset + 1],
+                data[offset + 2],
+                data[offset + 3],
+            ]);
+            offset += 4;
+            Some(val)
+        } else {
+            None
+        };
+
+        let counter_name = if flag & quest_info_flags::QUEST_SEND_COUNTER_NAME != 0 {
+            if offset + 17 > total_size {
+                return Err(ProtocolError::BadLength {
+                    expected: offset + 17,
+                    got: total_size,
+                });
+            }
+            let end = data[offset..offset + 17]
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(17);
+            let s = String::from_utf8_lossy(&data[offset..offset + end]).into_owned();
+            offset += 17;
+            Some(s)
+        } else {
+            None
+        };
+
+        let counter_value = if flag & quest_info_flags::QUEST_SEND_COUNTER_VALUE != 0 {
+            if offset + 4 > total_size {
+                return Err(ProtocolError::BadLength {
+                    expected: offset + 4,
+                    got: total_size,
+                });
+            }
+            let val = i32::from_le_bytes([
+                data[offset],
+                data[offset + 1],
+                data[offset + 2],
+                data[offset + 3],
+            ]);
+            offset += 4;
+            Some(val)
+        } else {
+            None
+        };
+
+        let icon_file = if flag & quest_info_flags::QUEST_SEND_ICON_FILE != 0 {
+            if offset + 25 > total_size {
+                return Err(ProtocolError::BadLength {
+                    expected: offset + 25,
+                    got: total_size,
+                });
+            }
+            let end = data[offset..offset + 25]
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(25);
+            let s = String::from_utf8_lossy(&data[offset..offset + end]).into_owned();
+            Some(s)
+        } else {
+            None
+        };
+
+        Ok(Self {
+            index,
+            is_begin,
+            title,
+            clock_name,
+            clock_value,
+            counter_name,
+            counter_value,
+            icon_file,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3397,5 +3675,48 @@ mod tests {
         assert!(TPacketGCPartyUpdate::from_bytes(&[79, 0, 0, 0, 0, 0]).is_err());
         assert!(TPacketGCPartyAdd::from_bytes(&[78]).is_err());
         assert!(TPacketGCPartyParameter::from_bytes(&[83]).is_err());
+    }
+
+    #[test]
+    fn quest_info_packet_roundtrip_and_wire_layout() {
+        // Test 1: Carta de quest (Letter)
+        let qi = TPacketGCQuestInfo::new_letter(1, "Welcome to Metin2", "scroll_open.tga");
+        let bytes = qi.to_bytes();
+        assert_eq!(bytes[0], 81, "HEADER_GC_QUEST_INFO");
+        assert_eq!(
+            bytes.len(),
+            6 + 1 + 31 + 25,
+            "header(1) + size(2) + index(2) + flag(1) + is_begin(1) + title(31) + icon(25) = 63 B"
+        );
+        let size = u16::from_le_bytes([bytes[1], bytes[2]]) as usize;
+        assert_eq!(size, 63);
+        let index = u16::from_le_bytes([bytes[3], bytes[4]]);
+        assert_eq!(index, 1);
+        let flag = bytes[5];
+        assert_eq!(
+            flag,
+            quest_info_flags::QUEST_SEND_ISBEGIN
+                | quest_info_flags::QUEST_SEND_TITLE
+                | quest_info_flags::QUEST_SEND_ICON_FILE
+        );
+
+        let parsed = TPacketGCQuestInfo::from_bytes(&bytes).unwrap();
+        assert_eq!(parsed.index, 1);
+        assert_eq!(parsed.is_begin, Some(true));
+        assert_eq!(parsed.title.as_deref(), Some("Welcome to Metin2"));
+        assert_eq!(parsed.icon_file.as_deref(), Some("scroll_open.tga"));
+        assert_eq!(parsed.clock_name, None);
+        assert_eq!(parsed.clock_value, None);
+
+        // Test 2: Eliminar carta (Remove)
+        let remove = TPacketGCQuestInfo::remove_letter(1);
+        let rbytes = remove.to_bytes();
+        assert_eq!(rbytes.len(), 6 + 1);
+        assert_eq!(rbytes[0], 81);
+        assert_eq!(rbytes[5], quest_info_flags::QUEST_SEND_ISBEGIN);
+        assert_eq!(rbytes[6], 0, "is_begin = 0");
+        let rparsed = TPacketGCQuestInfo::from_bytes(&rbytes).unwrap();
+        assert_eq!(rparsed.index, 1);
+        assert_eq!(rparsed.is_begin, Some(false));
     }
 }

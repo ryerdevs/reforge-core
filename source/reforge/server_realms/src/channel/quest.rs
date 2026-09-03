@@ -45,6 +45,22 @@ pub async fn handle_button(session: &mut Session, pkt: &[u8]) -> Result<Outcome,
         "server_realms: channel conn {}: botón de quest idx {idx} → mundo",
         session.conn_id
     );
+
+    // Si es la carta inicial de bienvenida (idx 1 o 0x80000001), enviar
+    // diálogo al cliente para que la ventana de pergamino muestre el texto.
+    let real_idx = idx & 0x7fff_ffff;
+    if real_idx <= 1 {
+        let welcome_dialog = "[TITLE]Bienvenido a Metin2[/TITLE]\
+                              ¡Bienvenido al mundo de Metin2![ENTER]\
+                              Para comenzar tu aventura, dirígete[ENTER]\
+                              al Guardián de la Ciudad en la plaza.[ENTER]\
+                              [NEXT]\
+                              Te encomendará tus primeras misiones[ENTER]\
+                              de caza y entrenamiento.[ENTER]\
+                              ¡Buena suerte, guerrero!";
+        send_script(session, welcome_dialog).await?;
+    }
+
     Ok(Outcome::Continue)
 }
 
@@ -143,7 +159,9 @@ pub(super) async fn emit(session: &mut Session, q: QuestEvent) -> Result<(), Str
                     }
                     QuestEffect::Warp { x, y } => warp(session, x, y).await?,
                     QuestEffect::Notice(text) => notice(session, &text).await?,
-                    QuestEffect::SendLetter(text) => notice(session, &text).await?,
+                    QuestEffect::SendLetter(text) => {
+                        send_quest_info(session, 1, &text, "scroll_open.tga").await?
+                    }
                     QuestEffect::TargetVid { .. }
                     | QuestEffect::TargetDelete { .. }
                     | QuestEffect::AffectAdd { .. }
@@ -169,6 +187,26 @@ pub(super) async fn emit(session: &mut Session, q: QuestEvent) -> Result<(), Str
             Ok(())
         }
     }
+}
+
+/// GC_QUEST_INFO (81): envía información de misión / carta al cliente
+/// para que `uiQuest.py` dibuje el pergamino en el lateral de la pantalla.
+pub async fn send_quest_info(
+    session: &mut Session,
+    index: u16,
+    title: &str,
+    icon_file: &str,
+) -> Result<(), String> {
+    let pkt = protocol::world::TPacketGCQuestInfo::new_letter(index, title, icon_file).to_bytes();
+    session
+        .send(&pkt)
+        .await
+        .map_err(|e| format!("enviando GC_QUEST_INFO: {e}"))?;
+    eprintln!(
+        "server_realms: channel conn {}: quest info enviada (idx {index}, title '{title}')",
+        session.conn_id
+    );
+    Ok(())
 }
 
 /// GC_SCRIPT (45): header + size(WORD, = 6 + src) + skin(BYTE) + src_size(WORD)
