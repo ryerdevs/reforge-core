@@ -34,9 +34,9 @@ reference](documentation/reference/login-flow.md). For a local server or test
 run, read the [progress handoff](documentation/progress.md) first, then run
 from the repository root:
 
-```powershell
-powershell -File scripts/check_docs.ps1
-powershell -File scripts/verify.ps1
+```bash
+python scripts/check_docs.py
+python scripts/verify.py
 ```
 
 For a Rust-only build and test run:

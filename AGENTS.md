@@ -40,15 +40,17 @@ The C++ server in `source/server` is **NEVER rebuilt** (ADR-0012). Linux ELF `ga
 ## Verification gate
 
 ```
-scripts/verify.ps1  →  cargo fmt --check
+scripts/verify.py   →  check_boundary.py
+                    +  check_path_contract.py
+                    +  check_docs.py
+                    +  cargo fmt --check
                     +  cargo test --workspace
-                    +  cargo test --workspace -- --ignored (PG-gated, informative)
                     +  cargo clippy --workspace --all-targets -- -D warnings
                     +  git diff --check
                     =  OK: verificacion completa
 ```
 
-GitHub `docs.yml` runs the same + `scripts/check_docs.ps1` metadata gate + handoff check (`source/reforge` touched ⇒ `progress.md` + `CHANGELOG.md` + `gap-registry.md` updated).
+GitHub `docs.yml` runs the same + `scripts/check_docs.py` metadata gate + handoff check (`source/reforge` touched ⇒ `progress.md` + `CHANGELOG.md` + `gap-registry.md` updated).
 
 ## Workflow rules
 
@@ -57,7 +59,7 @@ GitHub `docs.yml` runs the same + `scripts/check_docs.ps1` metadata gate + hando
 3. **Minimal + justified.** One line before fifty, stdlib before dep, YAGNI. Never hide warnings undocumented.
 4. **Verify proportionally.** Inspection → focused check → build/run. Report real command output; no success claims without evidence.
 5. **Never rebuild frozen C++.** Two-copy sync rule is dead.
-6. **Confirm destructive ops.** Deleting volumes/DBs/caches or `Remove-Item -Recurse` needs explicit user OK. Use `scripts/clean.ps1 -WhatIf` first.
+6. **Confirm destructive ops.** Deleting volumes/DBs/caches needs explicit user OK. Use `python scripts/clean.py --what-if` first.
 7. **Docs after every change.** Update canonical docs + `Last verified`; list exact required doc updates if outside lane scope. ADRs before architecture.
 8. **Log the change.** `CHANGELOG.md` (Keep a Changelog), `documentation/roadmap.md`, ADRs. Never end with unlogged changes.
 9. **Parallelize.** Independent lanes via `@explorer` / `@librarian` / `@oracle` / `@fixer` in background; `source/reforge` graph first (`graphify query`); reconcile before next step.

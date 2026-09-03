@@ -93,6 +93,14 @@ The registry's `C1`–`C12` rows are closed prerequisite fixes; they do not mark
 
 ## Handoff
 
+- 2026-09-03 | **Cross-platform pure Python tooling migration and PowerShell extinction (maintainer directive):**
+  rewrote all core validation and verification tooling from PowerShell into standard Python 3
+  (`scripts/verify.py`, `scripts/check_docs.py`, `scripts/check_boundary.py`, `scripts/check_path_contract.py`,
+  `scripts/clean.py`, `scripts/build_admin_tui.py`), migrated `.github/workflows/docs.yml` to run
+  cross-platform Python scripts directly, and deleted obsolete `.ps1` scripts (`verify.ps1`, `check_docs.ps1`,
+  `check_boundary.ps1`, `check_path_contract.ps1`, `build_admin_tui.ps1`, `clean.ps1`). Full gate
+  `python scripts/verify.py` verified and passing with 0 errors.
+
 - 2026-09-03 | **Radical documentation pruning & meta-doc elimination (maintainer directive):**
   eliminated 3 redundant meta-documents (`DOCUMENTATION.md`, `document-authority.md`, `history-index.md`),
   consolidated authority precedence and core documentation policy directly into `documentation/README.md`,
