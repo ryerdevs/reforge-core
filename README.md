@@ -79,6 +79,6 @@ hub](documentation/README.md), [phase map](documentation/roadmap.md), and
 before contributing; keep changes focused and attach an evidence path to each
 claim.
 
-The [changelog](CHANGELOG.md) records chronological evidence. The root
-[ROADMAP](ROADMAP.md) is a historical compatibility narrative, not a live plan
-or status page.
+The [changelog](CHANGELOG.md) records chronological evidence. The maintained
+[phase map](documentation/roadmap.md) records milestones, while the live pair
+records current state.

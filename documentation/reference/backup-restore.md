@@ -2,53 +2,46 @@
 Type: Reference
 Status: Current
 Audience: Operators
-Last verified: 2026-08-30
+Last verified: 2026-09-03
 ---
 
-# Backup & restore runbook — native Windows runtime (ADR-0012)
+# Backup & restore runbook — cross-platform runtime (ADR-0012)
 
 ## What protects the data
 
-- **Nightly `pg_dump -Fc`** of `metin2` to
-  `C:\projects\metin2-extra\backups\metin2_<yyyy-MM-dd>.dump`
-  (`scripts/backup_win.ps1`), retention 7, scheduled by the operator outside
-  the repo (Task Scheduler; verify with the file dates in the backups dir).
+- **Nightly `pg_dump -Fc`** of `metin2` to `backups/metin2_<timestamp>.dump`
+  (`python scripts/manage.py backup` or `python scripts/backup.py`),
+  scheduled by the operator outside the repo (Task Scheduler / cron).
 - **Durable-first WAL** in the server (`database/src/wal.rs`): every mutation
   is persisted to a local WAL file BEFORE PG, flushed by the Batcher (<=100 ms)
   in ONE transaction with the audit row, replayed idempotently on boot. A hard
   server crash loses at most the in-flight batch; a PG crash replays from WAL.
 
-## The drill (run it monthly, and after any schema change)
+## Cross-platform backup & restore operations
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\restore_drill.ps1            # newest nightly dump
-powershell -ExecutionPolicy Bypass -File scripts\restore_drill.ps1 -KeepDb    # leave the copy to inspect
+### 1. Create a backup
+```bash
+python scripts/manage.py backup
 ```
+Emits a timestamped, custom-format PostgreSQL dump into `backups/metin2_<stamp>.dump`.
 
-What it proves: the dump is restorable, the schema is complete, and the key
-tables carry data. It restores into a DISPOSABLE `m2_drill_<stamp>` database,
-counts `account.account`, `player.player`, `player.item`, `player.mob_proto`,
-`player.item_proto` (must be non-empty), `player.guild`, `player.quest`, and
-drops the copy. A dump that has never been restored is not a backup.
+### 2. Verify or inspect database health
+```bash
+python scripts/manage.py db check
+```
+Verifies PostgreSQL connectivity, validates the 5 schemas (`account`, `common`, `player`, `log`, `world`), and reports table counts.
 
-Last drill: **2026-08-30 PASSED** (metin2_2026-08-29.dump -> m2_drill_20260830-102840;
-account=3, player=6, item=42, mob_proto=2864, item_proto=11002, guild=0, quest=2).
+### 3. Restore from backup (disaster recovery)
+```bash
+# 1. Stop running servers
+python scripts/manage.py stop
 
-## Real restore (disaster recovery)
+# 2. Restore database from chosen dump or SQL file
+python scripts/manage.py db restore backups/metin2_<stamp>.dump
 
-```powershell
-# 1. Stop the servers (PG keeps running)
-powershell -ExecutionPolicy Bypass -File scripts\stop_win.ps1
-
-# 2. Recreate the database and restore the chosen dump
-$env:PGUSER="mt2"; $env:PGPASSWORD="mt2"
-& C:\projects\metin2-extra\pg18\pgsql\bin\dropdb.exe   -h 127.0.0.1 -p 5432 --force metin2
-& C:\projects\metin2-extra\pg18\pgsql\bin\createdb.exe -h 127.0.0.1 -p 5432 metin2
-& C:\projects\metin2-extra\pg18\pgsql\bin\pg_restore.exe -h 127.0.0.1 -p 5432 -d metin2 -Fc C:\projects\metin2-extra\backups\metin2_<date>.dump
-
-# 3. Start and verify
-powershell -ExecutionPolicy Bypass -File scripts\start_win.ps1
-# ports 5432 / 30001 / 30003; login test/1234 in the external client
+# 3. Start server stack and verify
+python scripts/manage.py start
+python scripts/manage.py status
 ```
 
 Notes:

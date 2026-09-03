@@ -18,7 +18,7 @@ duplicate volatile project status.
 | Where did the last verified session stop? | [Progress handoff](progress.md) |
 | Which source wins when documents disagree? | [Document authority](reference/document-authority.md) |
 | What do phases F0–F7 mean? | [Phase map](roadmap.md) |
-| What is the alpha scope and execution plan? | [Collaborative alpha readiness](plans/alpha-collaborative-readiness.md) and [A0 plan](plans/alpha-a0-truthful-baseline.md) |
+| What is the alpha scope and execution plan? | [Collaborative alpha readiness](plans/alpha-collaborative-readiness.md) and [A0 plan](history/plans/alpha-a0-truthful-baseline.md) |
 | What is the database shape? | [Schema reference](schema.md) |
 | What is the supported login wire? | [Login-flow reference](reference/login-flow.md) |
 | What public tools and external prerequisites apply? | [Public tools and external prerequisites](reference/public-tooling-boundary.md) |
@@ -28,8 +28,7 @@ duplicate volatile project status.
 | Where is the immutable archive? | [Historical archive index](history-index.md) |
 
 The [Gap Registry](plans/gap-registry.md) and [progress handoff](progress.md) are
-the only live status sources. The root [ROADMAP](../ROADMAP.md) is a historical
-compatibility narrative; the [phase map](roadmap.md) is a dated navigation view.
+the only live status sources. The [phase map](roadmap.md) is the maintained navigation view.
 
 ## Quick verification path
 

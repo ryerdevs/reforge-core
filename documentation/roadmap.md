@@ -18,7 +18,7 @@ exception defined by the [documentation policy](DOCUMENTATION.md) and
 - Live per-item state: [Gap Registry](plans/gap-registry.md)
 - Live handoff / current snapshot: [progress.md](progress.md)
 - Precedence when documents disagree: [document-authority.md](reference/document-authority.md)
-- Long-form phase history: [`ROADMAP.md`](../ROADMAP.md) (historical compatibility narrative)
+- Long-form historical narratives: [`history/`](history/) and [`history-index.md`](history-index.md)
 
 > **A0 navigation note (2026-09-02):** A0 classification is tracked by
 > **ARQ-E** in the [Gap Registry](plans/gap-registry.md). Current status remains

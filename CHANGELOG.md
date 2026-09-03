@@ -40,6 +40,13 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **Documentation cleanup and reference consolidation (2026-09-03):**
+  eliminated root `ROADMAP.md` duplicate in favor of canonical `documentation/roadmap.md`,
+  moved completed `alpha-a0-truthful-baseline.md` into `documentation/history/plans/`,
+  modernized backup/restore operations runbook to cross-platform Python CLI (`scripts/manage.py`),
+  updated `AGENTS.md` and `rules.md` to reference `.py` tooling, and reconciled all
+  internal markdown links.
+
 - **Modern 5-tab operator dashboard, interactive config editor, and rich player/world controls for admin_tui (2026-09-03):**
   transformed operator console into a fully English 5-tab terminal dashboard (`[1] Dashboard`,
   `[2] Live Logs`, `[3] Players & World`, `[4] Configuration`, `[5] System Doctor`).

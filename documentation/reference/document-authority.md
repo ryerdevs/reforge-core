@@ -39,7 +39,7 @@ status document and its durable result belongs in the registry or handoff.
 3. **progress.md Current/Handoff** — the session handoff; dated entries.
 4. **Accepted ADRs** — decisions (why), not status (what/when). Never updated
    to reflect progress, only to record decisions or supersessions.
-5. **README, documentation/roadmap.md, ROADMAP.md, CHANGELOG.md** — navigation,
+5. **README, documentation/roadmap.md, CHANGELOG.md** — navigation,
    phase map, historical narrative, and chronological record. A changelog entry
    is history, not proof of fresh execution.
 6. **`documentation/history/`, `.omo/`, `.slim/`** — archives and external

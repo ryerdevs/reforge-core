@@ -95,7 +95,7 @@ unusable; stop and restore the affected database before continuing.
 
 ## 6. Close every session with current documentation
 
-**Rule:** Update [`progress.md`](progress.md), [`ROADMAP.md`](../ROADMAP.md),
+**Rule:** Update [`progress.md`](progress.md), [`plans/gap-registry.md`](plans/gap-registry.md),
 and [`CHANGELOG.md`](../CHANGELOG.md) when verified project knowledge changes.
 
 **Why:** The handoff, plan, and evidence record must agree so the next session
