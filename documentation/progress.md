@@ -93,6 +93,17 @@ The registry's `C1`–`C12` rows are closed prerequisite fixes; they do not mark
 
 ## Handoff
 
+- 2026-09-02 | **A2.2 runtime configuration centralization, Python management CLI, and TUI subcommands closed:**
+  centralized deploy configuration files into `source/deploy/win/config/` (`config/auth.toml`,
+  `config/channel.toml`, and secret-free reference templates in `config/examples/`). Created
+  universal cross-platform management CLI `scripts/manage.py` (and convenience wrappers
+  `start.py`, `stop.py`, `status.py`, `backup.py`) utilizing only standard-library Python 3.
+  Extended `admin_tui` to support non-interactive CLI subcommands (`start`, `stop`, `restart`,
+  `status`, `backup`, `postgres`, `doctor`), interactive hotkeys `[P]` (PostgreSQL control)
+  and `[D]` (system doctor / health check), and a styled footer button bar. All 17 unit tests
+  passed; `admin_tui doctor` and `python scripts/manage.py doctor` verified successfully.
+  **Next:** A2.3 native Windows PostgreSQL bootstrap plus lawful synthetic seed.
+
 - 2026-09-02 | **A2.5 TUI native process controller and PostgreSQL monitoring closed:**
   replaced PowerShell script delegation in `admin_tui` (`process.rs`) with native
   Rust process lifecycle management. `start` now detects whether PostgreSQL is
