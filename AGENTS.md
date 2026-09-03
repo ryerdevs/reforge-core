@@ -20,7 +20,7 @@ Last verified: 2026-09-02
 
 ## Live sources of truth
 
-Read at session start, update at close. If they disagree, precedence is `documentation/reference/document-authority.md`:
+Read at session start, update at close. If they disagree, precedence is `documentation/README.md#document-authority-and-precedence`:
 
 1. Fresh `scripts/verify.ps1` output (`OK: verificacion completa`)
 2. `documentation/plans/gap-registry.md` — per-row owner/state/evidence/exit
@@ -90,7 +90,7 @@ GitHub `docs.yml` runs the same + `scripts/check_docs.ps1` metadata gate + hando
 
 ## Documentation
 
-Policy: `documentation/DOCUMENTATION.md`. Hub: `documentation/README.md`. Phase map: `documentation/roadmap.md`. DB: `documentation/schema.md`. Guardrails: `documentation/rules.md`. Wire: `documentation/reference/login-flow.md`. ADRs: `documentation/adr/` (17 ADRs, ADR-0013 superseded by ADR-0015). History: `documentation/history/` read-only, indexed by `documentation/history-index.md`.
+Hub & Authority: `documentation/README.md`. Phase map: `documentation/roadmap.md`. DB: `documentation/schema.md`. Guardrails: `documentation/rules.md`. Wire: `documentation/reference/login-flow.md`. ADRs: `documentation/adr/` (17 ADRs, ADR-0013 superseded by ADR-0015). History: `documentation/history/` (indexed in `documentation/progress.md#historical-archive-index`).
 
 Workspace: `source/reforge` (flat layout, `unsafe_code = "forbid"`, `server_realms` single binary roles `auth|channel` by config — ADR-0003/0004). Members: `protocol`, `network`, `database`, `game_core`, `server_realms`, `mysql_proxy`, `locale_import`, `bench_bot`, `quest_dsl`, `admin_tui`.
 

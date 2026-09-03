@@ -2,71 +2,61 @@
 Type: Hub
 Status: Current
 Audience: All
-Last verified: 2026-09-02
+Last verified: 2026-09-03
 ---
 
 # Documentation — reforge-core
 
-This page is the human navigation hub. It describes where to look; it does not
-duplicate volatile project status.
+Central navigation hub, document authority precedence, and documentation guidelines.
 
-## Start here
+## Quick Index
 
-| Question | Canonical document |
+| Topic / Question | Canonical Source |
 |---|---|
 | What is pending, who owns it, and what closes it? | [Gap Registry](plans/gap-registry.md) |
 | Where did the last verified session stop? | [Progress handoff](progress.md) |
-| Which source wins when documents disagree? | [Document authority](reference/document-authority.md) |
 | What do phases F0–F7 mean? | [Phase map](roadmap.md) |
-| What is the alpha scope and execution plan? | [Collaborative alpha readiness](plans/alpha-collaborative-readiness.md) and [A0 plan](history/plans/alpha-a0-truthful-baseline.md) |
+| What is the alpha scope and execution plan? | [Collaborative alpha readiness](plans/alpha-collaborative-readiness.md) |
 | What is the database shape? | [Schema reference](schema.md) |
 | What is the supported login wire? | [Login-flow reference](reference/login-flow.md) |
 | What public tools and external prerequisites apply? | [Public tools and external prerequisites](reference/public-tooling-boundary.md) |
+| How do backup and restore operations work? | [Backup & restore runbook](reference/backup-restore.md) |
 | Which rules prevent repeat failures? | [Rules](rules.md) |
 | Why were architecture choices made? | [Architecture decisions](adr/) |
 | What changed over time? | [Changelog](../CHANGELOG.md) |
-| Where is the immutable archive? | [Historical archive index](history-index.md) |
+| Where is the read-only historical archive? | [Progress history index](progress.md#historical-archive-index) |
 
-The [Gap Registry](plans/gap-registry.md) and [progress handoff](progress.md) are
-the only live status sources. The [phase map](roadmap.md) is the maintained navigation view.
+## Document Authority and Precedence
 
-## Quick verification path
+Live project state lives in exactly two files:
+1. [`plans/gap-registry.md`](plans/gap-registry.md) — owned work, state, evidence, dependency, risk, exit criteria.
+2. [`progress.md`](progress.md) — current verified snapshot, session handoff, and history index.
 
-Run commands from the repository root:
+When documents disagree, precedence is:
+1. **Fresh verification:** A command run today against HEAD (`cargo test`, `scripts/verify.ps1`, `manage.py db check`). Recorded command evidence beats any narrative.
+2. **Gap Registry:** [`plans/gap-registry.md`](plans/gap-registry.md) per-item tracker.
+3. **Progress Handoff:** [`progress.md`](progress.md) dated entries.
+4. **Accepted ADRs:** [`adr/`](adr/) architectural decisions.
+5. **Changelog & Phase Map:** [`../CHANGELOG.md`](../CHANGELOG.md) and [`roadmap.md`](roadmap.md).
+6. **Archive:** [`history/`](history/) (read-only context; nothing there is current status).
 
-```powershell
-powershell -File scripts/status.ps1
-powershell -File scripts/check_docs.ps1
-powershell -File scripts/verify.ps1
-```
+## Documentation Policy
 
-For a Rust-only build and test run:
+- Every live document carries a YAML frontmatter block (`Type`, `Status`, `Audience`, `Last verified`).
+- Maintained in clear technical English, UTF-8.
+- Proportional verification: never claim completion without reproducible command evidence.
+- When code in `source/reforge` is touched, CI enforces updating `progress.md`, `plans/gap-registry.md`, and `../CHANGELOG.md`.
 
-```powershell
-Set-Location source\reforge
-cargo build --workspace
+## Standard Verification Path
+
+```bash
+# Standard test suite
 cargo test --workspace
-Set-Location ..\..
-```
 
-Read the [progress handoff](progress.md) first for environmental prerequisites
-and the result of the latest gate. A command result is evidence, not a new
-status source.
+# Database health check
+python scripts/manage.py db check
 
-## Repository map
-
-```text
-documentation/
-  README.md            → this navigation hub
-  DOCUMENTATION.md     → mandatory documentation policy
-  progress.md          → live snapshot and handoff
-  plans/               → live plans and the Gap Registry
-  adr/                 → architecture decisions
-  reference/           → technical references and runbooks
-  roadmap.md           → dated phase map
-  schema.md            → PostgreSQL schema reference
-  history-index.md     → navigation for the read-only archive
-  history/             → archived, read-only documents
-source/reforge/        → authored Rust server
-scripts/               → verification and runtime operations
+# Public boundary & documentation checks
+powershell -File scripts/check_boundary.ps1
+powershell -File scripts/check_docs.ps1
 ```

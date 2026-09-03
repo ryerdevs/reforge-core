@@ -14,8 +14,7 @@ implementation incremental, testable, and server-authoritative.
 This repository is an **alpha contributor preview**, not a claim of complete
 gameplay parity, production readiness, or a finished client. The [Gap
 Registry](documentation/plans/gap-registry.md) and [progress
-handoff](documentation/progress.md) are the only live status sources. The
-[document authority](documentation/reference/document-authority.md) explains
+handoff](documentation/progress.md) are the only live status sources. The [document authority](documentation/README.md#document-authority-and-precedence) explains
 how evidence and summaries relate to them.
 
 ## Repository boundary

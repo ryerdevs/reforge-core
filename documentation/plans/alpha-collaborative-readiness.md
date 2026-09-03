@@ -218,16 +218,14 @@ registry proceeds independently unless it changes an alpha gate.
 |---|---|
 | Proprietary material enters the public repository | Treat as a release blocker; reject with automated boundary checks and document the external-prerequisite route. |
 | Synthetic data accidentally claims parity | Label it development-only; use it only for documented supported flows. Full parity remains a separate registry objective. |
-| Documentation becomes another stale status source | `document-authority.md` remains the precedence rule; summaries link rather than restate live status. |
+| Documentation becomes another stale status source | [Documentation hub](../README.md#document-authority-and-precedence) remains the precedence rule; summaries link rather than restate live status. |
 | Agents repeat a previous mistake | Record the invariant and evidence in the failure ledger; promote a stable rule to a guardrail and automate it where possible. |
 | CI blocks legitimate external contributors | Test fork-safe workflows and keep optional oracle/client checks explicitly local. |
 
 ## Evidence and references
 
 - [ADR-0015](../adr/0015-rust-only-public-repository.md) — public boundary.
-- [Document authority](../reference/document-authority.md) — live-state
-  precedence.
-- [Documentation policy](../DOCUMENTATION.md) — kinds and metadata.
+- [Documentation hub & authority](../README.md) — live-state precedence and metadata policy.
 - [Diátaxis](https://diataxis.fr/start-here/) — documentation needs.
 - [AGENTS.md format](https://agents.md/) and [Codex instruction
   layering](https://learn.chatgpt.com/docs/agent-configuration/agents-md) —

@@ -40,6 +40,11 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **Radical documentation pruning & meta-doc elimination (2026-09-03):**
+  removed 3 redundant meta-documents (`DOCUMENTATION.md`, `document-authority.md`, `history-index.md`),
+  consolidating document authority precedence and core policy directly into `documentation/README.md`,
+  and moving historical archive navigation into `progress.md#historical-archive-index`.
+
 - **Documentation cleanup and reference consolidation (2026-09-03):**
   eliminated root `ROADMAP.md` duplicate in favor of canonical `documentation/roadmap.md`,
   moved completed `alpha-a0-truthful-baseline.md` into `documentation/history/plans/`,

@@ -102,7 +102,7 @@ and [`CHANGELOG.md`](../CHANGELOG.md) when verified project knowledge changes.
 does not repeat closed work or treat an unverified item as complete.
 
 **Evidence:** [`AGENTS.md`](../AGENTS.md) rules 8, 9, and 19, and the
-[documentation policy](DOCUMENTATION.md).
+[documentation hub](README.md).
 
 **Consequence:** The change is incomplete and its status must remain open until
 the canonical documents are reconciled.
