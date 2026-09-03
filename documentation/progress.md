@@ -93,6 +93,13 @@ The registry's `C1`–`C12` rows are closed prerequisite fixes; they do not mark
 
 ## Handoff
 
+- 2026-09-03 | **Radical documentation pruning & meta-doc elimination (maintainer directive):**
+  eliminated 3 redundant meta-documents (`DOCUMENTATION.md`, `document-authority.md`, `history-index.md`),
+  consolidated authority precedence and core documentation policy directly into `documentation/README.md`,
+  moved the historical archive navigation into `progress.md#historical-archive-index`, preserved
+  `rules.md` for explicit guardrails, and updated all cross-document references.
+  `scripts/check_docs.ps1` and `scripts/check_boundary.ps1` fully verified.
+
 - 2026-09-03 | **Documentation bloat elimination and reference consolidation (maintainer directive):**
   removed redundant historical root `ROADMAP.md` (consolidating navigation on `documentation/roadmap.md`),
   moved completed baseline plan `alpha-a0-truthful-baseline.md` to `documentation/history/plans/`,
@@ -301,7 +308,7 @@ The registry's `C1`–`C12` rows are closed prerequisite fixes; they do not mark
 - 2026-08-29 | Prior Gate 2 handoff sync (librarian): superseded by the G0.1b–e handoff above; the earlier documentation reconciliation was committed at `96606e3` and G0.1a at `5354e6f`.
 - 2026-08-30 | **Public repository boundary and documentation reconciliation (librarian):** ADR-0015 accepted; the authored Rust server remains the public implementation scope, client and pack sources remain outside the repository, and real-client verification uses an external compatible client. ADR-0013 is superseded and F7 is deferred outside this repository. The current documentation policy and live hubs were restored/reconciled; the staged removals and documentation changes are intentionally uncommitted; no Rust source was changed by this documentation slice.
 - 2026-08-30 | **Archive navigation and metadata follow-up (librarian):** added the current `documentation/history-index.md` successor without editing `documentation/history/**`; reconciled the hub and registry freshness rows; added metadata to the historical `ASSUMPTIONS.md` snapshot and refreshed `source/reforge/README.md` as a current workspace hub. G1.14b was then resolved by the explicit decision to preserve `history/README.md` byte-for-byte, including its pre-migration metadata; G1.18 remains open for CI implementation. No Rust source was changed.
-- 2026-08-30 | **G1.14b history-policy decision (librarian):** the user chose immutable preservation of `documentation/history/README.md`, including its original metadata. The current [archive index](history-index.md) records this narrow exception; the historical file remains untouched, and all new or edited documents continue to follow [DOCUMENTATION.md](DOCUMENTATION.md).
+- 2026-08-30 | **G1.14b history-policy decision (librarian):** the user chose immutable preservation of `documentation/history/README.md`, including its original metadata. The [archive index](#historical-archive-index) records this narrow exception; the historical file remains untouched, and all new or edited documents continue to follow [documentation policy](README.md#documentation-policy).
 
 > Entries below this line are historical snapshots. Their counts and states are preserved for their dates; use the Current section and the live Gap Registry for present status.
 
@@ -322,3 +329,26 @@ The registry's `C1`–`C12` rows are closed prerequisite fixes; they do not mark
 - ADR-0014 + stats 5/nivel infinito implementado (gm.rs/session.rs/config.rs) — verifier 2 passed
 - 2026-08-27 | slice weight (coder): game_core/src/weight.rs (weight_for_item/can_carry/max_weight (30+level*3+ST*2)*10) + gate pickup events.rs con GC_CHAT INFO + verifier weight_limit_rejects_pickup; game_core 214/214, server_realms check OK. DB item_proto.weight = 0 (11 002 filas): el gate es fail-open hasta importar pesos (pendiente: columna weight). VE: fórmula clásica GetMaxWeight (el C++ de la variante no tiene peso).
 - 2026-08-27 | Goal started: corre todo lo que falta
+
+## Historical archive index
+
+Files under [`history/`](history/) preserve earlier plans, references, guardrails, and snapshots; they are read-only and describe past dates.
+
+### Historical plans
+- [`alpha-a0-truthful-baseline`](history/plans/alpha-a0-truthful-baseline.md) — completed baseline plan (A0).
+- [`master-plan`](history/plans/master-plan.md) — consolidated master plan.
+- [`server-rewrite`](history/plans/server-rewrite.md) — server rewrite plan.
+- [`client-rewrite`](history/plans/client-rewrite.md) — superseded by [ADR-0015](adr/0015-rust-only-public-repository.md).
+- [`server-side-gap-2026-08-15`](history/plans/server-side-gap-2026-08-15.md) — server gap analysis.
+- [`mob-legacy-behavior`](history/plans/mob-legacy-behavior.md) — legacy mob behavior.
+- [`locale-redesign`](history/plans/locale-redesign.md) — locale redesign notes.
+
+### Historical references and guardrails
+- [`legacy-compatibility`](history/reference/protocol/legacy-compatibility.md) — legacy wire/pack compatibility.
+- [`quest-dsl`](history/reference/quests/quest-dsl.md) — initial quest DSL notes.
+- [`language-system`](history/reference/legacy/language-system.md) — legacy language system.
+- [`legacy-schema`](history/reference/database/legacy-schema.md) — legacy database schema.
+- [`legacy-sql-compatibility`](history/reference/database/legacy-sql-compatibility.md) — legacy SQL compatibility.
+- [`operations`](history/guardrails/operations.md) — early operational notes.
+- [`world-entry-crash`](history/guardrails/world-entry-crash.md) — world-entry crash postmortem.
+- [`history/README.md`](history/README.md) — original 2026-08-10 snapshot.

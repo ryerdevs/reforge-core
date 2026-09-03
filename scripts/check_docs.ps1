@@ -186,7 +186,7 @@ $phase = Join-Path $docs "roadmap.md"
 if (Test-Path $phase) {
     $head = Get-Content -LiteralPath $phase -TotalCount 10 -Encoding UTF8
     if (-not ($head | Where-Object { $_ -match '^\s*Type:\s*Reference' })) {
-        $failures += "documentation/roadmap.md must be Type: Reference (phase map), see document-authority.md"
+        $failures += "documentation/roadmap.md must be Type: Reference (phase map), see documentation/README.md"
     }
 }
 

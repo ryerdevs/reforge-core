@@ -12,13 +12,13 @@ state at a dated glance). It does not track per-item, runtime, or worktree
 status. The phase states below are a map snapshot, not a live status source:
 
 Its metadata intentionally remains `Type: Reference` as the navigation
-exception defined by the [documentation policy](DOCUMENTATION.md) and
-[document authority](reference/document-authority.md).
+exception defined by the [documentation hub](README.md#documentation-policy) and
+[document authority](README.md#document-authority-and-precedence).
 
 - Live per-item state: [Gap Registry](plans/gap-registry.md)
 - Live handoff / current snapshot: [progress.md](progress.md)
-- Precedence when documents disagree: [document-authority.md](reference/document-authority.md)
-- Long-form historical narratives: [`history/`](history/) and [`history-index.md`](history-index.md)
+- Precedence when documents disagree: [Document authority](README.md#document-authority-and-precedence)
+- Long-form historical narratives: [`history/`](history/) (indexed in [`progress.md#historical-archive-index`](progress.md#historical-archive-index))
 
 > **A0 navigation note (2026-09-02):** A0 classification is tracked by
 > **ARQ-E** in the [Gap Registry](plans/gap-registry.md). Current status remains
