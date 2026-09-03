@@ -55,8 +55,9 @@ implementation. Preset: OmO (`openai/gpt-5.6-luna`, variant `max`).
   verifier passes known ignored-test filters as separate arguments.
   Local evidence is recorded in the A1 handoff below; the four pre-existing Rust
   slices remain uncommitted and untouched.
-- Next action: proceed to the A2 reproducible contributor environment; rerun the
-  optional ignored leg when the documented PG/WSL prerequisites are available.
+- Next action: proceed to A2.2 runtime configuration overrides and secret-free
+  examples; rerun the optional ignored leg when the documented PG/WSL
+  prerequisites are available.
 
 ## Verified capabilities (not a Gate 2 closure)
 
@@ -91,6 +92,20 @@ All four work groups remain open in the [Gap Registry](plans/gap-registry.md):
 The registry's `C1`–`C12` rows are closed prerequisite fixes; they do not mark G0–G3 or Gate 2 as closed.
 
 ## Handoff
+
+- 2026-09-02 | **A2.1 path contract and executable-relative deploy/TUI discovery closed:**
+  hardcoded maintainer repository paths (`C:\projects\Metin2`) were eliminated from
+  `scripts/start_win.ps1`, `scripts/deploy_win.ps1`, `scripts/backup_win.ps1`, and
+  `scripts/restore_drill.ps1`. Scripts now discover the repository root via
+  `$PSScriptRoot` and support explicit environment overrides (`REFORGE_ROOT`,
+  `REFORGE_DEPLOY_WIN`, `REFORGE_BACKUP_DIR`, `PGDUMP_PATH`, `PGBIN_PATH`).
+  `admin_tui` discovers the deploy directory and scripts through executable ancestors
+  (`current_exe()`), deploy directory ancestors, and CWD ancestors before falling back.
+  Unit tests in `admin_tui` verify argument precedence and ancestor script discovery;
+  `scripts/check_path_contract.ps1` verifies static path cleanliness and dynamic
+  execution in an external temporary mock checkout. `scripts/verify.ps1` incorporates
+  the new path contract step and passed (`OK: verificacion completa`). **Next:** A2.2
+  runtime configuration overrides and secret-free examples.
 
 - 2026-09-02 | **Gate live-PG tests + move link checker off Windows `verify` (PR #1 CI fix):** the
   GitHub `verify` required check (`windows-latest`, no PostgreSQL) failed

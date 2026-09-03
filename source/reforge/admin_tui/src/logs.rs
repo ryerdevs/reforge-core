@@ -76,19 +76,29 @@ pub fn tail(path: &Path) -> std::io::Result<Vec<String>> {
 }
 
 pub fn list_dumps() -> std::io::Result<Vec<String>> {
-    // Dumps may live in two places: the deploy-local `backups/`
-    // (recommended) or the developer's `C:\projects\metin2-extra\backups`
-    // (legacy). We union the two.
-    let cwd = match std::env::current_dir() {
-        Ok(c) => c,
-        Err(_) => return Ok(Vec::new()),
-    };
+    let mut candidate_dirs: Vec<PathBuf> = Vec::new();
+    if let Ok(env_backup) = std::env::var("REFORGE_BACKUP_DIR") {
+        candidate_dirs.push(PathBuf::from(env_backup));
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        candidate_dirs.push(cwd.join("backups"));
+        candidate_dirs.push(cwd.join("source").join("reforge").join("backups"));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        for ancestor in exe.ancestors() {
+            let b = ancestor.join("backups");
+            if b.is_dir() {
+                candidate_dirs.push(b);
+            }
+        }
+    }
+    let legacy = PathBuf::from(r"C:\projects\metin2-extra\backups");
+    if legacy.is_dir() {
+        candidate_dirs.push(legacy);
+    }
+
     let mut out: Vec<String> = Vec::new();
-    for dir in &[
-        cwd.join("backups"),
-        cwd.join("source").join("reforge").join("backups"),
-        PathBuf::from(r"C:\projects\metin2-extra\backups"),
-    ] {
+    for dir in &candidate_dirs {
         if dir.is_dir()
             && let Ok(rd) = fs::read_dir(dir)
         {

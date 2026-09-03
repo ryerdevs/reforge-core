@@ -192,6 +192,24 @@ fn find_script(deploy_dir: &Path, script: &str) -> PathBuf {
         return deployed;
     }
 
+    // Check deploy_dir ancestors (e.g. repo_root/source/deploy/win -> repo_root/scripts/)
+    for ancestor in deploy_dir.ancestors() {
+        let candidate = ancestor.join("scripts").join(script);
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+
+    // Check current_exe ancestors
+    if let Ok(exe) = std::env::current_exe() {
+        for ancestor in exe.ancestors() {
+            let candidate = ancestor.join("scripts").join(script);
+            if candidate.exists() {
+                return candidate;
+            }
+        }
+    }
+
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     for ancestor in cwd.ancestors() {
         let candidate = ancestor.join("scripts").join(script);
@@ -252,5 +270,28 @@ mod tests {
     fn netstat_parser_ignores_similar_ports_and_non_tcp_rows() {
         let output = "  UDP    0.0.0.0:30001    *:*                         1234\n  TCP    0.0.0.0:130001   0.0.0.0:0    LISTENING    5678\n  TCP    0.0.0.0:30001    0.0.0.0:0    LISTENING    nope";
         assert!(parse_listening_pids(output, 30001).is_empty());
+    }
+
+    #[test]
+    fn find_script_discovers_in_deploy_dir_ancestors() {
+        let unique = format!(
+            "tui_test_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(unique);
+        let deploy = root.join("source").join("deploy").join("win");
+        let scripts = root.join("scripts");
+        let _ = std::fs::create_dir_all(&deploy);
+        let _ = std::fs::create_dir_all(&scripts);
+        let dummy_script = scripts.join("test_script.ps1");
+        let _ = std::fs::write(&dummy_script, "# test");
+
+        let found = find_script(&deploy, "test_script.ps1");
+        assert_eq!(found, dummy_script);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
