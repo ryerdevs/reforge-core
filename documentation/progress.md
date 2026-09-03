@@ -93,6 +93,14 @@ The registry's `C1`–`C12` rows are closed prerequisite fixes; they do not mark
 
 ## Handoff
 
+- 2026-09-03 | **Documentation bloat elimination and reference consolidation (maintainer directive):**
+  removed redundant historical root `ROADMAP.md` (consolidating navigation on `documentation/roadmap.md`),
+  moved completed baseline plan `alpha-a0-truthful-baseline.md` to `documentation/history/plans/`,
+  modernized runbook `documentation/reference/backup-restore.md` with cross-platform Python CLI commands
+  (`manage.py backup`, `manage.py db restore`), updated `AGENTS.md` and `rules.md` to reference
+  Python tooling (`scripts/*.py`), and updated all internal markdown links and fragment targets.
+  `scripts/check_docs.ps1` and `scripts/check_boundary.ps1` fully verified.
+
 - 2026-09-03 | **A2.4 whitelisted package assembly and manifest closed (Milestone A2 100% complete):**
   implemented zero-dependency standard Python tool `scripts/package.py` and `manage.py package`
   for reproducible cross-platform package distribution on Windows and Linux.
@@ -279,7 +287,7 @@ The registry's `C1`–`C12` rows are closed prerequisite fixes; they do not mark
   not deleted. The two Rust slices remain uncommitted:
   `fix(world): normalize client-unsafe persisted positions` (map/entry/session)
   and `perf(world): limit initial spawn materialization` (spawn). **Next A0
-  task:** Task 3, publish the [tooling and deploy-boundary inventory](plans/alpha-a0-truthful-baseline.md#task-3-publish-the-tooling-and-deploy-boundary-inventory).
+  task:** Task 3, publish the [tooling and deploy-boundary inventory](history/plans/alpha-a0-truthful-baseline.md#task-3-publish-the-tooling-and-deploy-boundary-inventory).
 
 - 2026-09-02 | **Collaborative alpha foundation (user-approved plan):** alpha is a contributor preview, not a claim of total gameplay parity. Public scope is the complete authored Rust server, clean tools, documentation, scripts, and lawful synthetic/versioned development data; client source/packs/binaries, decompiled/proprietary material, and the frozen C++ oracle remain external per ADR-0015. Apache-2.0 is the chosen public license. The canonical [A0–A5 plan](plans/alpha-collaborative-readiness.md) begins with a truthful baseline and ends only after clean-clone reproducibility, contribution governance, and enforceable CI gates are evidenced. `ARQ-E` tracks the work; implementation has not yet begun.
 

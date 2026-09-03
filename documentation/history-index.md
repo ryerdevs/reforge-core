@@ -34,13 +34,15 @@ historical snapshot; new and edited documents still follow
 - [Document authority](reference/document-authority.md)
 - [Phase map](roadmap.md) — dated navigation, not live status
 - [Architecture decisions](adr/)
-- [Historical root roadmap](../ROADMAP.md)
 - [Changelog](../CHANGELOG.md) — chronological evidence, not live status
 
 ## Dated historical records
 
 These records are indexed here because they were omitted from the original
 archive navigation. Their original metadata and paths remain historical.
+
+- [alpha-a0-truthful-baseline](history/plans/alpha-a0-truthful-baseline.md) —
+  closed baseline plan (A0), superseded by live gap registry and progress handoff.
 
 - [2026-08-06 agent workflow plan](history/2026-08-06-agent-workflow-plan.md) —
   current contributor rules are in [AGENTS.md](../AGENTS.md).

@@ -62,7 +62,7 @@ evidence in the repository and CI:
 
 **Goal:** make current status auditable before changing release surfaces.
 
-Detailed execution: [A0 truthful-baseline implementation plan](alpha-a0-truthful-baseline.md).
+Detailed execution: [A0 truthful-baseline implementation plan](../history/plans/alpha-a0-truthful-baseline.md).
 
 - Reconcile `progress.md`, the gap registry, roadmap summaries, and release
   metadata with the actual HEAD and verified evidence.
@@ -201,7 +201,7 @@ assets.
 
 | Phase | Depends on | Likely paths | Validation owner |
 |---|---|---|---|
-| A0 | none | `documentation/{progress.md,plans/gap-registry.md,roadmap.md}`, `ROADMAP.md`, `.gitignore`, tooling inventory | orchestrator |
+| A0 | none | `documentation/{progress.md,plans/gap-registry.md,roadmap.md}`, `.gitignore`, tooling inventory | orchestrator |
 | A1 | A0 | `LICENSE`, `source/reforge/Cargo.toml`, deploy metadata, `.github/`, boundary check script, ADR/reference links | orchestrator + security reviewer |
 | A2 | A1 | `scripts/`, versioned server-development schema/seed, config examples, tutorials/how-to | implementer + clean-machine reviewer |
 | A3 | A0, A1 | `README.md`, `AGENTS.md`, `documentation/`, GitHub community files | librarian + orchestrator |

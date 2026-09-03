@@ -1,4 +1,4 @@
-﻿---
+---
 Type: Reference
 Status: Current
 Audience: Contributors, maintainers
@@ -59,13 +59,13 @@ GitHub `docs.yml` runs the same + `scripts/check_docs.ps1` metadata gate + hando
 5. **Never rebuild frozen C++.** Two-copy sync rule is dead.
 6. **Confirm destructive ops.** Deleting volumes/DBs/caches or `Remove-Item -Recurse` needs explicit user OK. Use `scripts/clean.ps1 -WhatIf` first.
 7. **Docs after every change.** Update canonical docs + `Last verified`; list exact required doc updates if outside lane scope. ADRs before architecture.
-8. **Log the change.** `CHANGELOG.md` (Keep a Changelog), `ROADMAP.md`/`documentation/roadmap.md`, ADRs. Never end with unlogged changes.
+8. **Log the change.** `CHANGELOG.md` (Keep a Changelog), `documentation/roadmap.md`, ADRs. Never end with unlogged changes.
 9. **Parallelize.** Independent lanes via `@explorer` / `@librarian` / `@oracle` / `@fixer` in background; `source/reforge` graph first (`graphify query`); reconcile before next step.
 10. **Plan before code.** Architecture/rewrite → discuss alternatives/risks + ADR, then implement. Devil's advocate on every user plan.
 11. **Ponytail always.** Do more with less; small is consequence of necessary, not of trimming. Never cut validation/security/accessibility.
 12. **Never block chat.** Commands >15s → `Start-Process -RedirectStandardOutput` or background task, then end turn. Verify next turn with <10s checks. Never chain stop/copy/start/verify in one `;` call.
 13. **Commits.** Conventional Commits in English, atomic, imperative, no `Co-authored-by:` trailer. Single author `ryer <82473243+ryerdevs@users.noreply.github.com>`. No history rewrites after push.
-14. **Automate in scripts.** Repeatable → `scripts/*.ps1` (`status.ps1`, `verify.ps1`, `clean.ps1`, `start_win.ps1`). Don't improvise.
+14. **Automate in scripts.** Repeatable cross-platform tooling → `scripts/*.py` (`manage.py`, `bootstrap_db.py`, `package.py`). Don't improvise.
 15. **Single handoff.** `documentation/progress.md` is the session handoff. Read at start, update at close.
 16. **Tests that catch bugs.** Every fix needs a mutation test (fails if reverted) + `proptest` where invariants exist.
 

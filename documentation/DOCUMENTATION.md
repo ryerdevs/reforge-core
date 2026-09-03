@@ -144,8 +144,8 @@ before implementing them. Use the lifecycle `Proposed` → `Accepted` or
 - The oracle reviews architecture and the complete change.
 - The orchestrator coordinates lanes and commits the reconciled result.
 - Every session updates the two live status documents and records durable
-  changes in [`CHANGELOG.md`](../CHANGELOG.md). The root `ROADMAP.md` remains a
-  historical archive and is not edited for volatile status.
+  changes in [`CHANGELOG.md`](../CHANGELOG.md). The maintained phase map is
+  [`roadmap.md`](roadmap.md).
 
 ## Review checklist
 
