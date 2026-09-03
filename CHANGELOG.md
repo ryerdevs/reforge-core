@@ -18,6 +18,16 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **Configuration centralization, cross-platform Python CLI, and TUI subcommands (A2.2, 2026-09-02):**
+  reorganized deploy tree to isolate all runtime configuration inside `config/`
+  (`config/auth.toml`, `config/channel.toml`, and secret-free reference templates in
+  `config/examples/`). Added zero-dependency standard Python management CLI
+  `scripts/manage.py` and convenience scripts (`start.py`, `stop.py`, `status.py`,
+  `backup.py`). Extended `admin_tui` to support non-interactive CLI commands
+  (`start`, `stop`, `restart`, `status`, `backup`, `postgres`, `doctor`), interactive
+  hotkeys `[P]` (Postgres toggle) and `[D]` (system doctor / health check), and a
+  styled footer button bar.
+
 - **Native TUI process controller and PostgreSQL monitoring (A2.5, 2026-09-02):**
   replaced PowerShell script delegation in `admin_tui` (`process.rs`) with direct
   native Rust lifecycle management. Implemented TCP-based PostgreSQL health

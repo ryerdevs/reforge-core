@@ -64,6 +64,8 @@ fn handle_key(app: &mut App, k: KeyEvent) -> bool {
             KeyCode::Char('s') => app.start_operation("start", ops::do_start),
             KeyCode::Char('x') => app.start_operation("stop", ops::do_stop),
             KeyCode::Char('r') => app.start_operation("restart", ops::do_restart),
+            KeyCode::Char('p') => app.start_operation("postgres", ops::do_postgres),
+            KeyCode::Char('d') => app.start_operation("doctor", ops::do_doctor),
             KeyCode::Char('b') => app.start_operation("backup", ops::do_backup),
             KeyCode::Char('l') => {
                 app.screen = Screen::Logs;
@@ -264,8 +266,106 @@ fn render_logs(f: &mut ratatui::Frame, area: Rect, app: &App) {
 
 fn render_footer(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let line = match app.screen {
-        Screen::Main => Line::from("[s]tart [x]stop [r]estart [l]ogs [b]ackup [q]uit"),
-        Screen::Logs => Line::from("[Tab] switch [↑↓] scroll [Home/End] [f]ollow [Esc] back"),
+        Screen::Main => Line::from(vec![
+            Span::styled(
+                " [S] ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Start "),
+            Span::styled(
+                " [X] ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Red)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Stop "),
+            Span::styled(
+                " [R] ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Restart "),
+            Span::styled(
+                " [P] ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Postgres "),
+            Span::styled(
+                " [D] ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::LightBlue)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Doctor "),
+            Span::styled(
+                " [B] ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Backup "),
+            Span::styled(
+                " [L] ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Logs "),
+            Span::styled(
+                " [Q] ",
+                Style::default()
+                    .fg(Color::White)
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Quit"),
+        ]),
+        Screen::Logs => Line::from(vec![
+            Span::styled(
+                " [Tab] ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(format!("Switch ({}) ", app.log_target.label())),
+            Span::styled(
+                " [↑/↓] ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Scroll "),
+            Span::styled(
+                " [F] ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Follow tail "),
+            Span::styled(
+                " [Esc/Q] ",
+                Style::default()
+                    .fg(Color::White)
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Back to main"),
+        ]),
     };
     let p = Paragraph::new(line).block(Block::default().borders(Borders::ALL));
     f.render_widget(p, area);

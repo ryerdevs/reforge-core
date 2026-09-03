@@ -21,8 +21,55 @@ fn main() -> ExitCode {
     let deploy_dir = deploy_dir_from_args(&args);
     eprintln!("admin_tui v0.1.0 - deploy dir: {}", deploy_dir.display());
 
-    if args.iter().any(|a| a == "--probe") {
+    let mut skip_next = false;
+    let mut subcmd = None;
+    for arg in &args {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if arg == "--deploy-dir" || arg == "-d" {
+            skip_next = true;
+            continue;
+        }
+        if !arg.starts_with('-') && subcmd.is_none() {
+            subcmd = Some(arg.as_str());
+        }
+    }
+
+    if let Some(cmd) = subcmd {
+        return match cmd {
+            "start" => run_cli_op("start", ops::do_start(&deploy_dir)),
+            "stop" => run_cli_op("stop", ops::do_stop(&deploy_dir)),
+            "restart" => run_cli_op("restart", ops::do_restart(&deploy_dir)),
+            "status" => probe(&deploy_dir),
+            "backup" => run_cli_op("backup", ops::do_backup(&deploy_dir)),
+            "postgres" => run_cli_op("postgres", ops::do_postgres(&deploy_dir)),
+            "doctor" => run_doctor(&deploy_dir),
+            other => {
+                eprintln!("admin_tui: unknown command '{other}'");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
+    if args.iter().any(|a| a == "--probe" || a == "--status") {
         return probe(&deploy_dir);
+    }
+    if args.iter().any(|a| a == "--start") {
+        return run_cli_op("start", ops::do_start(&deploy_dir));
+    }
+    if args.iter().any(|a| a == "--stop") {
+        return run_cli_op("stop", ops::do_stop(&deploy_dir));
+    }
+    if args.iter().any(|a| a == "--restart") {
+        return run_cli_op("restart", ops::do_restart(&deploy_dir));
+    }
+    if args.iter().any(|a| a == "--backup") {
+        return run_cli_op("backup", ops::do_backup(&deploy_dir));
+    }
+    if args.iter().any(|a| a == "--doctor") {
+        return run_doctor(&deploy_dir);
     }
 
     let mut app = app::App::new(deploy_dir);
@@ -30,6 +77,72 @@ fn main() -> ExitCode {
         eprintln!("admin_tui: TUI error: {e}");
         return ExitCode::FAILURE;
     }
+    ExitCode::SUCCESS
+}
+
+fn run_cli_op(label: &str, res: process::OpResult) -> ExitCode {
+    match res {
+        process::OpResult::Ok(msg) => {
+            println!("{label}: OK - {msg}");
+            ExitCode::SUCCESS
+        }
+        process::OpResult::Failed(msg) => {
+            eprintln!("{label}: FAILED - {msg}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_doctor(deploy_dir: &Path) -> ExitCode {
+    println!("=== Reforge Environment Doctor ===");
+    println!("Deploy Bundle  : {}", deploy_dir.display());
+    let pg = process::is_postgres_running();
+    println!(
+        "PostgreSQL 5432: {}",
+        if pg {
+            "[OK] Responding"
+        } else {
+            "[WARN] Not responding"
+        }
+    );
+    let exe = process::find_server_realms_exe(deploy_dir);
+    println!(
+        "server_realms  : {}",
+        if let Some(p) = exe {
+            format!("[OK] {}", p.display())
+        } else {
+            "[FAIL] Not found in deploy_dir or target/".to_string()
+        }
+    );
+    let auth = process::find_config(deploy_dir, "auth.toml");
+    let ch = process::find_config(deploy_dir, "channel.toml");
+    println!(
+        "Config auth    : {}",
+        if let Some(p) = auth {
+            format!("[OK] {}", p.display())
+        } else {
+            "[FAIL] Missing auth.toml".to_string()
+        }
+    );
+    println!(
+        "Config channel : {}",
+        if let Some(p) = ch {
+            format!("[OK] {}", p.display())
+        } else {
+            "[FAIL] Missing channel.toml".to_string()
+        }
+    );
+    let logs_dir = deploy_dir.join("logs");
+    let write_ok = std::fs::create_dir_all(&logs_dir).is_ok();
+    println!(
+        "Logs Directory : {}",
+        if write_ok {
+            format!("[OK] Writeable ({})", logs_dir.display())
+        } else {
+            "[FAIL] Cannot write".to_string()
+        }
+    );
+    println!("==================================");
     ExitCode::SUCCESS
 }
 

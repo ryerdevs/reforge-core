@@ -24,8 +24,10 @@ $ts = Get-Date -Format "HHmmss"
 if ($HsDebug) { $env:MT2_HS_DEBUG = "1" }  # instrumentación del handshake (handshake.rs)
 Get-Process server_realms -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep 1
-Start-Process -FilePath $exe -ArgumentList "--role","auth","--config",(Join-Path $win "auth.toml") -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logs "auth.$ts.out.log") -RedirectStandardError (Join-Path $logs "auth.$ts.err.log")
-$chArgs = @("--role","channel","--config",(Join-Path $win "channel.toml"))
+$authCfg = if (Test-Path (Join-Path $win "config\auth.toml")) { Join-Path $win "config\auth.toml" } else { Join-Path $win "auth.toml" }
+$channelCfg = if (Test-Path (Join-Path $win "config\channel.toml")) { Join-Path $win "config\channel.toml" } else { Join-Path $win "channel.toml" }
+Start-Process -FilePath $exe -ArgumentList "--role","auth","--config",$authCfg -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logs "auth.$ts.out.log") -RedirectStandardError (Join-Path $logs "auth.$ts.err.log")
+$chArgs = @("--role","channel","--config",$channelCfg)
 if ($BenchCapture -ne "") { $chArgs += @("--bench-capture",(Join-Path $logs $BenchCapture)) }
 Start-Process -FilePath $exe -ArgumentList $chArgs -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logs "channel.$ts.out.log") -RedirectStandardError (Join-Path $logs "channel.$ts.err.log")
 
