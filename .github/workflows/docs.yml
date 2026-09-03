@@ -1,4 +1,4 @@
-﻿name: docs
+name: docs
 
 on:
   push:
@@ -22,17 +22,14 @@ jobs:
         shell: pwsh
         run: rustup toolchain install 1.97.0 --profile minimal --component rustfmt --component clippy
       - name: Verify workspace
-        shell: pwsh
         run: |
-          powershell -ExecutionPolicy Bypass -File scripts/verify.ps1
+          python scripts/verify.py
       - name: Documentation metadata gate (G1.18)
-        shell: pwsh
         run: |
-          powershell -ExecutionPolicy Bypass -File scripts/check_docs.ps1
+          python scripts/check_docs.py
       - name: Status snapshot
-        shell: pwsh
         run: |
-          powershell -ExecutionPolicy Bypass -File scripts/status.ps1
+          python scripts/manage.py status
       - name: Handoff check — source changed without progress/CHANGELOG/registry
         shell: pwsh
         run: |
@@ -56,15 +53,9 @@ jobs:
           $openRows = $rows | Where-Object { $_ -notmatch 'CLOSED' -and $_ -notmatch '~~' }
           Write-Host "registry has $($openRows.Count) open rows (gate 2 backlog, expected: many)"
       - name: Build admin_tui (deploy operator TUI)
-        shell: pwsh
         run: |
-          powershell -ExecutionPolicy Bypass -File scripts/build_admin_tui.ps1
-          $bin = "source/deploy/win/admin_tui.exe"
-          if (-not (Test-Path $bin)) {
-            Write-Error "admin_tui.exe was not copied to deploy/win"
-            exit 1
-          }
-          Write-Host "admin_tui in deploy/win: $((Get-Item $bin).Length) bytes"
+          python scripts/build_admin_tui.py
+          python -c "from pathlib import Path; p = Path('source/deploy/win/admin_tui.exe'); assert p.is_file(), 'admin_tui.exe missing'; print(f'admin_tui in deploy/win: {p.stat().st_size} bytes')"
 
   link-check:
     runs-on: ubuntu-latest

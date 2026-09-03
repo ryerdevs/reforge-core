@@ -33,7 +33,7 @@ Live project state lives in exactly two files:
 2. [`progress.md`](progress.md) — current verified snapshot, session handoff, and history index.
 
 When documents disagree, precedence is:
-1. **Fresh verification:** A command run today against HEAD (`cargo test`, `scripts/verify.ps1`, `manage.py db check`). Recorded command evidence beats any narrative.
+1. **Fresh verification:** A command run today against HEAD (`cargo test`, `python scripts/verify.py`, `manage.py db check`). Recorded command evidence beats any narrative.
 2. **Gap Registry:** [`plans/gap-registry.md`](plans/gap-registry.md) per-item tracker.
 3. **Progress Handoff:** [`progress.md`](progress.md) dated entries.
 4. **Accepted ADRs:** [`adr/`](adr/) architectural decisions.
@@ -57,6 +57,7 @@ cargo test --workspace
 python scripts/manage.py db check
 
 # Public boundary & documentation checks
-powershell -File scripts/check_boundary.ps1
-powershell -File scripts/check_docs.ps1
+python scripts/check_boundary.py
+python scripts/check_docs.py
+python scripts/verify.py
 ```

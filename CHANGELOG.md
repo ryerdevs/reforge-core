@@ -40,6 +40,12 @@ The project uses semantic versioning ([SemVer](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **Pure Python 3 tooling migration and PowerShell extinction (2026-09-03):**
+  rewrote all development, boundary, documentation, and verification tooling into standard Python 3
+  (`scripts/verify.py`, `scripts/check_docs.py`, `scripts/check_boundary.py`, `scripts/check_path_contract.py`,
+  `scripts/clean.py`, `scripts/build_admin_tui.py`), updated GitHub Actions `docs.yml` to run
+  Python scripts natively without PowerShell wrappers, and deleted obsolete `.ps1` files.
+
 - **Radical documentation pruning & meta-doc elimination (2026-09-03):**
   removed 3 redundant meta-documents (`DOCUMENTATION.md`, `document-authority.md`, `history-index.md`),
   consolidating document authority precedence and core policy directly into `documentation/README.md`,
